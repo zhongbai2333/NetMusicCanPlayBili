@@ -10,9 +10,12 @@ group = mod_group_id
 
 repositories {
     mavenLocal()
-    // NetMusic 26.1 分支未发布到公共 Maven，从本地 libs 目录加载
-    flatDir {
-        dirs 'libs'
+    maven {
+        name = "Modrinth"
+        url = "https://api.modrinth.com/maven"
+        content {
+            includeGroup "maven.modrinth"
+        }
     }
 }
 
@@ -95,10 +98,7 @@ sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 
 dependencies {
-    // NetMusic API — 编译时需要 IAsyncSongUrlResolver 等接口；
-    // 运行时由 NeoForge 从 mods 目录加载 NetMusic 本体（已声明 required 依赖）。
-    // 将任意 NetMusic 26.1 JAR 放入 ./libs/ 即可编译。
-    compileOnly fileTree(dir: 'libs', include: ['netmusic-*.jar', 'NetMusic-*.jar'])
+    compileOnly "maven.modrinth:net-music:mCrjhdSq"
 }
 
 // This block of code expands all declared replace properties in the specified resource targets.

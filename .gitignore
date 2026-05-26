@@ -20,6 +20,7 @@ libs
 out/
 .idea
 *.iml
+.eclipse/
 # mpeltonen/sbt-idea plugin
 .idea_modules/
 
