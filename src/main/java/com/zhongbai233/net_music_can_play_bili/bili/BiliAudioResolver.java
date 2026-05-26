@@ -5,6 +5,7 @@ import com.mojang.logging.LogUtils;
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import org.slf4j.Logger;
 
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -27,8 +28,8 @@ public class BiliAudioResolver implements IAsyncSongUrlResolver {
         BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(videoId, page);
 
         ItemMusicCD.SongInfo songInfo = new ItemMusicCD.SongInfo(
-                BiliApiClient.formatStoredVideoSelection(videoId, info.page()),
-                info.displayTitle(),
+                Objects.requireNonNull(BiliApiClient.formatStoredVideoSelection(videoId, info.page())),
+                Objects.requireNonNull(info.displayTitle()),
                 info.duration(),
                 false);
         LOGGER.info("B站视频信息获取成功: {} (P{}, cid={}, {}s)",

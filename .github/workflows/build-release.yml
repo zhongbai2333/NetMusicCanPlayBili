@@ -1,0 +1,223 @@
+﻿name: Build & Release
+
+on:
+  push:
+    branches: [ "master", "dev" ]
+    tags: [ "v*" ]
+    paths:
+      - "src/**"
+      - "build.gradle"
+      - "settings.gradle"
+      - "gradle.properties"
+      - "gradle/**"
+      - "gradlew"
+      - "gradlew.bat"
+      - ".github/workflows/build-release.yml"
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build mod jar
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compute build metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mod_id="$(grep '^mod_id=' gradle.properties | cut -d= -f2-)"
+          mod_version="$(grep '^mod_version=' gradle.properties | cut -d= -f2-)"
+          minecraft_version="$(grep '^minecraft_version=' gradle.properties | cut -d= -f2-)"
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
+            mod_version="${GITHUB_REF_NAME#v}"
+          fi
+
+          artifact_name="${mod_id}-${mod_version}+mc${minecraft_version}-neoforge.jar"
+
+          echo "mod_id=${mod_id}" >> "$GITHUB_OUTPUT"
+          echo "mod_version=${mod_version}" >> "$GITHUB_OUTPUT"
+          echo "minecraft_version=${minecraft_version}" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=${artifact_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Ensure Gradle wrapper is executable
+        shell: bash
+        run: chmod +x ./gradlew
+
+      - name: Build with Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew build --stacktrace -Pmod_version="${{ steps.meta.outputs.mod_version }}"
+
+      - name: Bundle artifact
+        id: bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          jar_path="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | head -n 1)"
+          if [[ -z "${jar_path}" ]]; then
+            echo "No built mod jar found under build/libs" >&2
+            exit 1
+          fi
+
+          cp "${jar_path}" "dist/${{ steps.meta.outputs.artifact_name }}"
+          sha256sum "dist/${{ steps.meta.outputs.artifact_name }}" > "dist/${{ steps.meta.outputs.artifact_name }}.sha256"
+
+          echo "jar_path=${jar_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mod-build
+          path: dist
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mod-build
+          path: release-artifacts
+
+      - name: List artifacts
+        shell: bash
+        run: ls -R release-artifacts
+
+      - name: Generate release notes
+        id: generate_notes
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          result-encoding: string
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const tag = context.ref.replace('refs/tags/', '');
+
+            const releasesResp = await github.rest.repos.listReleases({
+              owner,
+              repo,
+              per_page: 100
+            });
+
+            const releases = releasesResp.data.filter(r => !r.draft);
+            const prev = releases.find(r => r.tag_name !== tag) || null;
+            const prevTag = prev ? prev.tag_name : null;
+            const compareUrl = prevTag
+              ? `https://github.com/${owner}/${repo}/compare/${prevTag}...${tag}`
+              : '';
+
+            const closedStart = prev?.published_at ? new Date(prev.published_at).toISOString() : null;
+            const closedEnd = new Date().toISOString();
+
+            let query = `repo:${owner}/${repo} is:issue is:closed`;
+            if (closedStart) {
+              query += ` closed:${closedStart}..${closedEnd}`;
+            }
+
+            const issues = await github.paginate(github.rest.search.issuesAndPullRequests, {
+              q: query,
+              per_page: 100
+            });
+
+            const negativeLabels = ['wontfix', 'duplicate', 'invalid'];
+            const groups = { Fix: [], Update: [], Feature: [] };
+            const seen = new Set();
+
+            for (const item of issues) {
+              if (seen.has(item.number)) continue;
+              seen.add(item.number);
+
+              const labels = (item.labels || []).map(l => typeof l === 'string' ? l : l.name);
+              const labelLowers = labels.map(l => String(l).toLowerCase());
+
+              if (labelLowers.some(l => negativeLabels.includes(l))) continue;
+              if (labelLowers.some(l => ['question'].includes(l))) continue;
+
+              if (labelLowers.some(l => ['bug'].includes(l))) {
+                groups.Fix.push(item);
+                continue;
+              }
+
+              if (labelLowers.some(l => ['enhancement', 'feature'].includes(l))) {
+                groups.Feature.push(item);
+                continue;
+              }
+
+              if (labelLowers.some(l => ['documentation', 'doc', 'update'].includes(l))) {
+                groups.Update.push(item);
+                continue;
+              }
+            }
+
+            let body = "# What's Changed\n\n";
+            const zh = { Fix: '修复', Update: '更新', Feature: '新增' };
+            let hasEntries = false;
+
+            for (const key of ['Fix', 'Update', 'Feature']) {
+              if (groups[key].length) {
+                hasEntries = true;
+                body += `## ${key}\n\n`;
+                for (const i of groups[key]) {
+                  body += `- ${zh[key]}：[#${i.number}](${i.html_url}) ${i.title}\n`;
+                }
+                body += "\n";
+              }
+            }
+
+            if (!hasEntries) {
+              body += "- No labeled closed issues were found for this release window.\n\n";
+            }
+
+            if (compareUrl) {
+              body += `**Full Changelog**: ${compareUrl}\n`;
+            }
+
+            return body;
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.generate_notes.outputs.result }}
+          files: |
+            release-artifacts/*.jar
+            release-artifacts/*.sha256
