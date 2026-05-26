@@ -1,0 +1,30 @@
+# MacOS DS_Store files
+.DS_Store
+
+# Gradle cache folder
+.gradle
+
+# Gradle build folder
+build
+
+# Compiled class output
+bin
+
+# IDE
+.vscode/
+
+# Runtime library JARs (managed by Gradle dependencies)
+libs
+
+# IntelliJ
+out/
+.idea
+*.iml
+# mpeltonen/sbt-idea plugin
+.idea_modules/
+
+# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
+hs_err_pid*
+
+# Common working directory
+run

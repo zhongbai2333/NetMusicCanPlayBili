@@ -1,0 +1,21 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.zhongbai233.net_music_can_play_bili.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "mixins": [
+  ],
+  "client": [
+    "BigMegaphoneScreenMixin",
+    "BigMegaphoneStartMessageMixin",
+    "CDBurnerMenuScreenMixin",
+    "ComputerMenuScreenMixin",
+    "MusicToClientMessageClientMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "overwrites": {
+    "requireAnnotations": true
+  }
+}

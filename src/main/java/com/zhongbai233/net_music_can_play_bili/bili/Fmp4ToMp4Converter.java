@@ -1,0 +1,742 @@
+package com.zhongbai233.net_music_can_play_bili.bili;
+
+import com.mojang.logging.LogUtils;
+import org.slf4j.Logger;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.List;
+
+public final class Fmp4ToMp4Converter {
+    private static final Logger LOGGER = LogUtils.getLogger();
+
+    private Fmp4ToMp4Converter() {
+    }
+
+    private static final int TRUN_DATA_OFFSET = 0x000001;
+    private static final int TRUN_FIRST_SAMPLE_FLAGS = 0x000004;
+    private static final int TRUN_SAMPLE_DURATION = 0x000100;
+    private static final int TRUN_SAMPLE_SIZE = 0x000200;
+    private static final int TRUN_SAMPLE_FLAGS = 0x000400;
+    private static final int TRUN_SAMPLE_COMP_TIME = 0x000800;
+    private static final int TFHD_DEFAULT_SAMPLE_SIZE = 0x000008;
+    private static final byte[] DEFAULT_ASC = { 0x11, (byte) 0x90 };
+
+    public static byte[] convertToStandardMp4(byte[] fmp4Data) throws IOException {
+        ByteBuffer buf = ByteBuffer.wrap(fmp4Data).order(ByteOrder.BIG_ENDIAN);
+        byte[] asc = null;
+        List<Integer> allSizes = new ArrayList<>();
+        List<Integer> allDurs = new ArrayList<>();
+        List<byte[]> mdatChunks = new ArrayList<>();
+        while (buf.remaining() >= 8) {
+            BoxHeader box = readBoxHeader(buf);
+            if (box == null)
+                break;
+            long dataSize = box.dataSize();
+            if ("moov".equals(box.type)) {
+                byte[] moovData = new byte[(int) dataSize];
+                buf.get(moovData);
+                ParseResult pr = parseMoov(moovData);
+                if (pr.asc != null)
+                    asc = pr.asc;
+            } else if ("moof".equals(box.type)) {
+                byte[] moofData = new byte[(int) dataSize];
+                buf.get(moofData);
+                ParseResult pr = parseMoof(moofData);
+                if (pr.sampleSizes != null) {
+                    for (int sz : pr.sampleSizes) {
+                        allSizes.add(sz);
+                        allDurs.add(1024);
+                    }
+                } else if (pr.defaultSampleSize > 0 && pr.sampleCount > 0) {
+                    for (int i = 0; i < pr.sampleCount; i++) {
+                        allSizes.add(pr.defaultSampleSize);
+                        allDurs.add(1024);
+                    }
+                }
+            } else if ("mdat".equals(box.type)) {
+                if (dataSize > 0) {
+                    byte[] mdat = new byte[(int) Math.min(dataSize, (long) Integer.MAX_VALUE)];
+                    buf.get(mdat);
+                    mdatChunks.add(mdat);
+                }
+            } else {
+                buf.position(buf.position() + (int) Math.min(dataSize, buf.remaining()));
+            }
+        }
+        if (asc == null)
+            asc = DEFAULT_ASC;
+        int skipCnt = 0, skipB = 0;
+        while (skipCnt < allSizes.size() && allSizes.get(skipCnt) < 20) {
+            skipB += allSizes.get(skipCnt);
+            skipCnt++;
+        }
+        ByteArrayOutputStream raw = new ByteArrayOutputStream();
+        for (byte[] c : mdatChunks)
+            raw.write(c);
+        byte[] full = raw.toByteArray();
+        byte[] audioData = new byte[full.length - skipB];
+        System.arraycopy(full, skipB, audioData, 0, audioData.length);
+        int[] sizes = allSizes.subList(skipCnt, allSizes.size()).stream().mapToInt(i -> i).toArray();
+        int[] durs = allDurs.subList(skipCnt, allDurs.size()).stream().mapToInt(i -> i).toArray();
+        LOGGER.info("[Fmp4ToAdts] MP4转换: {}帧, {}B AAC", sizes.length, audioData.length);
+        return buildStandardMp4(asc, sizes, durs, audioData);
+    }
+
+    private static byte[] buildStandardMp4(byte[] asc, int[] sizes, int[] durs, byte[] audioData) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] ftyp = makeBox("ftyp", toBytes("isom\u0000\u0000\u0000\u0000isomiso2mp41"));
+        out.write(ftyp, 0, ftyp.length);
+        int mdatPayloadOffset = ftyp.length + 8;
+        byte[] moov = buildMoov(asc, sizes, durs, mdatPayloadOffset);
+        mdatPayloadOffset = ftyp.length + moov.length + 8;
+        moov = buildMoov(asc, sizes, durs, mdatPayloadOffset);
+        out.write(moov, 0, moov.length);
+        writeInt(out, 8 + audioData.length);
+        out.write(toBytes("mdat"), 0, 4);
+        out.write(audioData, 0, audioData.length);
+        return out.toByteArray();
+    }
+
+    private static byte[] buildMoov(byte[] asc, int[] sizes, int[] durs, int mdatOff) {
+        int timescale = 48000;
+        int totalSamples = sizes.length;
+        long duration = 0;
+        for (int d : durs)
+            duration += d;
+        byte[] mvhd = makeMvhd(timescale, duration);
+        byte[] tkhd = makeTkhd(1, duration);
+        byte[] mdhd = makeMdhd(timescale, duration);
+        byte[] hdlr = makeHdlr();
+        byte[] stsd = makeStsd(asc);
+        byte[] stts = makeStts(totalSamples, durs);
+        byte[] stsz = makeStsz(sizes);
+        byte[] stsc = makeStsc(totalSamples);
+        byte[] stco = makeStco(mdatOff);
+        byte[] smhd = makeFullBox("smhd", new byte[4]);
+        byte[] dinf = makeDinf();
+        byte[] stbl = concat("stbl", stsd, stts, stsz, stsc, stco);
+        byte[] minf = concat("minf", smhd, dinf, stbl);
+        byte[] mdia = concat("mdia", mdhd, hdlr, minf);
+        byte[] trak = concat("trak", tkhd, mdia);
+        return concat("moov", mvhd, trak);
+    }
+
+    private static byte[] concat(String type, byte[]... boxes) {
+        int len = 0;
+        for (byte[] b : boxes)
+            len += b.length;
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeInt(out, 8 + len);
+        out.write(toBytes(type), 0, 4);
+        for (byte[] b : boxes)
+            out.write(b, 0, b.length);
+        return out.toByteArray();
+    }
+
+    private static byte[] makeBox(String type, byte[] payload) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeInt(out, 8 + payload.length);
+        out.write(toBytes(type), 0, 4);
+        out.write(payload, 0, payload.length);
+        return out.toByteArray();
+    }
+
+    private static byte[] makeFullBox(String type, byte[] payload) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeInt(out, 12 + payload.length);
+        out.write(toBytes(type), 0, 4);
+        writeInt(out, 0);
+        out.write(payload, 0, payload.length);
+        return out.toByteArray();
+    }
+
+    private static byte[] makeDinf() {
+        ByteArrayOutputStream url = new ByteArrayOutputStream();
+        writeInt(url, 12);
+        url.write(toBytes("url "), 0, 4);
+        writeInt(url, 1);
+        byte[] urlBox = url.toByteArray();
+        ByteArrayOutputStream drefPayload = new ByteArrayOutputStream();
+        writeInt(drefPayload, 1);
+        drefPayload.write(urlBox, 0, urlBox.length);
+        return makeBox("dinf", makeFullBox("dref", drefPayload.toByteArray()));
+    }
+
+    private static byte[] makeStsd(byte[] asc) {
+        byte[] esds = makeEsds(asc);
+        ByteArrayOutputStream mp4a = new ByteArrayOutputStream();
+        writeInt(mp4a, 8 + 28 + esds.length);
+        mp4a.write(toBytes("mp4a"), 0, 4);
+        writeBytes(mp4a, new byte[6]);
+        writeShort(mp4a, 1);
+        writeShort(mp4a, 0);
+        writeShort(mp4a, 0);
+        writeInt(mp4a, 0);
+        writeShort(mp4a, 2);
+        writeShort(mp4a, 16);
+        writeShort(mp4a, 0);
+        writeShort(mp4a, 0);
+        writeInt(mp4a, 48000 << 16);
+        mp4a.write(esds, 0, esds.length);
+        byte[] mp4aBytes = mp4a.toByteArray();
+        ByteArrayOutputStream stsd = new ByteArrayOutputStream();
+        writeInt(stsd, 16 + mp4aBytes.length);
+        stsd.write(toBytes("stsd"), 0, 4);
+        writeInt(stsd, 0);
+        writeInt(stsd, 1);
+        stsd.write(mp4aBytes, 0, mp4aBytes.length);
+        return stsd.toByteArray();
+    }
+
+    private static byte[] makeEsds(byte[] asc) {
+        ByteArrayOutputStream dsi = new ByteArrayOutputStream();
+        dsi.write(0x05);
+        writeVarLen(dsi, asc.length);
+        dsi.write(asc, 0, asc.length);
+        byte[] dsiB = dsi.toByteArray();
+        ByteArrayOutputStream dc = new ByteArrayOutputStream();
+        dc.write(0x04);
+        writeVarLen(dc, 13 + dsiB.length);
+        dc.write(0x40);
+        dc.write(0x15);
+        writeBytes(dc, new byte[] { 0, 0, 0 });
+        writeInt(dc, 0x1FFFFF);
+        writeInt(dc, 0x1FFFFF);
+        dc.write(dsiB, 0, dsiB.length);
+        byte[] dcB = dc.toByteArray();
+        byte[] sl = { 0x06, 0x01, 0x02 };
+        ByteArrayOutputStream es = new ByteArrayOutputStream();
+        es.write(0x03);
+        writeVarLen(es, 3 + dcB.length + sl.length);
+        writeShort(es, 1);
+        es.write(0);
+        es.write(dcB, 0, dcB.length);
+        es.write(sl, 0, sl.length);
+        byte[] esB = es.toByteArray();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeInt(out, 12 + esB.length);
+        out.write(toBytes("esds"), 0, 4);
+        writeInt(out, 0);
+        out.write(esB, 0, esB.length);
+        return out.toByteArray();
+    }
+
+    private static byte[] makeStts(int totalSamples, int[] durs) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeInt(out, 16 + 8);
+        out.write(toBytes("stts"), 0, 4);
+        writeInt(out, 0);
+        writeInt(out, 1);
+        writeInt(out, totalSamples);
+        writeInt(out, durs[0]);
+        return out.toByteArray();
+    }
+
+    private static byte[] makeStsz(int[] sizes) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeInt(out, 20 + sizes.length * 4);
+        out.write(toBytes("stsz"), 0, 4);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        writeInt(out, sizes.length);
+        for (int s : sizes)
+            writeInt(out, s);
+        return out.toByteArray();
+    }
+
+    private static byte[] makeStsc(int totalSamples) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeInt(out, 16 + 12);
+        out.write(toBytes("stsc"), 0, 4);
+        writeInt(out, 0);
+        writeInt(out, 1);
+        writeInt(out, 1);
+        writeInt(out, totalSamples);
+        writeInt(out, 1);
+        return out.toByteArray();
+    }
+
+    private static byte[] makeStco(int offset) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeInt(out, 16 + 4);
+        out.write(toBytes("stco"), 0, 4);
+        writeInt(out, 0);
+        writeInt(out, 1);
+        writeInt(out, offset);
+        return out.toByteArray();
+    }
+
+    private static byte[] makeMdhd(int timescale, long duration) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeInt(out, 32);
+        out.write(toBytes("mdhd"), 0, 4);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        writeInt(out, timescale);
+        writeInt(out, (int) duration);
+        writeShort(out, 0x55C4);
+        writeShort(out, 0);
+        return out.toByteArray();
+    }
+
+    private static byte[] makeHdlr() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeInt(out, 45);
+        out.write(toBytes("hdlr"), 0, 4);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        out.write(toBytes("soun"), 0, 4);
+        writeBytes(out, new byte[12]);
+        writeBytes(out, new byte[] { 'S', 'o', 'u', 'n', 'd', 'H', 'a', 'n', 'd', 'l', 'e', 'r', 0 });
+        return out.toByteArray();
+    }
+
+    private static byte[] makeTkhd(int trackId, long duration) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeInt(out, 92);
+        out.write(toBytes("tkhd"), 0, 4);
+        writeInt(out, 7);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        writeInt(out, trackId);
+        writeInt(out, 0);
+        writeInt(out, (int) duration);
+        writeBytes(out, new byte[8]);
+        writeShort(out, 0);
+        writeShort(out, 0);
+        writeShort(out, 0x0100);
+        writeShort(out, 0);
+        writeInt(out, 0x00010000);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        writeInt(out, 0x00010000);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        writeInt(out, 0x40000000);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        return out.toByteArray();
+    }
+
+    private static byte[] makeMvhd(int timescale, long duration) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeInt(out, 108);
+        out.write(toBytes("mvhd"), 0, 4);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        writeInt(out, timescale);
+        writeInt(out, (int) duration);
+        writeInt(out, 0x00010000);
+        writeShort(out, 0x0100);
+        writeShort(out, 0);
+        writeBytes(out, new byte[8]);
+        writeInt(out, 0x00010000);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        writeInt(out, 0x00010000);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        writeInt(out, 0);
+        writeInt(out, 0x40000000);
+        writeBytes(out, new byte[24]);
+        writeInt(out, 2);
+        return out.toByteArray();
+    }
+
+    private static void writeInt(ByteArrayOutputStream out, int v) {
+        out.write((v >> 24) & 0xFF);
+        out.write((v >> 16) & 0xFF);
+        out.write((v >> 8) & 0xFF);
+        out.write(v & 0xFF);
+    }
+
+    private static void writeShort(ByteArrayOutputStream out, int v) {
+        out.write((v >> 8) & 0xFF);
+        out.write(v & 0xFF);
+    }
+
+    private static void writeBytes(ByteArrayOutputStream out, byte[] b) {
+        out.write(b, 0, b.length);
+    }
+
+    private static void writeVarLen(ByteArrayOutputStream out, int size) {
+        if (size < 0x80) {
+            out.write(size);
+            return;
+        }
+        int n = 0;
+        for (int t = size; t > 0; t >>= 7)
+            n++;
+        for (int i = n - 1; i >= 0; i--)
+            out.write(((size >> (7 * i)) & 0x7F) | (i > 0 ? 0x80 : 0));
+    }
+
+    private static byte[] toBytes(String s) {
+        try {
+            return s.getBytes("UTF-8");
+        } catch (Exception e) {
+            return s.getBytes();
+        }
+    }
+
+    private static BoxHeader readBoxHeader(ByteBuffer buf) {
+        if (buf.remaining() < 8)
+            return null;
+        long size = buf.getInt() & 0xFFFFFFFFL;
+        byte[] tb = new byte[4];
+        buf.get(tb);
+        String type = new String(tb);
+        int hs = 8;
+        if (size == 1) {
+            if (buf.remaining() < 8)
+                return null;
+            size = buf.getLong();
+            hs = 16;
+        } else if (size == 0)
+            size = buf.remaining() + hs;
+        if (size < hs)
+            return null;
+        return new BoxHeader(size, type, hs);
+    }
+
+    private static class BoxHeader {
+        final long size;
+        final String type;
+        final int headerSize;
+
+        BoxHeader(long s, String t, int h) {
+            size = s;
+            type = t;
+            headerSize = h;
+        }
+
+        long dataSize() {
+            return size - headerSize;
+        }
+    }
+
+    private static ParseResult parseMoof(byte[] data) {
+        ParseResult r = new ParseResult();
+        ByteBuffer b = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN);
+        int td = 0;
+        while (b.remaining() >= 8) {
+            int s = b.getInt();
+            String t = read4cc(b);
+            if (s < 8 || s - 8 > b.remaining())
+                break;
+            int cs = s - 8;
+            byte[] cd = new byte[cs];
+            b.get(cd);
+            if ("traf".equals(t))
+                td = parseTraf(cd, r, td);
+        }
+        return r;
+    }
+
+    private static int parseTraf(byte[] data, ParseResult r, int prevDefault) {
+        ByteBuffer b = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN);
+        int ds = prevDefault;
+        while (b.remaining() >= 8) {
+            int s = b.getInt();
+            String t = read4cc(b);
+            if (s < 8 || s - 8 > b.remaining())
+                break;
+            int cs = s - 8;
+            byte[] cd = new byte[cs];
+            b.get(cd);
+            if ("tfhd".equals(t))
+                ds = parseTfhd(cd);
+            else if ("trun".equals(t))
+                parseTrun(cd, r, ds);
+        }
+        return ds;
+    }
+
+    private static int parseTfhd(byte[] cd) {
+        if (cd.length < 8)
+            return 0;
+        int flags = ((cd[1] & 0xFF) << 16) | ((cd[2] & 0xFF) << 8) | (cd[3] & 0xFF);
+        if ((flags & TFHD_DEFAULT_SAMPLE_SIZE) != 0 && 12 <= cd.length) {
+            ByteBuffer bb = ByteBuffer.wrap(cd).order(ByteOrder.BIG_ENDIAN);
+            return bb.getInt(8);
+        }
+        return 0;
+    }
+
+    private static void parseTrun(byte[] cd, ParseResult r, int defaultSampleSize) {
+        if (cd.length < 8)
+            return;
+        int flags = ((cd[1] & 0xFF) << 16) | ((cd[2] & 0xFF) << 8) | (cd[3] & 0xFF);
+        ByteBuffer trun = ByteBuffer.wrap(cd).order(ByteOrder.BIG_ENDIAN);
+        int pos = 4;
+        int sc = trun.getInt(pos);
+        pos += 4;
+        boolean hdo = (flags & TRUN_DATA_OFFSET) != 0, hfs = (flags & TRUN_FIRST_SAMPLE_FLAGS) != 0;
+        boolean hsd = (flags & TRUN_SAMPLE_DURATION) != 0, hss = (flags & TRUN_SAMPLE_SIZE) != 0;
+        boolean hsf = (flags & TRUN_SAMPLE_FLAGS) != 0, hct = (flags & TRUN_SAMPLE_COMP_TIME) != 0;
+        if (hdo && pos + 4 <= cd.length)
+            pos += 4;
+        if (hfs && pos + 4 <= cd.length)
+            pos += 4;
+        r.sampleCount += sc;
+        if (hss && sc > 0) {
+            r.ensureCapacity(r.sampleSizes != null ? r.sampleSizes.length + sc : sc);
+            int wi = r.sampleSizes.length - sc;
+            for (int i = 0; i < sc; i++) {
+                if (hsd && pos + 4 <= cd.length)
+                    pos += 4;
+                if (pos + 4 <= cd.length) {
+                    r.sampleSizes[wi + i] = trun.getInt(pos);
+                    pos += 4;
+                }
+                if (hsf && pos + 4 <= cd.length)
+                    pos += 4;
+                if (hct && pos + 4 <= cd.length)
+                    pos += 4;
+            }
+        } else if (defaultSampleSize > 0)
+            r.defaultSampleSize = defaultSampleSize;
+    }
+
+    private static ParseResult parseMoov(byte[] data) {
+        ByteBuffer b = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN);
+        ParseResult r = new ParseResult();
+        while (b.remaining() >= 8) {
+            int s = b.getInt();
+            String t = read4cc(b);
+            if (s < 8 || s - 8 > b.remaining())
+                break;
+            int cs = s - 8;
+            byte[] cd = new byte[cs];
+            b.get(cd);
+            if ("trak".equals(t))
+                parseTrak(cd, r);
+        }
+        return r;
+    }
+
+    private static void parseTrak(byte[] data, ParseResult r) {
+        if (!isAudioTrack(data))
+            return;
+        ByteBuffer b = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN);
+        while (b.remaining() >= 8) {
+            int s = b.getInt();
+            String t = read4cc(b);
+            if (s < 8 || s - 8 > b.remaining())
+                break;
+            int cs = s - 8;
+            byte[] cd = new byte[cs];
+            b.get(cd);
+            if ("mdia".equals(t))
+                parseMdia(cd, r);
+        }
+    }
+
+    private static boolean isAudioTrack(byte[] d) {
+        ByteBuffer b = ByteBuffer.wrap(d).order(ByteOrder.BIG_ENDIAN);
+        while (b.remaining() >= 8) {
+            int s = b.getInt();
+            String t = read4cc(b);
+            if (s < 8 || s - 8 > b.remaining())
+                break;
+            int cs = s - 8;
+            if ("hdlr".equals(t)) {
+                byte[] hd = new byte[cs];
+                b.get(hd);
+                if (cs >= 12 && "soun".equals(new String(hd, 8, 4)))
+                    return true;
+            } else if ("mdia".equals(t)) {
+                byte[] md = new byte[cs];
+                b.get(md);
+                if (isAudioTrack(md))
+                    return true;
+            } else
+                b.position(b.position() + cs);
+        }
+        return indexOf(d, "mp4a".getBytes()) >= 0;
+    }
+
+    private static void parseMdia(byte[] d, ParseResult r) {
+        ByteBuffer b = ByteBuffer.wrap(d).order(ByteOrder.BIG_ENDIAN);
+        while (b.remaining() >= 8) {
+            int s = b.getInt();
+            String t = read4cc(b);
+            if (s < 8 || s - 8 > b.remaining())
+                break;
+            int cs = s - 8;
+            byte[] cd = new byte[cs];
+            b.get(cd);
+            if ("minf".equals(t))
+                parseMinf(cd, r);
+        }
+    }
+
+    private static void parseMinf(byte[] d, ParseResult r) {
+        ByteBuffer b = ByteBuffer.wrap(d).order(ByteOrder.BIG_ENDIAN);
+        while (b.remaining() >= 8) {
+            int s = b.getInt();
+            String t = read4cc(b);
+            if (s < 8 || s - 8 > b.remaining())
+                break;
+            int cs = s - 8;
+            byte[] cd = new byte[cs];
+            b.get(cd);
+            if ("stbl".equals(t))
+                parseStbl(cd, r);
+        }
+    }
+
+    private static void parseStbl(byte[] d, ParseResult r) {
+        ByteBuffer b = ByteBuffer.wrap(d).order(ByteOrder.BIG_ENDIAN);
+        while (b.remaining() >= 8) {
+            int s = b.getInt();
+            String t = read4cc(b);
+            if (s < 8 || s - 8 > b.remaining())
+                break;
+            int cs = s - 8;
+            byte[] cd = new byte[cs];
+            b.get(cd);
+            if ("stsd".equals(t))
+                parseStsd(cd, r);
+        }
+    }
+
+    private static void parseStsd(byte[] d, ParseResult r) {
+        if (d.length < 16)
+            return;
+        ByteBuffer b = ByteBuffer.wrap(d).order(ByteOrder.BIG_ENDIAN);
+        b.position(4);
+        int ec = b.getInt();
+        int rem = d.length - 8;
+        for (int i = 0; i < ec && rem >= 8; i++) {
+            int es = b.getInt();
+            String et = read4cc(b);
+            if (es < 8 || es > rem)
+                break;
+            if ("mp4a".equals(et)) {
+                byte[] md = new byte[es - 8];
+                b.get(md);
+                r.asc = extractAscFromMp4a(md);
+                if (r.asc != null)
+                    return;
+            } else
+                b.position(b.position() + es - 8);
+            rem -= es;
+        }
+    }
+
+    private static byte[] extractAscFromMp4a(byte[] d) {
+        if (d.length < 28)
+            return null;
+        int pos = 28;
+        while (pos + 8 <= d.length) {
+            int bs = readIntBE(d, pos);
+            String bt = new String(d, pos + 4, 4);
+            if (bs == 0) {
+                pos += 4;
+                continue;
+            }
+            if (bs < 8 || pos + bs > d.length) {
+                pos += 4;
+                continue;
+            }
+            if ("esds".equals(bt))
+                return extractAscFromEsds(d, pos + 8, bs - 8);
+            pos += bs;
+        }
+        return null;
+    }
+
+    private static byte[] extractAscFromEsds(byte[] d, int start, int len) {
+        int pos = start + 4;
+        int end = Math.min(d.length, start + len);
+        return findAscDescriptor(d, pos, end);
+    }
+
+    private static byte[] findAscDescriptor(byte[] d, int start, int end) {
+        int pos = start;
+        while (pos < end - 1) {
+            int tag = d[pos++] & 0xFF;
+            if (tag == 0)
+                continue;
+            int dl = 0;
+            for (int i = 0; i < 4 && pos < end; i++) {
+                int b = d[pos++] & 0xFF;
+                dl = (dl << 7) | (b & 0x7F);
+                if ((b & 0x80) == 0)
+                    break;
+            }
+            int ps = pos, pe = Math.min(end, ps + dl);
+            if (tag == 0x05 && dl >= 2) {
+                byte[] asc = new byte[pe - ps];
+                System.arraycopy(d, ps, asc, 0, asc.length);
+                return asc;
+            }
+            int ns = ps;
+            if (tag == 0x03 && ps + 3 <= pe) {
+                int flags = d[ps + 2] & 0xFF;
+                ns = ps + 3;
+                if ((flags & 0x80) != 0)
+                    ns += 2;
+                if ((flags & 0x40) != 0 && ns < pe)
+                    ns += 1 + (d[ns] & 0xFF);
+                if ((flags & 0x20) != 0)
+                    ns += 2;
+            } else if (tag == 0x04)
+                ns = ps + 13;
+            if (ns > ps && ns < pe) {
+                byte[] nested = findAscDescriptor(d, ns, pe);
+                if (nested != null)
+                    return nested;
+            }
+            pos = pe;
+        }
+        return null;
+    }
+
+    private static String read4cc(ByteBuffer b) {
+        byte[] x = new byte[4];
+        b.get(x);
+        return new String(x);
+    }
+
+    private static int readIntBE(byte[] d, int off) {
+        return ((d[off] & 0xFF) << 24) | ((d[off + 1] & 0xFF) << 16) | ((d[off + 2] & 0xFF) << 8) | (d[off + 3] & 0xFF);
+    }
+
+    private static int indexOf(byte[] h, byte[] n) {
+        outer: for (int i = 0; i <= h.length - n.length; i++) {
+            for (int j = 0; j < n.length; j++)
+                if (h[i + j] != n[j])
+                    continue outer;
+            return i;
+        }
+        return -1;
+    }
+
+    private static class ParseResult {
+        byte[] asc;
+        int defaultSampleSize;
+        int sampleCount;
+        int[] sampleSizes;
+
+        void ensureCapacity(int min) {
+            if (sampleSizes == null)
+                sampleSizes = new int[min];
+            else if (sampleSizes.length < min) {
+                int[] o = sampleSizes;
+                sampleSizes = new int[min];
+                System.arraycopy(o, 0, sampleSizes, 0, o.length);
+            }
+        }
+    }
+}
