@@ -27,7 +27,8 @@ public final class BiliApiClient {
     private static final Pattern STORED_SELECTION_RE = Pattern.compile(
             "^((?:[Bb][Vv][0-9A-Za-z]{10}|av\\d+))(?:\\|p=(\\d+))?$",
             Pattern.CASE_INSENSITIVE);
-    private static final int[] QUALITY_ORDER = { 30255, 30251, 30250, 30280, 30232, 30216 };
+    // FLAC 优先, AAC 次之; 不选 Dolby(ec-3) 因为我们无法解码
+    private static final int[] QUALITY_ORDER = { 30251, 30250, 30280, 30232, 30216 };
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
@@ -294,19 +295,7 @@ public final class BiliApiClient {
             }
         }
 
-        // 杜比
-        if (dash.has("dolby") && !dash.get("dolby").isJsonNull()) {
-            JsonObject dolby = dash.getAsJsonObject("dolby");
-            if (dolby.has("audio")) {
-                JsonElement ae = dolby.get("audio");
-                if (ae.isJsonArray()) {
-                    for (JsonElement e : ae.getAsJsonArray()) {
-                        JsonObject a = e.getAsJsonObject();
-                        streams.put(a.get("id").getAsInt(), a.get("baseUrl").getAsString());
-                    }
-                }
-            }
-        }
+        // 杜比 (ec-3) 无法解码，跳过
 
         if (streams.isEmpty()) {
             throw new RuntimeException("该视频没有可用的 DASH 音频流");

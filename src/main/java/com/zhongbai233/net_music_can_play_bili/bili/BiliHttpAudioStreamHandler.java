@@ -31,7 +31,8 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
-    private static final int PIPE_BUFFER_SIZE = 256 * 1024;
+    private static final int PIPE_BUFFER_SIZE = 4 * 1024 * 1024;
+    private static final int STREAM_BUFFER_SIZE = 64 * 1024;
     private static final int SKIP_BUFFER_SIZE = 8192;
     private static final int MIN_AAC_SAMPLE_SIZE = 20;
 
@@ -117,13 +118,25 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
         if (isFlac.get()) {
             // FLAC
             AudioInputStream flacDecoded = new Flac2PcmAudioInputStream(pipe, format, AudioSystem.NOT_SPECIFIED);
-            return new AudioInputStream(flacDecoded, flacDecoded.getFormat(), AudioSystem.NOT_SPECIFIED) {
+            if (format.getSampleSizeInBits() > 16) {
+                AudioFormat fmt16 = new AudioFormat(format.getSampleRate(), 16,
+                        format.getChannels(), true, false);
+                LOGGER.info("B站 FLAC Hi-Res 启用 TPDF 抖动 24→16bit: {}Hz/{}ch",
+                        format.getSampleRate(), format.getChannels());
+                flacDecoded = new AudioInputStream(
+                        new PcmDitheringStream(flacDecoded, format, fmt16),
+                        fmt16, AudioSystem.NOT_SPECIFIED);
+            }
+            final AudioInputStream finalStream = flacDecoded;
+            return new AudioInputStream(finalStream, finalStream.getFormat(), AudioSystem.NOT_SPECIFIED) {
                 @Override
                 public void close() throws IOException {
+                    LOGGER.info("B站 FLAC 音频流 close(), caller={}",
+                            Thread.currentThread().getName());
                     closed.set(true);
                     closeBody(bodyRef);
                     worker.interrupt();
-                    flacDecoded.close();
+                    finalStream.close();
                     super.close();
                 }
             };
@@ -132,6 +145,8 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
             return new AudioInputStream(pipe, format, AudioSystem.NOT_SPECIFIED) {
                 @Override
                 public void close() throws IOException {
+                    LOGGER.info("B站 AAC 音频流 close(), caller={}",
+                            Thread.currentThread().getName());
                     closed.set(true);
                     closeBody(bodyRef);
                     worker.interrupt();
@@ -148,6 +163,8 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
         SampleBuffer sampleBuffer = null;
         int[] pendingSampleSizes = null;
         long decodedFrames = 0;
+        int boxCount = 0;
+        long totalBytes = 0;
 
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(url.toString()))
@@ -174,6 +191,8 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
                 if (box.dataSize < 0) {
                     throw new IOException("暂不支持未知长度 MP4 box: " + box.type);
                 }
+                boxCount++;
+                totalBytes += box.dataSize;
 
                 switch (box.type) {
                     case "ftyp" -> skipFully(in, box.dataSize);
@@ -197,7 +216,9 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
                             // AAC
                             byte[] asc = Fmp4ToMp4Converter.extractAudioSpecificConfigFromMoov(moovData);
                             if (asc == null) {
-                                throw new IOException("无法从 B站 fMP4 moov 中提取 AAC 配置");
+                                String codecs = Fmp4ToMp4Converter.listAudioCodecs(moovData);
+                                LOGGER.warn("B站 fMP4 moov 中未找到 AAC/FLAC 音频轨, 发现: {}", codecs);
+                                throw new IOException("B站音频编码不支持 (仅支持 AAC/FLAC), 发现: " + codecs);
                             }
                             aacDecoder = Decoder.create(asc);
                             AudioFormat format = aacDecoder.getAudioFormat();
@@ -240,14 +261,16 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
                 }
             }
 
-            LOGGER.info("B站音频流结束，共解码 {} 帧", decodedFrames);
+            LOGGER.info("B站音频流结束: {} boxes, {} bytes, 共解码 {} 帧", boxCount, totalBytes, decodedFrames);
         } catch (EOFException e) {
-            LOGGER.info("B站音频流 EOF，共解码 {} 帧", decodedFrames);
+            LOGGER.info("B站音频流 EOF: {} boxes, {} bytes, 共解码 {} 帧", boxCount, totalBytes, decodedFrames);
         } catch (IOException e) {
             if (closed.get() || isStreamEndException(e)) {
-                LOGGER.info("B站音频流正常结束: {}, 共解码 {} 帧", e.getMessage(), decodedFrames);
+                LOGGER.info("B站音频流中断: {} boxes, {} bytes, closed={}, msg={}, 共解码 {} 帧",
+                        boxCount, totalBytes, closed.get(), e.getMessage(), decodedFrames);
+                LOGGER.info("B站音频流中断堆栈", e);
             } else {
-                LOGGER.error("B站音频流 IO 失败", e);
+                LOGGER.error("B站音频流 IO 失败: {} boxes, {} bytes", boxCount, totalBytes, e);
                 errorRef.set(e);
             }
         } catch (Exception e) {
@@ -276,7 +299,23 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
             }
             if (sampleSize > remaining) {
                 LOGGER.warn("B站 fMP4 sample size 超出 mdat 剩余长度: sample={}, remaining={}", sampleSize, remaining);
-                skipFully(in, remaining);
+                if (remaining >= MIN_AAC_SAMPLE_SIZE) {
+                    byte[] partial = readFully(in, remaining);
+                    try {
+                        decoder.decodeFrame(partial, sampleBuffer);
+                        byte[] pcm = sampleBuffer.getData();
+                        if (pcm != null && pcm.length > 0) {
+                            output.write(pcm);
+                            decoded++;
+                        }
+                    } catch (IOException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        LOGGER.debug("B站 fMP4 尾部截断帧无法解码(size={}): {}", remaining, e.getMessage());
+                    }
+                } else {
+                    skipFully(in, remaining);
+                }
                 return decoded;
             }
 
@@ -374,7 +413,7 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
 
     private static void streamToPipe(InputStream in, long length, BlockingAudioPipe pipe, AtomicBoolean closed)
             throws IOException {
-        byte[] buffer = new byte[SKIP_BUFFER_SIZE];
+        byte[] buffer = new byte[STREAM_BUFFER_SIZE];
         long remaining = length;
         while (remaining > 0 && !closed.get()) {
             int toRead = (int) Math.min(buffer.length, remaining);
@@ -434,7 +473,7 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
 
     // 专门给 NetMusicAudioStream 用的阻塞音频管道，自动扩容
     private static final class BlockingAudioPipe extends InputStream {
-        private static final int MAX_CAPACITY = 64 * 1024 * 1024;
+        private static final int MAX_CAPACITY = 512 * 1024 * 1024;
         private byte[] buffer;
         private int readPos;
         private int writePos;
@@ -484,8 +523,8 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
             }
             readPos = (readPos + n) % buffer.length;
             size -= n;
-            if (size == 0 && buffer.length > PIPE_BUFFER_SIZE) {
-                buffer = new byte[PIPE_BUFFER_SIZE];
+            if (size == 0 && buffer.length > PIPE_BUFFER_SIZE * 8) {
+                buffer = new byte[PIPE_BUFFER_SIZE * 2];
                 readPos = 0;
                 writePos = 0;
             }

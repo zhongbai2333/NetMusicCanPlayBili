@@ -864,6 +864,42 @@ public final class Fmp4ToMp4Converter {
         return -1;
     }
 
+    /** 扫描 moov 中所有音频轨的 fourcc 编码类型，用于诊断不支持的编码格式。 */
+    public static String listAudioCodecs(byte[] moovData) {
+        java.util.List<String> codecs = new java.util.ArrayList<>();
+        ByteBuffer buf = ByteBuffer.wrap(moovData).order(ByteOrder.BIG_ENDIAN);
+        while (buf.remaining() >= 8) {
+            int s = buf.getInt();
+            String t = read4cc(buf);
+            if (s < 8 || s - 8 > buf.remaining())
+                break;
+            int cs = s - 8;
+            byte[] cd = new byte[cs];
+            buf.get(cd);
+            if ("trak".equals(t)) {
+                String c = findStsdCodec(cd);
+                if (c != null)
+                    codecs.add(c);
+            }
+        }
+        return codecs.isEmpty() ? "(未找到音频轨)" : String.join(", ", codecs);
+    }
+
+    private static String findStsdCodec(byte[] trakData) {
+        int stsd = indexOf(trakData, "stsd".getBytes());
+        if (stsd < 0)
+            return null;
+        ByteBuffer b = ByteBuffer.wrap(trakData).order(ByteOrder.BIG_ENDIAN);
+        if (stsd + 16 > b.remaining())
+            return null;
+        b.position(stsd + 12);
+        int ec = b.getInt();
+        if (ec < 1 || b.remaining() < 8)
+            return null;
+        b.getInt(); // skip entry size
+        return read4cc(b); // first entry fourcc
+    }
+
     private static class ParseResult {
         byte[] asc;
         byte[] flacDfLa;
