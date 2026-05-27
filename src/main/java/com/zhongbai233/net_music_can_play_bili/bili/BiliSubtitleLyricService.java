@@ -22,16 +22,41 @@ public final class BiliSubtitleLyricService {
 
         try {
             BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(selection.videoId(), selection.page());
+
+            // 尝试获取 CC 字幕
             String lyricJson = BiliApiClient.getBilingualSubtitleAsNetEaseLyric(info);
-            if (lyricJson == null || lyricJson.isBlank()) {
-                return null;
-            }
-            LyricRecord record = LyricParser.parseLyric(lyricJson, songName);
-            if (record == null) {
+            if (lyricJson != null && !lyricJson.isBlank()) {
+                LyricRecord record = LyricParser.parseLyric(lyricJson, songName);
+                if (record != null) {
+                    return record;
+                }
                 LOGGER.warn("B站 CC 字幕解析失败：LyricParser 返回 null");
-                return null;
             }
-            return record;
+
+            boolean hasAnySubtitle = false;
+            try {
+                java.util.List<BiliApiClient.SubtitleInfo> rawSubs = BiliApiClient.getAllSubtitles(info);
+                hasAnySubtitle = rawSubs != null && !rawSubs.isEmpty();
+            } catch (Exception ignored) {
+            }
+
+            String note;
+            if (BiliApiClient.sessdata.isBlank()) {
+                note = "字幕需登录B站账号";
+            } else if (hasAnySubtitle) {
+                note = "无可用CC字幕";
+            } else {
+                note = "无CC字幕";
+            }
+
+            LOGGER.info("B站占位歌词: {} | hasAnySubtitle={} | sessdata={}",
+                    info.displayTitle(), hasAnySubtitle, !BiliApiClient.sessdata.isBlank());
+            String placeholderJson = BiliApiClient.buildPlaceholderNetEaseLyric(info, note);
+            LyricRecord record = LyricParser.parseLyric(placeholderJson, songName);
+            if (record != null) {
+                return record;
+            }
+            return null;
         } catch (Exception e) {
             LOGGER.warn("B站 CC 字幕获取失败: {}", e.getMessage());
             return null;

@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.bili;
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
 
+import javax.sound.sampled.AudioFormat;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -84,6 +85,140 @@ public final class Fmp4ToMp4Converter {
         int[] durs = allDurs.subList(skipCnt, allDurs.size()).stream().mapToInt(i -> i).toArray();
         LOGGER.info("[Fmp4ToAdts] MP4转换: {}帧, {}B AAC", sizes.length, audioData.length);
         return buildStandardMp4(asc, sizes, durs, audioData);
+    }
+
+    /** 从 fMP4 头部的 moov box 快速提取音频格式，用于流式播放前预知采样率/声道 */
+    public static AudioFormat sniffAudioFormat(byte[] partialFmp4) {
+        ByteBuffer buf = ByteBuffer.wrap(partialFmp4).order(ByteOrder.BIG_ENDIAN);
+        while (buf.remaining() >= 8) {
+            BoxHeader box = readBoxHeader(buf);
+            if (box == null)
+                break;
+            long dataSize = box.dataSize();
+            if ("moov".equals(box.type) && dataSize > 0 && dataSize <= buf.remaining()) {
+                byte[] moovData = new byte[(int) dataSize];
+                buf.get(moovData);
+                ParseResult pr = parseMoov(moovData);
+                if (pr.asc != null) {
+                    return ascToAudioFormat(pr.asc);
+                }
+                break;
+            }
+            int skip = (int) Math.min(dataSize, buf.remaining());
+            buf.position(buf.position() + skip);
+        }
+        return null;
+    }
+
+    /** 从 moov box 的 payload 中提取 AAC AudioSpecificConfig，供流式解码器初始化。 */
+    public static byte[] extractAudioSpecificConfigFromMoov(byte[] moovData) {
+        ParseResult pr = parseMoov(moovData);
+        return pr.asc == null ? null : pr.asc.clone();
+    }
+
+    /** 从 moov box 的 payload 中提取 FLAC dfLa 元数据（若为 FLAC 音轨）。 */
+    public static byte[] extractFlacDfLaFromMoov(byte[] moovData) {
+        ParseResult pr = parseMoov(moovData);
+        return pr.flacDfLa == null ? null : pr.flacDfLa.clone();
+    }
+
+    /** 从 fLaC stsd entry 里提取子 box dfLa 的 payload。 */
+    private static byte[] extractDfLaFromFlacStsd(byte[] flacEntry) {
+        // fLaC entry: 6B reserved + 2B dref + child boxes
+        if (flacEntry.length < 28 + 8)
+            return null;
+        int pos = 28; // skip reserved + dref, start at first child box
+        while (pos + 8 <= flacEntry.length) {
+            int boxSize = readIntBE(flacEntry, pos);
+            String boxType = new String(flacEntry, pos + 4, 4);
+            if (boxSize < 8 || pos + boxSize > flacEntry.length)
+                break;
+            if ("dfLa".equals(boxType) && boxSize >= 12) {
+                byte[] dfLa = new byte[boxSize - 8];
+                System.arraycopy(flacEntry, pos + 8, dfLa, 0, dfLa.length);
+                return dfLa;
+            }
+            pos += boxSize;
+        }
+        return null;
+    }
+
+    /** 从 dfLa 的 FLAC 元数据块中提取 AudioFormat。 */
+    public static AudioFormat flacDfLaToAudioFormat(byte[] dfLa) {
+        if (dfLa == null || dfLa.length < 4)
+            return null;
+        // dfLa: version(1) + flags(3) + concatenated metadata blocks
+        int pos = 4;
+        while (pos + 4 <= dfLa.length) {
+            int header = (dfLa[pos] & 0xFF) << 24 | (dfLa[pos + 1] & 0xFF) << 16
+                    | (dfLa[pos + 2] & 0xFF) << 8 | (dfLa[pos + 3] & 0xFF);
+            boolean lastBlock = (header & 0x80000000) != 0;
+            int blockType = (header >> 24) & 0x7F;
+            int blockLen = header & 0x00FFFFFF;
+            pos += 4;
+            if (pos + blockLen > dfLa.length)
+                break;
+            if (blockType == 0 && blockLen >= 18) {
+                // STREAMINFO: skip min/max blocksize(4B), min/max framesize(6B)
+                // byte 10-12: sample_rate(20bit) + num_channels(3bit) + bps(5bit)
+                int b10 = dfLa[pos + 10] & 0xFF;
+                int b11 = dfLa[pos + 11] & 0xFF;
+                int b12 = dfLa[pos + 12] & 0xFF;
+                int sampleRate = (b10 << 12) | (b11 << 4) | ((b12 >> 4) & 0x0F);
+                int channels = ((b12 >> 1) & 0x07) + 1;
+                int bps = (((b12 & 0x01) << 4) | ((dfLa[pos + 13] & 0xF0) >> 4)) + 1;
+                if (bps < 4)
+                    bps = 16;
+                return new AudioFormat(sampleRate, bps, channels, true, false);
+            }
+            pos += blockLen;
+            if (lastBlock)
+                break;
+        }
+        return null;
+    }
+
+    /**
+     * dfLa 是 MP4 FullBox payload：version(1) + flags(3) + FLAC metadata blocks。
+     * 原生 FLAC 流在 "fLaC" marker 后只能接 metadata blocks，因此写流时必须跳过前 4 字节。
+     */
+    public static byte[] dfLaToNativeFlacMetadata(byte[] dfLa) {
+        if (dfLa == null || dfLa.length <= 4) {
+            return new byte[0];
+        }
+        byte[] metadata = new byte[dfLa.length - 4];
+        System.arraycopy(dfLa, 4, metadata, 0, metadata.length);
+        return metadata;
+    }
+
+    /** 从 moof box 的 payload 中提取当前 fragment 的 AAC sample 大小列表。 */
+    public static int[] extractSampleSizesFromMoof(byte[] moofData) {
+        ParseResult pr = parseMoof(moofData);
+        if (pr.sampleSizes != null) {
+            return pr.sampleSizes;
+        }
+        if (pr.defaultSampleSize > 0 && pr.sampleCount > 0) {
+            int[] sizes = new int[pr.sampleCount];
+            for (int i = 0; i < sizes.length; i++) {
+                sizes[i] = pr.defaultSampleSize;
+            }
+            return sizes;
+        }
+        return new int[0];
+    }
+
+    /** AAC ASC (AudioSpecificConfig) → AudioFormat */
+    private static AudioFormat ascToAudioFormat(byte[] asc) {
+        if (asc == null || asc.length < 2)
+            return null;
+        int b0 = asc[0] & 0xFF, b1 = asc[1] & 0xFF;
+        int freqIndex = ((b0 & 0x07) << 1) | ((b1 >> 7) & 0x01);
+        int channels = (b1 >> 3) & 0x0F;
+        if (channels < 1)
+            channels = 2;
+        int[] rates = { 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350 };
+        float rate = freqIndex < rates.length ? rates[freqIndex] : 44100.0f;
+        return new AudioFormat(rate, 16, channels, true, false);
     }
 
     private static byte[] buildStandardMp4(byte[] asc, int[] sizes, int[] durs, byte[] audioData) {
@@ -628,6 +763,12 @@ public final class Fmp4ToMp4Converter {
                 r.asc = extractAscFromMp4a(md);
                 if (r.asc != null)
                     return;
+            } else if ("fLaC".equals(et) && es >= 8 + 28) {
+                byte[] md = new byte[es - 8];
+                b.get(md);
+                r.flacDfLa = extractDfLaFromFlacStsd(md);
+                if (r.flacDfLa != null)
+                    return;
             } else
                 b.position(b.position() + es - 8);
             rem -= es;
@@ -725,6 +866,7 @@ public final class Fmp4ToMp4Converter {
 
     private static class ParseResult {
         byte[] asc;
+        byte[] flacDfLa;
         int defaultSampleSize;
         int sampleCount;
         int[] sampleSizes;

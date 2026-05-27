@@ -32,8 +32,11 @@ public class BiliAudioResolver implements IAsyncSongUrlResolver {
                 Objects.requireNonNull(info.displayTitle()),
                 info.duration(),
                 false);
-        LOGGER.info("B站视频信息获取成功: {} (P{}, cid={}, {}s)",
-                info.displayTitle(), info.page(), info.cid(), info.duration());
+        if (info.staffNames() != null && !info.staffNames().isEmpty()) {
+            songInfo.artists = new java.util.ArrayList<>(info.staffNames());
+        }
+        LOGGER.info("B站视频信息获取成功: {} (P{}, cid={}, {}s) UP主: {}",
+                info.displayTitle(), info.page(), info.cid(), info.duration(), info.staffNames());
         LOGGER.info("唱片将存储原始 ID: {}", songInfo.songUrl);
         return songInfo;
     }
@@ -62,6 +65,10 @@ public class BiliAudioResolver implements IAsyncSongUrlResolver {
                 }
                 if (songInfo.songTime <= 0) {
                     songInfo.songTime = info.duration();
+                }
+                if ((songInfo.artists == null || songInfo.artists.isEmpty())
+                        && info.staffNames() != null && !info.staffNames().isEmpty()) {
+                    songInfo.artists = new java.util.ArrayList<>(info.staffNames());
                 }
                 LOGGER.info("B站 CDN 直链刷新成功: {}", info.displayTitle());
 

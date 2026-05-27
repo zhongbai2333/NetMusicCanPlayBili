@@ -27,15 +27,11 @@ public final class BiliApiClient {
     private static final Pattern STORED_SELECTION_RE = Pattern.compile(
             "^((?:[Bb][Vv][0-9A-Za-z]{10}|av\\d+))(?:\\|p=(\\d+))?$",
             Pattern.CASE_INSENSITIVE);
-    private static final int[] QUALITY_ORDER = { 30251, 30250, 30280, 30232, 30216 };
+    private static final int[] QUALITY_ORDER = { 30255, 30251, 30250, 30280, 30232, 30216 };
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
-    /**
-     * B站 SESSDATA Cookie，用于获取字幕等需要登录的功能。
-     * 可在浏览器开发者工具 → Application → Cookies 中复制。
-     * 不设置则字幕功能不可用（不影响音频播放）。
-     */
+    // B站 SESSDATA Cookie，扫码登录后自动获取
     public static volatile String sessdata = System.getProperty("bili.sessdata", "");
 
     private BiliApiClient() {
@@ -50,8 +46,6 @@ public final class BiliApiClient {
         String raw = input.trim();
         return BV_FULL_RE.matcher(raw).matches() || AV_FULL_RE.matcher(raw).matches();
     }
-
-    // 从输入中提取视频 ID
 
     public static VideoId extractVideoId(String raw) {
         if (raw == null || raw.isBlank())
@@ -102,8 +96,8 @@ public final class BiliApiClient {
 
     // == API ==
 
-    public record VideoInfo(long aid, String title, long cid, int duration, int page, int totalPages, String part,
-            VideoId videoId) {
+    public record VideoInfo(long aid, String title, List<String> staffNames, long cid, int duration, int page,
+            int totalPages, String part, VideoId videoId) {
         public String displayTitle() {
             if (totalPages <= 1) {
                 return title;
@@ -136,7 +130,7 @@ public final class BiliApiClient {
         }
     }
 
-    // B站视频 ID：BV 或 AV(aid)
+    // B站视频 ID：BV 或 AV
     public record VideoId(String kind, String value) {
         public static VideoId bvid(String value) {
             return new VideoId("bvid", value);
@@ -197,6 +191,24 @@ public final class BiliApiClient {
         long aid = data.get("aid").getAsLong();
         String title = data.get("title").getAsString();
 
+        // 提取 UP主名称
+        List<String> staffNames = new ArrayList<>();
+        if (data.has("staff") && !data.get("staff").isJsonNull()) {
+            JsonArray staff = data.getAsJsonArray("staff");
+            for (JsonElement e : staff) {
+                JsonObject member = e.getAsJsonObject();
+                if (member.has("name") && !member.get("name").isJsonNull()) {
+                    staffNames.add(member.get("name").getAsString());
+                }
+            }
+        }
+        if (staffNames.isEmpty() && data.has("owner") && !data.get("owner").isJsonNull()) {
+            JsonObject owner = data.getAsJsonObject("owner");
+            if (owner.has("name") && !owner.get("name").isJsonNull()) {
+                staffNames.add(owner.get("name").getAsString());
+            }
+        }
+
         int duration = data.get("duration").getAsInt();
         JsonArray pages = data.getAsJsonArray("pages");
         int totalPages = pages != null && !pages.isEmpty() ? pages.size() : 1;
@@ -221,7 +233,7 @@ public final class BiliApiClient {
             cid = data.get("cid").getAsLong();
         }
 
-        return new VideoInfo(aid, title, cid, duration, actualPage, totalPages, part, id);
+        return new VideoInfo(aid, title, staffNames, cid, duration, actualPage, totalPages, part, id);
     }
 
     // 获取 DASH 音频流直链
@@ -229,7 +241,7 @@ public final class BiliApiClient {
         Map<String, String> params = new HashMap<>();
         id.putPlayUrlParam(params);
         params.put("cid", String.valueOf(cid));
-        params.put("fnval", "4048"); // 请求 DASH + FLAC + Dolby
+        params.put("fnval", "4048");
         params.put("fnver", "0");
         params.put("fourk", "1");
         params.put("platform", "pc");
@@ -238,12 +250,15 @@ public final class BiliApiClient {
         String url = "https://api.bilibili.com/x/player/wbi/playurl?"
                 + BiliWbiSigner.buildQuery(signed);
 
-        HttpRequest req = HttpRequest.newBuilder()
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("User-Agent", USER_AGENT)
                 .header("Referer", "https://www.bilibili.com/")
-                .timeout(Duration.ofSeconds(15))
-                .GET().build();
+                .timeout(Duration.ofSeconds(15));
+        if (!sessdata.isBlank()) {
+            builder.header("Cookie", "SESSDATA=" + sessdata);
+        }
+        HttpRequest req = builder.GET().build();
 
         HttpResponse<String> resp = BiliWbiSigner.HTTP.send(req,
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -306,14 +321,13 @@ public final class BiliApiClient {
         return streams.values().iterator().next();
     }
 
-    /** 获取双语字幕（中文 + 英文），返回 NetEase 歌词 JSON 格式 */
+    // 获取字幕并转为 NetEase 歌词 JSON 格式
     public static String getBilingualSubtitleAsNetEaseLyric(VideoInfo info) throws Exception {
         List<SubtitleInfo> all = getAllSubtitles(info);
         if (all.isEmpty()) {
             return null;
         }
 
-        // 过滤：必须有可下载 URL 且非 AI 生成
         List<SubtitleInfo> candidates = new ArrayList<>();
         for (SubtitleInfo s : all) {
             if (!s.normalizedUrl().isBlank() && !s.isAiGenerated()) {
@@ -324,41 +338,41 @@ public final class BiliApiClient {
             return null;
         }
 
-        // 找中文 + 英文
-        SubtitleInfo zh = null;
-        SubtitleInfo en = null;
+        SubtitleInfo chinese = null;
+        SubtitleInfo english = null;
+        SubtitleInfo other = null;
         for (SubtitleInfo s : candidates) {
-            if (zh == null && isChineseSubtitle(s.lan())) {
-                zh = s;
-            } else if (en == null && isEnglishSubtitle(s.lan())) {
-                en = s;
+            if (chinese == null && isChineseSubtitle(s.lan())) {
+                chinese = s;
+            } else if (english == null && isEnglishSubtitle(s.lan())) {
+                english = s;
+            } else if (other == null) {
+                other = s;
             }
-        }
-        // 如果缺一个，用第一个非中非英的补
-        SubtitleInfo fallback = null;
-        for (SubtitleInfo s : candidates) {
-            if (s != zh && s != en && fallback == null) {
-                fallback = s;
-            }
-        }
-        if (zh == null && fallback != null) {
-            zh = fallback;
-            fallback = null;
-        }
-        if (en == null && fallback != null) {
-            en = fallback;
         }
 
-        if (zh == null) {
+        SubtitleInfo zhSub = chinese != null ? chinese
+                : english != null ? english
+                        : other;
+        if (zhSub == null) {
             return null;
         }
 
-        String zhLrc = convertSubtitleJsonToLrc(getText(zh.normalizedUrl()));
-        String enLrc = en != null ? convertSubtitleJsonToLrc(getText(en.normalizedUrl())) : null;
-        return buildNetEaseLyricJson(zhLrc, enLrc);
+        SubtitleInfo transSub = null;
+        if (zhSub == chinese) {
+            transSub = english != null ? english : other;
+        } else if (zhSub == english) {
+            transSub = chinese != null ? chinese : other;
+        } else {
+            transSub = chinese != null ? chinese : (english != null ? english : null);
+        }
+
+        String zhLrc = convertSubtitleJsonToLrc(getText(zhSub.normalizedUrl()));
+        String transLrc = transSub != null ? convertSubtitleJsonToLrc(getText(transSub.normalizedUrl())) : null;
+        return buildNetEaseLyricJson(zhLrc, transLrc);
     }
 
-    private static List<SubtitleInfo> getAllSubtitles(VideoInfo info) throws Exception {
+    static List<SubtitleInfo> getAllSubtitles(VideoInfo info) throws Exception {
         List<SubtitleInfo> subtitles = getSubtitlesFromPlayerApi(info);
         if (subtitles.isEmpty()) {
             subtitles = getSubtitlesFromViewApi(info);
@@ -470,7 +484,6 @@ public final class BiliApiClient {
         return response.body();
     }
 
-    /** 将 B站 CC 字幕 JSON 转为 LRC 格式字符串 */
     private static String convertSubtitleJsonToLrc(String subtitleJson) {
         JsonObject root = JsonParser.parseString(subtitleJson).getAsJsonObject();
         if (!root.has("body") || !root.get("body").isJsonArray()) {
@@ -496,19 +509,38 @@ public final class BiliApiClient {
         return lrc.isEmpty() ? null : lrc.toString();
     }
 
-    /** 构建 NetEase 歌词 JSON（支持双语）。注意：字段名必须和 NetEase API 一致（lrc/tlyric） */
-    private static String buildNetEaseLyricJson(String zhLrc, String enLrc) {
-        JsonObject lyric = new JsonObject();
-        lyric.addProperty("lyric", zhLrc);
+    // 为没有 CC 字幕的 B站视频生成占位歌词。
+    public static String buildPlaceholderNetEaseLyric(VideoInfo info, String note) {
+        String title = info.displayTitle();
+        String artists = !info.staffNames().isEmpty() ? String.join(" | ", info.staffNames()) : "";
+
+        StringBuilder zhLrc = new StringBuilder();
+        zhLrc.append(formatLrcTime(0)).append(title);
+        if (!artists.isEmpty()) {
+            zhLrc.append(" By. ").append(artists);
+        }
+        zhLrc.append('\n');
+
+        String transLrc = formatLrcTime(0) + "（" + note + "）\n";
+
+        return buildNetEaseLyricJson(zhLrc.toString(), transLrc);
+    }
+
+    // 构建 NetEase 歌词 JSON。
+    private static String buildNetEaseLyricJson(String zhLrc, String transLrc) {
+        // lrc 是副字幕！！！！
+        JsonObject lrc = new JsonObject();
+        lrc.addProperty("lyric", transLrc != null ? transLrc : "");
 
         JsonObject netEaseLyric = new JsonObject();
         netEaseLyric.addProperty("code", 200);
-        netEaseLyric.add("lrc", lyric);
+        netEaseLyric.add("lrc", lrc);
 
-        if (enLrc != null && !enLrc.isBlank()) {
-            JsonObject transLyric = new JsonObject();
-            transLyric.addProperty("lyric", enLrc);
-            netEaseLyric.add("tlyric", transLyric);
+        // tlyric 是主字幕！！！！
+        if (zhLrc != null && !zhLrc.isBlank()) {
+            JsonObject tlyric = new JsonObject();
+            tlyric.addProperty("lyric", zhLrc);
+            netEaseLyric.add("tlyric", tlyric);
         }
 
         return netEaseLyric.toString();
