@@ -36,8 +36,8 @@ public class DolbyAudioHandler {
     private long lastFrameFeedNanos;
     private double frameBudget;
 
-    private OpenALSpatialAudio spatialAudio;
-    private boolean initialized;
+    private volatile OpenALSpatialAudio spatialAudio;
+    private volatile boolean initialized;
     private int numBedChannels;
     private int numObjects;
     private float[][] bedPositions;
@@ -302,6 +302,8 @@ public class DolbyAudioHandler {
     }
 
     private void feedOpenAL(ProcessedFrame pf) {
+        if (closed)
+            return;
         int chs = pf.channels, objs = Math.max(0, Math.min(pf.objCount, MAX_OBJECT_SOURCES));
         int targetObjects = BiliConfig.dolbyJocEnabled ? MAX_OBJECT_SOURCES : objs;
         if (!initialized || numBedChannels != chs || targetObjects > numObjects) {
@@ -309,8 +311,9 @@ public class DolbyAudioHandler {
             int newObjectCapacity = initialized && numBedChannels == chs
                     ? Math.max(numObjects, targetObjects)
                     : targetObjects;
-            if (spatialAudio != null)
-                spatialAudio.cleanup();
+            OpenALSpatialAudio oldSA = spatialAudio;
+            if (oldSA != null)
+                oldSA.cleanup();
             spatialAudio = new OpenALSpatialAudio();
             spatialAudio.init(chs, newObjectCapacity);
             numBedChannels = chs;
@@ -326,14 +329,17 @@ public class DolbyAudioHandler {
             LOGGER.info("Dolby OpenAL 配置: beds={}, objectCapacity={} (frameObjects={})",
                     chs, newObjectCapacity, objs);
         }
+        OpenALSpatialAudio sa = spatialAudio;
+        if (sa == null)
+            return;
         if (pf.oamd != null)
             updateObjectOffsets(pf.oamd);
         float[][] pc = pf.pcmCh;
         for (int blk = 0; blk < 6; blk++) {
             int off = blk * 256;
-            spatialAudio.updateBedFrameBlock(pc, off);
+            sa.updateBedFrameBlock(pc, off);
             if (numObjects > 0) {
-                spatialAudio.updateObjectFrameBlock(pf.objPcmCh, off);
+                sa.updateObjectFrameBlock(pf.objPcmCh, off);
             }
         }
     }
@@ -374,7 +380,10 @@ public class DolbyAudioHandler {
     }
 
     private void updateSpatialState(float[] mp, float[] lp) {
-        if (!initialized || spatialAudio == null || bedPositions == null)
+        if (closed || !initialized)
+            return;
+        OpenALSpatialAudio sa = spatialAudio;
+        if (sa == null || bedPositions == null)
             return;
         float yaw = (float) Math.atan2(mp[0] - lp[0], mp[2] - lp[2]);
         float[] forward = forwardToMachine(mp, lp, yaw);
@@ -388,12 +397,12 @@ public class DolbyAudioHandler {
                     String.format("%.2f", cp[1]), String.format("%.2f", cp[2]), String.format("%.2f", lp[0]),
                     String.format("%.2f", lp[1]), String.format("%.2f", lp[2]), numObjects);
         }
-        spatialAudio.updatePositions(bedPositions, objectPositions, lp, forward);
+        sa.updatePositions(bedPositions, objectPositions, lp, forward);
         float d = distance(lp, mp), g = gainForDistance(d);
         for (int ch = 0; ch < numBedChannels; ch++)
-            spatialAudio.setBedGain(ch, g);
+            sa.setBedGain(ch, g);
         for (int o = 0; o < numObjects; o++)
-            spatialAudio.setObjectGain(o, g);
+            sa.setObjectGain(o, g);
     }
 
     private void updateObjectOffsets(Eac3AtmosParser.OamdConfig oamd) {
