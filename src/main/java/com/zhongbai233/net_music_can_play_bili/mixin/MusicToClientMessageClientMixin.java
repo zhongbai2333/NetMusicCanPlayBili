@@ -9,6 +9,7 @@ import com.github.tartaricacid.netmusic.config.GeneralConfig;
 import com.github.tartaricacid.netmusic.network.client.MusicToClientMessageClient;
 import com.github.tartaricacid.netmusic.network.message.MusicToClientMessage;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSubtitleLyricService;
+import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -37,6 +38,7 @@ public abstract class MusicToClientMessageClientMixin {
         }
 
         LyricRecord finalLyricRecord = lyricRecord;
+        DolbyAudioRegistry.setMachinePos(message.pos().getX(), message.pos().getY(), message.pos().getZ());
         MusicPlayManager.play(message.url(), message.songName(),
                 url -> new NetMusicSound(message.pos(), url, message.timeSecond(), finalLyricRecord));
         ci.cancel();

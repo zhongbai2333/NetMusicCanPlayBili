@@ -27,8 +27,8 @@ public final class BiliApiClient {
     private static final Pattern STORED_SELECTION_RE = Pattern.compile(
             "^((?:[Bb][Vv][0-9A-Za-z]{10}|av\\d+))(?:\\|p=(\\d+))?$",
             Pattern.CASE_INSENSITIVE);
-    // FLAC 优先, AAC 次之; 不选 Dolby(ec-3) 因为我们无法解码
-    private static final int[] QUALITY_ORDER = { 30251, 30250, 30280, 30232, 30216 };
+    // Dolby EC-3 优先 → FLAC → AAC 兜底；Dolby 不可用时自动跳过
+    private static final int[] QUALITY_ORDER = { 30250, 30251, 30280, 30232, 30216 };
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
@@ -286,7 +286,21 @@ public final class BiliApiClient {
             }
         }
 
-        // Hi-Res
+        // 杜比全景声 (EC-3) — 仅在用户开启且 FFmpeg native 可用时纳入选择
+        boolean dolbyOk = BiliConfig.dolbyEnabled
+                && com.zhongbai233.net_music_can_play_bili.bili.codec.Eac3NativeDecoder.isNativeAvailable();
+        if (dolbyOk && dash.has("dolby") && !dash.get("dolby").isJsonNull()) {
+            JsonObject dolby = dash.getAsJsonObject("dolby");
+            if (dolby.has("audio") && !dolby.get("audio").isJsonNull()) {
+                JsonArray dolbyArr = dolby.getAsJsonArray("audio");
+                for (JsonElement e : dolbyArr) {
+                    JsonObject a = e.getAsJsonObject();
+                    streams.put(a.get("id").getAsInt(), a.get("baseUrl").getAsString());
+                }
+            }
+        }
+
+        // Hi-Res FLAC
         if (dash.has("flac") && !dash.get("flac").isJsonNull()) {
             JsonObject flac = dash.getAsJsonObject("flac");
             if (flac.has("audio") && !flac.get("audio").isJsonNull()) {
@@ -294,8 +308,6 @@ public final class BiliApiClient {
                 streams.put(a.get("id").getAsInt(), a.get("baseUrl").getAsString());
             }
         }
-
-        // 杜比 (ec-3) 无法解码，跳过
 
         if (streams.isEmpty()) {
             throw new RuntimeException("该视频没有可用的 DASH 音频流");

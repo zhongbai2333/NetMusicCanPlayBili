@@ -5,6 +5,7 @@ import com.github.tartaricacid.netmusic.soundlibs.net.sourceforge.jaad.SampleBuf
 import com.github.tartaricacid.netmusic.soundlibs.net.sourceforge.jaad.aac.Decoder;
 import com.github.tartaricacid.netmusic.soundlibs.org.jflac.sound.spi.Flac2PcmAudioInputStream;
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.bili.codec.Eac3NativeDecoder;
 import org.slf4j.Logger;
 
 import javax.sound.sampled.AudioFormat;
@@ -19,6 +20,7 @@ import java.net.URL;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -69,10 +71,13 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
         AtomicReference<InputStream> bodyRef = new AtomicReference<>();
         AtomicBoolean closed = new AtomicBoolean(false);
         AtomicBoolean isFlac = new AtomicBoolean(false);
+        AtomicBoolean isDolby = new AtomicBoolean(false);
+        AtomicReference<DolbyAudioHandler> dolbyRef = new AtomicReference<>();
         CountDownLatch formatReady = new CountDownLatch(1);
 
         Thread worker = new Thread(
-                () -> streamDecode(url, pipe, bodyRef, formatRef, errorRef, formatReady, closed, isFlac),
+                () -> streamDecode(url, pipe, bodyRef, formatRef, errorRef, formatReady, closed, isFlac, isDolby,
+                        dolbyRef),
                 "BiliTrueAudioStreamWorker");
         worker.setDaemon(true);
         worker.start();
@@ -115,8 +120,40 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
         LOGGER.info("B站音频流就绪: encoding={}, sampleRate={}Hz, channels={}, sampleSize={}bit",
                 format.getEncoding(), format.getSampleRate(), format.getChannels(), format.getSampleSizeInBits());
 
-        if (isFlac.get()) {
-            // FLAC
+        if (isDolby.get()) {
+            // Dolby Atmos: OpenAL 直接渲染空间音频，AudioInputStream 仅输出静音以保持音轨存活
+            return new AudioInputStream(pipe, format, AudioSystem.NOT_SPECIFIED) {
+                @Override
+                public int read() throws IOException {
+                    return 0;
+                }
+
+                @Override
+                public int read(byte[] b, int off, int len) throws IOException {
+                    if (closed.get())
+                        return -1;
+                    if (len <= 0)
+                        return 0;
+                    int fill = Math.min(len, b.length - off);
+                    Arrays.fill(b, off, off + fill, (byte) 0);
+                    return fill;
+                }
+
+                @Override
+                public void close() throws IOException {
+                    LOGGER.info("B站 Dolby 音频流 close(), caller={}",
+                            Thread.currentThread().getName());
+                    closed.set(true);
+                    worker.interrupt();
+                    DolbyAudioHandler dolby = dolbyRef.get();
+                    if (dolby != null) {
+                        DolbyAudioRegistry.unregister(dolby);
+                        dolby.cleanup();
+                    }
+                    super.close();
+                }
+            };
+        } else if (isFlac.get()) {
             AudioInputStream flacDecoded = new Flac2PcmAudioInputStream(pipe, format, AudioSystem.NOT_SPECIFIED);
             if (format.getSampleSizeInBits() > 16) {
                 AudioFormat fmt16 = new AudioFormat(format.getSampleRate(), 16,
@@ -158,13 +195,17 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
 
     private static void streamDecode(URL url, BlockingAudioPipe output, AtomicReference<InputStream> bodyRef,
             AtomicReference<AudioFormat> formatRef, AtomicReference<Exception> errorRef, CountDownLatch formatReady,
-            AtomicBoolean closed, AtomicBoolean isFlac) {
+            AtomicBoolean closed, AtomicBoolean isFlac, AtomicBoolean isDolby,
+            AtomicReference<DolbyAudioHandler> dolbyRef) {
         Decoder aacDecoder = null;
         SampleBuffer sampleBuffer = null;
         int[] pendingSampleSizes = null;
         long decodedFrames = 0;
         int boxCount = 0;
         long totalBytes = 0;
+        long dolbyMdatBoxes = 0;
+        long dolbyMdatBytes = 0;
+        long dolbyEc3Frames = 0;
 
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(url.toString()))
@@ -198,9 +239,21 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
                     case "ftyp" -> skipFully(in, box.dataSize);
                     case "moov" -> {
                         byte[] moovData = readFully(in, box.dataSize);
-                        byte[] dfLa = Fmp4ToMp4Converter.extractFlacDfLaFromMoov(moovData);
-                        if (dfLa != null) {
+                        Fmp4ToMp4Converter.ParseResult pr = Fmp4ToMp4Converter.parseMoov(moovData);
+                        if ("ec-3".equals(pr.audioCodec)
+                                && BiliConfig.dolbyEnabled
+                                && Eac3NativeDecoder.isNativeAvailable()) {
+                            // Dolby EC-3 → 空间音频管线
+                            isDolby.set(true);
+                            DolbyAudioHandler dolby = new DolbyAudioHandler();
+                            dolbyRef.set(dolby);
+                            DolbyAudioRegistry.register(dolby);
+                            formatRef.set(new AudioFormat(48000, 16, 2, true, false));
+                            formatReady.countDown();
+                            LOGGER.info("B站 Dolby Atmos 空间音频初始化完成");
+                        } else if (pr.flacDfLa != null) {
                             // FLAC
+                            byte[] dfLa = pr.flacDfLa.clone();
                             isFlac.set(true);
                             output.write(new byte[] { 'f', 'L', 'a', 'C' });
                             output.write(Fmp4ToMp4Converter.dfLaToNativeFlacMetadata(dfLa));
@@ -212,14 +265,9 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
                             formatReady.countDown();
                             LOGGER.info("B站 fMP4 FLAC(HIRES) 初始化完成: {}Hz, {}ch, {}bit",
                                     format.getSampleRate(), format.getChannels(), format.getSampleSizeInBits());
-                        } else {
+                        } else if (pr.asc != null) {
                             // AAC
-                            byte[] asc = Fmp4ToMp4Converter.extractAudioSpecificConfigFromMoov(moovData);
-                            if (asc == null) {
-                                String codecs = Fmp4ToMp4Converter.listAudioCodecs(moovData);
-                                LOGGER.warn("B站 fMP4 moov 中未找到 AAC/FLAC 音频轨, 发现: {}", codecs);
-                                throw new IOException("B站音频编码不支持 (仅支持 AAC/FLAC), 发现: " + codecs);
-                            }
+                            byte[] asc = pr.asc.clone();
                             aacDecoder = Decoder.create(asc);
                             AudioFormat format = aacDecoder.getAudioFormat();
                             sampleBuffer = new SampleBuffer(format);
@@ -229,6 +277,11 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
                             LOGGER.info("B站 fMP4 AAC 初始化完成: {}Hz, {}ch, {}bit, bigEndian={}",
                                     format.getSampleRate(), format.getChannels(), format.getSampleSizeInBits(),
                                     format.isBigEndian());
+                        } else {
+                            // 未知编码
+                            String codecs = Fmp4ToMp4Converter.listAudioCodecs(moovData);
+                            LOGGER.warn("B站 fMP4 moov 中未找到支持的音频轨, 发现: {}", codecs);
+                            throw new IOException("B站音频编码不支持 (仅支持 AAC/FLAC/EC-3), 发现: " + codecs);
                         }
                     }
                     case "moof" -> {
@@ -243,7 +296,41 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
                         }
                     }
                     case "mdat" -> {
-                        if (isFlac.get()) {
+                        if (isDolby.get()) {
+                            DolbyAudioHandler dolby = dolbyRef.get();
+                            if (dolby != null) {
+                                byte[] mdatData = readFully(in, box.dataSize);
+                                // 扫描 EC-3 同步帧 (0x0B77) 并入队
+                                int pos = 0;
+                                int framesFound = 0;
+                                while (pos < mdatData.length - 6) {
+                                    if ((mdatData[pos] & 0xFF) == 0x0B && (mdatData[pos + 1] & 0xFF) == 0x77) {
+                                        // 从头部解析帧大小
+                                        if (pos + 4 <= mdatData.length) {
+                                            int fszRaw = ((mdatData[pos + 2] & 0x07) << 8) | (mdatData[pos + 3] & 0xFF);
+                                            int fsz = (fszRaw + 1) * 2;
+                                            if (fsz >= 16 && pos + fsz <= mdatData.length) {
+                                                byte[] ec3Frame = new byte[fsz];
+                                                System.arraycopy(mdatData, pos, ec3Frame, 0, fsz);
+                                                dolby.enqueueFrame(ec3Frame);
+                                                framesFound++;
+                                                pos += fsz;
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    pos++;
+                                }
+                                if (framesFound > 0) {
+                                    dolbyMdatBoxes++;
+                                    dolbyMdatBytes += box.dataSize;
+                                    dolbyEc3Frames += framesFound;
+                                } else {
+                                    LOGGER.warn("B站 Dolby mdat: {} bytes → 0 EC-3 frames (sync scan failed)",
+                                            box.dataSize);
+                                }
+                            }
+                        } else if (isFlac.get()) {
                             streamToPipe(in, box.dataSize, output, closed);
                         } else if (aacDecoder == null || sampleBuffer == null) {
                             LOGGER.warn("B站 fMP4 在 moov 前遇到 mdat，跳过 {} bytes", box.dataSize);
@@ -261,13 +348,30 @@ public class BiliHttpAudioStreamHandler implements IAudioStreamHandler {
                 }
             }
 
-            LOGGER.info("B站音频流结束: {} boxes, {} bytes, 共解码 {} 帧", boxCount, totalBytes, decodedFrames);
+            String dolbyInfo = "";
+            if (isDolby.get()) {
+                DolbyAudioHandler dh = dolbyRef.get();
+                dolbyInfo = ", Dolbymdat=" + dolbyMdatBoxes
+                        + ", Dolbybytes=" + dolbyMdatBytes
+                        + ", Dolbyframes=" + dolbyEc3Frames
+                        + (dh != null ? ", Dolby队列=" + dh.queuedFrames() + "帧" : "");
+            }
+            LOGGER.info("B站音频流结束: {} boxes, {} bytes, 共解码 {} 帧{}",
+                    boxCount, totalBytes, decodedFrames, dolbyInfo);
         } catch (EOFException e) {
             LOGGER.info("B站音频流 EOF: {} boxes, {} bytes, 共解码 {} 帧", boxCount, totalBytes, decodedFrames);
         } catch (IOException e) {
             if (closed.get() || isStreamEndException(e)) {
-                LOGGER.info("B站音频流中断: {} boxes, {} bytes, closed={}, msg={}, 共解码 {} 帧",
-                        boxCount, totalBytes, closed.get(), e.getMessage(), decodedFrames);
+                String dolbyInfo2 = "";
+                if (isDolby.get()) {
+                    DolbyAudioHandler dh = dolbyRef.get();
+                    dolbyInfo2 = ", Dolbymdat=" + dolbyMdatBoxes
+                            + ", Dolbybytes=" + dolbyMdatBytes
+                            + ", Dolbyframes=" + dolbyEc3Frames
+                            + (dh != null ? ", Dolby队列=" + dh.queuedFrames() + "帧" : "");
+                }
+                LOGGER.info("B站音频流中断: {} boxes, {} bytes, closed={}, msg={}, 共解码 {} 帧{}",
+                        boxCount, totalBytes, closed.get(), e.getMessage(), decodedFrames, dolbyInfo2);
                 LOGGER.info("B站音频流中断堆栈", e);
             } else {
                 LOGGER.error("B站音频流 IO 失败: {} boxes, {} bytes", boxCount, totalBytes, e);

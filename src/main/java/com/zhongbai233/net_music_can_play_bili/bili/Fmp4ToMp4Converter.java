@@ -110,21 +110,9 @@ public final class Fmp4ToMp4Converter {
         return null;
     }
 
-    /** 从 moov box 的 payload 中提取 AAC AudioSpecificConfig，供流式解码器初始化。 */
-    public static byte[] extractAudioSpecificConfigFromMoov(byte[] moovData) {
-        ParseResult pr = parseMoov(moovData);
-        return pr.asc == null ? null : pr.asc.clone();
-    }
-
-    /** 从 moov box 的 payload 中提取 FLAC dfLa 元数据（若为 FLAC 音轨）。 */
-    public static byte[] extractFlacDfLaFromMoov(byte[] moovData) {
-        ParseResult pr = parseMoov(moovData);
-        return pr.flacDfLa == null ? null : pr.flacDfLa.clone();
-    }
-
     /** 从 fLaC stsd entry 里提取子 box dfLa 的 payload。 */
     private static byte[] extractDfLaFromFlacStsd(byte[] flacEntry) {
-        // fLaC entry: 6B reserved + 2B dref + child boxes
+        // fLaC 条目：6B 保留 + 2B dref + 子 box
         if (flacEntry.length < 28 + 8)
             return null;
         int pos = 28; // skip reserved + dref, start at first child box
@@ -147,7 +135,7 @@ public final class Fmp4ToMp4Converter {
     public static AudioFormat flacDfLaToAudioFormat(byte[] dfLa) {
         if (dfLa == null || dfLa.length < 4)
             return null;
-        // dfLa: version(1) + flags(3) + concatenated metadata blocks
+        // dfLa：version(1) + flags(3) + 拼接的元数据块
         int pos = 4;
         while (pos + 4 <= dfLa.length) {
             int header = (dfLa[pos] & 0xFF) << 24 | (dfLa[pos + 1] & 0xFF) << 16
@@ -159,8 +147,8 @@ public final class Fmp4ToMp4Converter {
             if (pos + blockLen > dfLa.length)
                 break;
             if (blockType == 0 && blockLen >= 18) {
-                // STREAMINFO: skip min/max blocksize(4B), min/max framesize(6B)
-                // byte 10-12: sample_rate(20bit) + num_channels(3bit) + bps(5bit)
+                // STREAMINFO：跳过 min/max blocksize(4B)、min/max framesize(6B)
+                // byte 10-12：sample_rate(20bit) + num_channels(3bit) + bps(5bit)
                 int b10 = dfLa[pos + 10] & 0xFF;
                 int b11 = dfLa[pos + 11] & 0xFF;
                 int b12 = dfLa[pos + 12] & 0xFF;
@@ -207,7 +195,7 @@ public final class Fmp4ToMp4Converter {
         return new int[0];
     }
 
-    /** AAC ASC (AudioSpecificConfig) → AudioFormat */
+    /** AAC ASC（AudioSpecificConfig）→ AudioFormat */
     private static AudioFormat ascToAudioFormat(byte[] asc) {
         if (asc == null || asc.length < 2)
             return null;
@@ -642,7 +630,7 @@ public final class Fmp4ToMp4Converter {
             r.defaultSampleSize = defaultSampleSize;
     }
 
-    private static ParseResult parseMoov(byte[] data) {
+    static ParseResult parseMoov(byte[] data) {
         ByteBuffer b = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN);
         ParseResult r = new ParseResult();
         while (b.remaining() >= 8) {
@@ -761,14 +749,19 @@ public final class Fmp4ToMp4Converter {
                 byte[] md = new byte[es - 8];
                 b.get(md);
                 r.asc = extractAscFromMp4a(md);
+                r.audioCodec = "mp4a";
                 if (r.asc != null)
                     return;
             } else if ("fLaC".equals(et) && es >= 8 + 28) {
                 byte[] md = new byte[es - 8];
                 b.get(md);
                 r.flacDfLa = extractDfLaFromFlacStsd(md);
+                r.audioCodec = "fLaC";
                 if (r.flacDfLa != null)
                     return;
+            } else if ("ec-3".equals(et)) {
+                r.audioCodec = "ec-3";
+                return;
             } else
                 b.position(b.position() + es - 8);
             rem -= es;
@@ -900,7 +893,8 @@ public final class Fmp4ToMp4Converter {
         return read4cc(b); // first entry fourcc
     }
 
-    private static class ParseResult {
+    static class ParseResult {
+        String audioCodec;
         byte[] asc;
         byte[] flacDfLa;
         int defaultSampleSize;

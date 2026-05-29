@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.mixin;
 
 import com.github.tartaricacid.netmusic.client.gui.ComputerMenuScreen;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliConfig;
 import com.zhongbai233.net_music_can_play_bili.gui.BiliQrLoginScreen;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.Button;
@@ -30,6 +31,9 @@ public abstract class ComputerMenuScreenMixin {
     private Button net_music_can_play_bili$loginButton;
 
     @Unique
+    private Button net_music_can_play_bili$dolbyButton;
+
+    @Unique
     private static final Method ADD_RENDERABLE_WIDGET;
 
     static {
@@ -47,14 +51,27 @@ public abstract class ComputerMenuScreenMixin {
                 Component.literal("B站登录"),
                 btn -> Minecraft.getInstance().setScreen(new BiliQrLoginScreen()))
                 .pos(this.urlTextField.getX(),
-                     this.urlTextField.getY() + 80)
+                        this.urlTextField.getY() + 80)
+                .size(60, 18)
+                .build();
+
+        this.net_music_can_play_bili$dolbyButton = Button.builder(
+                Component.literal(BiliConfig.dolbyEnabled ? "杜比:开" : "杜比:关"),
+                btn -> {
+                    BiliConfig.dolbyEnabled = !BiliConfig.dolbyEnabled;
+                    BiliConfig.save();
+                    btn.setMessage(Component.literal(BiliConfig.dolbyEnabled ? "杜比:开" : "杜比:关"));
+                })
+                .pos(this.urlTextField.getX() + 64,
+                        this.urlTextField.getY() + 80)
                 .size(60, 18)
                 .build();
 
         try {
             ADD_RENDERABLE_WIDGET.invoke(this, this.net_music_can_play_bili$loginButton);
+            ADD_RENDERABLE_WIDGET.invoke(this, this.net_music_can_play_bili$dolbyButton);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to add B站 login button", e);
+            throw new RuntimeException("Failed to add B站 buttons", e);
         }
     }
 }
