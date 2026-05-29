@@ -8,6 +8,8 @@ import com.github.tartaricacid.netmusic.client.audio.NetMusicSound;
 import com.github.tartaricacid.netmusic.config.GeneralConfig;
 import com.github.tartaricacid.netmusic.network.client.MusicToClientMessageClient;
 import com.github.tartaricacid.netmusic.network.message.MusicToClientMessage;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliAudioResolver;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSubtitleLyricService;
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
 import org.spongepowered.asm.mixin.Mixin;
@@ -39,9 +41,33 @@ public abstract class MusicToClientMessageClientMixin {
 
         LyricRecord finalLyricRecord = lyricRecord;
         DolbyAudioRegistry.setMachinePos(message.pos().getX(), message.pos().getY(), message.pos().getZ());
-        MusicPlayManager.play(message.url(), message.songName(),
+        String playUrl = net_music_can_play_bili$resolveBiliUrlOnClient(message);
+        MusicPlayManager.play(playUrl, message.songName(),
                 url -> new NetMusicSound(message.pos(), url, message.timeSecond(), finalLyricRecord));
         ci.cancel();
+    }
+
+    @Unique
+    private static String net_music_can_play_bili$resolveBiliUrlOnClient(MusicToClientMessage message) {
+        String storedSelection = null;
+        if (BiliApiClient.isStoredVideoSelection(message.rawUrl())) {
+            storedSelection = message.rawUrl();
+        } else if (BiliApiClient.isStoredVideoSelection(message.url())) {
+            storedSelection = message.url();
+        }
+
+        if (storedSelection == null) {
+            return message.url();
+        }
+
+        try {
+            String resolvedUrl = BiliAudioResolver.resolvePlayableUrl(storedSelection);
+            NetMusic.LOGGER.info("B站客户端本地解析播放直链成功: {}", message.songName());
+            return resolvedUrl;
+        } catch (Exception e) {
+            NetMusic.LOGGER.error("B站客户端本地解析播放直链失败: {}", storedSelection, e);
+            return message.url();
+        }
     }
 
     @Unique

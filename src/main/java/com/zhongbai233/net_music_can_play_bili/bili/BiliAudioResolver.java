@@ -3,6 +3,8 @@ package com.zhongbai233.net_music_can_play_bili.bili;
 import com.github.tartaricacid.netmusic.api.resolver.IAsyncSongUrlResolver;
 import com.mojang.logging.LogUtils;
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.fml.loading.FMLEnvironment;
 import org.slf4j.Logger;
 
 import java.util.Objects;
@@ -46,36 +48,58 @@ public class BiliAudioResolver implements IAsyncSongUrlResolver {
         return BiliApiClient.isStoredVideoSelection(songInfo.songUrl);
     }
 
+    public static String resolvePlayableUrl(String storedSelection) throws Exception {
+        BiliApiClient.VideoSelection selection = BiliApiClient.parseStoredVideoSelection(storedSelection);
+        if (selection == null) {
+            throw new IllegalArgumentException("无法从唱片存储的内容提取 B站 ID: " + storedSelection);
+        }
+
+        BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(selection.videoId(), selection.page());
+        return BiliApiClient.getBestAudioUrl(selection.videoId(), info.cid());
+    }
+
+    public static ItemMusicCD.SongInfo resolvePlayableSongInfo(ItemMusicCD.SongInfo songInfo) throws Exception {
+        BiliApiClient.VideoSelection selection = BiliApiClient.parseStoredVideoSelection(songInfo.songUrl);
+        if (selection == null) {
+            throw new IllegalArgumentException("无法从唱片存储的内容提取 B站 ID: " + songInfo.songUrl);
+        }
+
+        BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(selection.videoId(), selection.page());
+        String audioUrl = Objects.requireNonNull(BiliApiClient.getBestAudioUrl(selection.videoId(), info.cid()),
+                "音频直链不能为空");
+
+        String title = songInfo.songName;
+        if (title == null || title.isBlank()) {
+            title = info.displayTitle();
+        }
+        title = Objects.requireNonNull(title, "标题不能为空");
+
+        // 不修改传入的 songInfo，避免 CDN 直链覆盖 BV 号导致下次无法重新解析
+        ItemMusicCD.SongInfo resolved = new ItemMusicCD.SongInfo(
+                audioUrl,
+                title,
+                songInfo.songTime > 0 ? songInfo.songTime : info.duration(),
+                false);
+        if ((songInfo.artists == null || songInfo.artists.isEmpty())
+                && info.staffNames() != null && !info.staffNames().isEmpty()) {
+            resolved.artists = new java.util.ArrayList<>(info.staffNames());
+        } else {
+            resolved.artists = songInfo.artists;
+        }
+        return resolved;
+    }
+
     @Override
     public CompletableFuture<ItemMusicCD.SongInfo> resolve(ItemMusicCD.SongInfo songInfo) {
+        if (FMLEnvironment.getDist() == Dist.DEDICATED_SERVER) {
+            LOGGER.info("服务端跳过 B站 CDN 直链解析，保留原始 ID 下发给客户端: {}", songInfo.songUrl);
+            return CompletableFuture.completedFuture(songInfo);
+        }
+
         return CompletableFuture.supplyAsync(() -> {
             try {
-                BiliApiClient.VideoSelection selection = BiliApiClient.parseStoredVideoSelection(songInfo.songUrl);
-                if (selection == null) {
-                    LOGGER.error("无法从唱片存储的内容提取 B站 ID: {}", songInfo.songUrl);
-                    return songInfo;
-                }
-
-                BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(selection.videoId(), selection.page());
-                String audioUrl = BiliApiClient.getBestAudioUrl(selection.videoId(), info.cid());
-
-                // 不修改传入的 songInfo，避免 CDN 直链覆盖 BV 号导致下次无法重新解析
-                @SuppressWarnings("null")
-                ItemMusicCD.SongInfo resolved = new ItemMusicCD.SongInfo(
-                        Objects.requireNonNull(audioUrl, "音频直链不能为空"),
-                        Objects.requireNonNull(
-                                songInfo.songName != null && !songInfo.songName.isBlank() ? songInfo.songName
-                                        : info.displayTitle(),
-                                "标题不能为空"),
-                        songInfo.songTime > 0 ? songInfo.songTime : info.duration(),
-                        false);
-                if ((songInfo.artists == null || songInfo.artists.isEmpty())
-                        && info.staffNames() != null && !info.staffNames().isEmpty()) {
-                    resolved.artists = new java.util.ArrayList<>(info.staffNames());
-                } else {
-                    resolved.artists = songInfo.artists;
-                }
-                LOGGER.info("B站 CDN 直链刷新成功: {}", info.displayTitle());
+                ItemMusicCD.SongInfo resolved = resolvePlayableSongInfo(songInfo);
+                LOGGER.info("B站 CDN 直链刷新成功: {}", resolved.songName);
                 return resolved;
 
             } catch (Exception e) {
