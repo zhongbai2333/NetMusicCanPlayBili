@@ -17,7 +17,7 @@ public final class BiliConfig {
 
     /** Dolby 全景声默认开启，可在电脑界面关闭。 */
     public static volatile boolean dolbyEnabled = true;
-    public static volatile boolean dolbyJocEnabled = false;
+    public static volatile boolean dolbyJocEnabled = true;
 
     private BiliConfig() {
     }

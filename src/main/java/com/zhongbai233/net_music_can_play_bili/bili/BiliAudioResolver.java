@@ -59,18 +59,24 @@ public class BiliAudioResolver implements IAsyncSongUrlResolver {
                 BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(selection.videoId(), selection.page());
                 String audioUrl = BiliApiClient.getBestAudioUrl(selection.videoId(), info.cid());
 
-                songInfo.songUrl = audioUrl;
-                if (songInfo.songName == null || songInfo.songName.isBlank()) {
-                    songInfo.songName = info.displayTitle();
-                }
-                if (songInfo.songTime <= 0) {
-                    songInfo.songTime = info.duration();
-                }
+                // 不修改传入的 songInfo，避免 CDN 直链覆盖 BV 号导致下次无法重新解析
+                @SuppressWarnings("null")
+                ItemMusicCD.SongInfo resolved = new ItemMusicCD.SongInfo(
+                        Objects.requireNonNull(audioUrl, "音频直链不能为空"),
+                        Objects.requireNonNull(
+                                songInfo.songName != null && !songInfo.songName.isBlank() ? songInfo.songName
+                                        : info.displayTitle(),
+                                "标题不能为空"),
+                        songInfo.songTime > 0 ? songInfo.songTime : info.duration(),
+                        false);
                 if ((songInfo.artists == null || songInfo.artists.isEmpty())
                         && info.staffNames() != null && !info.staffNames().isEmpty()) {
-                    songInfo.artists = new java.util.ArrayList<>(info.staffNames());
+                    resolved.artists = new java.util.ArrayList<>(info.staffNames());
+                } else {
+                    resolved.artists = songInfo.artists;
                 }
                 LOGGER.info("B站 CDN 直链刷新成功: {}", info.displayTitle());
+                return resolved;
 
             } catch (Exception e) {
                 LOGGER.error("B站音频解析失败: {}", e.getMessage());

@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit;
 public class DolbyAudioHandler {
 
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final float SPATIAL_RADIUS = 3.0f;
+    private static final float SPATIAL_RADIUS = 1.5f;
     /** 手动反比衰减参考距离：只做一层衰减，避免 OpenAL 和 JOC 对象叠加变小。 */
     private static final float DISTANCE_REFERENCE = 8.0f;
     private static final float SILENCE_GATE_PEAK = 1.0e-4f;
@@ -523,7 +523,9 @@ public class DolbyAudioHandler {
     }
 
     private static float gainForDistance(float d) {
-        return clampGain(DISTANCE_REFERENCE / (DISTANCE_REFERENCE + Math.max(0f, d)));
+        // 最小有效距离 = 音响半径，避免进入音响圈内部时增益异常
+        float clamped = Math.max(SPATIAL_RADIUS, d);
+        return clampGain(DISTANCE_REFERENCE / (DISTANCE_REFERENCE + clamped));
     }
 
     private static float clampGain(float g) {

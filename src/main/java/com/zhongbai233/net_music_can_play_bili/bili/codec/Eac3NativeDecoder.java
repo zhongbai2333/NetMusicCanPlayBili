@@ -174,24 +174,14 @@ public class Eac3NativeDecoder implements AutoCloseable {
             }
         }
 
-        // ── 加载 FFmpeg DLL ──
+        // ── 加载所有 DLL ──
         for (String baseName : ffmpegLibs) {
-            if (isWindows) {
-                System.loadLibrary(ffmpegLibraryName(baseName));
-            } else {
-                String fn = nativeFileName(baseName, os, false);
-                System.load(gameDir.resolve(fn).toAbsolutePath().toString());
-            }
+            String fn = nativeFileName(baseName, os, isWindows);
+            System.load(gameDir.resolve(fn).toAbsolutePath().toString());
         }
-
-        // ── 加载自研 JNI ──
         for (String baseName : jniLibs) {
-            if (isWindows) {
-                System.loadLibrary(baseName);
-            } else {
-                String fn = nativeFileName(baseName, os, false);
-                System.load(gameDir.resolve(fn).toAbsolutePath().toString());
-            }
+            String fn = nativeFileName(baseName, os, isWindows);
+            System.load(gameDir.resolve(fn).toAbsolutePath().toString());
         }
     }
 
@@ -230,19 +220,6 @@ public class Eac3NativeDecoder implements AutoCloseable {
                 return isMac ? "libavcodec.62.dylib" : "libavcodec.so.62";
             default:
                 return "lib" + base + (isMac ? ".dylib" : ".so");
-        }
-    }
-
-    private static String ffmpegLibraryName(String base) {
-        switch (base) {
-            case "avutil":
-                return "avutil-60";
-            case "swresample":
-                return "swresample-6";
-            case "avcodec":
-                return "avcodec-62";
-            default:
-                return base;
         }
     }
 

@@ -5,6 +5,9 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import com.mojang.logging.LogUtils;
+import org.slf4j.Logger;
+
 import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -21,6 +24,8 @@ import java.util.regex.Pattern;
  * B站 API 客户端：BV/AV 解析、视频信息、DASH 音频流地址
  */
 public final class BiliApiClient {
+
+    private static final Logger LOGGER = LogUtils.getLogger();
 
     private static final Pattern BV_FULL_RE = Pattern.compile("^[Bb][Vv][0-9A-Za-z]{10}$");
     private static final Pattern AV_FULL_RE = Pattern.compile("^av(\\d+)$", Pattern.CASE_INSENSITIVE);
@@ -289,6 +294,10 @@ public final class BiliApiClient {
         // 杜比全景声 (EC-3) — 仅在用户开启且 FFmpeg native 可用时纳入选择
         boolean dolbyOk = BiliConfig.dolbyEnabled
                 && com.zhongbai233.net_music_can_play_bili.bili.codec.Eac3NativeDecoder.isNativeAvailable();
+        LOGGER.info("[Dolby] dolbyEnabled={}, nativeAvailable={}, dashHasDolby={}",
+                BiliConfig.dolbyEnabled,
+                com.zhongbai233.net_music_can_play_bili.bili.codec.Eac3NativeDecoder.isNativeAvailable(),
+                dash.has("dolby"));
         if (dolbyOk && dash.has("dolby") && !dash.get("dolby").isJsonNull()) {
             JsonObject dolby = dash.getAsJsonObject("dolby");
             if (dolby.has("audio") && !dolby.get("audio").isJsonNull()) {
