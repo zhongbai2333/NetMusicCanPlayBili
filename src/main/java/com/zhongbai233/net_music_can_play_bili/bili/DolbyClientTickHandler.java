@@ -31,12 +31,6 @@ public final class DolbyClientTickHandler {
                 (float) eye.z
         };
 
-        float[] machinePos = DolbyAudioRegistry.getMachinePos();
-        if (machinePos == null) {
-            // 尚无唱片机位置 —— 用玩家位置作为回退
-            machinePos = new float[] { (float) eye.x, (float) eye.y, (float) eye.z };
-        }
-
-        DolbyAudioRegistry.updatePositions(machinePos, listenerPos);
+        DolbyAudioRegistry.updatePositions(listenerPos);
     }
 }

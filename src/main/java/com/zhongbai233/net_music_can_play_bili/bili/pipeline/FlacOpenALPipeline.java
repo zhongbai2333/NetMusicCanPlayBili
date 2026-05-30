@@ -4,6 +4,7 @@ import com.github.tartaricacid.netmusic.soundlibs.org.jflac.sound.spi.Flac2PcmAu
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
 import com.zhongbai233.net_music_can_play_bili.bili.StereoOpenALHandler;
 import com.zhongbai233.net_music_can_play_bili.bili.stream.BlockingAudioPipe;
+import net.minecraft.core.BlockPos;
 
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioInputStream;
@@ -23,11 +24,15 @@ public final class FlacOpenALPipeline implements AudioDecodePipeline {
     private long compressedBytes;
 
     public FlacOpenALPipeline(byte[] dfLa, AtomicBoolean ownerClosed) throws IOException {
+        this(dfLa, ownerClosed, null);
+    }
+
+    public FlacOpenALPipeline(byte[] dfLa, AtomicBoolean ownerClosed, BlockPos sourcePos) throws IOException {
         this.format = FlacStreamSupport.audioFormat(dfLa);
         this.ownerClosed = ownerClosed;
         this.stereo = new StereoOpenALHandler();
         this.stereo.setSampleRate((int) format.getSampleRate());
-        DolbyAudioRegistry.registerStereo(stereo);
+        DolbyAudioRegistry.registerStereo(stereo, sourcePos);
         FlacStreamSupport.writeNativeHeader(compressedPipe, dfLa);
     }
 

@@ -12,7 +12,6 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliAudioResolver;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSubtitleLyricService;
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
 import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntableSound;
@@ -58,8 +57,7 @@ public abstract class MusicToClientMessageClientMixin {
         String playUrl = net_music_can_play_bili$resolveBiliUrlOnClient(message, modernTurntable);
 
         if (modernTurntable) {
-            DolbyAudioRegistry.setMachinePos(message.pos().getX(), message.pos().getY(), message.pos().getZ());
-            HttpAudioStreamHandler.allowUrl(playUrl);
+            HttpAudioStreamHandler.allowUrl(playUrl, message.pos());
         }
 
         BiliPlaybackDiagnostics.beginPlayback(message.songName(), message.rawUrl(), playUrl);

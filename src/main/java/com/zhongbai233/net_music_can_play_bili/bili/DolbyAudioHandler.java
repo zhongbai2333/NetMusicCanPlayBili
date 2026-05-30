@@ -126,9 +126,7 @@ public class DolbyAudioHandler {
             lines.add("音乐机/玩家位置尚未同步");
         }
         if (bedPositions != null) {
-            String[] names = numBedChannels == 6
-                    ? new String[] { "FL", "FR", "FC", "LFE", "SL", "SR" }
-                    : null;
+            String[] names = bedChannelNames(numBedChannels);
             for (int i = 0; i < Math.min(bedPositions.length, 8); i++) {
                 String name = names != null && i < names.length ? names[i] : "bed" + i;
                 lines.add(String.format("床声道 %s local=%s", name, fmtPos(bedPositions[i])));
@@ -400,7 +398,7 @@ public class DolbyAudioHandler {
         float[] forward = forwardToMachine(mp, lp, yaw);
         if (!didFirstPositionDiag) {
             didFirstPositionDiag = true;
-            int ci = numBedChannels == 6 ? 2 : 0;
+            int ci = centerChannelIndex(numBedChannels);
             float[] cp = ci < bedPositions.length ? bedPositions[ci] : new float[] { 0, 0, 0 };
             LOGGER.debug(
                     "Dolby spatial map active: world-follow front->machine yaw={}deg centerLocal=({}, {}, {}) listener=({}, {}, {}) objects={}",
@@ -510,13 +508,16 @@ public class DolbyAudioHandler {
                 p[i] = p51[i];
             return p;
         }
+        if (nc == 8) {
+            float[][] p71 = compute7_1Positions();
+            for (int i = 0; i < 8; i++)
+                p[i] = p71[i];
+            return p;
+        }
         double step = 2 * Math.PI / nc, start = 0;
         if (nc == 2) {
             step = Math.PI / 3;
             start = -Math.PI / 6;
-        } else if (nc == 8) {
-            step = Math.PI / 4;
-            start = -Math.PI / 2;
         }
         for (int ch = 0; ch < nc; ch++) {
             double a = start + ch * step;
@@ -540,6 +541,41 @@ public class DolbyAudioHandler {
         p[3][1] = 0;
         p[3][2] = 0;
         return p;
+    }
+
+    private static float[][] compute7_1Positions() {
+        // FFmpeg 7.1 planar order used by the JOC path: FL, FR, FC, LFE, BL, BR, SL, SR.
+        float[][] p = new float[8][3];
+        double[] a = {
+                -Math.PI / 6,
+                Math.PI / 6,
+                0,
+                0,
+                -Math.PI * 5 / 6,
+                Math.PI * 5 / 6,
+                -Math.PI / 2,
+                Math.PI / 2
+        };
+        for (int i = 0; i < p.length; i++) {
+            p[i][0] = (float) (Math.sin(a[i]) * SPATIAL_RADIUS);
+            p[i][2] = (float) (Math.cos(a[i]) * SPATIAL_RADIUS);
+        }
+        p[3][0] = 0;
+        p[3][1] = 0;
+        p[3][2] = 0;
+        return p;
+    }
+
+    private static String[] bedChannelNames(int channels) {
+        return switch (channels) {
+            case 6 -> new String[] { "FL", "FR", "FC", "LFE", "SL", "SR" };
+            case 8 -> new String[] { "FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR" };
+            default -> null;
+        };
+    }
+
+    private static int centerChannelIndex(int channels) {
+        return channels == 6 || channels == 8 ? 2 : 0;
     }
 
     private static float gainForDistance(float d) {

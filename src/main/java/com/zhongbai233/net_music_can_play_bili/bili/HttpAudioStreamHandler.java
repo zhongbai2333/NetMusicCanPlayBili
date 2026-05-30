@@ -12,6 +12,7 @@ import com.zhongbai233.net_music_can_play_bili.bili.pipeline.FlacPcmPipeline;
 import com.zhongbai233.net_music_can_play_bili.bili.stream.ChunkPrefetchInputStream;
 import com.zhongbai233.net_music_can_play_bili.bili.stream.Fmp4StreamParser;
 import com.zhongbai233.net_music_can_play_bili.bili.stream.BlockingAudioPipe;
+import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
 
 import javax.sound.sampled.AudioFormat;
@@ -22,6 +23,7 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,15 +36,25 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     private static final int PIPE_BUFFER_SIZE = 4 * 1024 * 1024;
     private static final int FORMAT_WAIT_SECONDS = 15;
     private static final long ALLOWED_URL_TTL_MILLIS = TimeUnit.MINUTES.toMillis(10);
-    private static final ConcurrentHashMap<String, Long> ALLOWED_URLS = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, PlaybackContextQueue> ALLOWED_URLS = new ConcurrentHashMap<>();
 
     public static void allowUrl(String url) {
+        allowUrl(url, null);
+    }
+
+    public static void allowUrl(String url, BlockPos pos) {
         if (url == null || url.isBlank()) {
             return;
         }
         long now = System.currentTimeMillis();
         cleanupAllowedUrls(now);
-        ALLOWED_URLS.put(url, now + ALLOWED_URL_TTL_MILLIS);
+        PlaybackContext context = new PlaybackContext(copyPos(pos), now + ALLOWED_URL_TTL_MILLIS);
+        ALLOWED_URLS.compute(url, (ignored, queue) -> {
+            PlaybackContextQueue contexts = queue != null ? queue : new PlaybackContextQueue();
+            contexts.removeExpired(now);
+            contexts.add(context);
+            return contexts;
+        });
     }
 
     @Override
@@ -59,10 +71,11 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
 
     @Override
     public AudioInputStream handle(URL url) throws UnsupportedAudioFileException, IOException {
-        boolean modernTurntable = consumeAllowedUrl(url);
+        PlaybackContext playbackContext = consumeAllowedUrl(url);
+        boolean modernTurntable = playbackContext != null;
 
         try {
-            return handleWithPipeline(url, modernTurntable);
+            return handleWithPipeline(url, playbackContext);
         } catch (UnsupportedAudioFileException e) {
             // 非现代化唱片机 + 非 fMP4/EC-3 格式 → 透传给 Java Sound API（MP3 等）
             if (!modernTurntable && isNotFmp4Error(e)) {
@@ -77,8 +90,9 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
      * 用 fMP4/EC-3 管线处理音频
      * 现代化唱片机 → OpenAL；普通唱片机 → PcmPipeline
      */
-    private AudioInputStream handleWithPipeline(URL url, boolean modernTurntable)
+    private AudioInputStream handleWithPipeline(URL url, PlaybackContext playbackContext)
             throws UnsupportedAudioFileException, IOException {
+        boolean modernTurntable = playbackContext != null;
         LOGGER.debug("HTTP audio handler probing {}://{}/... mode={}",
                 url.getProtocol(), url.getHost(), modernTurntable ? "modern-turntable" : "netmusic-compatible");
 
@@ -91,7 +105,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
 
         Thread worker = new Thread(
                 () -> streamDecode(url, fallbackPipe, pipelineRef, errorRef, bodyRef, closed, formatReady,
-                        modernTurntable),
+                        playbackContext),
                 modernTurntable ? "AudioStreamWorker" : "BiliCompatAudioStreamWorker");
         worker.setDaemon(true);
         worker.start();
@@ -142,11 +156,17 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 closed, worker, url, bodyRef, fallbackPipe, pipeline);
     }
 
-    private static boolean consumeAllowedUrl(URL url) {
+    private static PlaybackContext consumeAllowedUrl(URL url) {
         long now = System.currentTimeMillis();
         cleanupAllowedUrls(now);
-        Long expiresAt = ALLOWED_URLS.remove(url.toString());
-        return expiresAt != null && expiresAt >= now;
+        String key = url.toString();
+        AtomicReference<PlaybackContext> result = new AtomicReference<>();
+        ALLOWED_URLS.computeIfPresent(key, (ignored, queue) -> {
+            queue.removeExpired(now);
+            result.set(queue.poll());
+            return queue.isEmpty() ? null : queue;
+        });
+        return result.get();
     }
 
     /** 判断异常是否表示"内容不是 fMP4/EC-3"，此时应透传给 Java Sound API。 */
@@ -156,7 +176,32 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     }
 
     private static void cleanupAllowedUrls(long now) {
-        ALLOWED_URLS.entrySet().removeIf(entry -> entry.getValue() < now);
+        ALLOWED_URLS.forEach((key, queue) -> ALLOWED_URLS.computeIfPresent(key, (ignored, existing) -> {
+            existing.removeExpired(now);
+            return existing.isEmpty() ? null : existing;
+        }));
+    }
+
+    private static final class PlaybackContextQueue {
+        private final ArrayDeque<PlaybackContext> contexts = new ArrayDeque<>();
+
+        private void add(PlaybackContext context) {
+            contexts.offerLast(context);
+        }
+
+        private PlaybackContext poll() {
+            return contexts.pollFirst();
+        }
+
+        private void removeExpired(long now) {
+            while (!contexts.isEmpty() && contexts.peekFirst().expiresAtMillis() < now) {
+                contexts.pollFirst();
+            }
+        }
+
+        private boolean isEmpty() {
+            return contexts.isEmpty();
+        }
     }
 
     private static void streamDecode(
@@ -167,7 +212,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             AtomicReference<InputStream> bodyRef,
             AtomicBoolean closed,
             CountDownLatch formatReady,
-            boolean modernTurntable) {
+            PlaybackContext playbackContext) {
         long[] decoded = { 0L };
         long[] mdatBytes = { 0L };
 
@@ -185,7 +230,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                         return;
                     }
                     AudioDecodePipeline pipeline = createPipeline(url, parseResult, moovData, fallbackPipe, closed,
-                            modernTurntable);
+                            playbackContext);
                     activatePipeline(url, pipelineRef, pipeline, formatReady);
                 }
 
@@ -210,7 +255,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
 
                 @Override
                 public void onRawEac3(InputStream payload) throws IOException, UnsupportedAudioFileException {
-                    DolbyEc3Pipeline pipeline = createRawDolbyPipeline(closed, modernTurntable);
+                    DolbyEc3Pipeline pipeline = createRawDolbyPipeline(closed, playbackContext);
                     activatePipeline(url, pipelineRef, pipeline, formatReady);
                     decoded[0] += pipeline.onRawStream(payload);
                 }
@@ -263,22 +308,24 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             byte[] moovData,
             BlockingAudioPipe fallbackPipe,
             AtomicBoolean closed,
-            boolean modernTurntable) throws IOException, UnsupportedAudioFileException {
+            PlaybackContext playbackContext) throws IOException, UnsupportedAudioFileException {
+        boolean modernTurntable = playbackContext != null;
+        BlockPos sourcePos = playbackContext != null ? playbackContext.pos() : null;
         if ("ec-3".equals(parseResult.audioCodec)) {
             if (modernTurntable && BiliConfig.dolbyEnabled && Eac3NativeDecoder.isNativeAvailable()) {
-                return new DolbyEc3Pipeline("fMP4", closed);
+                return new DolbyEc3Pipeline("fMP4", closed, sourcePos);
             }
             throw new UnsupportedAudioFileException(
                     "EC-3 requires modern turntable Dolby playback and native decoder support");
         }
         if (parseResult.flacDfLa != null) {
             return modernTurntable
-                    ? new FlacOpenALPipeline(parseResult.flacDfLa.clone(), closed)
+                    ? new FlacOpenALPipeline(parseResult.flacDfLa.clone(), closed, sourcePos)
                     : new FlacPcmPipeline(parseResult.flacDfLa.clone(), fallbackPipe);
         }
         if (parseResult.asc != null) {
             return modernTurntable
-                    ? new AacOpenALPipeline(parseResult.asc.clone(), closed)
+                    ? new AacOpenALPipeline(parseResult.asc.clone(), closed, sourcePos)
                     : new AacPcmPipeline(parseResult.asc.clone(), fallbackPipe);
         }
         String codecs = Fmp4ToMp4Converter.listAudioCodecs(moovData);
@@ -286,12 +333,13 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         throw new UnsupportedAudioFileException("unsupported fMP4 audio codec: " + codecs);
     }
 
-    private static DolbyEc3Pipeline createRawDolbyPipeline(AtomicBoolean closed, boolean modernTurntable)
+    private static DolbyEc3Pipeline createRawDolbyPipeline(AtomicBoolean closed, PlaybackContext playbackContext)
             throws UnsupportedAudioFileException {
-        if (!modernTurntable || !BiliConfig.dolbyEnabled || !Eac3NativeDecoder.isNativeAvailable()) {
+        if (playbackContext == null || !BiliConfig.dolbyEnabled || !Eac3NativeDecoder.isNativeAvailable()) {
             throw new UnsupportedAudioFileException("raw E-AC-3 requires Dolby playback and native decoder support");
         }
-        return new DolbyEc3Pipeline("raw", closed);
+        BlockPos sourcePos = playbackContext.pos();
+        return new DolbyEc3Pipeline("raw", closed, sourcePos);
     }
 
     private static void activatePipeline(
@@ -459,6 +507,16 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             cause = cause.getCause();
         }
         return false;
+    }
+
+    private static BlockPos copyPos(BlockPos pos) {
+        if (pos == null) {
+            return null;
+        }
+        return new BlockPos(pos.getX(), pos.getY(), pos.getZ());
+    }
+
+    private record PlaybackContext(BlockPos pos, long expiresAtMillis) {
     }
 
     @Override

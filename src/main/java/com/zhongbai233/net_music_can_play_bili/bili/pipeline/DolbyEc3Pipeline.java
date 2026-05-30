@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.bili.pipeline;
 
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioHandler;
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import net.minecraft.core.BlockPos;
 
 import javax.sound.sampled.AudioFormat;
 import java.io.EOFException;
@@ -25,10 +26,14 @@ public final class DolbyEc3Pipeline implements AudioDecodePipeline {
     private long ec3Frames;
 
     public DolbyEc3Pipeline(String container, AtomicBoolean ownerClosed) {
+        this(container, ownerClosed, null);
+    }
+
+    public DolbyEc3Pipeline(String container, AtomicBoolean ownerClosed, BlockPos sourcePos) {
         this.container = container;
         this.ownerClosed = ownerClosed;
         this.dolby = new DolbyAudioHandler();
-        DolbyAudioRegistry.register(dolby);
+        DolbyAudioRegistry.register(dolby, sourcePos);
     }
 
     @Override

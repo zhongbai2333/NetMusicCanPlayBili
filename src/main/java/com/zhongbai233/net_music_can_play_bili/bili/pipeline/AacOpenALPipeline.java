@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.bili.pipeline;
 
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
 import com.zhongbai233.net_music_can_play_bili.bili.StereoOpenALHandler;
+import net.minecraft.core.BlockPos;
 
 import javax.sound.sampled.AudioFormat;
 import java.io.IOException;
@@ -14,10 +15,14 @@ public final class AacOpenALPipeline implements AudioDecodePipeline {
     private final StereoOpenALHandler stereo;
 
     public AacOpenALPipeline(byte[] asc, AtomicBoolean ownerClosed) {
+        this(asc, ownerClosed, null);
+    }
+
+    public AacOpenALPipeline(byte[] asc, AtomicBoolean ownerClosed, BlockPos sourcePos) {
         this.decoder = new AacFrameDecoder(asc, ownerClosed::get);
         this.stereo = new StereoOpenALHandler();
         this.stereo.setSampleRate((int) decoder.format().getSampleRate());
-        DolbyAudioRegistry.registerStereo(stereo);
+        DolbyAudioRegistry.registerStereo(stereo, sourcePos);
     }
 
     @Override

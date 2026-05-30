@@ -45,17 +45,21 @@ public class StereoOpenALHandler {
     public boolean enqueuePcm(float[][] stereoBlock) {
         if (stereoBlock == null || closed)
             return false;
-        int samples = stereoBlock.length > 0 ? stereoBlock[0].length : 0;
+        int samples = sampleCount(stereoBlock);
         if (samples <= 0)
             return false;
         boolean queuedAny = false;
         for (int sample = 0; sample < samples && !closed; sample++) {
-            for (int ch = 0; ch < 2; ch++) {
-                if (ch < stereoBlock.length && stereoBlock[ch] != null && sample < stereoBlock[ch].length) {
-                    pendingBlock[ch][pendingSamples] = stereoBlock[ch][sample];
-                } else {
-                    pendingBlock[ch][pendingSamples] = 0.0f;
-                }
+            float left = sampleAt(stereoBlock, 0, sample);
+            float right = sampleAt(stereoBlock, 1, sample);
+            float crossfeed = BiliConfig.stereoCrossfeedAmount();
+            if (crossfeed > 0.0f) {
+                float keep = 1.0f - crossfeed;
+                pendingBlock[0][pendingSamples] = softClip(left * keep + right * crossfeed);
+                pendingBlock[1][pendingSamples] = softClip(right * keep + left * crossfeed);
+            } else {
+                pendingBlock[0][pendingSamples] = left;
+                pendingBlock[1][pendingSamples] = right;
             }
             pendingSamples++;
             if (pendingSamples == SAMPLES_PER_BLOCK) {
@@ -93,6 +97,34 @@ public class StereoOpenALHandler {
             Thread.currentThread().interrupt();
         }
         return false;
+    }
+
+    private static float sampleAt(float[][] stereoBlock, int channel, int sample) {
+        if (stereoBlock == null || stereoBlock.length == 0) {
+            return 0.0f;
+        }
+        int sourceChannel = Math.min(channel, stereoBlock.length - 1);
+        float[] channelData = stereoBlock[sourceChannel];
+        if (channelData == null || sample >= channelData.length) {
+            return 0.0f;
+        }
+        return channelData[sample];
+    }
+
+    private static int sampleCount(float[][] stereoBlock) {
+        int samples = 0;
+        if (stereoBlock != null) {
+            for (float[] channelData : stereoBlock) {
+                if (channelData != null) {
+                    samples = Math.max(samples, channelData.length);
+                }
+            }
+        }
+        return samples;
+    }
+
+    private static float softClip(float sample) {
+        return Math.max(-1.0f, Math.min(1.0f, sample));
     }
 
     /** 每 tick 调用：推进 OpenAL 播放 + 更新空间位置 */

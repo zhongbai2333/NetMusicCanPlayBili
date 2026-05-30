@@ -18,6 +18,7 @@ public final class BiliConfig {
     /** Dolby 全景声默认开启，可在电脑界面关闭。 */
     public static volatile boolean dolbyEnabled = true;
     public static volatile boolean dolbyJocEnabled = true;
+    public static volatile double stereoCrossfeed = 0.16;
 
     private BiliConfig() {
     }
@@ -38,6 +39,9 @@ public final class BiliConfig {
                 if (root.has("dolbyJocEnabled")) {
                     dolbyJocEnabled = root.get("dolbyJocEnabled").getAsBoolean();
                 }
+                if (root.has("stereoCrossfeed")) {
+                    stereoCrossfeed = root.get("stereoCrossfeed").getAsDouble();
+                }
             }
         } catch (Exception e) {
             LOGGER.warn("加载 B站配置失败", e);
@@ -50,11 +54,16 @@ public final class BiliConfig {
             root.addProperty("sessdata", BiliApiClient.sessdata != null ? BiliApiClient.sessdata : "");
             root.addProperty("dolbyEnabled", dolbyEnabled);
             root.addProperty("dolbyJocEnabled", dolbyJocEnabled);
+            root.addProperty("stereoCrossfeed", stereoCrossfeed);
             Files.createDirectories(CONFIG_FILE.getParent());
             Files.writeString(CONFIG_FILE, root.toString());
             LOGGER.info("B站登录状态已保存");
         } catch (IOException e) {
             LOGGER.warn("保存 B站配置失败", e);
         }
+    }
+
+    public static float stereoCrossfeedAmount() {
+        return (float) Math.max(0.0, Math.min(0.45, stereoCrossfeed));
     }
 }

@@ -196,10 +196,10 @@ public class OpenALSpatialAudio {
         if (!initialized)
             return;
         for (int ch = 0; ch < numBeds; ch++) {
-            pumpSource(bedSources[ch], bedPending[ch], bedGains != null ? bedGains[ch] : 1f);
+            pumpSource(bedSources[ch], bedPending[ch], 1.0f);
         }
         for (int obj = 0; obj < numObjects; obj++) {
-            pumpSource(objectSources[obj], objPending[obj], objectGains != null ? objectGains[obj] : 1f);
+            pumpSource(objectSources[obj], objPending[obj], 1.0f);
         }
     }
 
@@ -228,18 +228,20 @@ public class OpenALSpatialAudio {
     /** 设置指定 bed 声道的增益 */
     public void setBedGain(int channel, float gain) {
         if (channel < numBeds) {
+            float clamped = clampGain(gain);
             if (bedGains != null && channel < bedGains.length)
-                bedGains[channel] = clampGain(gain);
-            AL10.alSourcef(bedSources[channel], AL10.AL_GAIN, 1.0f);
+                bedGains[channel] = clamped;
+            AL10.alSourcef(bedSources[channel], AL10.AL_GAIN, clamped);
         }
     }
 
     /** 设置指定对象的增益 */
     public void setObjectGain(int obj, float gain) {
         if (obj < numObjects) {
+            float clamped = clampGain(gain);
             if (objectGains != null && obj < objectGains.length)
-                objectGains[obj] = clampGain(gain);
-            AL10.alSourcef(objectSources[obj], AL10.AL_GAIN, 1.0f);
+                objectGains[obj] = clamped;
+            AL10.alSourcef(objectSources[obj], AL10.AL_GAIN, clamped);
         }
     }
 
