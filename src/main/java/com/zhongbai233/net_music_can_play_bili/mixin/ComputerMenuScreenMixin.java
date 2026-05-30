@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.mixin;
 import com.github.tartaricacid.netmusic.client.gui.ComputerMenuScreen;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliConfig;
 import com.zhongbai233.net_music_can_play_bili.gui.BiliQrLoginScreen;
+import com.zhongbai233.net_music_can_play_bili.util.MixinReflectionHelper;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;

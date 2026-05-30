@@ -1,4 +1,4 @@
-package com.zhongbai233.net_music_can_play_bili.mixin;
+package com.zhongbai233.net_music_can_play_bili.util;
 
 import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.screens.Screen;
