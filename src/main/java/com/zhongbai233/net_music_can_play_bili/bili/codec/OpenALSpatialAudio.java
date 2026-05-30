@@ -1,10 +1,13 @@
 package com.zhongbai233.net_music_can_play_bili.bili.codec;
 
 import com.mojang.logging.LogUtils;
+import net.neoforged.fml.ModList;
 import org.slf4j.Logger;
 
 import org.lwjgl.BufferUtils;
+import org.lwjgl.openal.AL;
 import org.lwjgl.openal.AL10;
+import org.lwjgl.openal.ALC;
 import org.lwjgl.openal.ALC10;
 import org.lwjgl.openal.EXTFloat32;
 import org.lwjgl.openal.SOFTHRTF;
@@ -26,27 +29,23 @@ public class OpenALSpatialAudio {
     /** 每 buffer 256 samples = 1 个 E-AC-3 block */
     private static final int SAMPLES_PER_BUFFER = 256;
     private static final int SAMPLE_RATE = 48000;
+    private static final float[] ZERO_LOCAL_POSITION = new float[] { 0f, 0f, 0f };
     private int actualSampleRate = SAMPLE_RATE;
     private static final boolean FORCE_HRTF = Boolean.getBoolean("netmusicbili.dolby.forceHrtf")
             && !Boolean.getBoolean("netmusicbili.dolby.disableHrtf");
+    private static final boolean FORCE_HRTF_WITH_CHANNEL = Boolean
+            .getBoolean("netmusicbili.dolby.forceHrtfWithChannel");
 
     /** 是否支持 AL_EXT_FLOAT32（浮点 PCM，无量化损失） */
-    private static final boolean USE_FLOAT32;
-    private static final int MONO_FORMAT;
-    private static final int BYTES_PER_SAMPLE;
+    private static final ThreadLocal<Long> CAPABILITIES_CONTEXT = ThreadLocal.withInitial(() -> 0L);
     private static volatile boolean hrtfAttempted;
 
-    static {
-        boolean hasFloat = AL10.alIsExtensionPresent("AL_EXT_FLOAT32");
-        USE_FLOAT32 = hasFloat;
-        if (hasFloat) {
-            MONO_FORMAT = EXTFloat32.AL_FORMAT_MONO_FLOAT32;
-            BYTES_PER_SAMPLE = 4;
-        } else {
-            MONO_FORMAT = AL10.AL_FORMAT_MONO16;
-            BYTES_PER_SAMPLE = 2;
-        }
-    }
+    /**
+     * Minecraft OpenAL context/device 缓存。只在首次访问时通过反射获取一次，
+     * 之后所有线程直接读缓存，零反射开销。
+     */
+    private static volatile OpenAlHandles CACHED_HANDLES;
+    private static final Object CACHE_LOCK = new Object();
 
     private int[] bedSources; // 床声道 OpenAL 声源 ID
     private int[] objectSources; // 动态对象 OpenAL 声源 ID
@@ -58,9 +57,14 @@ public class OpenALSpatialAudio {
     private float[] objectGains;
     private ByteBuffer uploadScratch;
     private final float[] lastFrontToMachine = new float[] { 0f, 0f, 1f };
+    private boolean useFloat32;
+    private int monoFormat = AL10.AL_FORMAT_MONO16;
+    private int bytesPerSample = 2;
     private int numBeds;
     private int numObjects;
     private boolean initialized;
+    /** 设备重置后所有 source/buffer 失效，标记为需重建 */
+    private volatile boolean deviceLost;
 
     public OpenALSpatialAudio() {
     }
@@ -76,12 +80,17 @@ public class OpenALSpatialAudio {
     }
 
     public void init(int numBedChannels, int numDynamicObjects, int sampleRate) {
+        if (!ensureOpenAlContext("init")) {
+            return;
+        }
         cleanup();
+        detectAudioFormat();
         ensureHrtfEnabled();
         this.actualSampleRate = sampleRate;
         this.numBeds = numBedChannels;
         this.numObjects = numDynamicObjects;
-        this.uploadScratch = BufferUtils.createByteBuffer(SAMPLES_PER_BUFFER * BYTES_PER_SAMPLE)
+        this.deviceLost = false;
+        this.uploadScratch = BufferUtils.createByteBuffer(SAMPLES_PER_BUFFER * bytesPerSample)
                 .order(ByteOrder.LITTLE_ENDIAN);
 
         // 分配床声道声源
@@ -89,51 +98,16 @@ public class OpenALSpatialAudio {
         bedBuffers = new int[numBeds][NUM_BUFFERS];
         bedPending = newPendingQueues(numBeds);
         bedGains = filledGains(numBeds);
-        for (int ch = 0; ch < numBeds; ch++) {
-            bedSources[ch] = AL10.alGenSources();
-            for (int b = 0; b < NUM_BUFFERS; b++) {
-                bedBuffers[ch][b] = AL10.alGenBuffers();
-            }
-            // 排队初始静音缓冲区
-            ByteBuffer silence = BufferUtils.createByteBuffer(SAMPLES_PER_BUFFER * BYTES_PER_SAMPLE)
-                    .order(ByteOrder.LITTLE_ENDIAN);
-            for (int b = 0; b < NUM_BUFFERS; b++) {
-                silence.clear();
-                AL10.alBufferData(bedBuffers[ch][b], MONO_FORMAT,
-                        silence, actualSampleRate);
-                AL10.alSourceQueueBuffers(bedSources[ch], bedBuffers[ch][b]);
-            }
-            AL10.alSourcei(bedSources[ch], AL10.AL_SOURCE_RELATIVE, AL10.AL_FALSE);
-            forceSourceSpatialize(bedSources[ch]);
-            AL10.alSourcef(bedSources[ch], AL10.AL_REFERENCE_DISTANCE, 3.0f);
-            AL10.alSourcef(bedSources[ch], AL10.AL_MAX_DISTANCE, 48.0f);
-            AL10.alSourcef(bedSources[ch], AL10.AL_ROLLOFF_FACTOR, 0.0f);
-        }
+        if (!initSourceGroup("bed", numBeds, bedSources, bedBuffers))
+            return;
 
         // 分配对象声源
         objectSources = new int[numObjects];
         objBuffers = new int[numObjects][NUM_BUFFERS];
         objPending = newPendingQueues(numObjects);
         objectGains = filledGains(numObjects);
-        for (int obj = 0; obj < numObjects; obj++) {
-            objectSources[obj] = AL10.alGenSources();
-            for (int b = 0; b < NUM_BUFFERS; b++) {
-                objBuffers[obj][b] = AL10.alGenBuffers();
-            }
-            ByteBuffer silence = BufferUtils.createByteBuffer(SAMPLES_PER_BUFFER * BYTES_PER_SAMPLE)
-                    .order(ByteOrder.LITTLE_ENDIAN);
-            for (int b = 0; b < NUM_BUFFERS; b++) {
-                silence.clear();
-                AL10.alBufferData(objBuffers[obj][b], MONO_FORMAT,
-                        silence, actualSampleRate);
-                AL10.alSourceQueueBuffers(objectSources[obj], objBuffers[obj][b]);
-            }
-            AL10.alSourcei(objectSources[obj], AL10.AL_SOURCE_RELATIVE, AL10.AL_FALSE);
-            forceSourceSpatialize(objectSources[obj]);
-            AL10.alSourcef(objectSources[obj], AL10.AL_REFERENCE_DISTANCE, 3.0f);
-            AL10.alSourcef(objectSources[obj], AL10.AL_MAX_DISTANCE, 48.0f);
-            AL10.alSourcef(objectSources[obj], AL10.AL_ROLLOFF_FACTOR, 0.0f);
-        }
+        if (!initSourceGroup("object", numObjects, objectSources, objBuffers))
+            return;
 
         // 启动所有声源播放
         for (int ch = 0; ch < numBeds; ch++) {
@@ -146,7 +120,7 @@ public class OpenALSpatialAudio {
         initialized = true;
         LOGGER.debug(
                 "OpenAL spatial init: beds={}, objects={}, format={}, sourceRelative=false(world-follow), spatialize=force, hrtf={}, preloadBuffers={} (~{}ms)",
-                numBeds, numObjects, USE_FLOAT32 ? "float32" : "int16", FORCE_HRTF ? "force" : "vanilla", NUM_BUFFERS,
+                numBeds, numObjects, useFloat32 ? "float32" : "int16", FORCE_HRTF ? "force" : "vanilla", NUM_BUFFERS,
                 Math.round(NUM_BUFFERS * SAMPLES_PER_BUFFER * 1000.0 / actualSampleRate));
     }
 
@@ -193,7 +167,9 @@ public class OpenALSpatialAudio {
      * 在整帧 6 个 block 都 enqueue 后调用
      */
     public void pumpQueuedAudio() {
-        if (!initialized)
+        if (!initialized || deviceLost)
+            return;
+        if (!ensureOpenAlContext("pumpQueuedAudio"))
             return;
         for (int ch = 0; ch < numBeds; ch++) {
             pumpSource(bedSources[ch], bedPending[ch], 1.0f);
@@ -208,19 +184,21 @@ public class OpenALSpatialAudio {
             float[] listenerPos, float[] listenerForward) {
         if (!initialized || listenerPos == null || listenerPos.length < 3)
             return;
+        if (!ensureOpenAlContext("updatePositions"))
+            return;
 
         float[] front = frontToMachine(listenerForward);
         for (int ch = 0; ch < numBeds; ch++) {
             float[] pos = (bedPositions != null && ch < bedPositions.length)
                     ? bedPositions[ch]
-                    : new float[] { 0, 0, 0 };
+                    : ZERO_LOCAL_POSITION;
             updateWorldSourcePosition(bedSources[ch], listenerPos, front, pos);
         }
 
         for (int obj = 0; obj < numObjects; obj++) {
             float[] pos = (objectPositions != null && obj < objectPositions.length)
                     ? objectPositions[obj]
-                    : new float[] { 0, 0, 0 };
+                    : ZERO_LOCAL_POSITION;
             updateWorldSourcePosition(objectSources[obj], listenerPos, front, pos);
         }
     }
@@ -228,6 +206,8 @@ public class OpenALSpatialAudio {
     /** 设置指定 bed 声道的增益 */
     public void setBedGain(int channel, float gain) {
         if (channel < numBeds) {
+            if (!ensureOpenAlContext("setBedGain"))
+                return;
             float clamped = clampGain(gain);
             if (bedGains != null && channel < bedGains.length)
                 bedGains[channel] = clamped;
@@ -238,6 +218,8 @@ public class OpenALSpatialAudio {
     /** 设置指定对象的增益 */
     public void setObjectGain(int obj, float gain) {
         if (obj < numObjects) {
+            if (!ensureOpenAlContext("setObjectGain"))
+                return;
             float clamped = clampGain(gain);
             if (objectGains != null && obj < objectGains.length)
                 objectGains[obj] = clamped;
@@ -256,6 +238,10 @@ public class OpenALSpatialAudio {
     /** 释放所有 OpenAL 资源 */
     public void cleanup() {
         initialized = false;
+        if (!ensureOpenAlContext("cleanup")) {
+            clearLocalReferences();
+            return;
+        }
         if (bedSources != null) {
             for (int src : bedSources) {
                 stopAndDelete(src);
@@ -280,6 +266,17 @@ public class OpenALSpatialAudio {
                 }
             }
         }
+        clearLocalReferences();
+    }
+
+    private void detectAudioFormat() {
+        boolean hasFloat = AL10.alIsExtensionPresent("AL_EXT_FLOAT32");
+        useFloat32 = hasFloat;
+        monoFormat = hasFloat ? EXTFloat32.AL_FORMAT_MONO_FLOAT32 : AL10.AL_FORMAT_MONO16;
+        bytesPerSample = hasFloat ? 4 : 2;
+    }
+
+    private void clearLocalReferences() {
         bedSources = null;
         objectSources = null;
         bedBuffers = null;
@@ -289,9 +286,8 @@ public class OpenALSpatialAudio {
         bedGains = null;
         objectGains = null;
         uploadScratch = null;
+        deviceLost = false;
     }
-
-    // ── 内部 ──
 
     @SuppressWarnings("unchecked")
     private static ArrayDeque<float[]>[] newPendingQueues(int count) {
@@ -307,6 +303,37 @@ public class OpenALSpatialAudio {
         for (int i = 0; i < count; i++)
             gains[i] = 1.0f;
         return gains;
+    }
+
+    /** 初始化一组 source（bed 或 object），失败时调用 cleanup() 并返回 false */
+    private boolean initSourceGroup(String label, int count, int[] sources, int[][] buffers) {
+        for (int i = 0; i < count; i++) {
+            sources[i] = genSource(label, i);
+            if (sources[i] == 0) {
+                cleanup();
+                return false;
+            }
+            for (int b = 0; b < NUM_BUFFERS; b++) {
+                buffers[i][b] = genBuffer(label, i, b);
+                if (buffers[i][b] == 0) {
+                    cleanup();
+                    return false;
+                }
+            }
+            ByteBuffer silence = BufferUtils.createByteBuffer(SAMPLES_PER_BUFFER * bytesPerSample)
+                    .order(ByteOrder.LITTLE_ENDIAN);
+            for (int b = 0; b < NUM_BUFFERS; b++) {
+                silence.clear();
+                AL10.alBufferData(buffers[i][b], monoFormat, silence, actualSampleRate);
+                AL10.alSourceQueueBuffers(sources[i], buffers[i][b]);
+            }
+            AL10.alSourcei(sources[i], AL10.AL_SOURCE_RELATIVE, AL10.AL_FALSE);
+            forceSourceSpatialize(sources[i]);
+            AL10.alSourcef(sources[i], AL10.AL_REFERENCE_DISTANCE, 3.0f);
+            AL10.alSourcef(sources[i], AL10.AL_MAX_DISTANCE, 48.0f);
+            AL10.alSourcef(sources[i], AL10.AL_ROLLOFF_FACTOR, 0.0f);
+        }
+        return true;
     }
 
     private void enqueuePending(ArrayDeque<float[]> queue, float[] pcm) {
@@ -336,12 +363,21 @@ public class OpenALSpatialAudio {
 
     private void pumpSource(int sourceId, ArrayDeque<float[]> pending, float gain) {
         int processed = AL10.alGetSourcei(sourceId, AL10.AL_BUFFERS_PROCESSED);
+        if (checkDeviceLost("pumpSource:alGetSourcei")) {
+            return;
+        }
 
         while (processed-- > 0) {
             int buf = AL10.alSourceUnqueueBuffers(sourceId);
+            if (buf == 0 && checkDeviceLost("pumpSource:alSourceUnqueueBuffers")) {
+                return;
+            }
             float[] pcm = pending != null ? pending.pollFirst() : null;
             fillBuffer(buf, pcm, gain);
             AL10.alSourceQueueBuffers(sourceId, buf);
+            if (checkDeviceLost("pumpSource:alSourceQueueBuffers")) {
+                return;
+            }
         }
         if (AL10.alGetSourcei(sourceId, AL10.AL_SOURCE_STATE) != AL10.AL_PLAYING
                 && AL10.alGetSourcei(sourceId, AL10.AL_BUFFERS_QUEUED) > 0) {
@@ -349,15 +385,45 @@ public class OpenALSpatialAudio {
         }
     }
 
+    /**
+     * 检测 OpenAL 设备是否已被重置（其他模组调用 alcResetDeviceSOFT 等）
+     * 设备重置后所有已分配的 source/buffer 句柄失效，继续使用会持续报 AL_INVALID_NAME
+     * 一旦检测到，标记 deviceLost，上层应重建整个 OpenAL 管线
+     */
+    private boolean checkDeviceLost(String context) {
+        int err = AL10.alGetError();
+        if (err == AL10.AL_NO_ERROR) {
+            return false;
+        }
+        if (err == AL10.AL_INVALID_NAME) {
+            if (!deviceLost) {
+                deviceLost = true;
+                LOGGER.warn("OpenAL device lost detected ({}): source/buffer handles invalidated. "
+                        + "This can happen when another mod resets the OpenAL device (e.g. Sound Physics). "
+                        + "Spatial audio will be reinitialized on next tick.",
+                        context);
+            }
+            return true;
+        }
+        // 其他错误码（如 AL_INVALID_OPERATION）记录但不停止
+        LOGGER.debug("OpenAL error in {}: 0x{}", context, Integer.toHexString(err).toUpperCase());
+        return false;
+    }
+
+    /** 查询设备是否已丢失，供上层（DolbyAudioHandler/StereoOpenALHandler）重建 */
+    public boolean isDeviceLost() {
+        return deviceLost;
+    }
+
     private void fillBuffer(int bufferId, float[] pcm, float gain) {
         int len = SAMPLES_PER_BUFFER;
         ByteBuffer buf = uploadScratch;
-        if (buf == null || buf.capacity() < len * BYTES_PER_SAMPLE) {
-            buf = BufferUtils.createByteBuffer(len * BYTES_PER_SAMPLE).order(ByteOrder.LITTLE_ENDIAN);
+        if (buf == null || buf.capacity() < len * bytesPerSample) {
+            buf = BufferUtils.createByteBuffer(len * bytesPerSample).order(ByteOrder.LITTLE_ENDIAN);
             uploadScratch = buf;
         }
         buf.clear();
-        if (USE_FLOAT32) {
+        if (useFloat32) {
             for (int i = 0; i < len; i++) {
                 float sample = (pcm != null && i < pcm.length) ? pcm[i] * gain : 0f;
                 buf.putFloat(Math.max(-1.0f, Math.min(1.0f, sample)));
@@ -371,7 +437,7 @@ public class OpenALSpatialAudio {
             }
         }
         buf.flip();
-        AL10.alBufferData(bufferId, MONO_FORMAT, buf, actualSampleRate);
+        AL10.alBufferData(bufferId, monoFormat, buf, actualSampleRate);
     }
 
     private float[] frontToMachine(float[] listenerForward) {
@@ -411,9 +477,135 @@ public class OpenALSpatialAudio {
         }
     }
 
+    private static boolean ensureOpenAlContext(String operation) {
+        long context = ALC10.alcGetCurrentContext();
+        long device = 0L;
+        if (context == 0L) {
+            OpenAlHandles handles = minecraftOpenAlHandles();
+            context = handles.context();
+            device = handles.device();
+            if (context == 0L) {
+                LOGGER.debug("OpenAL spatial {} skipped: no current Minecraft OpenAL context", operation);
+                return false;
+            }
+            if (!ALC10.alcMakeContextCurrent(context)) {
+                LOGGER.warn("OpenAL spatial {} skipped: failed to make Minecraft OpenAL context current", operation);
+                return false;
+            }
+        }
+
+        if (device == 0L) {
+            device = ALC10.alcGetContextsDevice(context);
+        }
+        if (device == 0L) {
+            LOGGER.warn("OpenAL spatial {} skipped: no OpenAL device for context", operation);
+            return false;
+        }
+
+        if (CAPABILITIES_CONTEXT.get() != context) {
+            AL.createCapabilities(ALC.createCapabilities(device));
+            CAPABILITIES_CONTEXT.set(context);
+        }
+        return true;
+    }
+
+    private static OpenAlHandles minecraftOpenAlHandles() {
+        OpenAlHandles cached = CACHED_HANDLES;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (CACHE_LOCK) {
+            cached = CACHED_HANDLES;
+            if (cached != null) {
+                return cached;
+            }
+            cached = resolveMinecraftOpenAlHandles();
+            CACHED_HANDLES = cached;
+            return cached;
+        }
+    }
+
+    /** 反射解析失败时只警告一次，避免刷屏 */
+    private static volatile boolean reflectionWarningLogged;
+
+    private static OpenAlHandles resolveMinecraftOpenAlHandles() {
+        try {
+            Class<?> minecraftClass = Class.forName("net.minecraft.client.Minecraft");
+            Object minecraft = minecraftClass.getMethod("getInstance").invoke(null);
+            if (minecraft == null) {
+                return OpenAlHandles.EMPTY;
+            }
+            Object soundManager = minecraftClass.getMethod("getSoundManager").invoke(minecraft);
+            if (soundManager == null) {
+                return OpenAlHandles.EMPTY;
+            }
+            Object soundEngine = readField(soundManager, "soundEngine");
+            if (soundEngine == null) {
+                return OpenAlHandles.EMPTY;
+            }
+            Object loaded = readField(soundEngine, "loaded");
+            if (loaded instanceof Boolean isLoaded && !isLoaded) {
+                return OpenAlHandles.EMPTY;
+            }
+            Object library = readField(soundEngine, "library");
+            if (library == null) {
+                return OpenAlHandles.EMPTY;
+            }
+            long context = readLongField(library, "context");
+            long device = readLongField(library, "currentDevice");
+            if (context == 0L) {
+                return OpenAlHandles.EMPTY;
+            }
+            LOGGER.debug("Cached Minecraft OpenAL handles: context=0x{} device=0x{}",
+                    Long.toHexString(context), Long.toHexString(device));
+            return new OpenAlHandles(context, device);
+        } catch (Throwable t) {
+            if (!reflectionWarningLogged) {
+                reflectionWarningLogged = true;
+                LOGGER.warn(
+                        "[NetMusicCanPlayBili] Dolby 空间音频不可用：无法通过反射获取 Minecraft SoundEngine 的 OpenAL 句柄。"
+                                + "这通常是因为当前 Minecraft/NeoForge 版本与模组不兼容（SoundEngine 内部字段名已变更）。"
+                                + "音频将自动降级为 FLAC/AAC 立体声。"
+                                + "具体异常: {}",
+                        t.toString());
+            } else {
+                LOGGER.debug("OpenAL handle resolution retry failed: {}", t.toString());
+            }
+            return OpenAlHandles.EMPTY;
+        }
+    }
+
+    private static Object readField(Object target, String name) throws ReflectiveOperationException {
+        if (target == null) {
+            return null;
+        }
+        Class<?> type = target.getClass();
+        while (type != null) {
+            try {
+                var field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                return field.get(target);
+            } catch (NoSuchFieldException ignored) {
+                type = type.getSuperclass();
+            }
+        }
+        return null;
+    }
+
+    private static long readLongField(Object target, String name) throws ReflectiveOperationException {
+        Object value = readField(target, name);
+        return value instanceof Number number ? number.longValue() : 0L;
+    }
+
     private static synchronized void ensureHrtfEnabled() {
         if (hrtfAttempted || !FORCE_HRTF)
             return;
+        if (isChannelLoaded() && !FORCE_HRTF_WITH_CHANNEL) {
+            LOGGER.warn(
+                    "OpenAL HRTF: Channel mod detected; skip alcResetDeviceSOFT to avoid disrupting voice EFX sources. Set -Dnetmusicbili.dolby.forceHrtfWithChannel=true to override.");
+            hrtfAttempted = true;
+            return;
+        }
         hrtfAttempted = true;
         long context = ALC10.alcGetCurrentContext();
         if (context == 0L) {
@@ -454,6 +646,14 @@ public class OpenALSpatialAudio {
         };
     }
 
+    private static boolean isChannelLoaded() {
+        try {
+            return ModList.get().isLoaded("channel");
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     private static void stopAndDelete(int sourceId) {
         AL10.alSourceStop(sourceId);
         // 取消所有缓冲区的排队
@@ -462,5 +662,49 @@ public class OpenALSpatialAudio {
             AL10.alSourceUnqueueBuffers(sourceId);
         }
         AL10.alDeleteSources(sourceId);
+    }
+
+    private record OpenAlHandles(long context, long device) {
+        private static final OpenAlHandles EMPTY = new OpenAlHandles(0L, 0L);
+    }
+
+    // ── Source / Buffer 分配（含失败检测） ──
+
+    /**
+     * 生成一个 OpenAL source。失败时返回 0，上层应立即 {@link #cleanup()}
+     */
+    private static int genSource(String type, int index) {
+        int source = AL10.alGenSources();
+        int err = AL10.alGetError();
+        if (err != AL10.AL_NO_ERROR) {
+            LOGGER.error("OpenAL genSource({}[{}]) 失败: AL error 0x{}", type, index,
+                    Integer.toHexString(err).toUpperCase());
+            return 0;
+        }
+        if (source == 0) {
+            LOGGER.error("OpenAL genSource({}[{}]) 返回 0: 设备 source 已耗尽或未初始化", type, index);
+            return 0;
+        }
+        LOGGER.debug("OpenAL genSource({}[{}]) -> {}", type, index, source);
+        return source;
+    }
+
+    /**
+     * 生成一个 OpenAL buffer。失败时返回 0，上层应立即 {@link #cleanup()}
+     */
+    private static int genBuffer(String type, int channelOrObj, int bufferIdx) {
+        int buffer = AL10.alGenBuffers();
+        int err = AL10.alGetError();
+        if (err != AL10.AL_NO_ERROR) {
+            LOGGER.error("OpenAL genBuffer({}[{}][{}]) 失败: AL error 0x{}", type, channelOrObj, bufferIdx,
+                    Integer.toHexString(err).toUpperCase());
+            return 0;
+        }
+        if (buffer == 0) {
+            LOGGER.error("OpenAL genBuffer({}[{}][{}]) 返回 0: 设备 buffer 资源已耗尽或未初始化", type, channelOrObj,
+                    bufferIdx);
+            return 0;
+        }
+        return buffer;
     }
 }

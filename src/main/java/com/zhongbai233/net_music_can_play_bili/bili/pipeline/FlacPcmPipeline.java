@@ -12,12 +12,13 @@ import java.io.InputStream;
 /**
  * 普通 NetMusic 唱片机使用的 FLAC 管线：拼回原生 FLAC 流，再交给 NetMusic 的 JFLAC 解码
  */
-public final class FlacPcmPipeline implements AudioDecodePipeline {
+public final class FlacPcmPipeline extends AbstractAudioPipeline {
     private final AudioFormat format;
     private final BlockingAudioPipe output;
     private long compressedBytes;
 
     public FlacPcmPipeline(byte[] dfLa, BlockingAudioPipe output) throws IOException {
+        super("fMP4", "flac", null, false);
         this.format = FlacStreamSupport.audioFormat(dfLa);
         this.output = output;
         FlacStreamSupport.writeNativeHeader(output, dfLa);
@@ -29,23 +30,8 @@ public final class FlacPcmPipeline implements AudioDecodePipeline {
     }
 
     @Override
-    public String container() {
-        return "fMP4";
-    }
-
-    @Override
-    public String codec() {
-        return "flac";
-    }
-
-    @Override
     public String detail() {
         return format.getSampleSizeInBits() > 16 ? "Hi-Res FLAC via NetMusic dither" : "FLAC via NetMusic";
-    }
-
-    @Override
-    public boolean usesOpenAlOutput() {
-        return false;
     }
 
     @Override

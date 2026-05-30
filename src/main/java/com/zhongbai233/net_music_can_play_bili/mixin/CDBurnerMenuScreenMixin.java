@@ -9,7 +9,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.EditBox;
-import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
@@ -20,7 +19,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.lang.reflect.Method;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -43,18 +41,6 @@ public abstract class CDBurnerMenuScreenMixin {
 
     @Unique
     private AbstractWidget net_music_can_play_bili$pageLabel;
-
-    @Unique
-    private static final Method ADD_RENDERABLE_WIDGET;
-
-    static {
-        try {
-            ADD_RENDERABLE_WIDGET = Screen.class.getDeclaredMethod("addRenderableWidget", GuiEventListener.class);
-            ADD_RENDERABLE_WIDGET.setAccessible(true);
-        } catch (NoSuchMethodException e) {
-            throw new RuntimeException("Failed to find Screen.addRenderableWidget", e);
-        }
-    }
 
     @Inject(method = "init", at = @At("TAIL"))
     private void net_music_can_play_bili$initPageField(CallbackInfo ci) {
@@ -92,12 +78,8 @@ public abstract class CDBurnerMenuScreenMixin {
             }
         };
 
-        try {
-            ADD_RENDERABLE_WIDGET.invoke(this, this.net_music_can_play_bili$pageLabel);
-            ADD_RENDERABLE_WIDGET.invoke(this, this.net_music_can_play_bili$pageField);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to add page field widget", e);
-        }
+        MixinReflectionHelper.addWidget((Screen) (Object) this, this.net_music_can_play_bili$pageLabel);
+        MixinReflectionHelper.addWidget((Screen) (Object) this, this.net_music_can_play_bili$pageField);
     }
 
     @Inject(method = "handleCraftButton", at = @At("HEAD"), cancellable = true)
@@ -147,11 +129,6 @@ public abstract class CDBurnerMenuScreenMixin {
                     info.readOnly = this.readOnlyButton.selected();
 
                     NetworkHandler.sendToServer(new SetMusicIDMessage(info));
-
-                    var player = Minecraft.getInstance().player;
-                    if (player != null) {
-                        player.closeContainer();
-                    }
                 }));
 
         ci.cancel();

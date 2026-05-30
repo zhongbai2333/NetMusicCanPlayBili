@@ -20,8 +20,13 @@ public class StereoOpenALHandler {
     private static final int QUEUE_CAPACITY = 2048;
     private static final int PREBUFFER_BLOCKS = 192;
     private static final int MAX_BLOCKS_PER_TICK = 64;
+    private static final float[][] BED_POSITIONS = {
+            { -0.5f, 0, 0.866f }, { 0.5f, 0, 0.866f },
+    };
+    private static final float[][] EMPTY_OBJECT_POSITIONS = new float[0][0];
 
     private final BlockingQueue<float[][]> pcmQueue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
+    private final float[] forwardToMachine = new float[3];
     private final Thread worker;
     private volatile boolean closed;
     private volatile boolean started;
@@ -34,6 +39,11 @@ public class StereoOpenALHandler {
     private int sampleRate = 48000;
     private float[][] pendingBlock = new float[2][SAMPLES_PER_BLOCK];
     private int pendingSamples;
+    private volatile float lastDistance = Float.NaN;
+    private volatile float lastGain = 1.0f;
+    private volatile float userVolume = 1.0f;
+    private volatile float lastAudioLevel;
+    private volatile long lastAudioLevelNanos;
 
     public StereoOpenALHandler() {
         worker = new Thread(this::workerLoop, "StereoOpenALWorker");
@@ -127,7 +137,7 @@ public class StereoOpenALHandler {
         return Math.max(-1.0f, Math.min(1.0f, sample));
     }
 
-    /** 每 tick 调用：推进 OpenAL 播放 + 更新空间位置 */
+    /** 每次客户端位置同步调用：推进 OpenAL 播放 + 更新空间位置 */
     public void tick(float[] machinePos, float[] listenerPos) {
         if (closed || !initialized)
             return;
@@ -145,23 +155,76 @@ public class StereoOpenALHandler {
         int fed = 0;
         float[][] block;
         while (fed < allowed && (block = pcmQueue.poll()) != null) {
+            updateAudioLevel(block);
             spatialAudio.updateBedBlock(block);
             fed++;
         }
         frameBudget = Math.max(0.0, frameBudget - fed);
 
         if (initialized && spatialAudio != null) {
+            if (spatialAudio.isDeviceLost()) {
+                LOGGER.warn("Stereo OpenAL device lost, reinitializing...");
+                spatialAudio.cleanup();
+                spatialAudio = null;
+                initialized = false;
+                started = false;
+                return;
+            }
             spatialAudio.pumpQueuedAudio();
             if (listenerPos != null && machinePos != null) {
-                float[][] bedPos = {
-                        { -0.5f, 0, 0.866f }, { 0.5f, 0, 0.866f },
-                };
-                float[] forward = { machinePos[0] - listenerPos[0], 0f, machinePos[2] - listenerPos[2] };
-                spatialAudio.updatePositions(bedPos, new float[0][0], listenerPos, forward);
-                spatialAudio.setBedGain(0, 1.0f);
-                spatialAudio.setBedGain(1, 1.0f);
+                forwardToMachine[0] = machinePos[0] - listenerPos[0];
+                forwardToMachine[1] = 0f;
+                forwardToMachine[2] = machinePos[2] - listenerPos[2];
+                spatialAudio.updatePositions(BED_POSITIONS, EMPTY_OBJECT_POSITIONS, listenerPos, forwardToMachine);
+                float distance = distance(listenerPos, machinePos);
+                float gain = gainForDistance(distance);
+                lastDistance = distance;
+                lastGain = gain;
+                spatialAudio.setBedGain(0, gain * userVolume);
+                spatialAudio.setBedGain(1, gain * userVolume);
             }
         }
+    }
+
+    public void setUserVolume(float volume) {
+        userVolume = clampGain(volume);
+    }
+
+    public float userVolume() {
+        return userVolume;
+    }
+
+    public float audioLevel() {
+        long ageNanos = System.nanoTime() - lastAudioLevelNanos;
+        if (ageNanos <= 0L) {
+            return lastAudioLevel;
+        }
+        float ageSeconds = ageNanos / 1_000_000_000.0f;
+        float decay = Math.max(0.0f, 1.0f - ageSeconds * 2.5f);
+        return clampGain(lastAudioLevel * decay);
+    }
+
+    private void updateAudioLevel(float[][] block) {
+        if (block == null || block.length == 0) {
+            return;
+        }
+        float peak = 0.0f;
+        double sum = 0.0;
+        int count = 0;
+        for (float[] channel : block) {
+            if (channel == null) {
+                continue;
+            }
+            for (float sample : channel) {
+                float abs = Math.abs(sample);
+                peak = Math.max(peak, abs);
+                sum += sample * sample;
+                count++;
+            }
+        }
+        float rms = count > 0 ? (float) Math.sqrt(sum / count) : 0.0f;
+        lastAudioLevel = clampGain(Math.max(peak * 0.7f, rms * 2.2f));
+        lastAudioLevelNanos = System.nanoTime();
     }
 
     private void updateFrameBudget() {
@@ -197,12 +260,25 @@ public class StereoOpenALHandler {
 
     public List<String> describeState() {
         return List.of(String.format(
-                "Stereo OpenAL: initialized=%s started=%s sampleRate=%d queue=%d pendingSamples=%d blocks=%d",
-                initialized, started, sampleRate, pcmQueue.size(), pendingSamples, frameCount));
+                "Stereo OpenAL: initialized=%s started=%s sampleRate=%d queue=%d pendingSamples=%d blocks=%d distance=%.2f gain=%.3f volume=%.2f level=%.3f",
+                initialized, started, sampleRate, pcmQueue.size(), pendingSamples, frameCount, lastDistance, lastGain,
+                userVolume, audioLevel()));
+    }
+
+    private static float gainForDistance(float d) {
+        return AudioUtils.gainForDistance(d);
+    }
+
+    private static float clampGain(float gain) {
+        return AudioUtils.clampGain(gain);
+    }
+
+    private static float distance(float[] a, float[] b) {
+        return AudioUtils.distance(a, b);
     }
 
     private void workerLoop() {
-        // Worker 仅负责延迟初始化 OpenAL（避免阻塞 HTTP 下载线程）
+        // Worker 负责延迟初始化 + 设备丢失后重建 OpenAL 管线
         while (!closed) {
             try {
                 Thread.sleep(100);
@@ -215,7 +291,7 @@ public class StereoOpenALHandler {
                 spatialAudio.init(2, 0, sampleRate);
                 initialized = true;
                 LOGGER.debug("Stereo OpenAL 初始化: 2 声道立体声");
-                break;
+                // 不 break：设备丢失后 initialized 会被重置为 false，需要继续循环等待重建
             }
         }
     }

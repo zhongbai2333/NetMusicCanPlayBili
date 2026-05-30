@@ -18,6 +18,7 @@ public final class BiliConfig {
     /** Dolby 全景声默认开启，可在电脑界面关闭。 */
     public static volatile boolean dolbyEnabled = true;
     public static volatile boolean dolbyJocEnabled = true;
+    public static volatile int dolbyMaxObjectSources = 64;
     public static volatile double stereoCrossfeed = 0.16;
 
     private BiliConfig() {
@@ -39,6 +40,9 @@ public final class BiliConfig {
                 if (root.has("dolbyJocEnabled")) {
                     dolbyJocEnabled = root.get("dolbyJocEnabled").getAsBoolean();
                 }
+                if (root.has("dolbyMaxObjectSources")) {
+                    dolbyMaxObjectSources = root.get("dolbyMaxObjectSources").getAsInt();
+                }
                 if (root.has("stereoCrossfeed")) {
                     stereoCrossfeed = root.get("stereoCrossfeed").getAsDouble();
                 }
@@ -54,6 +58,7 @@ public final class BiliConfig {
             root.addProperty("sessdata", BiliApiClient.sessdata != null ? BiliApiClient.sessdata : "");
             root.addProperty("dolbyEnabled", dolbyEnabled);
             root.addProperty("dolbyJocEnabled", dolbyJocEnabled);
+            root.addProperty("dolbyMaxObjectSources", dolbyMaxObjectSources());
             root.addProperty("stereoCrossfeed", stereoCrossfeed);
             Files.createDirectories(CONFIG_FILE.getParent());
             Files.writeString(CONFIG_FILE, root.toString());
@@ -65,5 +70,9 @@ public final class BiliConfig {
 
     public static float stereoCrossfeedAmount() {
         return (float) Math.max(0.0, Math.min(0.45, stereoCrossfeed));
+    }
+
+    public static int dolbyMaxObjectSources() {
+        return Math.max(0, Math.min(64, dolbyMaxObjectSources));
     }
 }

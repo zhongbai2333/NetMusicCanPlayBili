@@ -32,7 +32,8 @@ public final class BiliPlaybackDiagnostics {
                 "",
                 System.currentTimeMillis(),
                 System.currentTimeMillis(),
-                false);
+                false,
+                "");
         LOGGER.info("NetMusic 播放开始: {}", cleanSongName);
     }
 
@@ -51,7 +52,8 @@ public final class BiliPlaybackDiagnostics {
                 cleanDetail,
                 old.startedAtMillis(),
                 System.currentTimeMillis(),
-                false);
+                false,
+                old.lastError());
         LOGGER.info("NetMusic 音频格式: {} / {}, {}, {}",
                 cleanContainer, cleanCodec, audioFormatSummary(format), cleanDetail.isBlank() ? "normal" : cleanDetail);
     }
@@ -69,7 +71,26 @@ public final class BiliPlaybackDiagnostics {
                 old.detail(),
                 old.startedAtMillis(),
                 System.currentTimeMillis(),
-                true);
+                true,
+                old.lastError());
+    }
+
+    public static void markFailed(URL url, Throwable error) {
+        Snapshot old = current;
+        String resolvedUrl = url != null ? url.toString() : old.resolvedUrl();
+        String message = error == null ? "unknown" : error.getClass().getSimpleName() + ": " + error.getMessage();
+        current = new Snapshot(
+                old.songName(),
+                old.sourceUrl(),
+                resolvedUrl,
+                old.container(),
+                old.codec(),
+                old.format(),
+                old.detail(),
+                old.startedAtMillis(),
+                System.currentTimeMillis(),
+                true,
+                clean(message, "unknown"));
     }
 
     public static List<String> describeCurrentPlayback() {
@@ -94,7 +115,15 @@ public final class BiliPlaybackDiagnostics {
             lines.add("细节: " + s.detail());
         }
         lines.add("直链主机: " + hostOf(s.resolvedUrl()));
+        if (!s.lastError().isBlank()) {
+            lines.add("最近错误: " + s.lastError());
+        }
         return lines;
+    }
+
+    public static String currentCodecSummary() {
+        Snapshot s = current;
+        return s.container() + " / " + s.codec();
     }
 
     private static String clean(String value, String fallback) {
@@ -131,9 +160,10 @@ public final class BiliPlaybackDiagnostics {
             String detail,
             long startedAtMillis,
             long updatedAtMillis,
-            boolean closed) {
+            boolean closed,
+            String lastError) {
         static Snapshot empty() {
-            return new Snapshot("", "", "", "unknown", "unknown", null, "", 0L, 0L, true);
+            return new Snapshot("", "", "", "unknown", "unknown", null, "", 0L, 0L, true, "");
         }
     }
 }

@@ -8,10 +8,12 @@ import java.net.URI;
 import java.net.URL;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.Locale;
 import java.util.Optional;
 
 public final class HttpRangeClient {
+    private static final int MAX_REDIRECTS = 5;
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
@@ -27,12 +29,17 @@ public final class HttpRangeClient {
     }
 
     private CdnResponse send(URL url, Long start, Long endInclusive) throws IOException {
+        return send(url, start, endInclusive, 0);
+    }
+
+    private CdnResponse send(URL url, Long start, Long endInclusive, int redirects) throws IOException {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url.toString()))
                 .header("User-Agent", USER_AGENT)
                 .header("Referer", refererFor(url))
                 .header("Origin", originFor(url))
                 .header("Accept", "*/*")
                 .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                .timeout(Duration.ofSeconds(20))
                 .GET();
         if (start != null && endInclusive != null) {
             builder.header("Range", "bytes=" + start + "-" + endInclusive);
@@ -46,6 +53,19 @@ public final class HttpRangeClient {
             throw new IOException("CDN request interrupted", e);
         }
 
+        if (isRedirect(response.statusCode())) {
+            Optional<String> location = response.headers().firstValue("Location");
+            response.body().close();
+            if (location.isEmpty()) {
+                throw new IOException("HTTP " + response.statusCode() + " redirect without Location");
+            }
+            if (redirects >= MAX_REDIRECTS) {
+                throw new IOException("too many HTTP redirects");
+            }
+            URL redirected = URI.create(url.toString()).resolve(location.get()).toURL();
+            return send(redirected, start, endInclusive, redirects + 1);
+        }
+
         long contentLength = parseLong(response.headers().firstValue("Content-Length"));
         RangeInfo contentRange = parseContentRange(response.headers().firstValue("Content-Range"));
         return new CdnResponse(
@@ -56,6 +76,11 @@ public final class HttpRangeClient {
                 contentRange.endInclusive(),
                 contentRange.totalLength(),
                 start != null);
+    }
+
+    private static boolean isRedirect(int statusCode) {
+        return statusCode == 301 || statusCode == 302 || statusCode == 303
+                || statusCode == 307 || statusCode == 308;
     }
 
     private static String refererFor(URL url) {

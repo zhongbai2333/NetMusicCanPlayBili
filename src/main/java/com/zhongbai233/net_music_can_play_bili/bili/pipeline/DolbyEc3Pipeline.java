@@ -10,7 +10,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public final class DolbyEc3Pipeline implements AudioDecodePipeline {
+public final class DolbyEc3Pipeline extends AbstractAudioPipeline {
     private static final int STREAM_BUFFER_SIZE = 256 * 1024;
     private static final int EC3_MAX_FRAME_SIZE = 4096;
     private static final int EC3_SCAN_TAIL_SIZE = 8;
@@ -19,7 +19,7 @@ public final class DolbyEc3Pipeline implements AudioDecodePipeline {
     private final AtomicBoolean ownerClosed;
     private final AtomicBoolean cleaned = new AtomicBoolean(false);
     private final DolbyAudioHandler dolby;
-    private final String container;
+    private long skipFramesRemaining;
 
     private long mdatBoxes;
     private long mdatBytes;
@@ -30,35 +30,20 @@ public final class DolbyEc3Pipeline implements AudioDecodePipeline {
     }
 
     public DolbyEc3Pipeline(String container, AtomicBoolean ownerClosed, BlockPos sourcePos) {
-        this.container = container;
+        this(container, ownerClosed, sourcePos, 0f);
+    }
+
+    public DolbyEc3Pipeline(String container, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds) {
+        super(container, "ec-3", "Dolby Atmos", true);
         this.ownerClosed = ownerClosed;
         this.dolby = new DolbyAudioHandler();
+        this.skipFramesRemaining = skipFrames(startOffsetSeconds);
         DolbyAudioRegistry.register(dolby, sourcePos);
     }
 
     @Override
     public AudioFormat format() {
         return format;
-    }
-
-    @Override
-    public String container() {
-        return container;
-    }
-
-    @Override
-    public String codec() {
-        return "ec-3";
-    }
-
-    @Override
-    public String detail() {
-        return "Dolby Atmos";
-    }
-
-    @Override
-    public boolean usesOpenAlOutput() {
-        return true;
     }
 
     @Override
@@ -152,7 +137,9 @@ public final class DolbyEc3Pipeline implements AudioDecodePipeline {
 
                     byte[] ec3Frame = new byte[fsz];
                     System.arraycopy(data, pos, ec3Frame, 0, fsz);
-                    if (dolby.enqueueFrame(ec3Frame)) {
+                    if (skipFramesRemaining > 0L) {
+                        skipFramesRemaining--;
+                    } else if (dolby.enqueueFrame(ec3Frame)) {
                         framesFound++;
                     }
                     pos += fsz;
@@ -171,5 +158,12 @@ public final class DolbyEc3Pipeline implements AudioDecodePipeline {
     }
 
     private record Ec3ChunkScanResult(long framesFound, int carryLength) {
+    }
+
+    private static long skipFrames(float seconds) {
+        if (seconds <= 0f) {
+            return 0L;
+        }
+        return Math.max(0L, Math.round(seconds * 48000.0 / 1536.0));
     }
 }

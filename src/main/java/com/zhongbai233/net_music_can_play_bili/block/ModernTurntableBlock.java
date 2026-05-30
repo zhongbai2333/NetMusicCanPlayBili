@@ -68,9 +68,8 @@ public class ModernTurntableBlock extends HorizontalDirectionalBlock implements 
         if (level.isClientSide() || type != ModBlockEntities.MODERN_TURNTABLE.get()) {
             return null;
         }
-        return (tickLevel, pos, tickState, blockEntity) ->
-                ModernTurntableBlockEntity.tick(
-                        tickLevel, pos, tickState, (ModernTurntableBlockEntity) blockEntity);
+        return (tickLevel, pos, tickState, blockEntity) -> ModernTurntableBlockEntity.tick(
+                tickLevel, pos, tickState, (ModernTurntableBlockEntity) blockEntity);
     }
 
     @Override
@@ -78,6 +77,13 @@ public class ModernTurntableBlock extends HorizontalDirectionalBlock implements 
             Player player, InteractionHand hand, BlockHitResult hitResult) {
         if (hand == InteractionHand.OFF_HAND) {
             return InteractionResult.PASS;
+        }
+        if (player.isShiftKeyDown()) {
+            if (level.isClientSide()) {
+                openClientScreen(pos);
+                return InteractionResult.SUCCESS;
+            }
+            return InteractionResult.SUCCESS;
         }
         if (level.isClientSide()) {
             return InteractionResult.SUCCESS;
@@ -112,14 +118,23 @@ public class ModernTurntableBlock extends HorizontalDirectionalBlock implements 
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
             BlockHitResult hitResult) {
-        if (level.isClientSide()) {
-            return InteractionResult.SUCCESS;
-        }
-        if (level.getBlockEntity(pos) instanceof ModernTurntableBlockEntity turntable && turntable.hasDisc()) {
-            ejectDisc(level, pos, turntable);
+        if (player.isShiftKeyDown()) {
+            if (level.isClientSide()) {
+                openClientScreen(pos);
+                return InteractionResult.SUCCESS;
+            }
             return InteractionResult.SUCCESS;
         }
         return InteractionResult.PASS;
+    }
+
+    private static void openClientScreen(BlockPos pos) {
+        try {
+            Class<?> client = Class.forName("com.zhongbai233.net_music_can_play_bili.client.ModernTurntableClient");
+            client.getMethod("openScreen", BlockPos.class).invoke(null, pos);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Failed to open modern turntable screen", e);
+        }
     }
 
     @Override

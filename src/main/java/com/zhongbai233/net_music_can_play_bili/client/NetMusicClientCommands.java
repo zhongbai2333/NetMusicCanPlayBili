@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliConfig;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
@@ -13,6 +14,7 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 
+import static net.minecraft.commands.Commands.argument;
 import static net.minecraft.commands.Commands.literal;
 
 /** 客户端命令：/netmusicbili status、/netmusicbili dolby ... */
@@ -35,6 +37,11 @@ public final class NetMusicClientCommands {
                                         .then(literal("toggle")
                                                 .executes(ctx -> setJoc(ctx, !BiliConfig.dolbyJocEnabled)))
                                         .then(literal("status").executes(NetMusicClientCommands::showJocStatus)))
+                                .then(literal("objects")
+                                        .then(literal("status").executes(NetMusicClientCommands::showObjectLimit))
+                                        .then(argument("count", IntegerArgumentType.integer(0, 64))
+                                                .executes(ctx -> setObjectLimit(ctx,
+                                                        IntegerArgumentType.getInteger(ctx, "count")))))
                                 .then(literal("source")
                                         .then(literal("status").executes(NetMusicClientCommands::showSourceStatus)))));
     }
@@ -57,6 +64,18 @@ public final class NetMusicClientCommands {
         feedback(Component.literal(BiliConfig.dolbyJocEnabled
                 ? "杜比 JOC 对象音频：已启用"
                 : "杜比 JOC 对象音频：已关闭"));
+        return 1;
+    }
+
+    private static int setObjectLimit(CommandContext<CommandSourceStack> ctx, int count) {
+        BiliConfig.dolbyMaxObjectSources = count;
+        BiliConfig.save();
+        feedback(Component.literal("Dolby JOC object source limit: " + BiliConfig.dolbyMaxObjectSources()));
+        return 1;
+    }
+
+    private static int showObjectLimit(CommandContext<CommandSourceStack> ctx) {
+        feedback(Component.literal("Dolby JOC object source limit: " + BiliConfig.dolbyMaxObjectSources()));
         return 1;
     }
 

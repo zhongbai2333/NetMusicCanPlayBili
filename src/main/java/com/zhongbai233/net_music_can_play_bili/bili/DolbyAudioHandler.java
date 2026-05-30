@@ -15,14 +15,11 @@ public class DolbyAudioHandler {
 
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final float SPATIAL_RADIUS = 1.5f;
-    /** 手动反比衰减参考距离：只做一层衰减，避免 OpenAL 和 JOC 对象叠加变小。 */
-    private static final float DISTANCE_REFERENCE = 8.0f;
     private static final float SILENCE_GATE_PEAK = 1.0e-4f;
     private static final float SILENCE_GATE_RMS = 2.0e-5f;
     private static final float PCM_OUTPUT_GAIN = 1.0f;
     private static final float JOC_OBJECT_OUTPUT_GAIN = 0.20f;
     private static final boolean ENABLE_JOC_OBJECTS = true;
-    private static final int MAX_OBJECT_SOURCES = 32;
     private static final double EC3_FRAMES_PER_SECOND = 48000.0 / 1536.0;
     private static final int MAX_FRAMES_PER_TICK = 8;
     private static final int PREBUFFER_FRAMES = 96;
@@ -31,6 +28,8 @@ public class DolbyAudioHandler {
 
     private final BlockingQueue<byte[]> rawQueue = new LinkedBlockingQueue<>(RAW_QUEUE_CAPACITY);
     private final BlockingQueue<ProcessedFrame> processedQueue = new LinkedBlockingQueue<>(PROCESSED_QUEUE_CAPACITY);
+    private final Eac3JocDecoder jocDecoder = new Eac3JocDecoder();
+    private final float[] forwardToMachine = new float[3];
     private final Thread worker;
     private volatile boolean closed;
     private boolean playbackStarted;
@@ -47,6 +46,9 @@ public class DolbyAudioHandler {
     private volatile int lastJocAudioObjects;
     private volatile float[] lastJocObjectRms = new float[0];
     private volatile float[] lastJocObjectPeak = new float[0];
+    private volatile float userVolume = 1.0f;
+    private volatile float lastAudioLevel;
+    private volatile long lastAudioLevelNanos;
 
     private int frameCount;
     private int nullPcmCount;
@@ -102,6 +104,15 @@ public class DolbyAudioHandler {
         frameBudget = Math.max(0.0, frameBudget - processed);
 
         if (initialized && spatialAudio != null) {
+            if (spatialAudio.isDeviceLost()) {
+                LOGGER.warn("Dolby OpenAL device lost, reinitializing...");
+                spatialAudio.cleanup();
+                spatialAudio = null;
+                initialized = false;
+                numBedChannels = 0;
+                numObjects = 0;
+                return;
+            }
             spatialAudio.pumpQueuedAudio();
             updateSpatialState(machinePos, listenerPos);
         }
@@ -152,6 +163,24 @@ public class DolbyAudioHandler {
             lines.add("JOC对象声源未初始化");
         }
         return lines;
+    }
+
+    public void setUserVolume(float volume) {
+        userVolume = clampGain(volume);
+    }
+
+    public float userVolume() {
+        return userVolume;
+    }
+
+    public float audioLevel() {
+        long ageNanos = System.nanoTime() - lastAudioLevelNanos;
+        if (ageNanos <= 0L) {
+            return lastAudioLevel;
+        }
+        float ageSeconds = ageNanos / 1_000_000_000.0f;
+        float decay = Math.max(0.0f, 1.0f - ageSeconds * 2.5f);
+        return clampGain(lastAudioLevel * decay);
     }
 
     public void cleanup() {
@@ -213,6 +242,8 @@ public class DolbyAudioHandler {
             return null;
         }
         PcmStats stats = conditionPcm(pcm);
+        lastAudioLevel = clampGain(Math.max(stats.peak() * 0.7f, stats.rms() * 2.2f));
+        lastAudioLevelNanos = System.nanoTime();
         int samples = pcm.length, channels = pcm[0].length;
         if (!didFirstDiag) {
             didFirstDiag = true;
@@ -232,11 +263,11 @@ public class DolbyAudioHandler {
                 if (op != null)
                     oamd = Eac3AtmosParser.parseOamd(op);
             }
-            if (ENABLE_JOC_OBJECTS && jocResult == null) {
+            if (BiliConfig.dolbyJocEnabled && ENABLE_JOC_OBJECTS && jocResult == null) {
                 byte[] jp = Eac3AtmosParser.extractJocPayload(emdf);
                 if (jp != null) {
                     try {
-                        jocResult = new Eac3JocDecoder().decode(jp, QmfFilterBank.TIMESLOTS);
+                        jocResult = jocDecoder.decode(jp, QmfFilterBank.TIMESLOTS);
                     } catch (Exception e) {
                     }
                 }
@@ -244,10 +275,13 @@ public class DolbyAudioHandler {
         }
         int rawObjCount = 0;
         if (ENABLE_JOC_OBJECTS && jocResult != null) {
-            rawObjCount = (oamd != null && oamd.objectElement != null) ? oamd.objectElement.dynamicObjects
-                    : jocResult.config.objectCount;
+            int audioObjects = Math.max(0, jocResult.config.objectCount);
+            int metadataObjects = (oamd != null && oamd.objectElement != null) ? oamd.objectElement.dynamicObjects
+                    : audioObjects;
+            rawObjCount = Math.min(Math.max(0, metadataObjects), audioObjects);
         }
-        int objCount = BiliConfig.dolbyJocEnabled ? Math.max(0, Math.min(rawObjCount, MAX_OBJECT_SOURCES)) : 0;
+        int objCount = BiliConfig.dolbyJocEnabled ? Math.max(0, Math.min(rawObjCount, BiliConfig.dolbyMaxObjectSources()))
+                : 0;
         float[][] objPcmCh = null;
         if (BiliConfig.dolbyJocEnabled && ENABLE_JOC_OBJECTS && jocResult != null && objCount > 0) {
             try {
@@ -297,7 +331,7 @@ public class DolbyAudioHandler {
                     if (ho)
                         sb.append(", ");
                     sb.append(String.format("JOC objs=%d/%d ch=%d gain=%.2f audio=%s",
-                            Math.min(jocDiag.config.objectCount, MAX_OBJECT_SOURCES),
+                            Math.min(jocDiag.config.objectCount, BiliConfig.dolbyMaxObjectSources()),
                             jocDiag.config.objectCount,
                             jocDiag.config.channelCount,
                             jocDiag.config.gain,
@@ -313,8 +347,8 @@ public class DolbyAudioHandler {
     private void feedOpenAL(ProcessedFrame pf) {
         if (closed)
             return;
-        int chs = pf.channels, objs = Math.max(0, Math.min(pf.objCount, MAX_OBJECT_SOURCES));
-        int targetObjects = BiliConfig.dolbyJocEnabled ? MAX_OBJECT_SOURCES : objs;
+        int chs = pf.channels, objs = Math.max(0, Math.min(pf.objCount, BiliConfig.dolbyMaxObjectSources()));
+        int targetObjects = BiliConfig.dolbyJocEnabled ? objs : 0;
         if (!initialized || numBedChannels != chs || targetObjects > numObjects) {
             float[][] oldObjectPositions = objectPositions;
             int newObjectCapacity = initialized && numBedChannels == chs
@@ -385,7 +419,7 @@ public class DolbyAudioHandler {
                 float s = g ? 0f : sf[ch] * PCM_OUTPUT_GAIN;
                 sf[ch] = Math.max(-1f, Math.min(1f, s));
             }
-        return new PcmStats(min, max, rms, g);
+        return new PcmStats(min, max, peak, rms, g);
     }
 
     private void updateSpatialState(float[] mp, float[] lp) {
@@ -395,7 +429,7 @@ public class DolbyAudioHandler {
         if (sa == null || bedPositions == null)
             return;
         float yaw = (float) Math.atan2(mp[0] - lp[0], mp[2] - lp[2]);
-        float[] forward = forwardToMachine(mp, lp, yaw);
+        float[] forward = forwardToMachine(mp, lp);
         if (!didFirstPositionDiag) {
             didFirstPositionDiag = true;
             int ci = centerChannelIndex(numBedChannels);
@@ -409,9 +443,9 @@ public class DolbyAudioHandler {
         sa.updatePositions(bedPositions, objectPositions, lp, forward);
         float d = distance(lp, mp), g = gainForDistance(d);
         for (int ch = 0; ch < numBedChannels; ch++)
-            sa.setBedGain(ch, g);
+            sa.setBedGain(ch, g * userVolume);
         for (int o = 0; o < numObjects; o++)
-            sa.setObjectGain(o, g);
+            sa.setObjectGain(o, g * userVolume);
     }
 
     private void updateObjectOffsets(Eac3AtmosParser.OamdConfig oamd) {
@@ -544,7 +578,8 @@ public class DolbyAudioHandler {
     }
 
     private static float[][] compute7_1Positions() {
-        // FFmpeg 7.1 planar order used by the JOC path: FL, FR, FC, LFE, BL, BR, SL, SR.
+        // FFmpeg 7.1 planar order used by the JOC path: FL, FR, FC, LFE, BL, BR, SL,
+        // SR.
         float[][] p = new float[8][3];
         double[] a = {
                 -Math.PI / 6,
@@ -579,33 +614,33 @@ public class DolbyAudioHandler {
     }
 
     private static float gainForDistance(float d) {
-        // 最小有效距离 = 音响半径，避免进入音响圈内部时增益异常
-        float clamped = Math.max(SPATIAL_RADIUS, d);
-        return clampGain(DISTANCE_REFERENCE / (DISTANCE_REFERENCE + clamped));
+        return AudioUtils.gainForDistance(d);
     }
 
     private static float clampGain(float g) {
-        return g < 0 ? 0 : Math.min(g, 1);
+        return AudioUtils.clampGain(g);
     }
 
     private static float distance(float[] a, float[] b) {
-        float dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
-        return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+        return AudioUtils.distance(a, b);
     }
 
-    private static float[] forwardToMachine(float[] mp, float[] lp, float yaw) {
-        return new float[] { mp[0] - lp[0], 0f, mp[2] - lp[2] };
+    private float[] forwardToMachine(float[] mp, float[] lp) {
+        forwardToMachine[0] = mp[0] - lp[0];
+        forwardToMachine[1] = 0f;
+        forwardToMachine[2] = mp[2] - lp[2];
+        return forwardToMachine;
     }
 
     private static String fmtPos(float[] p) {
-        return p == null ? "(null)" : String.format("(%.2f, %.2f, %.2f)", p[0], p[1], p[2]);
+        return AudioUtils.fmtPos(p);
     }
 
     private static float softClip(float s) {
         return s / (1f + Math.abs(s));
     }
 
-    private record PcmStats(float min, float max, float rms, boolean gated) {
+    private record PcmStats(float min, float max, float peak, float rms, boolean gated) {
     }
 
     private static class ProcessedFrame {

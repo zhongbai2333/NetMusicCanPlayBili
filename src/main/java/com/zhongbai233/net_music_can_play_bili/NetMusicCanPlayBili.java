@@ -5,9 +5,11 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliAudioResolver;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliClientAudioHandlers;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliConfig;
+import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableClientEvents;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
 import com.zhongbai233.net_music_can_play_bili.init.ModItems;
+import com.zhongbai233.net_music_can_play_bili.network.ModernTurntableNetwork;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
@@ -26,6 +28,7 @@ public class NetMusicCanPlayBili {
         ModBlockEntities.BLOCK_ENTITY_TYPES.register(modEventBus);
         ModItems.ITEMS.register(modEventBus);
         ModItems.TABS.register(modEventBus);
+        modEventBus.addListener(ModernTurntableNetwork::register);
 
         modEventBus.addListener(Config::onLoad);
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
@@ -33,6 +36,7 @@ public class NetMusicCanPlayBili {
         LOGGER.info("BiliAudioResolver registered with NetMusic");
 
         if (FMLEnvironment.getDist() == Dist.CLIENT) {
+            ModernTurntableClientEvents.register(modEventBus);
             BiliConfig.load();
             BiliClientAudioHandlers.register();
         }

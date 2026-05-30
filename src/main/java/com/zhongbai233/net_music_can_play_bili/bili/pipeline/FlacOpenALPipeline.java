@@ -13,7 +13,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public final class FlacOpenALPipeline implements AudioDecodePipeline {
+public final class FlacOpenALPipeline extends AbstractAudioPipeline {
     private static final int PIPE_BUFFER_SIZE = 4 * 1024 * 1024;
 
     private final AudioFormat format;
@@ -21,6 +21,7 @@ public final class FlacOpenALPipeline implements AudioDecodePipeline {
     private final AtomicBoolean ownerClosed;
     private final AtomicBoolean cleaned = new AtomicBoolean(false);
     private final StereoOpenALHandler stereo;
+    private final float startOffsetSeconds;
     private long compressedBytes;
 
     public FlacOpenALPipeline(byte[] dfLa, AtomicBoolean ownerClosed) throws IOException {
@@ -28,9 +29,16 @@ public final class FlacOpenALPipeline implements AudioDecodePipeline {
     }
 
     public FlacOpenALPipeline(byte[] dfLa, AtomicBoolean ownerClosed, BlockPos sourcePos) throws IOException {
+        this(dfLa, ownerClosed, sourcePos, 0f);
+    }
+
+    public FlacOpenALPipeline(byte[] dfLa, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds)
+            throws IOException {
+        super("fMP4", "flac", null, true);
         this.format = FlacStreamSupport.audioFormat(dfLa);
         this.ownerClosed = ownerClosed;
         this.stereo = new StereoOpenALHandler();
+        this.startOffsetSeconds = Math.max(0f, startOffsetSeconds);
         this.stereo.setSampleRate((int) format.getSampleRate());
         DolbyAudioRegistry.registerStereo(stereo, sourcePos);
         FlacStreamSupport.writeNativeHeader(compressedPipe, dfLa);
@@ -42,23 +50,8 @@ public final class FlacOpenALPipeline implements AudioDecodePipeline {
     }
 
     @Override
-    public String container() {
-        return "fMP4";
-    }
-
-    @Override
-    public String codec() {
-        return "flac";
-    }
-
-    @Override
     public String detail() {
         return format.getSampleSizeInBits() > 16 ? "Hi-Res FLAC" : "FLAC";
-    }
-
-    @Override
-    public boolean usesOpenAlOutput() {
-        return true;
     }
 
     @Override
@@ -90,7 +83,7 @@ public final class FlacOpenALPipeline implements AudioDecodePipeline {
 
     public AudioInputStream openTappedStream() {
         AudioInputStream decoded = new Flac2PcmAudioInputStream(compressedPipe, format, AudioSystem.NOT_SPECIFIED);
-        return new OpenALTappedAudioInputStream(decoded, stereo, this::close);
+        return new OpenALTappedAudioInputStream(decoded, stereo, this::close, startOffsetSeconds);
     }
 
 }

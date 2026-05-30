@@ -19,7 +19,7 @@ public class Eac3NativeDecoder implements AutoCloseable {
     private static volatile boolean nativeAvailable;
     private static volatile String ffmpegVersion;
 
-    private long handle;          // DecoderHandle*
+    private long handle; // DecoderHandle*
     private boolean open;
     private int openFailures;
     private int decodeFailures;
@@ -39,8 +39,10 @@ public class Eac3NativeDecoder implements AutoCloseable {
      * @return float PCM [sample][channel]，通常为 1536×6 (5.1)；失败返回 null
      */
     public float[][] decodeFrame(byte[] ec3Frame) {
-        if (!nativeAvailable) return null;
-        if (!ensureOpen()) return null;
+        if (!nativeAvailable)
+            return null;
+        if (!ensureOpen())
+            return null;
 
         // JNI 层返回 planar PCM: [channel][sample]；上层播放器沿用 [sample][channel]。
         float[][] planar = Eac3Jni.decode(handle, ec3Frame, 0, ec3Frame.length);
@@ -59,7 +61,8 @@ public class Eac3NativeDecoder implements AutoCloseable {
         float[][] pcm = new float[samples][channels];
         for (int ch = 0; ch < channels; ch++) {
             float[] src = planar[ch];
-            if (src == null) continue;
+            if (src == null)
+                continue;
             int n = Math.min(samples, src.length);
             for (int i = 0; i < n; i++) {
                 pcm[i][ch] = src[i];
@@ -112,7 +115,8 @@ public class Eac3NativeDecoder implements AutoCloseable {
     }
 
     private static synchronized void ensureLoaderReady() {
-        if (loaderInitialized) return;
+        if (loaderInitialized)
+            return;
         try {
             loadEmbeddedNatives();
             ffmpegVersion = Eac3Jni.version();
@@ -147,19 +151,21 @@ public class Eac3NativeDecoder implements AutoCloseable {
         }
 
         // FFmpeg 核心库，按依赖顺序: avutil → swresample → avcodec
-        String[] ffmpegLibs = {"avutil", "swresample", "avcodec"};
+        String[] ffmpegLibs = { "avutil", "swresample", "avcodec" };
         // 自研薄 JNI 层（单个 DLL，替代原来的 jniavutil/jniswresample/jniavcodec 三个）
-        String[] jniLibs = {"eac3_jni"};
+        String[] jniLibs = { "eac3_jni" };
 
-        Path gameDir = Path.of("").toAbsolutePath();
+        // ── 提取到 config 目录（避免 temp 被杀软拦截 DLL 加载；平台子目录隔离多版本）──
+        Path nativeDir = gameConfigDir().resolve("net_music_can_play_bili").resolve("natives")
+                .resolve(platformDir);
+        Files.createDirectories(nativeDir);
 
         // ── 提取所有文件 ──
-        String[][] allLibs = {ffmpegLibs, jniLibs};
+        String[][] allLibs = { ffmpegLibs, jniLibs };
         for (String[] group : allLibs) {
             for (String baseName : group) {
                 String fileName = nativeFileName(baseName, os, isWindows);
-
-                Path target = gameDir.resolve(fileName);
+                Path target = nativeDir.resolve(fileName);
                 if (!Files.exists(target)) {
                     String resPath = "/native/" + platformDir + "/" + fileName;
                     try (InputStream in = Eac3NativeDecoder.class.getResourceAsStream(resPath)) {
@@ -172,15 +178,17 @@ public class Eac3NativeDecoder implements AutoCloseable {
             }
         }
 
-        // ── 加载所有 DLL ──
+        // ── 加载所有库 ──
         for (String baseName : ffmpegLibs) {
             String fn = nativeFileName(baseName, os, isWindows);
-            System.load(gameDir.resolve(fn).toAbsolutePath().toString());
+            System.load(nativeDir.resolve(fn).toAbsolutePath().toString());
         }
         for (String baseName : jniLibs) {
             String fn = nativeFileName(baseName, os, isWindows);
-            System.load(gameDir.resolve(fn).toAbsolutePath().toString());
+            System.load(nativeDir.resolve(fn).toAbsolutePath().toString());
         }
+
+        LOGGER.debug("FFmpeg native 库提取并加载: {}", nativeDir);
     }
 
     private static boolean isFfmpegLib(String name) {
@@ -222,8 +230,10 @@ public class Eac3NativeDecoder implements AutoCloseable {
     }
 
     private boolean ensureOpen() {
-        if (open && handle != 0) return true;
-        if (openFailures > 2) return false;
+        if (open && handle != 0)
+            return true;
+        if (openFailures > 2)
+            return false;
 
         try {
             handle = Eac3Jni.decoderOpen();
@@ -240,6 +250,17 @@ public class Eac3NativeDecoder implements AutoCloseable {
             openFailures++;
             LOGGER.error("Eac3Native 初始化异常", e);
             return false;
+        }
+    }
+
+    /**
+     * 获取游戏 config 目录。优先使用 NeoForge FMLPaths，不可用时回退到工作目录。
+     */
+    private static Path gameConfigDir() {
+        try {
+            return net.neoforged.fml.loading.FMLPaths.CONFIGDIR.get();
+        } catch (Throwable ignored) {
+            return Path.of("config").toAbsolutePath();
         }
     }
 }

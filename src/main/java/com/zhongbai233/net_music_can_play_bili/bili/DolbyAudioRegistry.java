@@ -15,6 +15,7 @@ public class DolbyAudioRegistry {
     private static final AtomicInteger ANONYMOUS_COUNTER = new AtomicInteger();
     private static final ConcurrentMap<BlockPos, DolbyEntry> DOLBY_HANDLERS = new ConcurrentHashMap<>();
     private static final ConcurrentMap<BlockPos, StereoEntry> STEREO_HANDLERS = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<BlockPos, Float> SOURCE_VOLUMES = new ConcurrentHashMap<>();
 
     private static volatile float[] fallbackMachinePos;
     private static volatile float[] listenerPos;
@@ -29,6 +30,7 @@ public class DolbyAudioRegistry {
         }
         BlockPos key = keyFor(pos);
         DolbyEntry entry = new DolbyEntry(key, centerFor(pos), handler, System.currentTimeMillis());
+        handler.setUserVolume(volumeFor(key));
         closeStereoAt(key);
         DolbyEntry old = DOLBY_HANDLERS.put(key, entry);
         if (old != null && old.handler() != handler) {
@@ -54,6 +56,7 @@ public class DolbyAudioRegistry {
         }
         BlockPos key = keyFor(pos);
         StereoEntry entry = new StereoEntry(key, centerFor(pos), handler, System.currentTimeMillis());
+        handler.setUserVolume(volumeFor(key));
         closeDolbyAt(key);
         StereoEntry old = STEREO_HANDLERS.put(key, entry);
         if (old != null && old.handler() != handler) {
@@ -70,15 +73,17 @@ public class DolbyAudioRegistry {
     }
 
     public static void updatePositions(float[] listenerPos) {
-        DolbyAudioRegistry.listenerPos = copy(listenerPos);
         if (listenerPos == null) {
             return;
         }
+
+        float[] currentListenerPos = AudioUtils.copyPos3(listenerPos);
+        DolbyAudioRegistry.listenerPos = currentListenerPos;
         for (DolbyEntry entry : DOLBY_HANDLERS.values()) {
-            entry.handler().tick(entry.machinePos(), listenerPos);
+            entry.handler().tick(entry.machinePos(), currentListenerPos);
         }
         for (StereoEntry entry : STEREO_HANDLERS.values()) {
-            entry.handler().tick(entry.machinePos(), listenerPos);
+            entry.handler().tick(entry.machinePos(), currentListenerPos);
         }
     }
 
@@ -93,21 +98,61 @@ public class DolbyAudioRegistry {
     public static float[] getMachinePos() {
         DolbyEntry dolby = firstValue(DOLBY_HANDLERS);
         if (dolby != null) {
-            return copy(dolby.machinePos());
+            return AudioUtils.copyPos3(dolby.machinePos());
         }
         StereoEntry stereo = firstValue(STEREO_HANDLERS);
         if (stereo != null) {
-            return copy(stereo.machinePos());
+            return AudioUtils.copyPos3(stereo.machinePos());
         }
-        return copy(fallbackMachinePos);
+        return AudioUtils.copyPos3(fallbackMachinePos);
     }
 
     public static float[] getListenerPos() {
-        return copy(listenerPos);
+        return AudioUtils.copyPos3(listenerPos);
     }
 
     public static boolean isActive() {
         return !DOLBY_HANDLERS.isEmpty() || !STEREO_HANDLERS.isEmpty();
+    }
+
+    public static void setUserVolume(BlockPos pos, float volume) {
+        if (pos == null) {
+            return;
+        }
+        BlockPos key = keyFor(pos);
+        float clamped = AudioUtils.clampGain(volume);
+        SOURCE_VOLUMES.put(key, clamped);
+        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
+        if (dolby != null) {
+            dolby.handler().setUserVolume(clamped);
+        }
+        StereoEntry stereo = STEREO_HANDLERS.get(key);
+        if (stereo != null) {
+            stereo.handler().setUserVolume(clamped);
+        }
+    }
+
+    public static float userVolume(BlockPos pos) {
+        if (pos == null) {
+            return 1.0f;
+        }
+        return volumeFor(keyFor(pos));
+    }
+
+    public static float audioLevel(BlockPos pos) {
+        if (pos == null) {
+            return 0.0f;
+        }
+        BlockPos key = keyFor(pos);
+        StereoEntry stereo = STEREO_HANDLERS.get(key);
+        if (stereo != null) {
+            return stereo.handler().audioLevel();
+        }
+        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
+        if (dolby != null) {
+            return dolby.handler().audioLevel();
+        }
+        return 0.0f;
     }
 
     public static List<String> describeActiveSources() {
@@ -123,7 +168,7 @@ public class DolbyAudioRegistry {
         DOLBY_HANDLERS.values().stream()
                 .sorted(Comparator.comparingLong(DolbyEntry::createdAtMillis))
                 .forEach(entry -> {
-                    lines.add(String.format("Dolby @ %s", fmtPos(entry.machinePos())));
+                    lines.add(String.format("Dolby @ %s", AudioUtils.fmtPos(entry.machinePos())));
                     for (String line : entry.handler().describeSources(entry.machinePos(), listener)) {
                         lines.add("  " + line);
                     }
@@ -131,7 +176,7 @@ public class DolbyAudioRegistry {
         STEREO_HANDLERS.values().stream()
                 .sorted(Comparator.comparingLong(StereoEntry::createdAtMillis))
                 .forEach(entry -> {
-                    lines.add(String.format("Stereo @ %s", fmtPos(entry.machinePos())));
+                    lines.add(String.format("Stereo @ %s", AudioUtils.fmtPos(entry.machinePos())));
                     for (String line : entry.handler().describeState()) {
                         lines.add("  " + line);
                     }
@@ -207,38 +252,20 @@ public class DolbyAudioRegistry {
         return null;
     }
 
+    private static float volumeFor(BlockPos key) {
+        return SOURCE_VOLUMES.getOrDefault(key, 1.0f);
+    }
+
     private static BlockPos keyFor(BlockPos pos) {
         if (pos != null) {
-            return copyPos(pos);
+            return AudioUtils.copyPos(pos);
         }
         int id = ANONYMOUS_COUNTER.getAndIncrement();
         return new BlockPos(Integer.MIN_VALUE, 0, id);
     }
 
-    private static BlockPos copyPos(BlockPos pos) {
-        return new BlockPos(pos.getX(), pos.getY(), pos.getZ());
-    }
-
     private static float[] centerFor(BlockPos pos) {
-        if (pos != null) {
-            return new float[] { pos.getX() + 0.5f, pos.getY() + 0.5f, pos.getZ() + 0.5f };
-        }
-        float[] fallback = fallbackMachinePos;
-        return fallback != null ? copy(fallback) : new float[] { 0.0f, 0.0f, 0.0f };
-    }
-
-    private static float[] copy(float[] pos) {
-        if (pos == null) {
-            return null;
-        }
-        return new float[] { pos[0], pos[1], pos[2] };
-    }
-
-    private static String fmtPos(float[] pos) {
-        if (pos == null) {
-            return "(null)";
-        }
-        return String.format("(%.2f, %.2f, %.2f)", pos[0], pos[1], pos[2]);
+        return AudioUtils.centerFor(pos, fallbackMachinePos);
     }
 
     private interface AudioEntry {

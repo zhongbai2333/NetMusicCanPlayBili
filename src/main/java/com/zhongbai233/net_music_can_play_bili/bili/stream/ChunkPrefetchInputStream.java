@@ -145,7 +145,7 @@ public final class ChunkPrefetchInputStream extends InputStream {
                     long requestedStart = nextStart;
                     long requestedLength = end - requestedStart + 1;
                     long received = copyResponse(response.body(), response.contentLength(), requestedLength);
-                    LOGGER.debug("HTTP chunk received: range={}-{} received={} cached={}",
+                    LOGGER.trace("HTTP chunk received: range={}-{} received={} cached={}",
                             nextStart, end, received, spool.cachedLength());
                     nextStart += received;
                     if (received == 0) {

@@ -13,18 +13,31 @@ import java.util.Arrays;
 public final class OpenALTappedAudioInputStream extends AudioInputStream {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int DIAGNOSTIC_MIN_FRAMES = 256;
+    private static final int SKIP_BUFFER_SIZE = 64 * 1024;
 
     private final AudioInputStream source;
     private final StereoOpenALHandler stereo;
     private final Runnable onClose;
     private final int frameBytes;
     private final byte[] carry;
+    private final byte[] skipBuffer = new byte[SKIP_BUFFER_SIZE];
+    private final long initialSkipBytes;
+    private long skipBytesRemaining;
     private int carryLength;
     private boolean closed;
     private boolean firstDiagnostics;
     private boolean inputFinished;
+    private boolean skipLogged;
 
     public OpenALTappedAudioInputStream(AudioInputStream source, StereoOpenALHandler stereo, Runnable onClose) {
+        this(source, stereo, onClose, 0f);
+    }
+
+    public OpenALTappedAudioInputStream(
+            AudioInputStream source,
+            StereoOpenALHandler stereo,
+            Runnable onClose,
+            float startOffsetSeconds) {
         super(source, source.getFormat(), AudioSystem.NOT_SPECIFIED);
         this.source = source;
         this.stereo = stereo;
@@ -32,6 +45,9 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
         AudioFormat format = source.getFormat();
         int bytesPerSample = Math.max(1, (format.getSampleSizeInBits() + 7) / 8);
         this.frameBytes = Math.max(1, bytesPerSample * Math.max(1, format.getChannels()));
+        this.skipBytesRemaining = Math.max(0L, Math.round(format.getSampleRate() * Math.max(0f, startOffsetSeconds))
+                * (long) this.frameBytes);
+        this.initialSkipBytes = this.skipBytesRemaining;
         this.carry = new byte[this.frameBytes];
     }
 
@@ -47,6 +63,9 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
         if (closed) {
             return -1;
         }
+        if (!drainStartOffset()) {
+            return -1;
+        }
         int n = source.read(b, off, len);
         if (n <= 0) {
             if (n < 0) {
@@ -60,6 +79,31 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
         tap(realPcm, n);
         Arrays.fill(b, off, off + n, (byte) 0);
         return n;
+    }
+
+    /**
+     * 真正丢弃起始偏移的 PCM，而不是把偏移段作为静音返回给 Minecraft。
+     * 否则 seek 到 2 分钟处会先真实播放 2 分钟静音，OpenAL 一直拿不到后续音频。
+     */
+    private boolean drainStartOffset() throws IOException {
+        while (skipBytesRemaining > 0L && !closed) {
+            int request = (int) Math.min(skipBuffer.length, skipBytesRemaining);
+            int n = source.read(skipBuffer, 0, request);
+            if (n < 0) {
+                skipBytesRemaining = 0L;
+                finishInput();
+                return false;
+            }
+            if (n == 0) {
+                continue;
+            }
+            skipBytesRemaining -= n;
+        }
+        if (!skipLogged && initialSkipBytes > 0L) {
+            skipLogged = true;
+            LOGGER.debug("OpenAL tapped stream skipped {} PCM bytes for start offset", initialSkipBytes);
+        }
+        return !closed;
     }
 
     @Override
