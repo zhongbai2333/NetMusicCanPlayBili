@@ -2,12 +2,10 @@ package com.zhongbai233.net_music_can_play_bili.bili;
 
 import java.util.List;
 
-/**
- * 活跃 Dolby Atmos 音频处理器注册表
- */
 public class DolbyAudioRegistry {
 
     private static volatile DolbyAudioHandler activeHandler;
+    private static volatile StereoOpenALHandler activeStereo;
     private static volatile float[] machinePos;
     private static volatile float[] listenerPos;
     private static volatile boolean hasPositions;
@@ -15,7 +13,6 @@ public class DolbyAudioRegistry {
     public static void register(DolbyAudioHandler handler) {
         DolbyAudioHandler old = activeHandler;
         activeHandler = handler;
-        hasPositions = false;
         if (old != null && old != handler) {
             old.cleanup();
         }
@@ -27,11 +24,20 @@ public class DolbyAudioRegistry {
         }
     }
 
-    /**
-     * 每客户端 tick 调用，传入唱片机位置和玩家头部位置
-     * 处理器利用这些位置来定位空间声场
-     * 同时通过活跃处理器处理排队的 EC-3 帧
-     */
+    public static void registerStereo(StereoOpenALHandler handler) {
+        StereoOpenALHandler old = activeStereo;
+        activeStereo = handler;
+        if (old != null && old != handler) {
+            old.cleanup();
+        }
+    }
+
+    public static void unregisterStereo(StereoOpenALHandler handler) {
+        if (activeStereo == handler) {
+            activeStereo = null;
+        }
+    }
+
     public static void updatePositions(float[] machinePos, float[] listenerPos) {
         DolbyAudioRegistry.machinePos = machinePos;
         DolbyAudioRegistry.listenerPos = listenerPos;
@@ -39,6 +45,10 @@ public class DolbyAudioRegistry {
         DolbyAudioHandler h = activeHandler;
         if (h != null) {
             h.tick(machinePos, listenerPos);
+        }
+        StereoOpenALHandler s = activeStereo;
+        if (s != null) {
+            s.tick(machinePos, listenerPos);
         }
     }
 
@@ -56,24 +66,29 @@ public class DolbyAudioRegistry {
     }
 
     public static boolean isActive() {
-        return activeHandler != null;
+        return activeHandler != null || activeStereo != null;
     }
 
-    /**
-     * 描述当前 Dolby 虚拟声源位置，供客户端调试命令使用
-     */
     public static List<String> describeActiveSources() {
         DolbyAudioHandler handler = activeHandler;
-        if (handler == null) {
-            return List.of("当前没有正在播放的 Dolby 音频");
+        if (handler != null) {
+            return handler.describeSources(machinePos, listenerPos);
         }
-        return handler.describeSources(machinePos, listenerPos);
+        StereoOpenALHandler stereo = activeStereo;
+        if (stereo != null) {
+            return stereo.describeState();
+        }
+        return List.of("No active Dolby/OpenAL audio");
     }
 
     public static void cleanup() {
         if (activeHandler != null) {
             activeHandler.cleanup();
             activeHandler = null;
+        }
+        if (activeStereo != null) {
+            activeStereo.cleanup();
+            activeStereo = null;
         }
     }
 }

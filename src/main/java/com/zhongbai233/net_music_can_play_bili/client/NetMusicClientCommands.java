@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.client;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliConfig;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.CommandSourceStack;
@@ -14,7 +15,7 @@ import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 
 import static net.minecraft.commands.Commands.literal;
 
-/** 客户端命令：/netmusicbili dolby joc &lt;on|off|toggle|status&gt; */
+/** 客户端命令：/netmusicbili status、/netmusicbili dolby ... */
 @EventBusSubscriber(value = Dist.CLIENT)
 public final class NetMusicClientCommands {
 
@@ -26,6 +27,7 @@ public final class NetMusicClientCommands {
         CommandDispatcher<CommandSourceStack> dispatcher = event.getDispatcher();
         dispatcher.register(
                 literal("netmusicbili")
+                        .then(literal("status").executes(NetMusicClientCommands::showPlaybackStatus))
                         .then(literal("dolby")
                                 .then(literal("joc")
                                         .then(literal("on").executes(ctx -> setJoc(ctx, true)))
@@ -60,6 +62,13 @@ public final class NetMusicClientCommands {
 
     private static int showSourceStatus(CommandContext<CommandSourceStack> ctx) {
         for (String line : DolbyAudioRegistry.describeActiveSources()) {
+            feedback(Component.literal(line));
+        }
+        return 1;
+    }
+
+    private static int showPlaybackStatus(CommandContext<CommandSourceStack> ctx) {
+        for (String line : BiliPlaybackDiagnostics.describeCurrentPlayback()) {
             feedback(Component.literal(line));
         }
         return 1;

@@ -25,10 +25,11 @@ public class DolbyAudioHandler {
     private static final int MAX_OBJECT_SOURCES = 32;
     private static final double EC3_FRAMES_PER_SECOND = 48000.0 / 1536.0;
     private static final int MAX_FRAMES_PER_TICK = 8;
-    private static final int PREBUFFER_FRAMES = 24;
-    private static final int PROCESSED_QUEUE_CAPACITY = 1024;
+    private static final int PREBUFFER_FRAMES = 96;
+    private static final int RAW_QUEUE_CAPACITY = 512;
+    private static final int PROCESSED_QUEUE_CAPACITY = 512;
 
-    private final BlockingQueue<byte[]> rawQueue = new LinkedBlockingQueue<>();
+    private final BlockingQueue<byte[]> rawQueue = new LinkedBlockingQueue<>(RAW_QUEUE_CAPACITY);
     private final BlockingQueue<ProcessedFrame> processedQueue = new LinkedBlockingQueue<>(PROCESSED_QUEUE_CAPACITY);
     private final Thread worker;
     private volatile boolean closed;
@@ -63,10 +64,20 @@ public class DolbyAudioHandler {
         worker.start();
     }
 
-    public void enqueueFrame(byte[] ec3Frame) {
+    public boolean enqueueFrame(byte[] ec3Frame) {
         if (ec3Frame == null || ec3Frame.length == 0 || closed)
-            return;
-        rawQueue.offer(ec3Frame);
+            return false;
+        try {
+            while (!closed) {
+                if (rawQueue.offer(ec3Frame, 250, TimeUnit.MILLISECONDS)) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     public void tick(float[] machinePos, float[] listenerPos) {
@@ -78,7 +89,7 @@ public class DolbyAudioHandler {
             playbackStarted = true;
             lastFrameFeedNanos = System.nanoTime();
             frameBudget = MAX_FRAMES_PER_TICK;
-            LOGGER.info("Dolby OpenAL 预缓冲完成: {} 帧", processedQueue.size());
+            LOGGER.debug("Dolby OpenAL 预缓冲完成: {} 帧", processedQueue.size());
         }
         updateFrameBudget();
         int processed = 0;
@@ -158,12 +169,12 @@ public class DolbyAudioHandler {
             spatialAudio = null;
         }
         initialized = false;
-        LOGGER.info("DolbyAudioHandler closed ({} frames)", frameCount);
+        LOGGER.debug("DolbyAudioHandler closed ({} frames)", frameCount);
     }
 
     private void workerLoop() {
         Eac3NativeDecoder decoder = new Eac3NativeDecoder();
-        LOGGER.info("DolbyDecodeWorker 启动");
+        LOGGER.debug("DolbyDecodeWorker 启动");
         while (!closed) {
             try {
                 byte[] raw = rawQueue.poll(500, TimeUnit.MILLISECONDS);
@@ -189,7 +200,7 @@ public class DolbyAudioHandler {
             }
         }
         decoder.close();
-        LOGGER.info("DolbyDecodeWorker 退出 (解码 {} 帧, nullPcm={})", frameCount, nullPcmCount);
+        LOGGER.debug("DolbyDecodeWorker 退出 (解码 {} 帧, nullPcm={})", frameCount, nullPcmCount);
     }
 
     private ProcessedFrame decodeOneFrame(Eac3NativeDecoder decoder, byte[] raw) {
@@ -207,7 +218,7 @@ public class DolbyAudioHandler {
         int samples = pcm.length, channels = pcm[0].length;
         if (!didFirstDiag) {
             didFirstDiag = true;
-            LOGGER.info("Dolby PCM: {}s×{}ch range=[{},{}] rms={} gated={}", samples, channels, stats.min, stats.max,
+            LOGGER.debug("Dolby PCM: {}s×{}ch range=[{},{}] rms={} gated={}", samples, channels, stats.min, stats.max,
                     stats.rms, stats.gated);
         }
         float[][] pcmCh = new float[channels][samples];
@@ -294,9 +305,9 @@ public class DolbyAudioHandler {
                             jocDiag.config.gain,
                             BiliConfig.dolbyJocEnabled ? "on" : "off"));
                 }
-                LOGGER.info(sb.toString());
+                LOGGER.debug(sb.toString());
             } else
-                LOGGER.info("Dolby spatial: none (5.1 bed only)");
+                LOGGER.debug("Dolby spatial: none (5.1 bed only)");
         }
         return new ProcessedFrame(pcmCh, objPcmCh, oamd, channels, objCount);
     }
@@ -326,7 +337,7 @@ public class DolbyAudioHandler {
                 }
             }
             initialized = true;
-            LOGGER.info("Dolby OpenAL 配置: beds={}, objectCapacity={} (frameObjects={})",
+            LOGGER.debug("Dolby OpenAL 配置: beds={}, objectCapacity={} (frameObjects={})",
                     chs, newObjectCapacity, objs);
         }
         OpenALSpatialAudio sa = spatialAudio;
@@ -391,7 +402,7 @@ public class DolbyAudioHandler {
             didFirstPositionDiag = true;
             int ci = numBedChannels == 6 ? 2 : 0;
             float[] cp = ci < bedPositions.length ? bedPositions[ci] : new float[] { 0, 0, 0 };
-            LOGGER.info(
+            LOGGER.debug(
                     "Dolby spatial map active: world-follow front->machine yaw={}deg centerLocal=({}, {}, {}) listener=({}, {}, {}) objects={}",
                     String.format("%.1f", Math.toDegrees(yaw)), String.format("%.2f", cp[0]),
                     String.format("%.2f", cp[1]), String.format("%.2f", cp[2]), String.format("%.2f", lp[0]),

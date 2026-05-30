@@ -39,7 +39,7 @@ public class BiliAudioResolver implements IAsyncSongUrlResolver {
         }
         LOGGER.info("B站视频信息获取成功: {} (P{}, cid={}, {}s) UP主: {}",
                 info.displayTitle(), info.page(), info.cid(), info.duration(), info.staffNames());
-        LOGGER.info("唱片将存储原始 ID: {}", songInfo.songUrl);
+        LOGGER.debug("唱片将存储原始 ID: {}", songInfo.songUrl);
         return songInfo;
     }
 
@@ -49,13 +49,17 @@ public class BiliAudioResolver implements IAsyncSongUrlResolver {
     }
 
     public static String resolvePlayableUrl(String storedSelection) throws Exception {
+        return resolvePlayableUrl(storedSelection, true);
+    }
+
+    public static String resolvePlayableUrl(String storedSelection, boolean allowDolby) throws Exception {
         BiliApiClient.VideoSelection selection = BiliApiClient.parseStoredVideoSelection(storedSelection);
         if (selection == null) {
             throw new IllegalArgumentException("无法从唱片存储的内容提取 B站 ID: " + storedSelection);
         }
 
         BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(selection.videoId(), selection.page());
-        return BiliApiClient.getBestAudioUrl(selection.videoId(), info.cid());
+        return BiliApiClient.getBestAudioUrl(selection.videoId(), info.cid(), allowDolby);
     }
 
     public static ItemMusicCD.SongInfo resolvePlayableSongInfo(ItemMusicCD.SongInfo songInfo) throws Exception {

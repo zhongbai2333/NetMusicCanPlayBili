@@ -242,8 +242,12 @@ public final class BiliApiClient {
         return new VideoInfo(aid, title, staffNames, cid, duration, actualPage, totalPages, part, id);
     }
 
-    // 获取 DASH 音频流直链
     public static String getBestAudioUrl(VideoId id, long cid) throws Exception {
+        return getBestAudioUrl(id, cid, true);
+    }
+
+    // 获取 DASH 音频流直链
+    public static String getBestAudioUrl(VideoId id, long cid, boolean allowDolby) throws Exception {
         Map<String, String> params = new HashMap<>();
         id.putPlayUrlParam(params);
         params.put("cid", String.valueOf(cid));
@@ -292,9 +296,11 @@ public final class BiliApiClient {
         }
 
         // 杜比全景声 (EC-3) — 仅在用户开启且 FFmpeg native 可用时纳入选择
-        boolean dolbyOk = BiliConfig.dolbyEnabled
+        boolean dolbyOk = allowDolby
+                && BiliConfig.dolbyEnabled
                 && com.zhongbai233.net_music_can_play_bili.bili.codec.Eac3NativeDecoder.isNativeAvailable();
-        LOGGER.info("[Dolby] dolbyEnabled={}, nativeAvailable={}, dashHasDolby={}",
+        LOGGER.info("[Dolby] allowDolby={}, dolbyEnabled={}, nativeAvailable={}, dashHasDolby={}",
+                allowDolby,
                 BiliConfig.dolbyEnabled,
                 com.zhongbai233.net_music_can_play_bili.bili.codec.Eac3NativeDecoder.isNativeAvailable(),
                 dash.has("dolby"));

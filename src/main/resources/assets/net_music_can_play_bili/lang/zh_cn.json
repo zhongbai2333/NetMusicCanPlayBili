@@ -1,0 +1,7 @@
+{
+  "block.net_music_can_play_bili.modern_turntable": "现代化唱片机",
+  "item.net_music_can_play_bili.modern_turntable": "现代化唱片机",
+  "itemGroup.net_music_can_play_bili": "Net Music Can Play Bili",
+  "message.net_music_can_play_bili.modern_turntable.need_cd": "请放入一张 NetMusic 唱片",
+  "message.net_music_can_play_bili.modern_turntable.need_vip": "这张唱片需要可用的解析器"
+}

@@ -126,7 +126,7 @@ final class PcmDitheringStream extends InputStream {
 
         if (!firstBlockLogged && srcLen > 0) {
             firstBlockLogged = true;
-            LOGGER.info("B站 TPDF 抖动转换已启动: 输入 {}bit/{}ch → 输出 16bit/{}ch, 首块 {} bytes",
+            LOGGER.debug("B站 TPDF 抖动转换已启动: 输入 {}bit/{}ch → 输出 16bit/{}ch, 首块 {} bytes",
                     SRC_SAMPLE_BYTES * 8, channels, channels, srcLen);
         }
 

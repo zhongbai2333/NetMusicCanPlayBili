@@ -66,7 +66,7 @@ public class BiliQrLoginScreen extends Screen {
                         .send(req, HttpResponse.BodyHandlers.ofInputStream());
                 try (InputStream in = resp.body()) {
                     NativeImage image = NativeImage.read(in);
-                    LOGGER.info("二维码图片加载成功: {}x{}", image.getWidth(), image.getHeight());
+                    LOGGER.debug("二维码图片加载成功: {}x{}", image.getWidth(), image.getHeight());
                     return image;
                 }
             } catch (Exception e) {

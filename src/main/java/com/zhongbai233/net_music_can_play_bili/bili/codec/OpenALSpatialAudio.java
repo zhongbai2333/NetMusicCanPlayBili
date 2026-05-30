@@ -22,10 +22,11 @@ public class OpenALSpatialAudio {
 
     /** 每个 source 预排队 48 个 buffer，约 256ms */
     private static final int NUM_BUFFERS = 48;
-    private static final int MAX_PENDING_BLOCKS = 192;
+    private static final int MAX_PENDING_BLOCKS = 2048;
     /** 每 buffer 256 samples = 1 个 E-AC-3 block */
     private static final int SAMPLES_PER_BUFFER = 256;
     private static final int SAMPLE_RATE = 48000;
+    private int actualSampleRate = SAMPLE_RATE;
     private static final boolean FORCE_HRTF = Boolean.getBoolean("netmusicbili.dolby.forceHrtf")
             && !Boolean.getBoolean("netmusicbili.dolby.disableHrtf");
 
@@ -71,8 +72,13 @@ public class OpenALSpatialAudio {
      * @param numDynamicObjects 动态对象数
      */
     public void init(int numBedChannels, int numDynamicObjects) {
+        init(numBedChannels, numDynamicObjects, SAMPLE_RATE);
+    }
+
+    public void init(int numBedChannels, int numDynamicObjects, int sampleRate) {
         cleanup();
         ensureHrtfEnabled();
+        this.actualSampleRate = sampleRate;
         this.numBeds = numBedChannels;
         this.numObjects = numDynamicObjects;
         this.uploadScratch = BufferUtils.createByteBuffer(SAMPLES_PER_BUFFER * BYTES_PER_SAMPLE)
@@ -94,7 +100,7 @@ public class OpenALSpatialAudio {
             for (int b = 0; b < NUM_BUFFERS; b++) {
                 silence.clear();
                 AL10.alBufferData(bedBuffers[ch][b], MONO_FORMAT,
-                        silence, SAMPLE_RATE);
+                        silence, actualSampleRate);
                 AL10.alSourceQueueBuffers(bedSources[ch], bedBuffers[ch][b]);
             }
             AL10.alSourcei(bedSources[ch], AL10.AL_SOURCE_RELATIVE, AL10.AL_FALSE);
@@ -119,7 +125,7 @@ public class OpenALSpatialAudio {
             for (int b = 0; b < NUM_BUFFERS; b++) {
                 silence.clear();
                 AL10.alBufferData(objBuffers[obj][b], MONO_FORMAT,
-                        silence, SAMPLE_RATE);
+                        silence, actualSampleRate);
                 AL10.alSourceQueueBuffers(objectSources[obj], objBuffers[obj][b]);
             }
             AL10.alSourcei(objectSources[obj], AL10.AL_SOURCE_RELATIVE, AL10.AL_FALSE);
@@ -138,10 +144,10 @@ public class OpenALSpatialAudio {
         }
 
         initialized = true;
-        LOGGER.info(
+        LOGGER.debug(
                 "OpenAL spatial init: beds={}, objects={}, format={}, sourceRelative=false(world-follow), spatialize=force, hrtf={}, preloadBuffers={} (~{}ms)",
                 numBeds, numObjects, USE_FLOAT32 ? "float32" : "int16", FORCE_HRTF ? "force" : "vanilla", NUM_BUFFERS,
-                Math.round(NUM_BUFFERS * SAMPLES_PER_BUFFER * 1000.0 / SAMPLE_RATE));
+                Math.round(NUM_BUFFERS * SAMPLES_PER_BUFFER * 1000.0 / actualSampleRate));
     }
 
     /** 送入一帧内单个 256-sample block 的床声道 PCM。每帧调用 6 次（6 个 block） */
@@ -304,9 +310,8 @@ public class OpenALSpatialAudio {
     private void enqueuePending(ArrayDeque<float[]> queue, float[] pcm) {
         if (queue == null)
             return;
-        while (queue.size() >= MAX_PENDING_BLOCKS) {
-            queue.pollFirst();
-        }
+        if (queue.size() >= MAX_PENDING_BLOCKS)
+            return;
         float[] copy = new float[SAMPLES_PER_BUFFER];
         if (pcm != null) {
             System.arraycopy(pcm, 0, copy, 0, Math.min(SAMPLES_PER_BUFFER, pcm.length));
@@ -317,9 +322,9 @@ public class OpenALSpatialAudio {
     private void enqueuePending(ArrayDeque<float[]> queue, float[] pcm, int offset) {
         if (queue == null)
             return;
-        while (queue.size() >= MAX_PENDING_BLOCKS) {
-            queue.pollFirst();
-        }
+        // 满了不丢旧块（丢旧块会导致音频跳跃+空洞），直接跳过
+        if (queue.size() >= MAX_PENDING_BLOCKS)
+            return;
         float[] copy = new float[SAMPLES_PER_BUFFER];
         if (pcm != null && offset < pcm.length) {
             System.arraycopy(pcm, offset, copy, 0, Math.min(SAMPLES_PER_BUFFER, pcm.length - offset));
@@ -364,7 +369,7 @@ public class OpenALSpatialAudio {
             }
         }
         buf.flip();
-        AL10.alBufferData(bufferId, MONO_FORMAT, buf, SAMPLE_RATE);
+        AL10.alBufferData(bufferId, MONO_FORMAT, buf, actualSampleRate);
     }
 
     private float[] frontToMachine(float[] listenerForward) {
@@ -432,7 +437,7 @@ public class OpenALSpatialAudio {
             return;
         }
         int status = ALC10.alcGetInteger(device, SOFTHRTF.ALC_HRTF_STATUS_SOFT);
-        LOGGER.info("OpenAL HRTF: reset={}, status={}", ok, hrtfStatusName(status));
+        LOGGER.debug("OpenAL HRTF: reset={}, status={}", ok, hrtfStatusName(status));
     }
 
     private static String hrtfStatusName(int status) {

@@ -9,9 +9,7 @@ import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
 
 /**
- * E-AC-3 原生解码器，封装 FFmpeg libavcodec。
- * <p>
- * 通过自研薄 JNI 层 ({@link Eac3Jni}) 直接调用 FFmpeg，零 JavaCPP 依赖。
+ * E-AC-3 原生解码器，封装 FFmpeg libavcodec
  */
 public class Eac3NativeDecoder implements AutoCloseable {
 
@@ -69,7 +67,7 @@ public class Eac3NativeDecoder implements AutoCloseable {
         }
 
         if (samples != lastNbSamples || channels != lastNbChannels) {
-            LOGGER.info("Eac3Native 解码: {}samples × {}ch (FFmpeg {})",
+            LOGGER.debug("Eac3Native 解码: {}samples × {}ch (FFmpeg {})",
                     samples, channels, ffmpegVersion);
             lastNbSamples = samples;
             lastNbChannels = channels;
@@ -92,22 +90,22 @@ public class Eac3NativeDecoder implements AutoCloseable {
             Eac3Jni.close(handle);
             handle = 0;
         }
-        LOGGER.info("Eac3Native 已关闭 (解码 {} 帧)", totalFrames);
+        LOGGER.debug("Eac3Native 已关闭 (解码 {} 帧)", totalFrames);
     }
 
-    /** 已成功解码的总帧数。 */
+    /** 已成功解码的总帧数 */
     public long totalFrames() {
         return totalFrames;
     }
 
     // ── 内部 ──
 
-    /** 预加载 FFmpeg native 库，幂等。建议在 mdat 到达前调用，避免 worker 线程被初始化阻塞。 */
+    /** 预加载 FFmpeg native 库，幂等。建议在 mdat 到达前调用，避免 worker 线程被初始化阻塞 */
     public static synchronized void preload() {
         ensureLoaderReady();
     }
 
-    /** FFmpeg native 库是否成功加载，Dolby 管线由此决定是否可用。 */
+    /** FFmpeg native 库是否成功加载，Dolby 管线由此决定是否可用 */
     public static boolean isNativeAvailable() {
         ensureLoaderReady();
         return nativeAvailable;
@@ -119,7 +117,7 @@ public class Eac3NativeDecoder implements AutoCloseable {
             loadEmbeddedNatives();
             ffmpegVersion = Eac3Jni.version();
             nativeAvailable = true;
-            LOGGER.info("FFmpeg E-AC-3 解码器加载成功: {}", ffmpegVersion);
+            LOGGER.debug("FFmpeg E-AC-3 解码器加载成功: {}", ffmpegVersion);
         } catch (Throwable e) {
             nativeAvailable = false;
             LOGGER.error("FFmpeg 加载失败，Dolby 全景声将不可用，自动降级到 FLAC/AAC。", e);
@@ -128,7 +126,7 @@ public class Eac3NativeDecoder implements AutoCloseable {
         }
     }
 
-    /** 从 jar 资源中提取并加载平台对应的 native 库。 */
+    /** 从 jar 资源中提取并加载平台对应的 native 库 */
     private static void loadEmbeddedNatives() throws IOException {
         String os = System.getProperty("os.name").toLowerCase();
         String arch = System.getProperty("os.arch").toLowerCase();
@@ -236,7 +234,7 @@ public class Eac3NativeDecoder implements AutoCloseable {
             }
             open = true;
             openFailures = 0;
-            LOGGER.info("Eac3Native 解码器就绪");
+            LOGGER.debug("Eac3Native 解码器就绪");
             return true;
         } catch (Exception e) {
             openFailures++;

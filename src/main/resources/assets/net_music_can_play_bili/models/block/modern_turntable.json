@@ -1,0 +1,47 @@
+{
+  "parent": "minecraft:block/block",
+  "textures": {
+    "particle": "minecraft:block/blackstone",
+    "base": "minecraft:block/blackstone",
+    "trim": "minecraft:block/polished_blackstone",
+    "glass": "minecraft:block/tinted_glass"
+  },
+  "elements": [
+    {
+      "from": [1, 0, 1],
+      "to": [15, 3, 15],
+      "faces": {
+        "down": { "texture": "#base" },
+        "up": { "texture": "#trim" },
+        "north": { "texture": "#base" },
+        "south": { "texture": "#base" },
+        "west": { "texture": "#base" },
+        "east": { "texture": "#base" }
+      }
+    },
+    {
+      "from": [2, 3, 2],
+      "to": [14, 8, 14],
+      "faces": {
+        "up": { "texture": "#glass" },
+        "north": { "texture": "#glass" },
+        "south": { "texture": "#glass" },
+        "west": { "texture": "#glass" },
+        "east": { "texture": "#glass" }
+      }
+    },
+    {
+      "from": [11, 3, 3],
+      "to": [12, 4, 12],
+      "rotation": { "origin": [11.5, 3.5, 3.5], "axis": "y", "angle": -22.5 },
+      "faces": {
+        "down": { "texture": "#trim" },
+        "up": { "texture": "#trim" },
+        "north": { "texture": "#trim" },
+        "south": { "texture": "#trim" },
+        "west": { "texture": "#trim" },
+        "east": { "texture": "#trim" }
+      }
+    }
+  ]
+}

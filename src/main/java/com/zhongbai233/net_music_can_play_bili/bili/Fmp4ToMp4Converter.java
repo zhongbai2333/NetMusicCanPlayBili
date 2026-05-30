@@ -83,7 +83,7 @@ public final class Fmp4ToMp4Converter {
         System.arraycopy(full, skipB, audioData, 0, audioData.length);
         int[] sizes = allSizes.subList(skipCnt, allSizes.size()).stream().mapToInt(i -> i).toArray();
         int[] durs = allDurs.subList(skipCnt, allDurs.size()).stream().mapToInt(i -> i).toArray();
-        LOGGER.info("[Fmp4ToAdts] MP4转换: {}帧, {}B AAC", sizes.length, audioData.length);
+        LOGGER.debug("[Fmp4ToAdts] MP4转换: {}帧, {}B AAC", sizes.length, audioData.length);
         return buildStandardMp4(asc, sizes, durs, audioData);
     }
 
@@ -547,7 +547,7 @@ public final class Fmp4ToMp4Converter {
         }
     }
 
-    private static ParseResult parseMoof(byte[] data) {
+    public static ParseResult parseMoof(byte[] data) {
         ParseResult r = new ParseResult();
         ByteBuffer b = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN);
         int td = 0;
@@ -630,7 +630,7 @@ public final class Fmp4ToMp4Converter {
             r.defaultSampleSize = defaultSampleSize;
     }
 
-    static ParseResult parseMoov(byte[] data) {
+    public static ParseResult parseMoov(byte[] data) {
         ByteBuffer b = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN);
         ParseResult r = new ParseResult();
         while (b.remaining() >= 8) {
@@ -893,13 +893,13 @@ public final class Fmp4ToMp4Converter {
         return read4cc(b); // first entry fourcc
     }
 
-    static class ParseResult {
-        String audioCodec;
-        byte[] asc;
-        byte[] flacDfLa;
-        int defaultSampleSize;
-        int sampleCount;
-        int[] sampleSizes;
+    public static class ParseResult {
+        public String audioCodec;
+        public byte[] asc;
+        public byte[] flacDfLa;
+        public int defaultSampleSize;
+        public int sampleCount;
+        public int[] sampleSizes;
 
         void ensureCapacity(int min) {
             if (sampleSizes == null)

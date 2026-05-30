@@ -5,6 +5,9 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliAudioResolver;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliClientAudioHandlers;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliConfig;
+import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
+import com.zhongbai233.net_music_can_play_bili.init.ModItems;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
@@ -19,6 +22,11 @@ public class NetMusicCanPlayBili {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     public NetMusicCanPlayBili(IEventBus modEventBus, ModContainer modContainer) {
+        ModBlocks.BLOCKS.register(modEventBus);
+        ModBlockEntities.BLOCK_ENTITY_TYPES.register(modEventBus);
+        ModItems.ITEMS.register(modEventBus);
+        ModItems.TABS.register(modEventBus);
+
         modEventBus.addListener(Config::onLoad);
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
         MusicPlayResolverManager.registerResolver(new BiliAudioResolver());

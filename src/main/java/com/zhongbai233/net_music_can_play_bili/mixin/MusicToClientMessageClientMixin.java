@@ -10,8 +10,14 @@ import com.github.tartaricacid.netmusic.network.client.MusicToClientMessageClien
 import com.github.tartaricacid.netmusic.network.message.MusicToClientMessage;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliAudioResolver;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSubtitleLyricService;
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
+import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntableSound;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.resources.sounds.SoundInstance;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -20,6 +26,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.net.URL;
 
 /**
  * 为 B站 音频注入由 CC 字幕生成的歌词。
@@ -31,6 +38,14 @@ public abstract class MusicToClientMessageClientMixin {
 
     @Inject(method = "onHandle", at = @At("HEAD"), cancellable = true)
     private static void net_music_can_play_bili$injectBiliLyrics(MusicToClientMessage message, CallbackInfo ci) {
+        boolean modernTurntable = net_music_can_play_bili$isModernTurntable(message);
+        boolean biliSelection = net_music_can_play_bili$hasStoredBiliSelection(message);
+
+        // 现代化唱片机需要我们的 OpenAL 管线；普通唱片机只在 B站选曲时恢复客户端解析和请求头兼容层。
+        if (!modernTurntable && !biliSelection) {
+            return;
+        }
+
         LyricRecord lyricRecord = null;
         if (GeneralConfig.ENABLE_PLAYER_LYRICS.get()) {
             lyricRecord = net_music_can_play_bili$tryBuildNetEaseLyric(message);
@@ -40,15 +55,44 @@ public abstract class MusicToClientMessageClientMixin {
         }
 
         LyricRecord finalLyricRecord = lyricRecord;
-        DolbyAudioRegistry.setMachinePos(message.pos().getX(), message.pos().getY(), message.pos().getZ());
-        String playUrl = net_music_can_play_bili$resolveBiliUrlOnClient(message);
+        String playUrl = net_music_can_play_bili$resolveBiliUrlOnClient(message, modernTurntable);
+
+        if (modernTurntable) {
+            DolbyAudioRegistry.setMachinePos(message.pos().getX(), message.pos().getY(), message.pos().getZ());
+            HttpAudioStreamHandler.allowUrl(playUrl);
+        }
+
+        BiliPlaybackDiagnostics.beginPlayback(message.songName(), message.rawUrl(), playUrl);
         MusicPlayManager.play(playUrl, message.songName(),
-                url -> new NetMusicSound(message.pos(), url, message.timeSecond(), finalLyricRecord));
+                url -> net_music_can_play_bili$createSound(message, url, finalLyricRecord));
         ci.cancel();
     }
 
     @Unique
-    private static String net_music_can_play_bili$resolveBiliUrlOnClient(MusicToClientMessage message) {
+    private static boolean net_music_can_play_bili$isModernTurntable(MusicToClientMessage message) {
+        var level = Minecraft.getInstance().level;
+        return level != null && level.getBlockEntity(message.pos()) instanceof ModernTurntableBlockEntity;
+    }
+
+    @Unique
+    private static boolean net_music_can_play_bili$hasStoredBiliSelection(MusicToClientMessage message) {
+        return BiliApiClient.isStoredVideoSelection(message.rawUrl())
+                || BiliApiClient.isStoredVideoSelection(message.url());
+    }
+
+    @Unique
+    private static SoundInstance net_music_can_play_bili$createSound(MusicToClientMessage message, URL url,
+            LyricRecord lyricRecord) {
+        var level = Minecraft.getInstance().level;
+        if (level != null && level.getBlockEntity(message.pos()) instanceof ModernTurntableBlockEntity) {
+            return new ModernTurntableSound(message.pos(), url, message.timeSecond(), lyricRecord);
+        }
+        return new NetMusicSound(message.pos(), url, message.timeSecond(), lyricRecord);
+    }
+
+    @Unique
+    private static String net_music_can_play_bili$resolveBiliUrlOnClient(MusicToClientMessage message,
+            boolean allowDolby) {
         String storedSelection = null;
         if (BiliApiClient.isStoredVideoSelection(message.rawUrl())) {
             storedSelection = message.rawUrl();
@@ -61,7 +105,7 @@ public abstract class MusicToClientMessageClientMixin {
         }
 
         try {
-            String resolvedUrl = BiliAudioResolver.resolvePlayableUrl(storedSelection);
+            String resolvedUrl = BiliAudioResolver.resolvePlayableUrl(storedSelection, allowDolby);
             NetMusic.LOGGER.info("B站客户端本地解析播放直链成功: {}", message.songName());
             return resolvedUrl;
         } catch (Exception e) {
