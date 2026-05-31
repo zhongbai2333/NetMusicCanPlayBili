@@ -33,7 +33,7 @@ authors = "${mod_authors}" #optional
 
 # The description text for the mod (multi line!) (#mandatory)
 description = '''Adds Bilibili video audio support to NetMusic.
-Paste a Bilibili link (BVxxxx, avxxxx, b23.tv) into a music CD and play the audio directly. No server needed.'''
+Paste a Bilibili link (BVxxxx, avxxxx) into a music CD and play the audio directly.'''
 
 # The [[mixins]] block allows you to declare your mixin config to FML so that it gets loaded.
 [[mixins]]
