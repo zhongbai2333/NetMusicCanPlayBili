@@ -14,6 +14,8 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.neoforge.capabilities.Capabilities;
+import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.loading.FMLEnvironment;
 import org.slf4j.Logger;
@@ -29,6 +31,7 @@ public class NetMusicCanPlayBili {
         ModItems.ITEMS.register(modEventBus);
         ModItems.TABS.register(modEventBus);
         modEventBus.addListener(ModernTurntableNetwork::register);
+        modEventBus.addListener(RegisterCapabilitiesEvent.class, this::registerCapabilities);
 
         modEventBus.addListener(Config::onLoad);
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
@@ -40,5 +43,12 @@ public class NetMusicCanPlayBili {
             BiliConfig.load();
             BiliClientAudioHandlers.register();
         }
+    }
+
+    private void registerCapabilities(RegisterCapabilitiesEvent event) {
+        event.registerBlockEntity(
+                Capabilities.Item.BLOCK,
+                ModBlockEntities.MODERN_TURNTABLE.get(),
+                (turntable, side) -> turntable.getItemHandler());
     }
 }

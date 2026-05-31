@@ -22,6 +22,9 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.neoforge.transfer.ResourceHandler;
+import net.neoforged.neoforge.transfer.item.ItemResource;
+import net.neoforged.neoforge.transfer.transaction.TransactionContext;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.AABB;
@@ -63,6 +66,71 @@ public class ModernTurntableBlockEntity extends BlockEntity {
 
     public ModernTurntableBlockEntity(BlockPos pos, BlockState blockState) {
         super(ModBlockEntities.MODERN_TURNTABLE.get(), pos, blockState);
+    }
+
+    private final ResourceHandler<ItemResource> itemHandler = new ResourceHandler<>() {
+        @Override
+        public int size() {
+            return 1;
+        }
+
+        @Override
+        public ItemResource getResource(int index) {
+            return hasDisc() ? ItemResource.of(disc.getItem(), disc.getComponentsPatch()) : ItemResource.EMPTY;
+        }
+
+        @Override
+        public long getAmountAsLong(int index) {
+            return hasDisc() ? 1L : 0L;
+        }
+
+        @Override
+        public long getCapacityAsLong(int index, ItemResource resource) {
+            return 1L;
+        }
+
+        @Override
+        @SuppressWarnings("null")
+        public boolean isValid(int index, ItemResource resource) {
+            return ItemMusicCD.getSongInfo(resource.toStack()) != null;
+        }
+
+        @Override
+        @SuppressWarnings("null")
+        public int insert(int index, ItemResource resource, int amount, TransactionContext transaction) {
+            if (resource.isEmpty() || hasDisc() || amount <= 0)
+                return 0;
+            if (ItemMusicCD.getSongInfo(resource.toStack()) == null)
+                return 0;
+            int inserted = Math.min(1, amount);
+            setDisc(resource.toStack(1));
+            syncBlockState();
+            return inserted;
+        }
+
+        @Override
+        public int extract(int index, ItemResource resource, int amount, TransactionContext transaction) {
+            if (amount <= 0 || !hasDisc())
+                return 0;
+            removeDisc();
+            syncBlockState();
+            return 1;
+        }
+    };
+
+    public ResourceHandler<ItemResource> getItemHandler() {
+        return itemHandler;
+    }
+
+    private void syncBlockState() {
+        if (level != null && !level.isClientSide()) {
+            BlockState state = level.getBlockState(worldPosition);
+            if (state.getBlock() instanceof ModernTurntableBlock) {
+                level.setBlock(worldPosition, state
+                        .setValue(ModernTurntableBlock.HAS_DISC, hasDisc())
+                        .setValue(ModernTurntableBlock.PLAYING, isPlaying()), 3);
+            }
+        }
     }
 
     public static void tick(Level level, BlockPos pos, BlockState state, ModernTurntableBlockEntity turntable) {
