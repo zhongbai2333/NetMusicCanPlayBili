@@ -28,7 +28,8 @@ public class DolbyAudioRegistry {
     private static final AtomicInteger ANONYMOUS_COUNTER = new AtomicInteger();
     private static final ConcurrentMap<BlockPos, DolbyEntry> DOLBY_HANDLERS = new ConcurrentHashMap<>();
     private static final ConcurrentMap<BlockPos, StereoEntry> STEREO_HANDLERS = new ConcurrentHashMap<>();
-    private static final ConcurrentMap<BlockPos, Float> SOURCE_VOLUMES = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<String, Float> SOURCE_VOLUMES = new ConcurrentHashMap<>();
+    private static final int MAX_VOLUME_ENTRIES = 5_000;
 
     private static final Gson GSON = new Gson();
     private static final Type VOLUME_MAP_TYPE = new TypeToken<Map<String, Float>>() {
@@ -56,7 +57,7 @@ public class DolbyAudioRegistry {
         handler.setUserVolume(volumeFor(key));
         closeStereoAt(key);
         DolbyEntry old = DOLBY_HANDLERS.put(key, entry);
-        if (old != null && old.handler() != handler) {
+        if (old != null) {
             old.cleanup();
         }
         enforceActiveLimit();
@@ -82,7 +83,7 @@ public class DolbyAudioRegistry {
         handler.setUserVolume(volumeFor(key));
         closeDolbyAt(key);
         StereoEntry old = STEREO_HANDLERS.put(key, entry);
-        if (old != null && old.handler() != handler) {
+        if (old != null) {
             old.cleanup();
         }
         enforceActiveLimit();
@@ -144,7 +145,12 @@ public class DolbyAudioRegistry {
         }
         BlockPos key = keyFor(pos);
         float clamped = AudioUtils.clampGain(volume);
-        SOURCE_VOLUMES.put(key, clamped);
+        String volumeKey = volumeKeyFor(key);
+        if (volumeKey == null) {
+            return;
+        }
+        SOURCE_VOLUMES.put(volumeKey, clamped);
+        evictVolumesIfNeeded();
         DolbyEntry dolby = DOLBY_HANDLERS.get(key);
         if (dolby != null) {
             dolby.handler().setUserVolume(clamped);
@@ -277,7 +283,11 @@ public class DolbyAudioRegistry {
     }
 
     private static float volumeFor(BlockPos key) {
-        return SOURCE_VOLUMES.getOrDefault(key, 1.0f);
+        String volumeKey = volumeKeyFor(key);
+        if (volumeKey == null) {
+            return 1.0f;
+        }
+        return SOURCE_VOLUMES.getOrDefault(volumeKey, 1.0f);
     }
 
     // ---- 音量持久化 ----
@@ -295,19 +305,22 @@ public class DolbyAudioRegistry {
             Map<String, Float> saved = GSON.fromJson(reader, VOLUME_MAP_TYPE);
             if (saved != null) {
                 for (var entry : saved.entrySet()) {
-                    String[] parts = entry.getKey().split(",");
-                    if (parts.length == 3) {
-                        try {
-                            int x = Integer.parseInt(parts[0]);
-                            int y = Integer.parseInt(parts[1]);
-                            int z = Integer.parseInt(parts[2]);
-                            SOURCE_VOLUMES.put(new BlockPos(x, y, z),
-                                    AudioUtils.clampGain(entry.getValue()));
-                        } catch (NumberFormatException ignored) {
+                    String key = entry.getKey();
+                    float value = AudioUtils.clampGain(entry.getValue());
+                    if (isScopedVolumeKey(key)) {
+                        SOURCE_VOLUMES.put(key, value);
+                    } else {
+                        // 旧版 x,y,z 格式：迁移到 scoped key（当前作用域 + 默认维度）
+                        BlockPos legacy = parseLegacyPosKey(key);
+                        if (legacy != null) {
+                            String migrated = volumeKeyFor(legacy);
+                            if (migrated != null) {
+                                SOURCE_VOLUMES.put(migrated, value);
+                            }
                         }
                     }
                 }
-                LOGGER.info("加载已保存的唱片机音量: {} 个位置", saved.size());
+                LOGGER.debug("加载已保存的唱片机音量: {} 个位置", SOURCE_VOLUMES.size());
             }
         } catch (IOException e) {
             LOGGER.warn("读取唱片机音量文件失败: {}", e.toString());
@@ -321,7 +334,7 @@ public class DolbyAudioRegistry {
             return;
         }
         pendingSave = true;
-        Thread.ofVirtual().start(() -> {
+        Thread saveThread = new Thread(() -> {
             try {
                 Thread.sleep(1500);
             } catch (InterruptedException ignored) {
@@ -329,14 +342,16 @@ public class DolbyAudioRegistry {
                 pendingSave = false;
                 return;
             }
+            // 如果 1.5s 内又有新写入，跳过本次（下次写入会触发新的 debounce）
             if (System.currentTimeMillis() - lastSaveMillis < 1400) {
                 pendingSave = false;
-                saveVolumesDebounced();
                 return;
             }
             saveVolumesNow();
             pendingSave = false;
-        });
+        }, "VolumeSaveDebounce");
+        saveThread.setDaemon(true);
+        saveThread.start();
     }
 
     private static void saveVolumesNow() {
@@ -345,11 +360,7 @@ public class DolbyAudioRegistry {
         }
         Map<String, Float> data = new HashMap<>();
         for (var entry : SOURCE_VOLUMES.entrySet()) {
-            BlockPos pos = entry.getKey();
-            if (pos.getX() == Integer.MIN_VALUE) {
-                continue;
-            }
-            data.put(pos.getX() + "," + pos.getY() + "," + pos.getZ(), entry.getValue());
+            data.put(entry.getKey(), entry.getValue());
         }
         if (data.isEmpty()) {
             return;
@@ -362,6 +373,92 @@ public class DolbyAudioRegistry {
             }
         } catch (IOException e) {
             LOGGER.warn("保存唱片机音量文件失败: {}", e.toString());
+        }
+    }
+
+    private static boolean isScopedVolumeKey(String key) {
+        return key != null && key.contains("|") && key.indexOf('|') != key.lastIndexOf('|');
+    }
+
+    private static BlockPos parseLegacyPosKey(String key) {
+        if (key == null) {
+            return null;
+        }
+        String[] parts = key.split(",");
+        if (parts.length != 3) {
+            return null;
+        }
+        try {
+            return new BlockPos(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), Integer.parseInt(parts[2]));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static String volumeKeyFor(BlockPos pos) {
+        if (pos == null || pos.getX() == Integer.MIN_VALUE) {
+            return null;
+        }
+        return currentWorldScope() + "|" + currentDimensionKey() + "|"
+                + pos.getX() + "," + pos.getY() + "," + pos.getZ();
+    }
+
+    private static String currentDimensionKey() {
+        var mc = net.minecraft.client.Minecraft.getInstance();
+        if (mc != null && mc.level != null) {
+            try {
+                return mc.level.dimension().toString();
+            } catch (Exception ignored) {
+            }
+        }
+        return "unknown_dimension";
+    }
+
+    private static String currentWorldScope() {
+        var mc = net.minecraft.client.Minecraft.getInstance();
+        if (mc == null) {
+            return "unknown_world";
+        }
+
+        if (mc.getCurrentServer() != null) {
+            String ip = mc.getCurrentServer().ip;
+            return "server:" + sanitizeScope(!isBlank(ip) ? ip : mc.getCurrentServer().name);
+        }
+
+        if (mc.getSingleplayerServer() != null) {
+            String levelName = mc.getSingleplayerServer().getWorldData().getLevelName();
+            return "singleplayer:" + sanitizeScope(levelName);
+        }
+
+        return "unknown_world";
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static String sanitizeScope(String value) {
+        if (value == null || value.isBlank()) {
+            return "unknown";
+        }
+        return value.replace('\\', '/').replace('|', '_').trim();
+    }
+
+    private static void evictVolumesIfNeeded() {
+        if (SOURCE_VOLUMES.size() <= MAX_VOLUME_ENTRIES) {
+            return;
+        }
+        // 驱逐最旧的一半条目
+        int target = MAX_VOLUME_ENTRIES / 2;
+        var iter = SOURCE_VOLUMES.entrySet().iterator();
+        int removed = 0;
+        while (iter.hasNext() && SOURCE_VOLUMES.size() > target) {
+            iter.next();
+            iter.remove();
+            removed++;
+        }
+        if (removed > 0) {
+            LOGGER.debug("音量表驱逐 {} 条旧记录", removed);
         }
     }
 

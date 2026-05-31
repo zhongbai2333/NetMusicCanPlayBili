@@ -193,6 +193,11 @@ public class DolbyAudioHandler {
         lastFrameFeedNanos = 0L;
         frameBudget = 0.0;
         worker.interrupt();
+        try {
+            worker.join(500);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
         if (spatialAudio != null) {
             spatialAudio.cleanup();
             spatialAudio = null;

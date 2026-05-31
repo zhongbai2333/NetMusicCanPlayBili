@@ -57,12 +57,12 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
         this.x = pos.getX() + 0.5D;
         this.y = pos.getY() + 0.5D;
         this.z = pos.getZ() + 0.5D;
-        this.volume = 4.0F * clientVolume;
+        this.volume = Math.max(0.01F, 4.0F * clientVolume);
     }
 
     @Override
     public void tick() {
-        this.volume = 4.0F * clientVolume;
+        this.volume = Math.max(0.01F, 4.0F * clientVolume);
         var level = Minecraft.getInstance().level;
         if (level == null) {
             finishSession();
@@ -117,6 +117,7 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
 
     @Override
     public CompletableFuture<AudioStream> getStream(SoundBufferLibrary soundBuffers, Sound sound, boolean looping) {
+        ModernTurntablePlaybackTracker.markStreamStarted(pos, sessionId);
         return CompletableFuture.supplyAsync(() -> {
             try {
                 return new NetMusicAudioStream(songUrl);

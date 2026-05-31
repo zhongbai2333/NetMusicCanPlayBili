@@ -148,6 +148,25 @@ public final class TempFileByteSpool implements Closeable {
         }
     }
 
+    /** 启动时清理上次异常退出残留的 .spool 临时文件 */
+    public static void cleanupOrphanedSpoolFiles() {
+        try {
+            Path tmpDir = Path.of(System.getProperty("java.io.tmpdir"));
+            if (!Files.isDirectory(tmpDir)) {
+                return;
+            }
+            try (var files = Files.newDirectoryStream(tmpDir, "http-prefetch-*.spool")) {
+                for (Path file : files) {
+                    try {
+                        Files.deleteIfExists(file);
+                    } catch (IOException ignored) {
+                    }
+                }
+            }
+        } catch (IOException ignored) {
+        }
+    }
+
     private void ensureOpen() throws IOException {
         if (closed) {
             throw new IOException("temp spool is closed");

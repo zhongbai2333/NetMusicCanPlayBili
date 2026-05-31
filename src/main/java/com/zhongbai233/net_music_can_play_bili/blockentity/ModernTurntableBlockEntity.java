@@ -173,7 +173,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
             syncedPlayers.clear();
             markDirty();
             syncNearbyPlayers(serverLevel, remainingSeconds(serverLevel.getGameTime()));
-            LOGGER.info("现代化唱片机恢复播放: {} ({}s, 续播 {}ms)", songName, durationSeconds, elapsedTicks * 50L);
+            LOGGER.debug("现代化唱片机恢复播放: {} ({}s, 续播 {}ms)", songName, durationSeconds, elapsedTicks * 50L);
             return;
         }
         // B站 存储选集的 URL：重新解析 CDN 直链
@@ -194,7 +194,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
                             syncedPlayers.clear();
                             markDirty();
                             syncNearbyPlayers(serverLevel, remainingSeconds(serverLevel.getGameTime()));
-                            LOGGER.info("现代化唱片机恢复播放(B站): {} ({}s, 续播 {}ms)", songName, durationSeconds,
+                            LOGGER.debug("现代化唱片机恢复播放(B站): {} ({}s, 续播 {}ms)", songName, durationSeconds,
                                     elapsedTicks * 50L);
                         }
                     }
@@ -324,7 +324,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         syncedPlayers.clear();
         markDirty();
         syncNearbyPlayers(serverLevel, durationSeconds);
-        LOGGER.info("现代化唱片机开始播放: {} ({}s)", songName, durationSeconds);
+        LOGGER.debug("现代化唱片机开始播放: {} ({}s)", songName, durationSeconds);
     }
 
     public void stopPlayback() {
@@ -463,7 +463,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
                         remainingSeconds,
                         songName);
                 NetworkHandler.sendToClientPlayer(message, player);
-                LOGGER.info("现代化唱片机同步播放给玩家: {} -> {} (剩余 {}s)",
+                LOGGER.debug("现代化唱片机同步播放给玩家: {} -> {} (剩余 {}s)",
                         songName, player.getScoreboardName(), remainingSeconds);
             }
         }

@@ -37,7 +37,7 @@ public class BiliAudioResolver implements IAsyncSongUrlResolver {
         if (info.staffNames() != null && !info.staffNames().isEmpty()) {
             songInfo.artists = new java.util.ArrayList<>(info.staffNames());
         }
-        LOGGER.info("B站视频信息获取成功: {} (P{}, cid={}, {}s) UP主: {}",
+        LOGGER.debug("B站视频信息获取成功: {} (P{}, cid={}, {}s) UP主: {}",
                 info.displayTitle(), info.page(), info.cid(), info.duration(), info.staffNames());
         LOGGER.debug("唱片将存储原始 ID: {}", songInfo.songUrl);
         return songInfo;
@@ -96,14 +96,14 @@ public class BiliAudioResolver implements IAsyncSongUrlResolver {
     @Override
     public CompletableFuture<ItemMusicCD.SongInfo> resolve(ItemMusicCD.SongInfo songInfo) {
         if (FMLEnvironment.getDist() == Dist.DEDICATED_SERVER) {
-            LOGGER.info("服务端跳过 B站 CDN 直链解析，保留原始 ID 下发给客户端: {}", songInfo.songUrl);
+            LOGGER.debug("服务端跳过 B站 CDN 直链解析，保留原始 ID 下发给客户端: {}", songInfo.songUrl);
             return CompletableFuture.completedFuture(songInfo);
         }
 
         return CompletableFuture.supplyAsync(() -> {
             try {
                 ItemMusicCD.SongInfo resolved = resolvePlayableSongInfo(songInfo);
-                LOGGER.info("B站 CDN 直链刷新成功: {}", resolved.songName);
+                LOGGER.debug("B站 CDN 直链刷新成功: {}", resolved.songName);
                 return resolved;
 
             } catch (Exception e) {

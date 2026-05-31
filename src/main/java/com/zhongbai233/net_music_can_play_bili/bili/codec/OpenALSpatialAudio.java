@@ -398,6 +398,7 @@ public class OpenALSpatialAudio {
         if (err == AL10.AL_INVALID_NAME) {
             if (!deviceLost) {
                 deviceLost = true;
+                CACHED_HANDLES = null; // 设备失效后缓存作废，下次调用时重建
                 LOGGER.warn("OpenAL device lost detected ({}): source/buffer handles invalidated. "
                         + "This can happen when another mod resets the OpenAL device (e.g. Sound Physics). "
                         + "Spatial audio will be reinitialized on next tick.",

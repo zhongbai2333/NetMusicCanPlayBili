@@ -34,7 +34,7 @@ public final class BiliPlaybackDiagnostics {
                 System.currentTimeMillis(),
                 false,
                 "");
-        LOGGER.info("NetMusic 播放开始: {}", cleanSongName);
+        LOGGER.debug("NetMusic 播放开始: {}", cleanSongName);
     }
 
     public static void updateFormat(URL url, String container, String codec, AudioFormat format, String detail) {
@@ -54,7 +54,7 @@ public final class BiliPlaybackDiagnostics {
                 System.currentTimeMillis(),
                 false,
                 old.lastError());
-        LOGGER.info("NetMusic 音频格式: {} / {}, {}, {}",
+        LOGGER.debug("NetMusic 音频格式: {} / {}, {}, {}",
                 cleanContainer, cleanCodec, audioFormatSummary(format), cleanDetail.isBlank() ? "normal" : cleanDetail);
     }
 

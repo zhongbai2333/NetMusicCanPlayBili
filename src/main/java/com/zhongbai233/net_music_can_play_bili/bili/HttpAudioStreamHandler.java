@@ -206,7 +206,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             if (decodedFormat.getSampleSizeInBits() > 16) {
                 AudioFormat fmt16 = new AudioFormat(decodedFormat.getSampleRate(), 16,
                         decodedFormat.getChannels(), true, false);
-                LOGGER.info("FLAC Hi-Res enabled TPDF dither {}bit -> 16bit: {}Hz/{}ch",
+                LOGGER.debug("FLAC Hi-Res enabled TPDF dither {}bit -> 16bit: {}Hz/{}ch",
                         decodedFormat.getSampleSizeInBits(), decodedFormat.getSampleRate(),
                         decodedFormat.getChannels());
                 decoded = new AudioInputStream(

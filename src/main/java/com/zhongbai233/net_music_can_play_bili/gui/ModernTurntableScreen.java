@@ -510,15 +510,16 @@ public class ModernTurntableScreen extends Screen {
         private final BlockPos sourcePos;
 
         VolumeSlider(int x, int y, int w, int h, BlockPos sourcePos) {
-            super(x, y, w, h, Component.literal(""), DolbyAudioRegistry.userVolume(sourcePos));
+            super(x, y, w, h, Component.literal(""), gainToSlider(DolbyAudioRegistry.userVolume(sourcePos)));
             this.sourcePos = new BlockPos(sourcePos.getX(), sourcePos.getY(), sourcePos.getZ());
             updateMessage();
         }
 
         @Override
         protected void updateMessage() {
-            ModernTurntableSound.clientVolume = (float) this.value;
-            DolbyAudioRegistry.setUserVolume(sourcePos, (float) this.value);
+            float gain = sliderToGain((float) this.value);
+            ModernTurntableSound.clientVolume = gain;
+            DolbyAudioRegistry.setUserVolume(sourcePos, gain);
             setMessage(Component.literal((int) (this.value * 100) + "%"));
         }
 
@@ -529,6 +530,14 @@ public class ModernTurntableScreen extends Screen {
 
         double getSliderValue() {
             return this.value;
+        }
+
+        private static float sliderToGain(float slider) {
+            return slider * slider;
+        }
+
+        private static float gainToSlider(float gain) {
+            return (float) Math.sqrt(Math.max(0f, gain));
         }
     }
 

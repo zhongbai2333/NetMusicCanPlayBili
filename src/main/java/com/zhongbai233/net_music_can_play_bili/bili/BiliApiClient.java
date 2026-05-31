@@ -299,7 +299,7 @@ public final class BiliApiClient {
         boolean dolbyOk = allowDolby
                 && BiliConfig.dolbyEnabled
                 && com.zhongbai233.net_music_can_play_bili.bili.codec.Eac3NativeDecoder.isNativeAvailable();
-        LOGGER.info("[Dolby] allowDolby={}, dolbyEnabled={}, nativeAvailable={}, dashHasDolby={}",
+        LOGGER.debug("[Dolby] allowDolby={}, dolbyEnabled={}, nativeAvailable={}, dashHasDolby={}",
                 allowDolby,
                 BiliConfig.dolbyEnabled,
                 com.zhongbai233.net_music_can_play_bili.bili.codec.Eac3NativeDecoder.isNativeAvailable(),
@@ -333,7 +333,7 @@ public final class BiliApiClient {
             String baseUrl = streams.get(qid);
             if (baseUrl != null && !baseUrl.isEmpty()) {
                 if (validateUrl(baseUrl, 3)) {
-                    LOGGER.info("B站 CDN 直链验证通过 (qid={}): {}", qid, baseUrl);
+                    LOGGER.debug("B站 CDN 直链验证通过 (qid={}): {}", qid, baseUrl);
                     return baseUrl;
                 }
                 LOGGER.warn("B站 CDN 直链不可用 (qid={}), 尝试下一品质", qid);

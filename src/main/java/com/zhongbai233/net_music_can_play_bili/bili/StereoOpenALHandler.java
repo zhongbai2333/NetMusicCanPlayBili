@@ -149,7 +149,7 @@ public class StereoOpenALHandler {
             started = true;
             lastFrameFeedNanos = System.nanoTime();
             frameBudget = Math.min(MAX_BLOCKS_PER_TICK, sampleRate / 20.0 / SAMPLES_PER_BLOCK);
-            LOGGER.info("Stereo OpenAL 预缓冲完成: {} blocks, 开始播放", pcmQueue.size());
+            LOGGER.debug("Stereo OpenAL 预缓冲完成: {} blocks, 开始播放", pcmQueue.size());
         }
 
         updateFrameBudget();
@@ -261,6 +261,11 @@ public class StereoOpenALHandler {
         pendingBlock = new float[2][SAMPLES_PER_BLOCK];
         pendingSamples = 0;
         worker.interrupt();
+        try {
+            worker.join(500);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
         if (spatialAudio != null) {
             spatialAudio.cleanup();
             spatialAudio = null;

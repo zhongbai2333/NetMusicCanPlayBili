@@ -2,20 +2,29 @@ package com.zhongbai233.net_music_can_play_bili.bili;
 
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
+import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 
 @EventBusSubscriber(value = Dist.CLIENT)
 public final class DolbyClientTickHandler {
     private static final long TICK_FALLBACK_AFTER_NANOS = 250_000_000L;
 
     private static volatile long lastFrameUpdateNanos;
+    private static volatile Level lastTrackedLevel;
 
     private DolbyClientTickHandler() {
+    }
+
+    @SubscribeEvent
+    public static void onPlayerLoggedOut(ClientPlayerNetworkEvent.LoggingOut event) {
+        com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker.clear();
+        lastTrackedLevel = null;
     }
 
     @SubscribeEvent
@@ -32,6 +41,15 @@ public final class DolbyClientTickHandler {
 
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
+        // 切世界/单人存档重进时清掉旧 tracker 记录
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level != lastTrackedLevel) {
+            lastTrackedLevel = mc.level;
+            if (lastTrackedLevel == null) {
+                com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker.clear();
+            }
+        }
+
         if (!DolbyAudioRegistry.isActive()) {
             return;
         }
@@ -42,7 +60,6 @@ public final class DolbyClientTickHandler {
             return;
         }
 
-        Minecraft mc = Minecraft.getInstance();
         if (updateFromCamera(mc)) {
             return;
         }

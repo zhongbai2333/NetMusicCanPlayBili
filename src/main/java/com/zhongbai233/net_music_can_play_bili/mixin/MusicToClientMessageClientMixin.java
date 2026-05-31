@@ -19,6 +19,7 @@ import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlayb
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntableSound;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.sounds.SoundInstance;
+import net.minecraft.sounds.SoundSource;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -48,6 +49,19 @@ public abstract class MusicToClientMessageClientMixin {
             return;
         }
 
+        if (modernTurntable) {
+            if (sync.hasSession()
+                    && !ModernTurntablePlaybackTracker.tryStart(message.pos(), sync.sessionId(),
+                            message.timeSecond())) {
+                ci.cancel();
+                return;
+            }
+            if (Minecraft.getInstance().options.getSoundSourceVolume(SoundSource.MASTER) <= 0f) {
+                ci.cancel();
+                return;
+            }
+        }
+
         LyricRecord lyricRecord = null;
         if (GeneralConfig.ENABLE_PLAYER_LYRICS.get()) {
             lyricRecord = net_music_can_play_bili$tryBuildNetEaseLyric(message);
@@ -60,12 +74,6 @@ public abstract class MusicToClientMessageClientMixin {
         String playUrl = net_music_can_play_bili$resolveBiliUrlOnClient(message, modernTurntable);
 
         if (modernTurntable) {
-            if (sync.hasSession()
-                    && !ModernTurntablePlaybackTracker.tryStart(message.pos(), sync.sessionId(),
-                            message.timeSecond())) {
-                ci.cancel();
-                return;
-            }
             HttpAudioStreamHandler.allowUrl(playUrl, message.pos());
         }
 
@@ -118,7 +126,7 @@ public abstract class MusicToClientMessageClientMixin {
 
         try {
             String resolvedUrl = BiliAudioResolver.resolvePlayableUrl(storedSelection, allowDolby);
-            NetMusic.LOGGER.info("B站客户端本地解析播放直链成功: {}", message.songName());
+            NetMusic.LOGGER.debug("B站客户端本地解析播放直链成功: {}", message.songName());
             return PlaybackSync.transferSync(message.url(), resolvedUrl);
         } catch (Exception e) {
             NetMusic.LOGGER.error("B站客户端本地解析播放直链失败: {}", storedSelection, e);
