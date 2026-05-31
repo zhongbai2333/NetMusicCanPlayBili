@@ -784,7 +784,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         boolean modernTurntable = playbackContext != null;
         BlockPos sourcePos = playbackContext != null ? playbackContext.pos() : null;
         if ("ec-3".equals(parseResult.audioCodec)) {
-            if (modernTurntable && BiliConfig.dolbyEnabled && Eac3NativeDecoder.isNativeAvailable()) {
+            if (modernTurntable && Eac3NativeDecoder.isNativeAvailable()) {
                 return new DolbyEc3Pipeline("fMP4", closed, sourcePos, startOffsetSeconds);
             }
             throw new UnsupportedAudioFileException(
@@ -808,7 +808,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     private static DolbyEc3Pipeline createRawDolbyPipeline(AtomicBoolean closed, PlaybackContext playbackContext,
             float startOffsetSeconds)
             throws UnsupportedAudioFileException {
-        if (playbackContext == null || !BiliConfig.dolbyEnabled || !Eac3NativeDecoder.isNativeAvailable()) {
+        if (playbackContext == null || !Eac3NativeDecoder.isNativeAvailable()) {
             throw new UnsupportedAudioFileException("raw E-AC-3 requires Dolby playback and native decoder support");
         }
         BlockPos sourcePos = playbackContext.pos();

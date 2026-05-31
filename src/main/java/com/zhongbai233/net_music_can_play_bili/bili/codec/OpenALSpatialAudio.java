@@ -504,8 +504,14 @@ public class OpenALSpatialAudio {
         }
 
         if (CAPABILITIES_CONTEXT.get() != context) {
-            AL.createCapabilities(ALC.createCapabilities(device));
-            CAPABILITIES_CONTEXT.set(context);
+            try {
+                AL.createCapabilities(ALC.createCapabilities(device));
+                CAPABILITIES_CONTEXT.set(context);
+            } catch (IllegalStateException e) {
+                CACHED_HANDLES = null;
+                LOGGER.warn("OpenAL spatial {} skipped: context lost between check and capability init", operation);
+                return false;
+            }
         }
         return true;
     }
