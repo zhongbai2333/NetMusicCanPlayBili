@@ -8,6 +8,7 @@ import com.github.tartaricacid.netmusic.client.audio.NetMusicSound;
 import com.github.tartaricacid.netmusic.config.GeneralConfig;
 import com.github.tartaricacid.netmusic.network.client.MusicToClientMessageClient;
 import com.github.tartaricacid.netmusic.network.message.MusicToClientMessage;
+import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliAudioResolver;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
@@ -20,6 +21,7 @@ import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntableSound
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.sounds.SoundInstance;
 import net.minecraft.sounds.SoundSource;
+import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -36,6 +38,8 @@ import java.net.URL;
 @Mixin(MusicToClientMessageClient.class)
 public abstract class MusicToClientMessageClientMixin {
     @Unique
+    private static final Logger LOGGER = LogUtils.getLogger();
+    @Unique
     private static final Pattern NET_MUSIC_CAN_PLAY_BILI$NET_EASE_MP3_URL = Pattern.compile("^.*?\\?id=(\\d+)\\.mp3$");
 
     @Inject(method = "onHandle", at = @At("HEAD"), cancellable = true)
@@ -46,6 +50,8 @@ public abstract class MusicToClientMessageClientMixin {
 
         // 现代化唱片机需要我们的 OpenAL 管线；普通唱片机只在 B站选曲时恢复客户端解析和请求头兼容层。
         if (!modernTurntable && !biliSelection) {
+            LOGGER.debug("Mixin 放行非B站/非现代唱片机票: {} (modern={} bili={})",
+                    message.songName(), modernTurntable, biliSelection);
             return;
         }
 
