@@ -328,53 +328,14 @@ public final class BiliApiClient {
             throw new RuntimeException("该视频没有可用的 DASH 音频流");
         }
 
-        // 按品质顺序验证 CDN URL：同一品质重试 3 次（递增退避），仍失败再降级
+        // B站 API 本身只返回当前用户可用的音质，无需额外 HEAD 验证
         for (int qid : QUALITY_ORDER) {
             String baseUrl = streams.get(qid);
-            if (baseUrl != null && !baseUrl.isEmpty()) {
-                if (validateUrl(baseUrl, 3)) {
-                    LOGGER.debug("B站 CDN 直链验证通过 (qid={}): {}", qid, baseUrl);
-                    return baseUrl;
-                }
-                LOGGER.warn("B站 CDN 直链不可用 (qid={}), 尝试下一品质", qid);
-            }
+            if (baseUrl != null && !baseUrl.isEmpty())
+                return baseUrl;
         }
 
-        String fallback = streams.values().iterator().next();
-        LOGGER.warn("所有品质 CDN 验证均失败，使用兜底 URL: {}", fallback);
-        return fallback;
-    }
-
-    private static boolean validateUrl(String url, int maxTries) {
-        for (int attempt = 1; attempt <= maxTries; attempt++) {
-            try {
-                HttpRequest req = HttpRequest.newBuilder()
-                        .uri(URI.create(url))
-                        .method("HEAD", HttpRequest.BodyPublishers.noBody())
-                        .header("User-Agent", USER_AGENT)
-                        .header("Referer", "https://www.bilibili.com/")
-                        .timeout(Duration.ofSeconds(3))
-                        .build();
-                HttpResponse<Void> resp = BiliWbiSigner.HTTP.send(req,
-                        HttpResponse.BodyHandlers.discarding());
-                int status = resp.statusCode();
-                if (status == 200 || status == 206 || status == 302) {
-                    return true;
-                }
-                LOGGER.debug("CDN HEAD 返回 {} (第{}次/{}): {}", status, attempt, maxTries, url);
-            } catch (Exception e) {
-                LOGGER.debug("CDN HEAD 失败 (第{}次/{}): {} — {}", attempt, maxTries, url, e.toString());
-            }
-            if (attempt < maxTries) {
-                try {
-                    Thread.sleep(500L * (1L << (attempt - 1))); // 500ms → 1s → 2s
-                } catch (InterruptedException ignored) {
-                    Thread.currentThread().interrupt();
-                    return false;
-                }
-            }
-        }
-        return false;
+        return streams.values().iterator().next();
     }
 
     // 获取字幕并转为 NetEase 歌词 JSON 格式

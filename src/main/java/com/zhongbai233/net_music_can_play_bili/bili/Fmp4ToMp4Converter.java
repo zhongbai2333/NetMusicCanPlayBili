@@ -68,8 +68,10 @@ public final class Fmp4ToMp4Converter {
                 buf.position(buf.position() + (int) Math.min(dataSize, buf.remaining()));
             }
         }
-        if (asc == null)
+        if (asc == null) {
+            LOGGER.warn("AAC ASC 提取失败，回退到默认 ASC (48000Hz 立体声)。低品质流可能产生噪音。");
             asc = DEFAULT_ASC;
+        }
         int skipCnt = 0, skipB = 0;
         while (skipCnt < allSizes.size() && allSizes.get(skipCnt) < 20) {
             skipB += allSizes.get(skipCnt);
@@ -750,8 +752,13 @@ public final class Fmp4ToMp4Converter {
                 b.get(md);
                 r.asc = extractAscFromMp4a(md);
                 r.audioCodec = "mp4a";
-                if (r.asc != null)
+                if (r.asc != null) {
+                    AudioFormat af = ascToAudioFormat(r.asc);
+                    if (af != null) {
+                        LOGGER.debug("AAC ASC 提取成功: {}Hz/{}ch", af.getSampleRate(), af.getChannels());
+                    }
                     return;
+                }
             } else if ("fLaC".equals(et) && es >= 8 + 28) {
                 byte[] md = new byte[es - 8];
                 b.get(md);

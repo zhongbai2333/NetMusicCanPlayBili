@@ -22,7 +22,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
 public class ModernTurntableSound extends AbstractTickableSoundInstance {
-    private static final int BLOCK_STATE_GRACE_TICKS = 120;
+    private static final int BLOCK_STATE_GRACE_TICKS = 40;
 
     /** 客户端全局音量倍率，由 GUI 音量滑块控制。范围 [0, 2]，默认 1.0 */
     public static volatile float clientVolume = 1.0f;
@@ -91,6 +91,12 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
                 stop();
                 return;
             }
+        }
+        // 唱片被取出时立即停止，不等 grace 过期
+        if (turntable != null && !turntable.hasDisc() && tick > 0) {
+            finishSession();
+            stop();
+            return;
         }
 
         if (lyricRecord != null) {
