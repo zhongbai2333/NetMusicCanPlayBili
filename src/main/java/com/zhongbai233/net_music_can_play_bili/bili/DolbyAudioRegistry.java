@@ -1,9 +1,21 @@
 package com.zhongbai233.net_music_can_play_bili.bili;
 
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
+import com.mojang.logging.LogUtils;
 import net.minecraft.core.BlockPos;
+import org.slf4j.Logger;
 
+import java.io.IOException;
+import java.io.Reader;
+import java.io.Writer;
+import java.lang.reflect.Type;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -11,11 +23,22 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class DolbyAudioRegistry {
+    private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_ACTIVE_TURNTABLES = 16;
     private static final AtomicInteger ANONYMOUS_COUNTER = new AtomicInteger();
     private static final ConcurrentMap<BlockPos, DolbyEntry> DOLBY_HANDLERS = new ConcurrentHashMap<>();
     private static final ConcurrentMap<BlockPos, StereoEntry> STEREO_HANDLERS = new ConcurrentHashMap<>();
     private static final ConcurrentMap<BlockPos, Float> SOURCE_VOLUMES = new ConcurrentHashMap<>();
+
+    private static final Gson GSON = new Gson();
+    private static final Type VOLUME_MAP_TYPE = new TypeToken<Map<String, Float>>() {
+    }.getType();
+    private static volatile long lastSaveMillis;
+    private static volatile boolean pendingSave;
+
+    static {
+        loadVolumes();
+    }
 
     private static volatile float[] fallbackMachinePos;
     private static volatile float[] listenerPos;
@@ -130,6 +153,7 @@ public class DolbyAudioRegistry {
         if (stereo != null) {
             stereo.handler().setUserVolume(clamped);
         }
+        saveVolumesDebounced();
     }
 
     public static float userVolume(BlockPos pos) {
@@ -254,6 +278,91 @@ public class DolbyAudioRegistry {
 
     private static float volumeFor(BlockPos key) {
         return SOURCE_VOLUMES.getOrDefault(key, 1.0f);
+    }
+
+    // ---- 音量持久化 ----
+
+    private static Path volumeFilePath() {
+        return Paths.get("config", "net_music_can_play_bili", "turntable_volumes.json");
+    }
+
+    private static void loadVolumes() {
+        Path file = volumeFilePath();
+        if (!Files.exists(file)) {
+            return;
+        }
+        try (Reader reader = Files.newBufferedReader(file)) {
+            Map<String, Float> saved = GSON.fromJson(reader, VOLUME_MAP_TYPE);
+            if (saved != null) {
+                for (var entry : saved.entrySet()) {
+                    String[] parts = entry.getKey().split(",");
+                    if (parts.length == 3) {
+                        try {
+                            int x = Integer.parseInt(parts[0]);
+                            int y = Integer.parseInt(parts[1]);
+                            int z = Integer.parseInt(parts[2]);
+                            SOURCE_VOLUMES.put(new BlockPos(x, y, z),
+                                    AudioUtils.clampGain(entry.getValue()));
+                        } catch (NumberFormatException ignored) {
+                        }
+                    }
+                }
+                LOGGER.info("加载已保存的唱片机音量: {} 个位置", saved.size());
+            }
+        } catch (IOException e) {
+            LOGGER.warn("读取唱片机音量文件失败: {}", e.toString());
+        }
+    }
+
+    private static void saveVolumesDebounced() {
+        long now = System.currentTimeMillis();
+        lastSaveMillis = now;
+        if (pendingSave) {
+            return;
+        }
+        pendingSave = true;
+        Thread.ofVirtual().start(() -> {
+            try {
+                Thread.sleep(1500);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+                pendingSave = false;
+                return;
+            }
+            if (System.currentTimeMillis() - lastSaveMillis < 1400) {
+                pendingSave = false;
+                saveVolumesDebounced();
+                return;
+            }
+            saveVolumesNow();
+            pendingSave = false;
+        });
+    }
+
+    private static void saveVolumesNow() {
+        if (SOURCE_VOLUMES.isEmpty()) {
+            return;
+        }
+        Map<String, Float> data = new HashMap<>();
+        for (var entry : SOURCE_VOLUMES.entrySet()) {
+            BlockPos pos = entry.getKey();
+            if (pos.getX() == Integer.MIN_VALUE) {
+                continue;
+            }
+            data.put(pos.getX() + "," + pos.getY() + "," + pos.getZ(), entry.getValue());
+        }
+        if (data.isEmpty()) {
+            return;
+        }
+        Path file = volumeFilePath();
+        try {
+            Files.createDirectories(file.getParent());
+            try (Writer writer = Files.newBufferedWriter(file)) {
+                GSON.toJson(data, writer);
+            }
+        } catch (IOException e) {
+            LOGGER.warn("保存唱片机音量文件失败: {}", e.toString());
+        }
     }
 
     private static BlockPos keyFor(BlockPos pos) {

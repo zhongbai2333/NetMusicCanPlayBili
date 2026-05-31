@@ -60,6 +60,8 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     private long startedGameTime;
     private int savedElapsedSeconds;
     private long savedElapsedTicks;
+    private int seekGeneration;
+    private long lastFullSyncGameTime;
     private boolean needsResolveOnLoad;
     private transient LyricRecord clientLyricRecord;
     private transient String clientLyricSessionId = "";
@@ -150,6 +152,11 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         if (remaining <= 0) {
             turntable.stopPlayback();
             return;
+        }
+        // 每 3 秒全量重同步：覆盖关闭音量后进入范围、重进等边缘情况
+        if (serverLevel.getGameTime() - turntable.lastFullSyncGameTime > 60) {
+            turntable.syncedPlayers.clear();
+            turntable.lastFullSyncGameTime = serverLevel.getGameTime();
         }
         if (serverLevel.getGameTime() % SYNC_INTERVAL_TICKS == 0) {
             turntable.syncNearbyPlayers(serverLevel, remaining);
@@ -312,6 +319,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         startedGameTime = serverLevel.getGameTime();
         savedElapsedSeconds = 0;
         savedElapsedTicks = 0L;
+        seekGeneration = 0;
         playing = true;
         syncedPlayers.clear();
         markDirty();
@@ -331,6 +339,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         startedGameTime = 0L;
         savedElapsedSeconds = 0;
         savedElapsedTicks = 0L;
+        seekGeneration = 0;
         syncedPlayers.clear();
         markDirty();
     }
@@ -390,6 +399,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         saveElapsedTicks(targetTicks);
         if (playing) {
             startedGameTime = serverLevel.getGameTime() - targetTicks;
+            seekGeneration++;
             syncedPlayers.clear();
             markDirty();
             syncNearbyPlayers(serverLevel, remainingSeconds(serverLevel.getGameTime()));
@@ -461,7 +471,8 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     }
 
     private String playbackSessionId() {
-        return Long.toString(worldPosition.asLong()) + "-" + Long.toString(startedGameTime);
+        return Long.toString(worldPosition.asLong()) + "-" + Long.toString(startedGameTime)
+                + (seekGeneration > 0 ? "-" + seekGeneration : "");
     }
 
     private int remainingSeconds(long gameTime) {

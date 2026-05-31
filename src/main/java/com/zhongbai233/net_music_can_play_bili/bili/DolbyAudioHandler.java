@@ -85,6 +85,8 @@ public class DolbyAudioHandler {
     public void tick(float[] machinePos, float[] listenerPos) {
         if (closed)
             return;
+        if (net.minecraft.client.Minecraft.getInstance().isPaused())
+            return;
         if (!playbackStarted) {
             if (processedQueue.size() < PREBUFFER_FRAMES)
                 return;
@@ -280,7 +282,8 @@ public class DolbyAudioHandler {
                     : audioObjects;
             rawObjCount = Math.min(Math.max(0, metadataObjects), audioObjects);
         }
-        int objCount = BiliConfig.dolbyJocEnabled ? Math.max(0, Math.min(rawObjCount, BiliConfig.dolbyMaxObjectSources()))
+        int objCount = BiliConfig.dolbyJocEnabled
+                ? Math.max(0, Math.min(rawObjCount, BiliConfig.dolbyMaxObjectSources()))
                 : 0;
         float[][] objPcmCh = null;
         if (BiliConfig.dolbyJocEnabled && ENABLE_JOC_OBJECTS && jocResult != null && objCount > 0) {
@@ -442,10 +445,19 @@ public class DolbyAudioHandler {
         }
         sa.updatePositions(bedPositions, objectPositions, lp, forward);
         float d = distance(lp, mp), g = gainForDistance(d);
+        float gv = g * userVolume * gameVolume();
         for (int ch = 0; ch < numBedChannels; ch++)
-            sa.setBedGain(ch, g * userVolume);
+            sa.setBedGain(ch, gv);
         for (int o = 0; o < numObjects; o++)
-            sa.setObjectGain(o, g * userVolume);
+            sa.setObjectGain(o, gv);
+    }
+
+    private static float gameVolume() {
+        var mc = net.minecraft.client.Minecraft.getInstance();
+        if (mc == null || mc.options == null)
+            return 1.0f;
+        return mc.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.MASTER)
+                * mc.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.RECORDS);
     }
 
     private void updateObjectOffsets(Eac3AtmosParser.OamdConfig oamd) {

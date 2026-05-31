@@ -6,7 +6,7 @@ import net.minecraft.core.BlockPos;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class ModernTurntablePlaybackTracker {
-    private static final long STOP_GRACE_MILLIS = 5_000L;
+    private static final long STOP_GRACE_MILLIS = 1_500L;
     private static final ConcurrentHashMap<BlockPos, ActiveSession> ACTIVE = new ConcurrentHashMap<>();
 
     private ModernTurntablePlaybackTracker() {

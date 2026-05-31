@@ -141,6 +141,8 @@ public class StereoOpenALHandler {
     public void tick(float[] machinePos, float[] listenerPos) {
         if (closed || !initialized)
             return;
+        if (net.minecraft.client.Minecraft.getInstance().isPaused())
+            return;
         if (!started) {
             if (pcmQueue.size() < PREBUFFER_BLOCKS)
                 return;
@@ -180,10 +182,19 @@ public class StereoOpenALHandler {
                 float gain = gainForDistance(distance);
                 lastDistance = distance;
                 lastGain = gain;
-                spatialAudio.setBedGain(0, gain * userVolume);
-                spatialAudio.setBedGain(1, gain * userVolume);
+                float gv = gain * userVolume * gameVolume();
+                spatialAudio.setBedGain(0, gv);
+                spatialAudio.setBedGain(1, gv);
             }
         }
+    }
+
+    private static float gameVolume() {
+        var mc = net.minecraft.client.Minecraft.getInstance();
+        if (mc == null || mc.options == null)
+            return 1.0f;
+        return mc.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.MASTER)
+                * mc.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.RECORDS);
     }
 
     public void setUserVolume(float volume) {
