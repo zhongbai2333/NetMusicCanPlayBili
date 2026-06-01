@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
@@ -154,31 +155,37 @@ public class Eac3NativeDecoder implements AutoCloseable {
         String[] ffmpegLibs = { "avutil", "swresample", "avcodec" };
         // 自研薄 JNI 层（单个 DLL，替代原来的 jniavutil/jniswresample/jniavcodec 三个）
         String[] jniLibs = { "eac3_jni" };
+        // Windows 工具链运行时依赖原则上应由 FFmpeg 构建端消除；这里保留可选预加载兜底。
+        String[] runtimeLibs = isWindows ? new String[] { "libwinpthread-1" } : new String[0];
+        boolean[] runtimeLibPresent = new boolean[runtimeLibs.length];
 
         // ── 提取到 config 目录（避免 temp 被杀软拦截 DLL 加载；平台子目录隔离多版本）──
         Path nativeDir = gameConfigDir().resolve("net_music_can_play_bili").resolve("natives")
                 .resolve(platformDir);
         Files.createDirectories(nativeDir);
 
-        // ── 提取所有文件 ──
-        String[][] allLibs = { ffmpegLibs, jniLibs };
-        for (String[] group : allLibs) {
-            for (String baseName : group) {
-                String fileName = nativeFileName(baseName, os, isWindows);
-                Path target = nativeDir.resolve(fileName);
-                if (!Files.exists(target)) {
-                    String resPath = "/native/" + platformDir + "/" + fileName;
-                    try (InputStream in = Eac3NativeDecoder.class.getResourceAsStream(resPath)) {
-                        if (in == null) {
-                            throw new IOException("内嵌 native 库缺失: " + resPath);
-                        }
-                        Files.copy(in, target);
-                    }
-                }
-            }
+        // ── 提取所有文件；如果 jar 内资源更新，覆盖 config 中旧版本，避免用户残留旧 DLL ──
+        for (int i = 0; i < runtimeLibs.length; i++) {
+            String fileName = nativeFileName(runtimeLibs[i], os, isWindows);
+            runtimeLibPresent[i] = extractEmbeddedNative(platformDir, fileName, nativeDir.resolve(fileName), false);
+        }
+        for (String baseName : ffmpegLibs) {
+            String fileName = nativeFileName(baseName, os, isWindows);
+            extractEmbeddedNative(platformDir, fileName, nativeDir.resolve(fileName), true);
+        }
+        for (String baseName : jniLibs) {
+            String fileName = nativeFileName(baseName, os, isWindows);
+            extractEmbeddedNative(platformDir, fileName, nativeDir.resolve(fileName), true);
         }
 
         // ── 加载所有库 ──
+        // 可选运行时依赖必须先显式加载；Windows 不保证会从当前 DLL 所在目录解析二级依赖。
+        for (int i = 0; i < runtimeLibs.length; i++) {
+            if (runtimeLibPresent[i]) {
+                String fn = nativeFileName(runtimeLibs[i], os, isWindows);
+                System.load(nativeDir.resolve(fn).toAbsolutePath().toString());
+            }
+        }
         for (String baseName : ffmpegLibs) {
             String fn = nativeFileName(baseName, os, isWindows);
             System.load(nativeDir.resolve(fn).toAbsolutePath().toString());
@@ -189,6 +196,25 @@ public class Eac3NativeDecoder implements AutoCloseable {
         }
 
         LOGGER.debug("FFmpeg native 库提取并加载: {}", nativeDir);
+    }
+
+    private static boolean extractEmbeddedNative(String platformDir, String fileName, Path target, boolean required)
+            throws IOException {
+        String resPath = "/native/" + platformDir + "/" + fileName;
+        try (InputStream in = Eac3NativeDecoder.class.getResourceAsStream(resPath)) {
+            if (in == null) {
+                if (required) {
+                    throw new IOException("内嵌 native 库缺失: " + resPath);
+                }
+                return false;
+            }
+
+            byte[] bundled = in.readAllBytes();
+            if (!Files.exists(target) || !Arrays.equals(Files.readAllBytes(target), bundled)) {
+                Files.write(target, bundled);
+            }
+            return true;
+        }
     }
 
     private static boolean isFfmpegLib(String name) {
