@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.init;
 
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
+import com.zhongbai233.net_music_can_play_bili.blockentity.LyricProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -19,6 +20,13 @@ public final class ModBlockEntities {
                     () -> new BlockEntityType<>(
                             ModernTurntableBlockEntity::new,
                             Set.of(ModBlocks.MODERN_TURNTABLE.get())));
+
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<LyricProjectorBlockEntity>> LYRIC_PROJECTOR = BLOCK_ENTITY_TYPES
+            .register(
+                    "lyric_projector",
+                    () -> new BlockEntityType<>(
+                            LyricProjectorBlockEntity::new,
+                            Set.of(ModBlocks.LYRIC_PROJECTOR.get())));
 
     private ModBlockEntities() {
     }

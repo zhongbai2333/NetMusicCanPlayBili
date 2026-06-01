@@ -1,0 +1,10 @@
+{
+  "variants": {
+    "activated=false": {
+      "model": "net_music_can_play_bili:block/lyric_projector"
+    },
+    "activated=true": {
+      "model": "net_music_can_play_bili:block/lyric_projector_activated"
+    }
+  }
+}

@@ -18,12 +18,18 @@ public final class ModItems {
     public static final DeferredItem<BlockItem> MODERN_TURNTABLE = ITEMS.registerSimpleBlockItem("modern_turntable",
             ModBlocks.MODERN_TURNTABLE);
 
+    public static final DeferredItem<BlockItem> LYRIC_PROJECTOR = ITEMS.registerSimpleBlockItem("lyric_projector",
+            ModBlocks.LYRIC_PROJECTOR);
+
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> MAIN_TAB = TABS.register(
             "main",
             () -> CreativeModeTab.builder()
                     .title(Component.translatable("itemGroup.net_music_can_play_bili"))
                     .icon(() -> new ItemStack(MODERN_TURNTABLE.get()))
-                    .displayItems((parameters, output) -> output.accept(MODERN_TURNTABLE.get()))
+                    .displayItems((parameters, output) -> {
+                        output.accept(MODERN_TURNTABLE.get());
+                        output.accept(LYRIC_PROJECTOR.get());
+                    })
                     .build());
 
     private ModItems() {

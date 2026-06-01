@@ -6,6 +6,7 @@ import com.github.tartaricacid.netmusic.config.GeneralConfig;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
 import it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -47,8 +48,18 @@ public class ModernTurntableRenderer
         state.currentLyricColor = ConfigEvent.PLAYER_ORIGINAL_COLOR;
         state.transLyricColor = ConfigEvent.PLAYER_TRANSLATED_COLOR;
         state.y = 0.5F;
+        state.projected = false;
 
         if (!GeneralConfig.ENABLE_PLAYER_LYRICS.get() || !turntable.isPlaying()) {
+            return;
+        }
+
+        // 检查是否已连接投影仪，若连接则显示占位提示
+        if (isLinkedToProjector(turntable)) {
+            state.projected = true;
+            state.currentLine = Component.translatable(
+                    "message.net_music_can_play_bili.modern_turntable.projected");
+            state.currentLyricColor = 0xFFAAAAAA;
             return;
         }
 
@@ -128,5 +139,10 @@ public class ModernTurntableRenderer
         public int currentLyricColor = ConfigEvent.PLAYER_ORIGINAL_COLOR;
         public int transLyricColor = ConfigEvent.PLAYER_TRANSLATED_COLOR;
         public float y = 0.5F;
+        public boolean projected;
+    }
+
+    private static boolean isLinkedToProjector(ModernTurntableBlockEntity turntable) {
+        return ClientLinkRegistry.isTargetLinked(turntable.getBlockPos());
     }
 }

@@ -1,0 +1,197 @@
+package com.zhongbai233.net_music_can_play_bili.gui;
+
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
+
+import java.util.function.Consumer;
+
+/**
+ * 黑金主题 GUI 基类。
+ * <p>
+ * 提供统一的面板、标题栏、关闭按钮和滑块 overlay 绘制。
+ * 子类在 {@link #buildWidgets()} 中创建控件，在 {@link #onSave()} 中持久化。
+ * </p>
+ */
+public abstract class BlackGoldScreen extends Screen {
+    // ──── 主题常量 ────
+    public static final int GOLD = 0xFFD4A843;
+    public static final int GOLD_DIM = 0xFF6B4F12;
+    public static final int GOLD_GLOW = 0x30D4A843;
+    public static final int BG_BLACK = 0xFF0D0D0D;
+    public static final int BG_HEADER = 0xFF1C1C1C;
+    public static final int TEXT_PRIMARY = 0xFFE0D8C8;
+    public static final int TEXT_SECONDARY = 0xFFA09888;
+    public static final int TEXT_DIM = 0xFF605848;
+
+    // ──── 布局常量 ────
+    protected static final int BOX_W = 320;
+    protected static final int BOX_H = 285;
+    protected static final int HEADER_H = 28;
+    protected static final int CLOSE_SIZE = 14;
+    protected static final int PAD = 16;
+    protected static final int SLIDER_W = 145;
+    protected static final int SLIDER_H = 20;
+    protected static final int VAL_W = 42;
+
+    protected final BlockPos blockPos;
+    private boolean closeHovered;
+
+    protected BlackGoldScreen(Component title, BlockPos blockPos) {
+        super(title);
+        this.blockPos = blockPos.immutable();
+    }
+
+    // ──── 子类实现 ────
+
+    protected abstract void buildWidgets();
+
+    protected abstract void onSave();
+
+    // ──── 生命周期 ────
+
+    @Override
+    protected void init() {
+        buildWidgets();
+    }
+
+    @Override
+    public void onClose() {
+        onSave();
+        if (minecraft != null)
+            minecraft.setScreen(null);
+    }
+
+    @Override
+    public boolean isPauseScreen() {
+        return false;
+    }
+
+    @Override
+    public void extractBackground(GuiGraphicsExtractor g, int mx, int my, float pt) {
+        g.fillGradient(0, 0, width, height, 0xCC000000, 0xDD050505);
+    }
+
+    @Override
+    public void extractRenderState(GuiGraphicsExtractor g, int mx, int my, float pt) {
+        int bx = boxX(), by = boxY();
+        drawBox(g, bx, by);
+        drawHeader(g, bx, by, mx, my);
+        drawContent(g, bx, by, mx, my);
+        renderWidgets(g, mx, my, pt);
+        drawSliderOverlays(g);
+    }
+
+    /** 仅渲染子控件（绕过面板绘制），供子类在自定义布局中调用 */
+    protected final void renderWidgets(GuiGraphicsExtractor g, int mx, int my, float pt) {
+        super.extractRenderState(g, mx, my, pt);
+    }
+
+    @Override
+    public boolean mouseClicked(MouseButtonEvent event, boolean cancelled) {
+        if (cancelled)
+            return false;
+        int bx = boxX(), by = boxY();
+        int cx = bx + BOX_W - CLOSE_SIZE - 8;
+        int cy = by + (HEADER_H - CLOSE_SIZE) / 2;
+        if (event.x() >= cx && event.x() <= cx + CLOSE_SIZE
+                && event.y() >= cy && event.y() <= cy + CLOSE_SIZE) {
+            onClose();
+            return true;
+        }
+        return super.mouseClicked(event, cancelled);
+    }
+
+    // ──── 布局 ────
+
+    protected int boxX() {
+        return (width - BOX_W) / 2;
+    }
+
+    protected int boxY() {
+        return (height - BOX_H) / 2;
+    }
+
+    // ──── 绘制 ────
+
+    protected void drawBox(GuiGraphicsExtractor g, int x, int y) {
+        g.fillGradient(x - 2, y - 2, x + BOX_W + 2, y + BOX_H + 2, GOLD_GLOW, GOLD_GLOW);
+        g.fillGradient(x, y, x + BOX_W, y + BOX_H, BG_BLACK, BG_BLACK);
+    }
+
+    /** 绘制标题栏和关闭按钮 */
+    protected void drawHeader(GuiGraphicsExtractor g, int bx, int by, int mx, int my) {
+        g.fillGradient(bx + 1, by + 1, bx + BOX_W - 1, by + HEADER_H, BG_HEADER, BG_HEADER);
+        g.fillGradient(bx + 8, by + HEADER_H - 1, bx + BOX_W - 8, by + HEADER_H, GOLD_DIM, GOLD_DIM);
+
+        Component title = getTitle();
+        g.centeredText(font, title, bx + BOX_W / 2, by + 9, GOLD);
+
+        int cx = bx + BOX_W - CLOSE_SIZE - 8;
+        int cy = by + (HEADER_H - CLOSE_SIZE) / 2;
+        closeHovered = mx >= cx && mx <= cx + CLOSE_SIZE && my >= cy && my <= cy + CLOSE_SIZE;
+        g.centeredText(font, Component.literal("\u2715"),
+                cx + CLOSE_SIZE / 2, cy + 4, closeHovered ? GOLD : TEXT_SECONDARY);
+    }
+
+    /** 绘制面板内容区（子类覆写，默认留空） */
+    protected void drawContent(GuiGraphicsExtractor g, int bx, int by, int mx, int my) {
+    }
+
+    // ──── 滑块工具 ────
+
+    /** 便捷创建滑块 + 文本框 */
+    protected ConfigSlider addConfigSlider(int x, int y, float min, float max, float cur,
+            Consumer<Float> onApply) {
+        ConfigSlider s = new ConfigSlider(x, y, SLIDER_W, SLIDER_H, min, max, cur, onApply);
+        addRenderableWidget(s);
+        EditBox box = new EditBox(font, x + SLIDER_W + 4, y, VAL_W, SLIDER_H, Component.empty());
+        box.setValue(ConfigSlider.fmt(cur));
+        box.setResponder(txt -> {
+            try {
+                float v = Float.parseFloat(txt);
+                s.setFromValue(v);
+                onApply.accept(v);
+            } catch (NumberFormatException ignored) {
+            }
+        });
+        addRenderableWidget(box);
+        s.linkedBox = box;
+        return s;
+    }
+
+    /** 便捷创建多选项按钮 */
+    protected CycleWidget addCycleWidget(int x, int y, java.util.List<String> options,
+            int initIndex, java.util.function.Consumer<Integer> onSwitch) {
+        CycleWidget w = new CycleWidget(x, y, SLIDER_W, SLIDER_H, options, initIndex, onSwitch);
+        addRenderableWidget(w);
+        return w;
+    }
+
+    /** 绘制所有 ConfigSlider 的轨道和手柄（黑金风格） */
+    protected void drawSliderOverlays(GuiGraphicsExtractor g) {
+        for (var child : children()) {
+            if (child instanceof ConfigSlider s) {
+                drawOneSlider(g, s);
+            }
+        }
+    }
+
+    private void drawOneSlider(GuiGraphicsExtractor g, ConfigSlider s) {
+        int x = s.getX(), y = s.getY(), w = s.getWidth(), h = s.getHeight();
+        double val = s.getSliderValue();
+        int pad = 4, trackY = y + h / 2 - 1, trackH = 3;
+        int trackL = x + pad, trackW = w - pad * 2;
+        g.fillGradient(trackL, trackY, trackL + trackW, trackY + trackH, 0xFF1A1A1A, 0xFF1A1A1A);
+        int fillW = (int) (val * trackW);
+        if (fillW > 0)
+            g.fillGradient(trackL, trackY, trackL + fillW, trackY + trackH, GOLD_DIM, GOLD);
+        int hx = trackL + fillW, hr = s.isHoveredOrFocused() ? 5 : 4;
+        int hc = s.isHoveredOrFocused() ? GOLD : TEXT_PRIMARY;
+        g.fillGradient(hx - hr, trackY - hr + 1, hx + hr, trackY + trackH + hr - 1, hc, hc);
+        g.fillGradient(hx - 2, trackY - 1, hx + 2, trackY + trackH + 1, BG_BLACK, BG_BLACK);
+    }
+}

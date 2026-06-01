@@ -531,6 +531,17 @@ public final class BiliApiClient {
         String title = info.displayTitle();
         String artists = !info.staffNames().isEmpty() ? String.join(" | ", info.staffNames()) : "";
 
+        // 截断过长内容，避免歌词行溢出
+        int maxArtistLen = 30;
+        if (artists.length() > maxArtistLen) {
+            artists = artists.substring(0, maxArtistLen - 1) + "\u2026";
+        }
+        int maxTotal = 52;
+        int titleBudget = maxTotal - (artists.isEmpty() ? 0 : 5 + artists.length()); // " By. " = 5
+        if (title.length() > titleBudget) {
+            title = title.substring(0, Math.max(8, titleBudget - 1)) + "\u2026";
+        }
+
         StringBuilder zhLrc = new StringBuilder();
         zhLrc.append(formatLrcTime(0)).append(title);
         if (!artists.isEmpty()) {
@@ -538,7 +549,7 @@ public final class BiliApiClient {
         }
         zhLrc.append('\n');
 
-        String transLrc = formatLrcTime(0) + "（" + note + "）\n";
+        String transLrc = formatLrcTime(0) + "\uff08" + note + "\uff09\n";
 
         return buildNetEaseLyricJson(zhLrc.toString(), transLrc);
     }

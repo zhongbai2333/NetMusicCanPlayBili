@@ -13,5 +13,9 @@ public final class ModernTurntableNetwork {
                 ModernTurntableControlPacket.TYPE,
                 ModernTurntableControlPacket.STREAM_CODEC,
                 ModernTurntableControlPacket::handle);
+        registrar.playToServer(
+                LyricProjectorConfigPacket.TYPE,
+                LyricProjectorConfigPacket.STREAM_CODEC,
+                LyricProjectorConfigPacket::handle);
     }
 }

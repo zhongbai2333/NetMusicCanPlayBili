@@ -4,6 +4,7 @@ import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import com.mojang.serialization.MapCodec;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -83,6 +84,17 @@ public class ModernTurntableBlock extends HorizontalDirectionalBlock implements 
                 openClientScreen(pos);
                 return InteractionResult.SUCCESS;
             }
+            return InteractionResult.SUCCESS;
+        }
+        // 手持链接物品右键 → 存储连接目标到物品 NBT
+        if (stack.getItem() == com.zhongbai233.net_music_can_play_bili.init.ModItems.LYRIC_PROJECTOR.get()) {
+            if (level.isClientSide()) {
+                return InteractionResult.SUCCESS;
+            }
+            LinkHelper.writeLinkToItem(stack, pos);
+            player.sendSystemMessage(Component.translatable(
+                    "message.net_music_can_play_bili.lyric_projector.item_linked",
+                    pos.getX(), pos.getY(), pos.getZ()).withStyle(ChatFormatting.GOLD));
             return InteractionResult.SUCCESS;
         }
         if (level.isClientSide()) {
