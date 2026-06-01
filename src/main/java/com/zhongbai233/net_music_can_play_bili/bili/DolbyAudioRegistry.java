@@ -20,6 +20,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class DolbyAudioRegistry {
@@ -34,12 +37,25 @@ public class DolbyAudioRegistry {
     private static final Gson GSON = new Gson();
     private static final Type VOLUME_MAP_TYPE = new TypeToken<Map<String, Float>>() {
     }.getType();
+    /** 音量持久化 debounce 专用，单线程复用，避免每次新建线程 */
+    private static final ScheduledExecutorService VOLUME_SAVE_EXECUTOR =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "VolumeSaveDebounce");
+                t.setDaemon(true);
+                return t;
+            });
     private static volatile long lastSaveMillis;
     private static volatile boolean pendingSave;
 
     static {
         loadVolumes();
     }
+
+    private static final ConcurrentMap<BlockPos, BlockPos> MACHINE_OVERRIDES = new ConcurrentHashMap<>();
+    /** 音响 relay 注册表：speakerPos → relay */
+    private static final ConcurrentMap<BlockPos, SpeakerAudioRelay> RELAYS = new ConcurrentHashMap<>();
+    /** relay → turntable 反向映射 */
+    private static final ConcurrentMap<BlockPos, BlockPos> RELAY_TURNTABLE = new ConcurrentHashMap<>();
 
     private static volatile float[] fallbackMachinePos;
     private static volatile float[] listenerPos;
@@ -60,6 +76,8 @@ public class DolbyAudioRegistry {
         if (old != null) {
             old.cleanup();
         }
+        // 自动连接已注册的音响 relay
+        connectPendingRelays(key, handler);
         enforceActiveLimit();
     }
 
@@ -67,7 +85,14 @@ public class DolbyAudioRegistry {
         if (handler == null) {
             return;
         }
-        DOLBY_HANDLERS.entrySet().removeIf(entry -> entry.getValue().handler() == handler);
+        DOLBY_HANDLERS.entrySet().removeIf(entry -> {
+            if (entry.getValue().handler() == handler) {
+                // 清理指向此 handler 位置的所有 relay→turntable 映射，防止内存泄漏
+                RELAY_TURNTABLE.entrySet().removeIf(relayEntry -> relayEntry.getValue().equals(entry.getKey()));
+                return true;
+            }
+            return false;
+        });
     }
 
     public static void registerStereo(StereoOpenALHandler handler) {
@@ -86,14 +111,44 @@ public class DolbyAudioRegistry {
         if (old != null) {
             old.cleanup();
         }
+        // 自动连接已注册的音响 relay
+        connectPendingRelays(key, handler);
         enforceActiveLimit();
+    }
+
+    /** handler 创建时自动连接已注册的音响 relay */
+    private static void connectPendingRelays(BlockPos handlerKey, DolbyAudioHandler handler) {
+        for (var entry : RELAYS.entrySet()) {
+            BlockPos speakerPos = entry.getKey();
+            BlockPos linkedTurntable = RELAY_TURNTABLE.get(speakerPos);
+            if (linkedTurntable != null && linkedTurntable.equals(handlerKey)) {
+                handler.addRelay(entry.getValue());
+            }
+        }
+    }
+
+    private static void connectPendingRelays(BlockPos handlerKey, StereoOpenALHandler handler) {
+        for (var entry : RELAYS.entrySet()) {
+            BlockPos speakerPos = entry.getKey();
+            BlockPos linkedTurntable = RELAY_TURNTABLE.get(speakerPos);
+            if (linkedTurntable != null && linkedTurntable.equals(handlerKey)) {
+                handler.addRelay(entry.getValue());
+            }
+        }
     }
 
     public static void unregisterStereo(StereoOpenALHandler handler) {
         if (handler == null) {
             return;
         }
-        STEREO_HANDLERS.entrySet().removeIf(entry -> entry.getValue().handler() == handler);
+        STEREO_HANDLERS.entrySet().removeIf(entry -> {
+            if (entry.getValue().handler() == handler) {
+                // 清理指向此 handler 位置的所有 relay→turntable 映射，防止内存泄漏
+                RELAY_TURNTABLE.entrySet().removeIf(relayEntry -> relayEntry.getValue().equals(entry.getKey()));
+                return true;
+            }
+            return false;
+        });
     }
 
     public static void updatePositions(float[] listenerPos) {
@@ -104,10 +159,103 @@ public class DolbyAudioRegistry {
         float[] currentListenerPos = AudioUtils.copyPos3(listenerPos);
         DolbyAudioRegistry.listenerPos = currentListenerPos;
         for (DolbyEntry entry : DOLBY_HANDLERS.values()) {
-            entry.handler().tick(entry.machinePos(), currentListenerPos);
+            float[] pos = resolveMachinePos(entry.pos(), entry.machinePos());
+            entry.handler().tick(pos, currentListenerPos);
         }
         for (StereoEntry entry : STEREO_HANDLERS.values()) {
-            entry.handler().tick(entry.machinePos(), currentListenerPos);
+            float[] pos = resolveMachinePos(entry.pos(), entry.machinePos());
+            entry.handler().tick(pos, currentListenerPos);
+        }
+    }
+
+    private static float[] resolveMachinePos(BlockPos handlerKey, float[] originalPos) {
+        return originalPos;
+    }
+
+    /** 将指定唱片机的音频输出重定向到音响位置 */
+    public static void setMachineOverride(BlockPos turntablePos, BlockPos speakerPos) {
+        // 保留 API 兼容旧调用；多音响模式下不再把主 handler 移到某个音响，避免后注册音响独占主输出。
+        if (turntablePos == null || speakerPos == null)
+            return;
+    }
+
+    /** 清除指定唱片机的音频位置重定向 */
+    public static void clearMachineOverride(BlockPos turntablePos) {
+        if (turntablePos == null)
+            return;
+        MACHINE_OVERRIDES.remove(turntablePos);
+    }
+
+    /** 清除指向此音响的所有音频位置重定向 */
+    public static void clearMachineOverrideForSpeaker(BlockPos speakerPos) {
+        if (speakerPos == null)
+            return;
+        MACHINE_OVERRIDES.entrySet().removeIf(e -> e.getValue().equals(speakerPos));
+        RELAY_TURNTABLE.remove(speakerPos);
+        SpeakerAudioRelay relay = RELAYS.remove(speakerPos);
+        if (relay != null) {
+            relay.cleanup();
+            for (DolbyEntry entry : DOLBY_HANDLERS.values()) {
+                entry.handler().removeRelay(relay);
+            }
+            for (StereoEntry entry : STEREO_HANDLERS.values()) {
+                entry.handler().removeRelay(relay);
+            }
+        }
+    }
+
+    /** 注册音响 relay 并关联到对应的唱片机 handler */
+    public static void registerRelay(BlockPos speakerPos, BlockPos turntablePos, SpeakerAudioRelay relay) {
+        if (speakerPos == null || turntablePos == null || relay == null)
+            return;
+        relay.setSpeakerPos(AudioUtils.centerFor(speakerPos, fallbackMachinePos));
+        SpeakerAudioRelay old = RELAYS.put(speakerPos, relay);
+        RELAY_TURNTABLE.put(speakerPos, turntablePos);
+        if (old != null) {
+            old.cleanup();
+            for (DolbyEntry entry : DOLBY_HANDLERS.values()) {
+                entry.handler().removeRelay(old);
+            }
+            for (StereoEntry entry : STEREO_HANDLERS.values()) {
+                entry.handler().removeRelay(old);
+            }
+        }
+        BlockPos key = keyFor(turntablePos);
+        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
+        if (dolby != null) {
+            dolby.handler().addRelay(relay);
+        }
+        StereoEntry stereo = STEREO_HANDLERS.get(key);
+        if (stereo != null) {
+            stereo.handler().addRelay(relay);
+        }
+    }
+
+    /** 更新音响 relay 的声道和音量 */
+    public static void updateRelayConfig(BlockPos speakerPos, int channelIndex, float volume, boolean autoMixJoc) {
+        if (speakerPos == null)
+            return;
+        SpeakerAudioRelay relay = RELAYS.get(speakerPos);
+        if (relay != null) {
+            relay.setChannelIndex(channelIndex);
+            relay.setUserVolume(volume);
+        }
+    }
+
+    /** 将音响配置（声道掩码/音量/JOC 静态化）应用到对应唱片机的 handler */
+    public static void applySpeakerConfig(BlockPos turntablePos, int channelMask, float volume, boolean autoMixJoc) {
+        if (turntablePos == null)
+            return;
+        BlockPos key = keyFor(turntablePos);
+        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
+        if (dolby != null) {
+            dolby.handler().setChannelMask(channelMask);
+            dolby.handler().setUserVolume(volume);
+            dolby.handler().setForceStaticJoc(autoMixJoc);
+        }
+        StereoEntry stereo = STEREO_HANDLERS.get(key);
+        if (stereo != null) {
+            stereo.handler().setUserVolume(volume);
         }
     }
 
@@ -346,24 +494,15 @@ public class DolbyAudioRegistry {
             return;
         }
         pendingSave = true;
-        Thread saveThread = new Thread(() -> {
-            try {
-                Thread.sleep(1500);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-                pendingSave = false;
-                return;
-            }
-            // 如果 1.5s 内又有新写入，跳过本次（下次写入会触发新的 debounce）
+        VOLUME_SAVE_EXECUTOR.schedule(() -> {
+            // 如果 1.5s 内又有新写入，跳过本次（下次写入会触发新的 schedule）
             if (System.currentTimeMillis() - lastSaveMillis < 1400) {
                 pendingSave = false;
                 return;
             }
             saveVolumesNow();
             pendingSave = false;
-        }, "VolumeSaveDebounce");
-        saveThread.setDaemon(true);
-        saveThread.start();
+        }, 1500, TimeUnit.MILLISECONDS);
     }
 
     private static void saveVolumesNow() {

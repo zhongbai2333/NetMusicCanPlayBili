@@ -29,7 +29,7 @@ public abstract class BlackGoldScreen extends Screen {
 
     // ──── 布局常量 ────
     protected static final int BOX_W = 320;
-    protected static final int BOX_H = 285;
+    protected static final int BOX_H = 310;
     protected static final int HEADER_H = 28;
     protected static final int CLOSE_SIZE = 14;
     protected static final int PAD = 16;
@@ -45,6 +45,10 @@ public abstract class BlackGoldScreen extends Screen {
         this.blockPos = blockPos.immutable();
     }
 
+    /** 子类可覆写以调整面板高度 */
+    protected int boxH() {
+        return BOX_H;
+    }
     // ──── 子类实现 ────
 
     protected abstract void buildWidgets();
@@ -112,14 +116,15 @@ public abstract class BlackGoldScreen extends Screen {
     }
 
     protected int boxY() {
-        return (height - BOX_H) / 2;
+        return (height - boxH()) / 2;
     }
 
     // ──── 绘制 ────
 
     protected void drawBox(GuiGraphicsExtractor g, int x, int y) {
-        g.fillGradient(x - 2, y - 2, x + BOX_W + 2, y + BOX_H + 2, GOLD_GLOW, GOLD_GLOW);
-        g.fillGradient(x, y, x + BOX_W, y + BOX_H, BG_BLACK, BG_BLACK);
+        int h = boxH();
+        g.fillGradient(x - 2, y - 2, x + BOX_W + 2, y + h + 2, GOLD_GLOW, GOLD_GLOW);
+        g.fillGradient(x, y, x + BOX_W, y + h, BG_BLACK, BG_BLACK);
     }
 
     /** 绘制标题栏和关闭按钮 */

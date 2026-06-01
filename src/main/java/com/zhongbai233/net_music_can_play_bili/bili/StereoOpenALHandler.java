@@ -46,6 +46,9 @@ public class StereoOpenALHandler {
     private volatile float lastAudioLevel;
     private volatile long lastAudioLevelNanos;
 
+    /** 音响转发目标列表 */
+    private final java.util.concurrent.CopyOnWriteArrayList<SpeakerAudioRelay> relays = new java.util.concurrent.CopyOnWriteArrayList<>();
+
     public StereoOpenALHandler() {
         worker = new Thread(this::workerLoop, "StereoOpenALWorker");
         worker.setDaemon(true);
@@ -161,6 +164,13 @@ public class StereoOpenALHandler {
             updateAudioLevel(block);
             spatialAudio.updateBedBlock(block);
             fed++;
+            // 拆分声道转发：每个 relay 只拿到它选的声道数据
+            for (SpeakerAudioRelay relay : relays) {
+                int ch = relay.getChannelIndex();
+                if (ch >= 0 && ch < block.length) {
+                    relay.feedChannel(block[ch]);
+                }
+            }
         }
         totalSamplesFed += (long) fed * SAMPLES_PER_BLOCK;
         frameBudget = Math.max(0.0, frameBudget - fed);
@@ -184,11 +194,26 @@ public class StereoOpenALHandler {
                 float gain = gainForDistance(distance);
                 lastDistance = distance;
                 lastGain = gain;
-                float gv = gain * userVolume * gameVolume();
+                float gv = allRelaysStarted() ? 0f : gain * userVolume * gameVolume();
                 spatialAudio.setBedGain(0, gv);
                 spatialAudio.setBedGain(1, gv);
             }
         }
+        // 驱动所有音响 relay（relay 使用自身存储的音响位置，不传 machinePos）
+        for (SpeakerAudioRelay relay : relays) {
+            relay.tick(listenerPos);
+        }
+    }
+
+    /** 所有音响 relay 是否都已度过初始静音期，正在输出真实 PCM */
+    private boolean allRelaysStarted() {
+        if (relays.isEmpty())
+            return false;
+        for (SpeakerAudioRelay relay : relays) {
+            if (!relay.isStarted())
+                return false;
+        }
+        return true;
     }
 
     private static float gameVolume() {
@@ -205,6 +230,18 @@ public class StereoOpenALHandler {
 
     public float userVolume() {
         return userVolume;
+    }
+
+    public void addRelay(SpeakerAudioRelay relay) {
+        if (relay != null && !relays.contains(relay)) {
+            relay.setSampleRate(sampleRate); // 注入正确采样率（如 44100Hz AAC/FLAC），避免 relay 用错误速率播放
+            relays.add(relay);
+        }
+    }
+
+    public void removeRelay(SpeakerAudioRelay relay) {
+        if (relay != null)
+            relays.remove(relay);
     }
 
     public float audioLevel() {
@@ -264,7 +301,7 @@ public class StereoOpenALHandler {
         pendingSamples = 0;
         worker.interrupt();
         try {
-            worker.join(500);
+            worker.join(2000);
         } catch (InterruptedException ignored) {
             Thread.currentThread().interrupt();
         }

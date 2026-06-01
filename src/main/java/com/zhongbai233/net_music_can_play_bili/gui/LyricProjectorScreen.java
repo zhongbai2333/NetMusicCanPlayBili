@@ -13,9 +13,15 @@ import java.util.List;
 
 public class LyricProjectorScreen extends BlackGoldScreen {
     private CycleWidget modeBtn;
+    private CycleWidget aiBtn;
 
     public LyricProjectorScreen(BlockPos pos) {
         super(Component.literal("\u266b \u6b4c\u8bcd\u6295\u5f71\u4eea"), pos);
+    }
+
+    @Override
+    protected int boxH() {
+        return 310;
     }
 
     @Override
@@ -78,6 +84,16 @@ public class LyricProjectorScreen extends BlackGoldScreen {
                     if (be != null)
                         be.setProjectionMode(v);
                 });
+        rowY += 30;
+
+        boolean allowAi = be != null && be.getAllowAi();
+        aiBtn = addCycleWidget(sliderX, rowY,
+                List.of("AI\u5b57\u5e55\uff1a\u5173", "AI\u5b57\u5e55\uff1a\u5f00"),
+                allowAi ? 1 : 0,
+                v -> {
+                    if (be != null)
+                        be.setAllowAi(v == 1);
+                });
     }
 
     private void addResetButton(int x, int y, float defaultValue, ConfigSlider slider) {
@@ -98,7 +114,8 @@ public class LyricProjectorScreen extends BlackGoldScreen {
             minecraft.getConnection().send(new LyricProjectorConfigPacket(
                     blockPos,
                     be.getProjectionYaw(), be.getProjectionPitch(), be.getProjectionScale(),
-                    be.getProjectionHeight(), be.getProjectionDistance(), be.getProjectionMode()));
+                    be.getProjectionHeight(), be.getProjectionDistance(), be.getProjectionMode(),
+                    be.getAllowAi()));
         }
     }
 
@@ -107,6 +124,7 @@ public class LyricProjectorScreen extends BlackGoldScreen {
         drawLinkInfo(g, bx, by);
         drawLabels(g, bx, by);
         drawModeOverlay(g);
+        drawAiOverlay(g);
     }
 
     private LyricProjectorBlockEntity getProjectorBE() {
@@ -143,7 +161,7 @@ public class LyricProjectorScreen extends BlackGoldScreen {
         int lx = bx + PAD, ry = by + HEADER_H + 58;
         String[] labels = { "\u6c34\u5e73\u671d\u5411", "\u4fef\u4ef0\u89d2\u5ea6",
                 "\u6295\u5f71\u9ad8\u5ea6", "\u6295\u5f71\u8ddd\u79bb",
-                "\u6587\u5b57\u5927\u5c0f", "\u8bed\u8a00/\u6a21\u5f0f" };
+                "\u6587\u5b57\u5927\u5c0f", "\u8bed\u8a00/\u6a21\u5f0f", "AI\u5b57\u5e55" };
         for (String lb : labels) {
             g.centeredText(font, Component.literal(lb), lx + 27, ry, TEXT_SECONDARY);
             ry += 26;
@@ -156,6 +174,15 @@ public class LyricProjectorScreen extends BlackGoldScreen {
         int x = modeBtn.getX(), y = modeBtn.getY(), w = modeBtn.getWidth(), h = modeBtn.getHeight();
         g.fillGradient(x, y, x + w, y + h, GOLD & 0x30FFFFFF, GOLD & 0x18FFFFFF);
         g.centeredText(font, Component.literal("\u25c8 " + modeBtn.currentOption()),
+                x + w / 2, y + 5, GOLD);
+    }
+
+    private void drawAiOverlay(GuiGraphicsExtractor g) {
+        if (aiBtn == null)
+            return;
+        int x = aiBtn.getX(), y = aiBtn.getY(), w = aiBtn.getWidth(), h = aiBtn.getHeight();
+        g.fillGradient(x, y, x + w, y + h, GOLD & 0x30FFFFFF, GOLD & 0x18FFFFFF);
+        g.centeredText(font, Component.literal("\u25c8 " + aiBtn.currentOption()),
                 x + w / 2, y + 5, GOLD);
     }
 }

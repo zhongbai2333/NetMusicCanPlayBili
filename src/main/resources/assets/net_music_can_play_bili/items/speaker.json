@@ -1,0 +1,6 @@
+{
+  "model": {
+    "type": "minecraft:model",
+    "model": "net_music_can_play_bili:block/speaker"
+  }
+}

@@ -24,6 +24,7 @@ public class LyricProjectorBlockEntity extends BlockEntity {
     private static final String PROJ_HEIGHT = "ProjHeight";
     private static final String PROJ_DISTANCE = "ProjDistance";
     private static final String PROJ_MODE = "ProjMode";
+    private static final String ALLOW_AI = "AllowAi";
 
     @Nullable
     private BlockPos linkedTurntablePos;
@@ -40,8 +41,13 @@ public class LyricProjectorBlockEntity extends BlockEntity {
     private float projectionDistance = 0.0F;
     /** 字幕显示模式：0=静态, 1=轮换(主字幕), 2=轮换(副字幕) */
     private int projectionMode;
+    /** 是否允许显示 AI 字幕 */
+    private boolean allowAi;
 
     private transient LyricRecord cachedLyricRecord;
+    private transient LyricRecord cachedAiLyricRecord;
+    private transient String cachedAiRawUrl;
+    private transient long cachedAiBaseTick = -1;
 
     public LyricProjectorBlockEntity(BlockPos pos, BlockState blockState) {
         super(ModBlockEntities.LYRIC_PROJECTOR.get(), pos, blockState);
@@ -80,6 +86,29 @@ public class LyricProjectorBlockEntity extends BlockEntity {
     @Nullable
     public LyricRecord getCachedLyricRecord() {
         return cachedLyricRecord;
+    }
+
+    @Nullable
+    public LyricRecord getCachedAiLyricRecord() {
+        return cachedAiLyricRecord;
+    }
+
+    public void setCachedAiLyricRecord(@Nullable LyricRecord record, String rawUrl) {
+        this.cachedAiLyricRecord = record;
+        this.cachedAiRawUrl = rawUrl;
+        this.cachedAiBaseTick = -1;
+    }
+
+    public String getCachedAiRawUrl() {
+        return cachedAiRawUrl;
+    }
+
+    public long getCachedAiBaseTick() {
+        return cachedAiBaseTick;
+    }
+
+    public void setCachedAiBaseTick(long tick) {
+        this.cachedAiBaseTick = tick;
     }
 
     public float getProjectionYaw() {
@@ -136,10 +165,27 @@ public class LyricProjectorBlockEntity extends BlockEntity {
         setChanged();
     }
 
+    public boolean getAllowAi() {
+        return allowAi;
+    }
+
+    public void setAllowAi(boolean v) {
+        this.allowAi = v;
+        setChanged();
+    }
+
     public void markDirtyAndSync() {
         setChanged();
         if (level != null && !level.isClientSide()) {
             level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+        }
+    }
+
+    @Override
+    public void setRemoved() {
+        super.setRemoved();
+        if (level != null && level.isClientSide()) {
+            com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry.unlink(worldPosition);
         }
     }
 
@@ -154,6 +200,7 @@ public class LyricProjectorBlockEntity extends BlockEntity {
         output.putFloat(PROJ_HEIGHT, projectionHeight);
         output.putFloat(PROJ_DISTANCE, projectionDistance);
         output.putInt(PROJ_MODE, projectionMode);
+        output.putBoolean(ALLOW_AI, allowAi);
     }
 
     @Override
@@ -167,6 +214,7 @@ public class LyricProjectorBlockEntity extends BlockEntity {
         this.projectionHeight = input.getFloatOr(PROJ_HEIGHT, 1.2F);
         this.projectionDistance = input.getFloatOr(PROJ_DISTANCE, 0.0F);
         this.projectionMode = input.getIntOr(PROJ_MODE, 0);
+        this.allowAi = input.getBooleanOr(ALLOW_AI, false);
     }
 
     @Override

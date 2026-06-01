@@ -11,5 +11,12 @@
   "message.net_music_can_play_bili.lyric_projector.unlinked": "已断开连接",
   "message.net_music_can_play_bili.lyric_projector.no_turntable": "未在附近找到唱片机",
   "message.net_music_can_play_bili.lyric_projector.item_linked": "已存储连接目标: (%d, %d, %d)，放置投影仪即可远程连接",
-  "item.net_music_can_play_bili.lyric_projector.linked": "歌词投影仪 (已绑定 %d,%d,%d)"
+  "item.net_music_can_play_bili.lyric_projector.linked": "歌词投影仪 (已绑定 %d,%d,%d)",
+  "block.net_music_can_play_bili.speaker": "音响",
+  "item.net_music_can_play_bili.speaker": "音响",
+  "gui.net_music_can_play_bili.speaker": "音响配置",
+  "message.net_music_can_play_bili.speaker.linked": "已连接唱片机",
+  "message.net_music_can_play_bili.speaker.unlinked": "已断开连接",
+  "message.net_music_can_play_bili.speaker.item_linked": "已存储连接目标: (%d, %d, %d)，放置音响即可远程连接",
+  "item.net_music_can_play_bili.speaker.linked": "音响 (已绑定 %d,%d,%d)"
 }

@@ -1,0 +1,36 @@
+{
+  "variants": {
+    "activated=false,facing=north": {
+      "model": "net_music_can_play_bili:block/speaker",
+      "y": 180
+    },
+    "activated=false,facing=east": {
+      "model": "net_music_can_play_bili:block/speaker",
+      "y": 270
+    },
+    "activated=false,facing=south": {
+      "model": "net_music_can_play_bili:block/speaker",
+      "y": 0
+    },
+    "activated=false,facing=west": {
+      "model": "net_music_can_play_bili:block/speaker",
+      "y": 90
+    },
+    "activated=true,facing=north": {
+      "model": "net_music_can_play_bili:block/speaker",
+      "y": 180
+    },
+    "activated=true,facing=east": {
+      "model": "net_music_can_play_bili:block/speaker",
+      "y": 270
+    },
+    "activated=true,facing=south": {
+      "model": "net_music_can_play_bili:block/speaker",
+      "y": 0
+    },
+    "activated=true,facing=west": {
+      "model": "net_music_can_play_bili:block/speaker",
+      "y": 90
+    }
+  }
+}

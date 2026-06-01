@@ -70,6 +70,12 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         super(ModBlockEntities.MODERN_TURNTABLE.get(), pos, blockState);
     }
 
+    @Override
+    public void setRemoved() {
+        super.setRemoved();
+        stopPlayback();
+    }
+
     private final ResourceHandler<ItemResource> itemHandler = new ResourceHandler<>() {
         @Override
         public int size() {
@@ -219,6 +225,10 @@ public class ModernTurntableBlockEntity extends BlockEntity {
 
     public String getSongName() {
         return songName;
+    }
+
+    public String getRawUrl() {
+        return rawUrl;
     }
 
     public int getDurationSeconds() {
@@ -442,9 +452,12 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     }
 
     private void syncNearbyPlayers(ServerLevel serverLevel, int remainingSeconds) {
-        if (playUrl.isBlank() || remainingSeconds <= 0) {
+        if (playUrl.isBlank()) {
             return;
         }
+        // 剩余秒数 <= 0 时不跳过同步：仍需要通知客户端歌曲已结束并停止播放
+        // 传入 Math.max(1, remainingSeconds) 保证客户端 MusicToClientMessage 收到
+        // 有效的 timeSecond 值，触发 ModernTurntableSound 的结束逻辑
 
         AABB range = new AABB(worldPosition).inflate(SYNC_RANGE);
         Set<UUID> nearby = new HashSet<>();
@@ -460,11 +473,11 @@ public class ModernTurntableBlockEntity extends BlockEntity {
                         worldPosition,
                         syncedPlayUrl,
                         rawUrl.isBlank() ? playUrl : rawUrl,
-                        remainingSeconds,
+                        Math.max(1, remainingSeconds),
                         songName);
                 NetworkHandler.sendToClientPlayer(message, player);
                 LOGGER.debug("现代化唱片机同步播放给玩家: {} -> {} (剩余 {}s)",
-                        songName, player.getScoreboardName(), remainingSeconds);
+                        songName, player.getScoreboardName(), Math.max(1, remainingSeconds));
             }
         }
         syncedPlayers.retainAll(nearby);
@@ -486,7 +499,8 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         if (!playing || startedGameTime <= 0L) {
             return 0L;
         }
-        return Math.max(0L, (gameTime - startedGameTime) * 50L);
+        // 与 getPlaybackElapsedMillis 对齐：超过歌曲总时长的已播放时间视为已结束
+        return Math.min(durationSeconds * 1000L, Math.max(0L, (gameTime - startedGameTime) * 50L));
     }
 
     private int elapsedSeconds(long gameTime) {
@@ -494,7 +508,8 @@ public class ModernTurntableBlockEntity extends BlockEntity {
             return 0;
         }
         long elapsed = Math.max(0L, (gameTime - startedGameTime) / 20L);
-        return (int) Math.min(Integer.MAX_VALUE, elapsed);
+        // 与 getPlaybackElapsedMillis 对齐：已播放秒数不应超过歌曲总时长
+        return Math.min(durationSeconds, (int) Math.min(Integer.MAX_VALUE, elapsed));
     }
 
     @Override

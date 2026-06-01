@@ -15,6 +15,10 @@ public final class BiliSubtitleLyricService {
     }
 
     public static LyricRecord tryBuildLyricRecord(String rawInput, String songName) {
+        return tryBuildLyricRecord(rawInput, songName, false);
+    }
+
+    public static LyricRecord tryBuildLyricRecord(String rawInput, String songName, boolean allowAi) {
         BiliApiClient.VideoSelection selection = BiliApiClient.parseStoredVideoSelection(rawInput);
         if (selection == null) {
             return null;
@@ -24,7 +28,7 @@ public final class BiliSubtitleLyricService {
             BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(selection.videoId(), selection.page());
 
             // 尝试获取 CC 字幕
-            String lyricJson = BiliApiClient.getBilingualSubtitleAsNetEaseLyric(info);
+            String lyricJson = BiliApiClient.getBilingualSubtitleAsNetEaseLyric(info, allowAi);
             if (lyricJson != null && !lyricJson.isBlank()) {
                 LyricRecord record = LyricParser.parseLyric(lyricJson, songName);
                 if (record != null) {

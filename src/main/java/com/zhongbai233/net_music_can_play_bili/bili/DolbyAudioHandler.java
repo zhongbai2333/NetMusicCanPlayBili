@@ -47,8 +47,13 @@ public class DolbyAudioHandler {
     private volatile float[] lastJocObjectRms = new float[0];
     private volatile float[] lastJocObjectPeak = new float[0];
     private volatile float userVolume = 1.0f;
+    private volatile int channelMask; // 0 = full mix, else bitmask of enabled channels
+    private volatile boolean forceStaticJoc;
     private volatile float lastAudioLevel;
     private volatile long lastAudioLevelNanos;
+
+    /** 音响转发目标列表（线程安全） */
+    private final java.util.concurrent.CopyOnWriteArrayList<SpeakerAudioRelay> relays = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     private int frameCount;
     private int nullPcmCount;
@@ -118,6 +123,10 @@ public class DolbyAudioHandler {
             spatialAudio.pumpQueuedAudio();
             updateSpatialState(machinePos, listenerPos);
         }
+        // 驱动所有音响 relay（relay 使用自身存储的音响位置，不传 machinePos）
+        for (SpeakerAudioRelay relay : relays) {
+            relay.tick(listenerPos);
+        }
     }
 
     public int queuedFrames() {
@@ -175,6 +184,31 @@ public class DolbyAudioHandler {
         return userVolume;
     }
 
+    /** 设置声道掩码（7.1.4 位掩码），0=全声道混音，其他值按位启用对应声道 */
+    public void setChannelMask(int mask) {
+        this.channelMask = mask;
+    }
+
+    /** 设置是否强制 JOC 对象声源固定在 machinePos（音响模式） */
+    public void setForceStaticJoc(boolean v) {
+        this.forceStaticJoc = v;
+    }
+
+    /** 添加音响转发目标 */
+    public void addRelay(SpeakerAudioRelay relay) {
+        if (relay != null && !relays.contains(relay)) {
+            relay.setSampleRate(48000); // EC-3 Dolby 固定 48kHz，显式设置以防 relay 默认值被意外覆盖
+            relays.add(relay);
+        }
+    }
+
+    /** 移除音响转发目标 */
+    public void removeRelay(SpeakerAudioRelay relay) {
+        if (relay != null) {
+            relays.remove(relay);
+        }
+    }
+
     public float audioLevel() {
         long ageNanos = System.nanoTime() - lastAudioLevelNanos;
         if (ageNanos <= 0L) {
@@ -194,7 +228,7 @@ public class DolbyAudioHandler {
         frameBudget = 0.0;
         worker.interrupt();
         try {
-            worker.join(500);
+            worker.join(2000);
         } catch (InterruptedException ignored) {
             Thread.currentThread().interrupt();
         }
@@ -393,6 +427,13 @@ public class DolbyAudioHandler {
                 sa.updateObjectFrameBlock(pf.objPcmCh, off);
             }
         }
+        // 拆分声道转发：每个 relay 只拿到它选的声道数据
+        for (SpeakerAudioRelay relay : relays) {
+            int ch = relay.getChannelIndex();
+            if (ch >= 0 && ch < pc.length) {
+                relay.feedChannel(pc[ch]);
+            }
+        }
     }
 
     private void updateFrameBudget() {
@@ -450,11 +491,42 @@ public class DolbyAudioHandler {
         }
         sa.updatePositions(bedPositions, objectPositions, lp, forward);
         float d = distance(lp, mp), g = gainForDistance(d);
-        float gv = g * userVolume * gameVolume();
+        float gv = allRelaysStarted() ? 0f : g * userVolume * gameVolume();
         for (int ch = 0; ch < numBedChannels; ch++)
-            sa.setBedGain(ch, gv);
+            sa.setBedGain(ch, channelGain(ch, gv));
         for (int o = 0; o < numObjects; o++)
-            sa.setObjectGain(o, gv);
+            sa.setObjectGain(o, channelGain(o + numBedChannels, gv));
+    }
+
+    /** 根据声道掩码计算单个声道增益：全声道 = gv，被静音 = 0 */
+    private float channelGain(int channelIndex, float baseGain) {
+        if (channelMask == 0)
+            return baseGain; // full mix
+        // 7.1.4 声道索引 → 位映射
+        int bit = channelBitForIndex(channelIndex);
+        if (bit < 0)
+            return baseGain; // unknown channel, pass through
+        return (channelMask & bit) != 0 ? baseGain : 0f;
+    }
+
+    /** 将声道索引映射到 7.1.4 位掩码位，-1 表示无映射 */
+    private static int channelBitForIndex(int index) {
+        // 7.1.4 声道顺序: L, R, C, LFE, Ls, Rs, Lrs, Rrs, Ltf, Rtf, Ltr, Rtr
+        return switch (index) {
+            case 0 -> 0x001; // L
+            case 1 -> 0x002; // R
+            case 2 -> 0x004; // C
+            case 3 -> 0x008; // LFE
+            case 4 -> 0x010; // Ls
+            case 5 -> 0x020; // Rs
+            case 6 -> 0x040; // Lrs
+            case 7 -> 0x080; // Rrs
+            case 8 -> 0x100; // Ltf
+            case 9 -> 0x200; // Rtf
+            case 10 -> 0x400; // Ltr
+            case 11 -> 0x800; // Rtr
+            default -> -1; // JOC objects or unknown
+        };
     }
 
     private static float gameVolume() {
@@ -468,6 +540,15 @@ public class DolbyAudioHandler {
     private void updateObjectOffsets(Eac3AtmosParser.OamdConfig oamd) {
         if (objectPositions == null || numObjects == 0)
             return;
+        // 音响强制静态模式：所有 JOC 对象固定在原点（machinePos）
+        if (forceStaticJoc) {
+            for (int o = 0; o < numObjects; o++) {
+                objectPositions[o][0] = 0;
+                objectPositions[o][1] = 0;
+                objectPositions[o][2] = 0;
+            }
+            return;
+        }
         if (oamd == null || oamd.objectElement == null || oamd.objectElement.firstPositions == null) {
             for (int o = 0; o < numObjects; o++) {
                 objectPositions[o][0] = 0;
@@ -640,6 +721,17 @@ public class DolbyAudioHandler {
 
     private static float distance(float[] a, float[] b) {
         return AudioUtils.distance(a, b);
+    }
+
+    /** 所有音响 relay 是否都已度过初始静音期，正在输出真实 PCM */
+    private boolean allRelaysStarted() {
+        if (relays.isEmpty())
+            return false;
+        for (SpeakerAudioRelay relay : relays) {
+            if (!relay.isStarted())
+                return false;
+        }
+        return true;
     }
 
     private float[] forwardToMachine(float[] mp, float[] lp) {

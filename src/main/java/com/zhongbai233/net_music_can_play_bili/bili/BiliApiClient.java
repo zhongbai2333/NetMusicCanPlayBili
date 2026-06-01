@@ -340,6 +340,10 @@ public final class BiliApiClient {
 
     // 获取字幕并转为 NetEase 歌词 JSON 格式
     public static String getBilingualSubtitleAsNetEaseLyric(VideoInfo info) throws Exception {
+        return getBilingualSubtitleAsNetEaseLyric(info, false);
+    }
+
+    public static String getBilingualSubtitleAsNetEaseLyric(VideoInfo info, boolean allowAi) throws Exception {
         List<SubtitleInfo> all = getAllSubtitles(info);
         if (all.isEmpty()) {
             return null;
@@ -347,7 +351,7 @@ public final class BiliApiClient {
 
         List<SubtitleInfo> candidates = new ArrayList<>();
         for (SubtitleInfo s : all) {
-            if (!s.normalizedUrl().isBlank() && !s.isAiGenerated()) {
+            if (!s.normalizedUrl().isBlank() && (allowAi || !s.isAiGenerated())) {
                 candidates.add(s);
             }
         }

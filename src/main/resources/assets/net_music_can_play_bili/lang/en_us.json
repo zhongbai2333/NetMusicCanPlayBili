@@ -10,5 +10,13 @@
   "message.net_music_can_play_bili.modern_turntable.projected": "Connected to Projector",
   "message.net_music_can_play_bili.lyric_projector.linked": "Linked to turntable",
   "message.net_music_can_play_bili.lyric_projector.unlinked": "Unlinked",
-  "message.net_music_can_play_bili.lyric_projector.no_turntable": "No turntable found nearby"
+  "message.net_music_can_play_bili.lyric_projector.no_turntable": "No turntable found nearby",
+  "item.net_music_can_play_bili.lyric_projector.linked": "Lyric Projector (bound to %d,%d,%d)",
+  "block.net_music_can_play_bili.speaker": "Speaker",
+  "item.net_music_can_play_bili.speaker": "Speaker",
+  "gui.net_music_can_play_bili.speaker": "Speaker Config",
+  "message.net_music_can_play_bili.speaker.linked": "Linked to turntable",
+  "message.net_music_can_play_bili.speaker.unlinked": "Unlinked",
+  "message.net_music_can_play_bili.speaker.item_linked": "Stored link to (%d, %d, %d), place speaker to connect",
+  "item.net_music_can_play_bili.speaker.linked": "Speaker (bound to %d,%d,%d)"
 }

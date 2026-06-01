@@ -7,6 +7,9 @@ import com.mojang.math.Axis;
 import com.zhongbai233.net_music_can_play_bili.block.LyricProjectorBlock;
 import com.zhongbai233.net_music_can_play_bili.blockentity.LyricProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliSubtitleLyricService;
+import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
 import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
 import it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap;
 import net.minecraft.client.Minecraft;
@@ -74,6 +77,7 @@ public class LyricProjectorRenderer
         state.projectionHeight = projector.getProjectionHeight();
         state.projectionDistance = projector.getProjectionDistance();
         state.projectionMode = projector.getProjectionMode();
+        state.allowAi = projector.getAllowAi();
 
         if (state.linkedPos == null || projector.getLevel() == null) {
             syncActivatedState(projector, false);
@@ -102,6 +106,47 @@ public class LyricProjectorRenderer
             scrollStates.remove(projector.getBlockPos());
             syncActivatedState(projector, false);
             return;
+        }
+
+        // 动态 AI 字幕刷新：当 allowAi 开启但尚未缓存 AI 歌词时，异步获取
+        if (state.allowAi) {
+            String rawUrl = turntable.getRawUrl();
+            if (rawUrl != null && !rawUrl.isBlank() && BiliApiClient.isStoredVideoSelection(rawUrl)) {
+                String cachedUrl = projector.getCachedAiRawUrl();
+                LyricRecord aiCached = projector.getCachedAiLyricRecord();
+                if (aiCached != null && rawUrl.equals(cachedUrl)) {
+                    // 使用 OpenAL 播放位置同步 AI 歌词进度（与唱片机自身字幕逻辑一致）
+                    long dolbyTicks = DolbyAudioRegistry.getStereoPositionTicks(state.linkedPos);
+                    if (dolbyTicks >= 0L) {
+                        long baseTick = projector.getCachedAiBaseTick();
+                        if (baseTick < 0L) {
+                            // 首次使用：用当前经过时间校准基准偏移
+                            baseTick = turntable.getPlaybackElapsedMillis(level.getGameTime()) / 50L - dolbyTicks;
+                            projector.setCachedAiBaseTick(Math.max(0L, baseTick));
+                        }
+                        int currentTick = (int) Math.min(Integer.MAX_VALUE,
+                                Math.max(0L, projector.getCachedAiBaseTick() + dolbyTicks));
+                        aiCached.updateCurrentLine(currentTick);
+                    }
+                    lyricRecord = aiCached;
+                } else if (cachedUrl == null || !cachedUrl.equals(rawUrl)) {
+                    // 新歌曲或无缓存，标记 URL 并触发异步获取（标记即防重）
+                    projector.setCachedAiLyricRecord(null, rawUrl);
+                    String songName = turntable.getSongName();
+                    java.util.concurrent.CompletableFuture.runAsync(() -> {
+                        try {
+                            LyricRecord aiRecord = BiliSubtitleLyricService.tryBuildLyricRecord(rawUrl, songName, true);
+                            if (aiRecord != null) {
+                                Minecraft.getInstance().execute(() -> {
+                                    projector.setCachedAiLyricRecord(aiRecord, rawUrl);
+                                });
+                            }
+                        } catch (Exception ignored) {
+                        }
+                    });
+                }
+                // else: pending（cachedUrl 匹配但 record 为 null），等待异步结果，先用现有歌词
+            }
         }
 
         String current = currentLine(lyricRecord.getLyrics());
@@ -367,6 +412,7 @@ public class LyricProjectorRenderer
         public float projectionHeight = 1.2F;
         public float projectionDistance = 0.0F;
         public int projectionMode;
+        public boolean allowAi;
         public Int2ObjectSortedMap<String> lyrics;
         public Int2ObjectSortedMap<String> transLyrics;
         public List<String> scrollFutureLines;

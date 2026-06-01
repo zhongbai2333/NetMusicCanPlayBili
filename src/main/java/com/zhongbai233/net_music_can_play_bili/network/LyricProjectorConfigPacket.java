@@ -14,7 +14,7 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 public record LyricProjectorConfigPacket(BlockPos pos, float yaw, float pitch, float scale,
-        float height, float distance, int mode) implements CustomPacketPayload {
+        float height, float distance, int mode, boolean allowAi) implements CustomPacketPayload {
 
     public static final Type<LyricProjectorConfigPacket> TYPE = new Type<>(
             Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID, "lyric_projector_config"));
@@ -28,9 +28,11 @@ public record LyricProjectorConfigPacket(BlockPos pos, float yaw, float pitch, f
                     ByteBufCodecs.FLOAT, p -> p.height(),
                     ByteBufCodecs.FLOAT, p -> p.distance(),
                     ByteBufCodecs.INT, p -> p.mode(),
+                    ByteBufCodecs.BOOL, p -> p.allowAi(),
                     (BlockPos pos, Float yaw, Float pitch, Float scale,
-                            Float height, Float distance, Integer mode) -> new LyricProjectorConfigPacket(pos, yaw,
-                                    pitch, scale, height, distance, mode));
+                            Float height, Float distance, Integer mode,
+                            Boolean allowAi) -> new LyricProjectorConfigPacket(pos, yaw,
+                                    pitch, scale, height, distance, mode, allowAi));
 
     @Override
     public Type<? extends CustomPacketPayload> type() {
@@ -53,6 +55,7 @@ public record LyricProjectorConfigPacket(BlockPos pos, float yaw, float pitch, f
         be.setProjectionHeight(payload.height());
         be.setProjectionDistance(payload.distance());
         be.setProjectionMode(payload.mode());
+        be.setAllowAi(payload.allowAi());
         be.markDirtyAndSync();
     }
 }
