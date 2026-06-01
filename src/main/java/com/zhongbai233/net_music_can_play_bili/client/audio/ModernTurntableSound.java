@@ -100,9 +100,12 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
         }
 
         if (lyricRecord != null) {
-            lyricRecord.updateCurrentLine(lyricTick());
-            if (turntable != null && turntable.isPlaying()) {
-                turntable.setClientLyricRecord(lyricRecord, sessionId);
+            int lyricPos = effectiveLyricTick();
+            if (lyricPos >= 0) {
+                lyricRecord.updateCurrentLine(lyricPos);
+                if (turntable != null && turntable.isPlaying()) {
+                    turntable.setClientLyricRecord(lyricRecord, sessionId);
+                }
             }
         }
 
@@ -136,9 +139,19 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
         }, Util.backgroundExecutor());
     }
 
-    private int lyricTick() {
-        long value = (long) lyricStartTick + tick;
-        return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, value));
+    /**
+     * 返回有效的歌词 tick 位置。
+     * 现代唱片机走自己的 OpenAL 管线（StereoOpenALHandler），从 DolbyAudioRegistry 获取实际播放位置。
+     * 在 OpenAL 预缓冲完成并开始播放之前返回 -1，歌词不推进。
+     */
+    private int effectiveLyricTick() {
+        long posTicks = com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry.getStereoPositionTicks(pos);
+        if (posTicks >= 0L) {
+            long value = (long) lyricStartTick + posTicks;
+            return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, value));
+        }
+        // StereoOpenALHandler 尚未开始播放（预缓冲未完成或非 OpenAL 管线），不推进歌词
+        return -1;
     }
 
     private void finishSession() {

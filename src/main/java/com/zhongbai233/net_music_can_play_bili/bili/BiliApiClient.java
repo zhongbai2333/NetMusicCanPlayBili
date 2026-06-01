@@ -543,18 +543,23 @@ public final class BiliApiClient {
         return buildNetEaseLyricJson(zhLrc.toString(), transLrc);
     }
 
-    // 构建 NetEase 歌词 JSON。
+    // 构建 NetEase 歌词 JSON
     private static String buildNetEaseLyricJson(String zhLrc, String transLrc) {
-        // lrc 是副字幕！！！！
-        JsonObject lrc = new JsonObject();
-        lrc.addProperty("lyric", transLrc != null ? transLrc : "");
-
         JsonObject netEaseLyric = new JsonObject();
         netEaseLyric.addProperty("code", 200);
-        netEaseLyric.add("lrc", lrc);
 
-        // tlyric 是主字幕！！！！
-        if (zhLrc != null && !zhLrc.isBlank()) {
+        boolean hasTrans = transLrc != null && !transLrc.isBlank();
+
+        // lrc 必须有内容，有翻译时放翻译，否则放原文
+        String lrcContent = hasTrans ? transLrc : zhLrc;
+        if (lrcContent != null && !lrcContent.isBlank()) {
+            JsonObject lrc = new JsonObject();
+            lrc.addProperty("lyric", lrcContent);
+            netEaseLyric.add("lrc", lrc);
+        }
+
+        // tlyric 仅在有翻译时传递，放原文
+        if (hasTrans && zhLrc != null && !zhLrc.isBlank()) {
             JsonObject tlyric = new JsonObject();
             tlyric.addProperty("lyric", zhLrc);
             netEaseLyric.add("tlyric", tlyric);

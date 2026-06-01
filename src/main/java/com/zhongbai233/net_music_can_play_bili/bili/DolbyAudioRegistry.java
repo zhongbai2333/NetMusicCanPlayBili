@@ -185,6 +185,18 @@ public class DolbyAudioRegistry {
         return 0.0f;
     }
 
+    /** 获取指定位置立体声 OpenAL 管线的歌词播放位置（tick），未开始播放返回 -1 */
+    public static long getStereoPositionTicks(BlockPos pos) {
+        if (pos == null) {
+            return -1L;
+        }
+        StereoEntry entry = STEREO_HANDLERS.get(keyFor(pos));
+        if (entry == null) {
+            return -1L;
+        }
+        return entry.handler().getPositionTicks();
+    }
+
     public static List<String> describeActiveSources() {
         float[] listener = listenerPos;
         if (!isActive()) {

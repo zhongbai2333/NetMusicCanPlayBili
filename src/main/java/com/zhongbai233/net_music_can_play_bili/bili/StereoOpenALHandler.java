@@ -30,6 +30,7 @@ public class StereoOpenALHandler {
     private final Thread worker;
     private volatile boolean closed;
     private volatile boolean started;
+    private long totalSamplesFed;
     private long lastFrameFeedNanos;
     private double frameBudget;
 
@@ -161,6 +162,7 @@ public class StereoOpenALHandler {
             spatialAudio.updateBedBlock(block);
             fed++;
         }
+        totalSamplesFed += (long) fed * SAMPLES_PER_BLOCK;
         frameBudget = Math.max(0.0, frameBudget - fed);
 
         if (initialized && spatialAudio != null) {
@@ -272,6 +274,22 @@ public class StereoOpenALHandler {
         }
         initialized = false;
         LOGGER.debug("StereoOpenALHandler closed ({} blocks)", frameCount);
+    }
+
+    public boolean hasStarted() {
+        return started;
+    }
+
+    /**
+     * 当前已播放的歌词 tick 数。1 tick = 50ms 音频时间。
+     * 
+     * @return 播放位置（tick），未开始播放时返回 -1
+     */
+    public long getPositionTicks() {
+        if (!started) {
+            return -1L;
+        }
+        return totalSamplesFed * 20L / sampleRate;
     }
 
     public List<String> describeState() {
