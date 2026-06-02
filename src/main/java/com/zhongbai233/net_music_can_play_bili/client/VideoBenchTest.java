@@ -38,8 +38,6 @@ public final class VideoBenchTest {
      * 异步执行解码测试，不阻塞游戏主循环。
      */
     public static void tryRunOnce(String testVideoUrl) {
-        if (!hasRun.compareAndSet(false, true))
-            return;
         if (testVideoUrl == null || testVideoUrl.isBlank())
             return;
 
@@ -181,7 +179,7 @@ public final class VideoBenchTest {
         CompletableFuture.runAsync(() -> {
             try {
                 BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(vid);
-                String videoUrl = BiliApiClient.getBestVideoUrl(vid, info.cid(), 32); // quality 32 = 480P
+                String videoUrl = BiliApiClient.getBestVideoUrl(vid, info.cid(), 32);
                 LOGGER.info("获取视频流 URL: {}", videoUrl.substring(0, Math.min(80, videoUrl.length())));
                 tryRunOnce(videoUrl);
             } catch (Exception e) {
