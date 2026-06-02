@@ -5,23 +5,19 @@ import com.mojang.logging.LogUtils;
 import com.mojang.math.Axis;
 import com.zhongbai233.net_music_can_play_bili.bili.codec.FfmpegSubprocessDecoder;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.Font;
-import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.network.chat.Component;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.minecraft.world.phys.Vec3;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL20;
 import org.slf4j.Logger;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
-/**
- * 视频画面世界内渲染器 — 用彩色 █ 文字模拟，走 MC 文字渲染管线。
- */
 @EventBusSubscriber(value = Dist.CLIENT)
 public final class VideoScreenRenderer {
 
@@ -29,20 +25,28 @@ public final class VideoScreenRenderer {
     private static final int COLS = 40;
     private static final int ROWS = 22;
     private static final int FPS = 20;
-    private static final float TEXT_SCALE = 0.025F;
-    private static final float CHAR_STEP = 10.0F;
-    private static final AtomicReference<byte[]> currentFrame = new AtomicReference<>();
     private static final AtomicBoolean running = new AtomicBoolean(false);
+    private static volatile int videoTextureId = -1;
+    private static int emptyFrameCount = 0;
 
     private VideoScreenRenderer() {
     }
 
     public static void startPlayback(String videoUrl) {
-        if (!running.compareAndSet(false, true)) {
-            LOGGER.warn("视频已在播放中");
-            return;
-        }
+        if (!running.compareAndSet(false, true)) return;
         LOGGER.info("启动视频播放: {}×{} @ {}fps", COLS, ROWS, FPS);
+
+        Minecraft.getInstance().execute(() -> {
+            videoTextureId = GL11.glGenTextures();
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, videoTextureId);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+            ByteBuffer init = ByteBuffer.allocateDirect(COLS * ROWS * 4);
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA,
+                    COLS, ROWS, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, init);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+            LOGGER.info("GL 纹理已创建 id={}", videoTextureId);
+        });
 
         Thread player = new Thread(() -> {
             try (FfmpegSubprocessDecoder dec = new FfmpegSubprocessDecoder(
@@ -52,123 +56,88 @@ public final class VideoScreenRenderer {
 
                 while (running.get()) {
                     byte[] rgba = dec.getNextFrame();
-                    if (rgba == null) {
-                        LOGGER.info("视频流结束 ({} 帧)", dec.getTotalFrames());
-                        break;
-                    }
-                    currentFrame.set(rgba);
+                    if (rgba == null) { LOGGER.info("视频流结束 ({}帧)", dec.getTotalFrames()); break; }
 
-                    if (dec.getTotalFrames() == 1) {
-                        LOGGER.info("首帧已解码, 开始渲染");
-                    }
+                    final byte[] frame = rgba;
+                    Minecraft.getInstance().execute(() -> {
+                        if (videoTextureId < 0) return;
+                        ByteBuffer buf = ByteBuffer.allocateDirect(frame.length);
+                        buf.put(frame);
+                        buf.flip();
+                        GL11.glBindTexture(GL11.GL_TEXTURE_2D, videoTextureId);
+                        GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0,
+                                COLS, ROWS, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buf);
+                    });
+
+                    if (dec.getTotalFrames() == 1) LOGGER.info("首帧已解码 → 纹理上传中");
 
                     long now = System.currentTimeMillis();
                     long sleep = nextFrameTime - now;
-                    if (sleep > 0) {
-                        try { Thread.sleep(sleep); } catch (InterruptedException e) { break; }
-                    }
+                    if (sleep > 0) Thread.sleep(sleep);
                     nextFrameTime += frameInterval;
                     if (nextFrameTime < now) nextFrameTime = now + frameInterval;
                 }
-            } catch (IOException e) {
+            } catch (Exception e) {
                 LOGGER.error("视频播放异常", e);
             } finally {
                 running.set(false);
-                currentFrame.set(null);
+                Minecraft.getInstance().execute(() -> {
+                    if (videoTextureId >= 0) { GL11.glDeleteTextures(videoTextureId); videoTextureId = -1; }
+                });
             }
         }, "video-player");
         player.setDaemon(true);
         player.start();
     }
 
-    public static void stopPlayback() {
-        running.set(false);
-        currentFrame.set(null);
-    }
-
-    // ── 渲染 ──
-
-    private static int emptyFrameCount = 0;
-
     @SubscribeEvent
     public static void onRenderWorld(RenderLevelStageEvent.AfterTranslucentBlocks event) {
-        byte[] rgba = currentFrame.get();
-        if (rgba == null) {
-            if (emptyFrameCount++ == 0) {
-                LOGGER.info("渲染事件触发, 但 currentFrame 为空 (等待视频解码...)");
-            }
-            return;
-        }
-        emptyFrameCount = 0;
+        int texId = videoTextureId;
+        if (texId < 0) return;
 
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || mc.font == null) return;
+        if (mc.player == null) return;
 
-        LOGGER.info("渲染视频帧: {} bytes", rgba.length);
-
-        // 玩家前方 5 格
         Vec3 look = mc.player.getLookAngle();
-        Vec3 pos = mc.player.getEyePosition().add(look.scale(5.0)).add(0, 1.5, 0);
+        Vec3 pos = mc.player.getEyePosition().add(look.scale(5.0));
 
-        PoseStack poseStack = event.getPoseStack();
-        Font font = mc.font;
-        MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
+        PoseStack ps = event.getPoseStack();
 
-        poseStack.pushPose();
-        poseStack.translate(pos.x, pos.y, pos.z);
-        // 面朝相机
-        float yRot = mc.player.getYRot();
-        float xRot = mc.player.getXRot();
-        poseStack.mulPose(Axis.YP.rotationDegrees(-yRot));
-        poseStack.mulPose(Axis.XP.rotationDegrees(xRot));
-        poseStack.scale(-TEXT_SCALE, -TEXT_SCALE, -TEXT_SCALE);
+        int oldProg = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+        GL20.glUseProgram(0);
+        int oldTex = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        boolean blend = GL11.glIsEnabled(GL11.GL_BLEND);
+        boolean depth = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
 
-        float totalW = COLS * CHAR_STEP;
-        float totalH = ROWS * CHAR_STEP;
-        float startX = -totalW / 2.0F + CHAR_STEP / 2.0F;
-        float startY = totalH / 2.0F - CHAR_STEP / 2.0F;
-        int light = 0x00F000F0; // fullbright
+        GL11.glEnable(GL11.GL_TEXTURE_2D);
+        GL11.glEnable(GL11.GL_BLEND);
+        GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
+        GL11.glDisable(GL11.GL_DEPTH_TEST);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, texId);
 
-        for (int row = 0; row < ROWS; row++) {
-            int rowStart = row * COLS * 4;
-            float y = startY - row * CHAR_STEP;
+        ps.pushPose();
+        ps.translate(pos.x, pos.y, pos.z);
+        float yr = mc.player.getYRot();
+        float xr = mc.player.getXRot();
+        ps.mulPose(Axis.YP.rotationDegrees(-yr + 180));
+        ps.mulPose(Axis.XP.rotationDegrees(xr));
 
-            // Run-length 编码
-            int segStart = 0;
-            int prevColor = 0;
-            boolean hasPrev = false;
+        float s = 3.0f; // 6 blocks wide
+        GL11.glBegin(GL11.GL_QUADS);
+        GL11.glTexCoord2f(0, 1); GL11.glVertex3f(-s, -s, 0);
+        GL11.glTexCoord2f(0, 0); GL11.glVertex3f(-s,  s, 0);
+        GL11.glTexCoord2f(1, 0); GL11.glVertex3f( s,  s, 0);
+        GL11.glTexCoord2f(1, 1); GL11.glVertex3f( s, -s, 0);
+        GL11.glEnd();
 
-            for (int col = 0; col <= COLS; col++) {
-                int color = 0;
-                if (col < COLS) {
-                    int i = rowStart + col * 4;
-                    color = ((rgba[i] & 0xFF) << 16) | ((rgba[i + 1] & 0xFF) << 8) | (rgba[i + 2] & 0xFF);
-                }
+        ps.popPose();
 
-                if (hasPrev && (col == COLS || color != prevColor)) {
-                    // 渲染这一段
-                    int segLen = col - segStart;
-                    if (segLen > 0) {
-                        StringBuilder sb = new StringBuilder(segLen);
-                        for (int k = 0; k < segLen; k++) sb.append('\u2588');
-                        float x = startX + segStart * CHAR_STEP;
-
-                        font.drawInBatch(
-                                Component.literal(sb.toString()),
-                                x, y, prevColor | 0xFF000000,
-                                false, poseStack.last().pose(), bufferSource,
-                                Font.DisplayMode.NORMAL,
-                                0x00000000, light);
-                    }
-                    segStart = col;
-                }
-
-                prevColor = color;
-                hasPrev = true;
-            }
-        }
-
-        poseStack.popPose();
-        bufferSource.endBatch();
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, oldTex);
+        if (!blend) GL11.glDisable(GL11.GL_BLEND);
+        if (depth) GL11.glEnable(GL11.GL_DEPTH_TEST);
+        else GL11.glDisable(GL11.GL_DEPTH_TEST);
+        GL20.glUseProgram(oldProg);
     }
+
+    public static void stopPlayback() { running.set(false); }
 }
