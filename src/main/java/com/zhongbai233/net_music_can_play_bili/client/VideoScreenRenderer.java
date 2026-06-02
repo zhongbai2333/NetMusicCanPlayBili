@@ -110,17 +110,10 @@ public final class VideoScreenRenderer {
 
         int vw = 320, vh = 176, vx = (int)sw - vw - 10, vy = (int)sh - vh - 10;
         int loc = GL20.glGetUniformLocation(prog, "m");
-        FloatBuffer mat;
 
-        // 半透明背景
-        GL11.glDisable(GL11.GL_TEXTURE_2D);
-        GL20.glUniform4f(GL20.glGetUniformLocation(prog, "s"), 0, 0, 0, 0.5f); // unused but sets color via a different path... 
-
-        // 直接用 Blaze3D 的方式：用不同的 shader... 太复杂
-        // 简化：就用视频纹理画到整个 320x176 区域，让黑色像素自然出现
-        GL11.glEnable(GL11.GL_TEXTURE_2D);
+        // 视频纹理
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, texId);
-        mat = ortho(vx, vx+vw, vy+vh, vy);
+        FloatBuffer mat = ortho(vx, vx+vw, vy+vh, vy);
         GL20.glUniformMatrix4fv(loc, false, mat);
         GL11.glDrawArrays(GL11.GL_TRIANGLE_FAN, 0, 4);
 
