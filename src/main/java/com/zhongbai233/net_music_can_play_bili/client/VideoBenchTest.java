@@ -52,7 +52,7 @@ public final class VideoBenchTest {
         CompletableFuture.runAsync(() -> {
             long startMs = System.currentTimeMillis();
 
-            try (FfmpegSubprocessDecoder dec = FfmpegSubprocessDecoder.fromUrl(
+            try (FfmpegSubprocessDecoder dec = new FfmpegSubprocessDecoder(
                     testVideoUrl, TARGET_W, TARGET_H, TARGET_FPS)) {
 
                 int frameCount = 0;

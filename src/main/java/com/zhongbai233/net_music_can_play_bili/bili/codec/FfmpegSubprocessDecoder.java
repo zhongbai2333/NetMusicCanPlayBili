@@ -4,23 +4,33 @@ import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
 
 import java.io.*;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 通过系统 ffmpeg 子进程做视频解码的快速原型。
+ * 通过系统 ffmpeg 子进程做视频解码。
  *
- * 用法：喂 H.264 annex-b 流到 stdin，从 stdout 读 RGBA rawvideo。
- * 这是 bench 阶段的临时方案，生产环境应改用 JNI 直接调用 libavcodec。
+ * 先从 B站 CDN 下载视频片段到临时文件，再用 ffmpeg 解码为 RGBA rawvideo。
  */
 public class FfmpegSubprocessDecoder implements AutoCloseable {
 
     private static final Logger LOGGER = LogUtils.getLogger();
+    private static final HttpClient HTTP = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            .build();
 
     private final Process process;
     private final OutputStream stdin;
     private final InputStream stdout;
+    private final Path tempFile;
     private final int width;
     private final int height;
     private final int frameSize;
@@ -28,29 +38,57 @@ public class FfmpegSubprocessDecoder implements AutoCloseable {
     private boolean closed;
 
     /**
-     * @param videoUrl 视频文件或 URL（ffmpeg 能直接打开的）
-     * @param targetWidth 输出宽度
-     * @param targetHeight 输出高度
-     * @param fps 输出帧率
+     * 从 URL 创建解码器。
+     * 先下载开头 2MB 到临时文件（足够 60 帧 40×22 的视频）。
      */
     public FfmpegSubprocessDecoder(String videoUrl, int targetWidth, int targetHeight, int fps)
             throws IOException {
         this.width = targetWidth;
         this.height = targetHeight;
-        this.frameSize = width * height * 4; // RGBA
+        this.frameSize = width * height * 4;
 
+        // 1. 下载视频片段到临时文件
+        tempFile = Files.createTempFile("bili_video_", ".m4s");
+        LOGGER.info("下载视频片段: {} → {}", videoUrl.substring(0, 60), tempFile);
+
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(videoUrl))
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                .header("Referer", "https://www.bilibili.com/")
+                .timeout(Duration.ofSeconds(30))
+                .GET().build();
+
+        HttpResponse<InputStream> resp;
+        try {
+            resp = HTTP.send(req, HttpResponse.BodyHandlers.ofInputStream());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Files.deleteIfExists(tempFile);
+            throw new IOException("下载被中断", e);
+        }
+        if (resp.statusCode() != 200) {
+            Files.deleteIfExists(tempFile);
+            throw new IOException("下载失败 HTTP " + resp.statusCode());
+        }
+
+        // 只下载前 2MB（足够 bench 用）
+        byte[] buf = new byte[8192];
+        long total = 0;
+        try (InputStream in = resp.body(); OutputStream out = Files.newOutputStream(tempFile)) {
+            int n;
+            while (total < 2 * 1024 * 1024 && (n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+                total += n;
+            }
+        }
+        LOGGER.info("已下载 {}KB", total / 1024);
+
+        // 2. 启动 ffmpeg 解码
         List<String> cmd = new ArrayList<>();
         cmd.add("ffmpeg");
         cmd.add("-v"); cmd.add("error");
-        // B站 CDN 需要这些 header（每个 header 单独一个 -headers）
-        cmd.add("-headers"); cmd.add("Referer: https://www.bilibili.com/");
-        cmd.add("-headers"); cmd.add("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-        cmd.add("-headers"); cmd.add("Origin: https://www.bilibili.com");
-        // 超时防止卡死
-        cmd.add("-timeout"); cmd.add("15000000"); // 15s in microseconds
-        cmd.add("-i"); cmd.add(videoUrl);
+        cmd.add("-i"); cmd.add(tempFile.toAbsolutePath().toString());
 
-        // 解码参数
         if (fps > 0) {
             cmd.add("-vf");
             cmd.add("fps=" + fps + ",scale=" + width + ":" + height + ":flags=bilinear");
@@ -61,10 +99,10 @@ public class FfmpegSubprocessDecoder implements AutoCloseable {
 
         cmd.add("-pix_fmt"); cmd.add("rgba");
         cmd.add("-f"); cmd.add("rawvideo");
-        cmd.add("-an");             // 不要音频
-        cmd.add("pipe:1");          // stdout = RGBA raw
+        cmd.add("-an");
+        cmd.add("pipe:1");
 
-        LOGGER.info("启动 ffmpeg: {}", String.join(" ", cmd));
+        LOGGER.info("启动 ffmpeg (本地文件): {}", String.join(" ", cmd));
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectError(ProcessBuilder.Redirect.PIPE);
@@ -72,79 +110,40 @@ public class FfmpegSubprocessDecoder implements AutoCloseable {
         this.stdin = process.getOutputStream();
         this.stdout = process.getInputStream();
 
-        // 异步读取 stderr（避免管道阻塞）
         Thread stderrReader = new Thread(() -> {
-            try (InputStream err = process.getErrorStream()) {
-                byte[] buf = new byte[4096];
-                int n;
-                while ((n = err.read(buf)) > 0) {
-                    String msg = new String(buf, 0, n).trim();
-                    if (!msg.isEmpty()) {
-                        LOGGER.error("ffmpeg: {}", msg);
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (!line.isBlank()) {
+                        LOGGER.error("ffmpeg: {}", line);
                     }
                 }
             } catch (IOException e) {
-                LOGGER.error("ffmpeg stderr 读取异常", e);
+                LOGGER.error("ffmpeg stderr 异常", e);
             }
         }, "ffmpeg-stderr");
         stderrReader.setDaemon(true);
         stderrReader.start();
 
-        LOGGER.info("ffmpeg 子进程已启动: {}×{} RGBA, frameSize={}B",
-                width, height, frameSize);
+        LOGGER.info("ffmpeg 已启动 (本地文件) {}×{} RGBA", width, height);
     }
 
-    /**
-     * 直接从 URL 解码（ffmpeg 处理 HTTP 连接）。
-     */
-    public static FfmpegSubprocessDecoder fromUrl(String url, int targetWidth, int targetHeight, int fps)
-            throws IOException {
-        return new FfmpegSubprocessDecoder(url, targetWidth, targetHeight, fps);
-    }
-
-    /**
-     * 获取下一帧 RGBA。
-     *
-     * @return RGBA byte[] (width*height*4)，EOF 返回 null
-     */
     public byte[] getNextFrame() throws IOException {
         if (closed) return null;
-
         byte[] buf = new byte[frameSize];
         int totalRead = 0;
         while (totalRead < frameSize) {
             int n = stdout.read(buf, totalRead, frameSize - totalRead);
-            if (n < 0) {
-                // EOF
-                if (totalRead == 0) return null;
-                // 部分帧（不应该发生）
-                LOGGER.warn("ffmpeg 在帧中间 EOF: {}/{} bytes", totalRead, frameSize);
-                return null;
-            }
+            if (n < 0) return totalRead == 0 ? null : null; // EOF
             totalRead += n;
         }
-
         totalFrames++;
         return buf;
-    }
-
-    /**
-     * 跳过帧直到满足条件。
-     */
-    public byte[] skipFrames(int count) throws IOException {
-        byte[] last = null;
-        for (int i = 0; i <= count; i++) {
-            byte[] frame = getNextFrame();
-            if (frame == null) break;
-            last = frame;
-        }
-        return last;
     }
 
     public int getWidth() { return width; }
     public int getHeight() { return height; }
     public int getTotalFrames() { return totalFrames; }
-    public boolean isAlive() { return process != null && process.isAlive(); }
 
     @Override
     public void close() {
@@ -155,6 +154,7 @@ public class FfmpegSubprocessDecoder implements AutoCloseable {
             process.destroy();
             try { process.waitFor(3, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
         }
-        LOGGER.debug("ffmpeg 子进程已关闭 ({} 帧)", totalFrames);
+        try { Files.deleteIfExists(tempFile); } catch (IOException ignored) {}
+        LOGGER.debug("ffmpeg 已关闭 ({} 帧)", totalFrames);
     }
 }
