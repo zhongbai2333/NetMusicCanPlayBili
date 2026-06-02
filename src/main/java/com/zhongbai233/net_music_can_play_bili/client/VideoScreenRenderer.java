@@ -88,18 +88,23 @@ public final class VideoScreenRenderer {
 
     // ── 渲染 ──
 
+    private static int emptyFrameCount = 0;
+
     @SubscribeEvent
     public static void onRenderWorld(RenderLevelStageEvent.AfterTranslucentBlocks event) {
         byte[] rgba = currentFrame.get();
         if (rgba == null) {
-            // 每秒最多打一次日志
+            if (emptyFrameCount++ == 0) {
+                LOGGER.info("渲染事件触发, 但 currentFrame 为空 (等待视频解码...)");
+            }
             return;
         }
+        emptyFrameCount = 0;
 
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.font == null) return;
 
-        LOGGER.debug("渲染视频帧: {} bytes", rgba.length);
+        LOGGER.info("渲染视频帧: {} bytes", rgba.length);
 
         // 玩家前方 5 格
         Vec3 look = mc.player.getLookAngle();
