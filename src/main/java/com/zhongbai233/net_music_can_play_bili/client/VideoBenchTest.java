@@ -96,9 +96,7 @@ public final class VideoBenchTest {
         }
 
         LOGGER.info("══════════════════════════════════════════");
-
-        // 启动 GUI 视频渲染
-        VideoScreenRenderer.startPlayback(testVideoUrl);
+        LOGGER.info("  解码完成。渲染待接 — MC26.1 Core Profile 需走 Blaze3D API");
     }
 
     private static void analyzeFirstFrame(byte[] rgba) {
