@@ -179,8 +179,9 @@ def analyze_video_streams(video_id: str, sessdata: str = ""):
     dash = play_data["data"]["dash"]
 
     # 4. 分析视频流
-    video_streams = dash.get("video", [])
-    if not video_streams:
+    video_streams = dash.get("video")
+    if not isinstance(video_streams, list):
+        video_streams = []
         print("\n  ⚠ 没有 DASH 视频流数据")
         return
 
@@ -233,14 +234,22 @@ def analyze_video_streams(video_id: str, sessdata: str = ""):
     # 5. 分析音频流
     audio_streams = []
     for section in ["audio", "dolby", "flac"]:
-        if section in dash and dash[section]:
-            arr = dash[section]
-            if section == "dolby":
-                arr = arr.get("audio", [])
-            elif section == "flac":
-                arr = [arr.get("audio")] if arr.get("audio") else []
+        raw = dash.get(section)
+        if raw is None or (isinstance(raw, bool) and not raw):
+            continue
+        if section == "audio":
+            arr = raw if isinstance(raw, list) else []
+        elif section == "dolby":
+            arr = raw.get("audio") if isinstance(raw, dict) else None
+            arr = arr if isinstance(arr, list) else []
+        elif section == "flac":
+            audio_item = raw.get("audio") if isinstance(raw, dict) else None
+            arr = [audio_item] if isinstance(audio_item, dict) else []
+        else:
+            continue
+        if arr:
             for item in arr:
-                if item and "id" in item:
+                if isinstance(item, dict) and "id" in item:
                     audio_streams.append(item)
 
     if audio_streams:
