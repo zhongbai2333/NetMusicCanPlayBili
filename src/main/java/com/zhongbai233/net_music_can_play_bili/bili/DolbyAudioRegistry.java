@@ -38,8 +38,8 @@ public class DolbyAudioRegistry {
     private static final Type VOLUME_MAP_TYPE = new TypeToken<Map<String, Float>>() {
     }.getType();
     /** 音量持久化 debounce 专用，单线程复用，避免每次新建线程 */
-    private static final ScheduledExecutorService VOLUME_SAVE_EXECUTOR =
-            Executors.newSingleThreadScheduledExecutor(r -> {
+    private static final ScheduledExecutorService VOLUME_SAVE_EXECUTOR = Executors
+            .newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "VolumeSaveDebounce");
                 t.setDaemon(true);
                 return t;
@@ -87,8 +87,6 @@ public class DolbyAudioRegistry {
         }
         DOLBY_HANDLERS.entrySet().removeIf(entry -> {
             if (entry.getValue().handler() == handler) {
-                // 清理指向此 handler 位置的所有 relay→turntable 映射，防止内存泄漏
-                RELAY_TURNTABLE.entrySet().removeIf(relayEntry -> relayEntry.getValue().equals(entry.getKey()));
                 return true;
             }
             return false;
@@ -143,8 +141,6 @@ public class DolbyAudioRegistry {
         }
         STEREO_HANDLERS.entrySet().removeIf(entry -> {
             if (entry.getValue().handler() == handler) {
-                // 清理指向此 handler 位置的所有 relay→turntable 映射，防止内存泄漏
-                RELAY_TURNTABLE.entrySet().removeIf(relayEntry -> relayEntry.getValue().equals(entry.getKey()));
                 return true;
             }
             return false;

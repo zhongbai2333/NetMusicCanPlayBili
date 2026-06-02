@@ -15,14 +15,11 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSubtitleLyricService;
 import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
 import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
-import com.zhongbai233.net_music_can_play_bili.blockentity.LyricProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntableSound;
-import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.sounds.SoundInstance;
-import net.minecraft.core.BlockPos;
 import net.minecraft.sounds.SoundSource;
 import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
@@ -75,9 +72,7 @@ public abstract class MusicToClientMessageClientMixin {
         if (GeneralConfig.ENABLE_PLAYER_LYRICS.get()) {
             lyricRecord = net_music_can_play_bili$tryBuildNetEaseLyric(message);
             if (lyricRecord == null) {
-                boolean allowAi = net_music_can_play_bili$shouldAllowAi(message.pos());
-                lyricRecord = BiliSubtitleLyricService.tryBuildLyricRecord(message.rawUrl(), message.songName(),
-                        allowAi);
+                lyricRecord = BiliSubtitleLyricService.tryBuildLyricRecord(message.rawUrl(), message.songName());
             }
         }
 
@@ -164,20 +159,5 @@ public abstract class MusicToClientMessageClientMixin {
             NetMusic.LOGGER.error(e);
             return null;
         }
-    }
-
-    @Unique
-    private static boolean net_music_can_play_bili$shouldAllowAi(BlockPos turntablePos) {
-        var level = Minecraft.getInstance().level;
-        if (level == null) {
-            return false;
-        }
-        for (BlockPos sourcePos : ClientLinkRegistry.getSources(turntablePos)) {
-            if (level.getBlockEntity(sourcePos) instanceof LyricProjectorBlockEntity projector
-                    && projector.getAllowAi()) {
-                return true;
-            }
-        }
-        return false;
     }
 }
