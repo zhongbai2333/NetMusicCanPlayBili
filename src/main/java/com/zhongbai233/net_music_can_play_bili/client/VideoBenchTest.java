@@ -9,7 +9,6 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import org.slf4j.Logger;
 
-import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -94,8 +93,8 @@ public final class VideoBenchTest {
                                 ? "解码性能充足，可支持实时播放"
                                 : "解码性能不足，需降低分辨率或帧率");
 
-            } catch (IOException e) {
-                LOGGER.error("视频解码测试失败", e);
+            } catch (Exception e) {
+                LOGGER.error("视频解码测试失败: {}", e.getMessage(), e);
             }
 
             LOGGER.info("══════════════════════════════════════════");

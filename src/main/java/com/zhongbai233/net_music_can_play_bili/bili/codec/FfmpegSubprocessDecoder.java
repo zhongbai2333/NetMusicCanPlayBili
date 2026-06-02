@@ -42,6 +42,11 @@ public class FfmpegSubprocessDecoder implements AutoCloseable {
         List<String> cmd = new ArrayList<>();
         cmd.add("ffmpeg");
         cmd.add("-v"); cmd.add("error");
+        // B站 CDN 需要这些 header
+        cmd.add("-headers");
+        cmd.add("Referer: https://www.bilibili.com/\r\n" +
+                "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n" +
+                "Origin: https://www.bilibili.com");
         cmd.add("-i"); cmd.add(videoUrl);
 
         // 解码参数
@@ -72,12 +77,13 @@ public class FfmpegSubprocessDecoder implements AutoCloseable {
                 byte[] buf = new byte[4096];
                 int n;
                 while ((n = err.read(buf)) > 0) {
-                    String msg = new String(buf, 0, n);
-                    if (!msg.isBlank()) {
-                        LOGGER.warn("ffmpeg stderr: {}", msg.trim());
+                    String msg = new String(buf, 0, n).trim();
+                    if (!msg.isEmpty()) {
+                        LOGGER.error("ffmpeg: {}", msg);
                     }
                 }
-            } catch (IOException ignored) {
+            } catch (IOException e) {
+                LOGGER.error("ffmpeg stderr 读取异常", e);
             }
         }, "ffmpeg-stderr");
         stderrReader.setDaemon(true);
