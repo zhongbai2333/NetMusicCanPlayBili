@@ -58,6 +58,10 @@ public final class VideoScreenRenderer {
                     }
                     currentFrame.set(rgba);
 
+                    if (dec.getTotalFrames() == 1) {
+                        LOGGER.info("首帧已解码, 开始渲染");
+                    }
+
                     long now = System.currentTimeMillis();
                     long sleep = nextFrameTime - now;
                     if (sleep > 0) {
@@ -87,10 +91,15 @@ public final class VideoScreenRenderer {
     @SubscribeEvent
     public static void onRenderWorld(RenderLevelStageEvent.AfterTranslucentBlocks event) {
         byte[] rgba = currentFrame.get();
-        if (rgba == null) return;
+        if (rgba == null) {
+            // 每秒最多打一次日志
+            return;
+        }
 
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.font == null) return;
+
+        LOGGER.debug("渲染视频帧: {} bytes", rgba.length);
 
         // 玩家前方 5 格
         Vec3 look = mc.player.getLookAngle();

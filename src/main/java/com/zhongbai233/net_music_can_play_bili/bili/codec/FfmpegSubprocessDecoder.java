@@ -90,12 +90,10 @@ public class FfmpegSubprocessDecoder implements AutoCloseable {
         cmd.add("-i"); cmd.add(tempFile.toAbsolutePath().toString());
 
         if (fps > 0) {
-            cmd.add("-vf");
-            cmd.add("fps=" + fps + ",scale=" + width + ":" + height + ":flags=bilinear");
-        } else {
-            cmd.add("-vf");
-            cmd.add("scale=" + width + ":" + height + ":flags=bilinear");
+            cmd.add("-r"); cmd.add(String.valueOf(fps));
         }
+        cmd.add("-vf");
+        cmd.add("scale=" + width + ":" + height + ":flags=bilinear");
 
         cmd.add("-pix_fmt"); cmd.add("rgba");
         cmd.add("-f"); cmd.add("rawvideo");
