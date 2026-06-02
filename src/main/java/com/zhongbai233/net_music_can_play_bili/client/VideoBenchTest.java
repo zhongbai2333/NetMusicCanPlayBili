@@ -96,7 +96,9 @@ public final class VideoBenchTest {
         }
 
         LOGGER.info("══════════════════════════════════════════");
-        LOGGER.info("  解码完成 — 渲染层待接 (MC 1.21.2 渲染 API 调研中)");
+
+        // 启动 GUI 视频渲染
+        VideoScreenRenderer.startPlayback(testVideoUrl);
     }
 
     private static void analyzeFirstFrame(byte[] rgba) {
