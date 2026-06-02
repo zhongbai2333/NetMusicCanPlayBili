@@ -75,8 +75,8 @@ public final class VideoBenchTest {
             LOGGER.info("  解码帧数:     {}", frameCount);
             LOGGER.info("  首帧延迟:     {}ms", firstFrameMs);
             LOGGER.info("  总耗时:       {}ms", totalMs);
-            LOGGER.info("  平均每帧:     {:.1f}ms", avgMsPerFrame);
-            LOGGER.info("  等效 FPS:     {:.1f}", effectiveFps);
+            LOGGER.info("  平均每帧:     {}ms", String.format("%.1f", avgMsPerFrame));
+            LOGGER.info("  等效 FPS:     {}", String.format("%.1f", effectiveFps));
             LOGGER.info("  帧大小:       {}×{} = {}B/帧",
                     TARGET_W, TARGET_H, TARGET_W * TARGET_H * 4);
 
@@ -131,8 +131,8 @@ public final class VideoBenchTest {
                 if (colorCounts[idx] == 0) uniqueColors++;
                 colorCounts[idx]++;
             }
-            LOGGER.info("  唯一颜色数:   {} / {} ({:.0f}%)",
-                    uniqueColors, pixels, uniqueColors * 100.0 / pixels);
+            LOGGER.info("  唯一颜色数:   {} / {} ({}%)",
+                    uniqueColors, pixels, String.format("%.0f", uniqueColors * 100.0 / pixels));
         } catch (ArrayIndexOutOfBoundsException ignored) {
             // 颜色空间太大用简单统计
             LOGGER.info("  唯一颜色数:   (未统计 — 需要更高效算法)");
