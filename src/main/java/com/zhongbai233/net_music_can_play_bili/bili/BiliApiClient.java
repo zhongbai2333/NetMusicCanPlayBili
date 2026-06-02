@@ -338,6 +338,69 @@ public final class BiliApiClient {
         return streams.values().iterator().next();
     }
 
+    // 获取 DASH 视频流直链
+    public static String getBestVideoUrl(VideoId id, long cid, int preferredQuality) throws Exception {
+        Map<String, String> params = new HashMap<>();
+        id.putPlayUrlParam(params);
+        params.put("cid", String.valueOf(cid));
+        params.put("fnval", "4048");
+        params.put("fnver", "0");
+        params.put("fourk", "1");
+        params.put("platform", "pc");
+        Map<String, String> signed = BiliWbiSigner.signParams(params);
+
+        String url = "https://api.bilibili.com/x/player/wbi/playurl?"
+                + BiliWbiSigner.buildQuery(signed);
+
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", "https://www.bilibili.com/")
+                .timeout(Duration.ofSeconds(15));
+        if (!sessdata.isBlank()) {
+            builder.header("Cookie", "SESSDATA=" + sessdata);
+        }
+        HttpRequest req = builder.GET().build();
+
+        HttpResponse<String> resp = BiliWbiSigner.HTTP.send(req,
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        JsonObject body = JsonParser.parseString(resp.body()).getAsJsonObject();
+
+        int code = body.get("code").getAsInt();
+        if (code != 0) {
+            String msg = body.has("message") ? body.get("message").getAsString() : "unknown";
+            throw new RuntimeException("B站 playurl API 返回 code=" + code + ": " + msg);
+        }
+
+        JsonObject dash = body.getAsJsonObject("data").getAsJsonObject("dash");
+        JsonArray videoArr = dash.getAsJsonArray("video");
+        if (videoArr == null || videoArr.isEmpty()) {
+            throw new RuntimeException("该视频没有 DASH 视频流");
+        }
+
+        // 收集所有视频流，优先选 H.264 同质量的
+        String bestH264 = null;
+        String fallback = null;
+        for (JsonElement e : videoArr) {
+            JsonObject v = e.getAsJsonObject();
+            int qid = v.get("id").getAsInt();
+            int codecId = v.has("codecid") ? v.get("codecid").getAsInt() : 0;
+            String baseUrl = v.get("baseUrl").getAsString();
+
+            if (codecId == 7) {  // H.264
+                bestH264 = baseUrl;
+                if (qid == preferredQuality) {
+                    return baseUrl;  // 正好是想要的 H.264 质量
+                }
+            }
+            if (fallback == null) {
+                fallback = baseUrl;
+            }
+        }
+
+        return bestH264 != null ? bestH264 : fallback;
+    }
+
     // 获取字幕并转为 NetEase 歌词 JSON 格式
     public static String getBilingualSubtitleAsNetEaseLyric(VideoInfo info) throws Exception {
         return getBilingualSubtitleAsNetEaseLyric(info, false);

@@ -151,10 +151,10 @@ public class Eac3NativeDecoder implements AutoCloseable {
             isWindows = false;
         }
 
-        // FFmpeg 核心库，按依赖顺序: avutil → swresample → avcodec
-        String[] ffmpegLibs = { "avutil", "swresample", "avcodec" };
-        // 自研薄 JNI 层（单个 DLL，替代原来的 jniavutil/jniswresample/jniavcodec 三个）
-        String[] jniLibs = { "eac3_jni" };
+        // FFmpeg 核心库，按依赖顺序: avutil → swresample → swscale → avcodec
+        String[] ffmpegLibs = { "avutil", "swresample", "swscale", "avcodec" };
+        // 自研薄 JNI 层
+        String[] jniLibs = { "eac3_jni", "video_jni" };
         // Windows 工具链运行时依赖原则上应由 FFmpeg 构建端消除；这里保留可选预加载兜底。
         String[] runtimeLibs = isWindows ? new String[] { "libwinpthread-1" } : new String[0];
         boolean[] runtimeLibPresent = new boolean[runtimeLibs.length];
