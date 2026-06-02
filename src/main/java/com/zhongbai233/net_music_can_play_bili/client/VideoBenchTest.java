@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.client;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.codec.FfmpegSubprocessDecoder;
+import net.minecraft.client.Minecraft;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -164,6 +165,11 @@ public final class VideoBenchTest {
     public static void onClientTick(ClientTickEvent.Post event) {
         String benchVideoId = System.getProperty("bili.video.bench", "");
         if (benchVideoId.isBlank())
+            return;
+
+        // 只在进入世界后才触发
+        var mc = Minecraft.getInstance();
+        if (mc.level == null || mc.player == null)
             return;
 
         tryRunOnceBili(benchVideoId);
