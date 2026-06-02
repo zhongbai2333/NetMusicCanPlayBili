@@ -87,10 +87,11 @@ public final class VideoScreenRenderer {
 
     private static void upload(byte[] rgba) {
         if (texId < 0) return;
-        ByteBuffer b = ByteBuffer.allocateDirect(rgba.length); b.put(rgba); b.flip();
+        ByteBuffer b = org.lwjgl.BufferUtils.createByteBuffer(rgba.length);
+        b.put(rgba); b.flip();
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, texId);
-        GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, COLS, ROWS, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, b);
-        // 首帧检查
+        GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, COLS, ROWS,
+                GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, b);
         if (rgba[0] != 0 || rgba[1] != 0 || rgba[2] != 0) {
             LOGGER.info("非黑帧! pixel0=#{:02X}{:02X}{:02X}", rgba[0]&0xFF, rgba[1]&0xFF, rgba[2]&0xFF);
         }
