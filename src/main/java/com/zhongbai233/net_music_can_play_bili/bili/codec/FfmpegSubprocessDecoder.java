@@ -83,24 +83,21 @@ public class FfmpegSubprocessDecoder implements AutoCloseable {
         }
         LOGGER.info("已下载 {}KB", total / 1024);
 
-        // 2. 启动 ffmpeg 解码（不做缩放，原分辨率输出）
+        // 2. 启动 ffmpeg 解码
         List<String> cmd = new ArrayList<>();
         cmd.add("ffmpeg");
         cmd.add("-v"); cmd.add("error");
+        cmd.add("-nostdin");
         cmd.add("-i"); cmd.add(tempFile.toAbsolutePath().toString());
 
-        // 用 fps filter 做帧率控制 + 缩放
+        cmd.add("-s"); cmd.add(width + "x" + height);  // 缩放
         if (fps > 0) {
-            cmd.add("-filter:v");
-            cmd.add("fps=" + fps + ",scale=" + width + ":" + height + ":flags=bilinear,format=rgba");
-        } else {
-            cmd.add("-filter:v");
-            cmd.add("scale=" + width + ":" + height + ":flags=bilinear,format=rgba");
+            cmd.add("-r"); cmd.add(String.valueOf(fps));  // 帧率
         }
-
+        cmd.add("-pix_fmt"); cmd.add("rgba");
         cmd.add("-f"); cmd.add("rawvideo");
         cmd.add("-an");
-        cmd.add("pipe:1");
+        cmd.add("-");  // stdout
 
         LOGGER.info("启动 ffmpeg (本地文件): {}", String.join(" ", cmd));
 
@@ -134,10 +131,20 @@ public class FfmpegSubprocessDecoder implements AutoCloseable {
         int totalRead = 0;
         while (totalRead < frameSize) {
             int n = stdout.read(buf, totalRead, frameSize - totalRead);
-            if (n < 0) return totalRead == 0 ? null : null; // EOF
+            if (n < 0) {
+                if (totalRead == 0) {
+                    LOGGER.info("ffmpeg stdout EOF ({} 帧已读)", totalFrames);
+                    return null;
+                }
+                LOGGER.warn("ffmpeg 帧中间 EOF: {}/{} bytes", totalRead, frameSize);
+                return null;
+            }
             totalRead += n;
         }
         totalFrames++;
+        if (totalFrames == 1) {
+            LOGGER.info("首帧到达, {} bytes", totalRead);
+        }
         return buf;
     }
 
