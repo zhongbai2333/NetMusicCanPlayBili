@@ -15,6 +15,7 @@ import com.zhongbai233.net_music_can_play_bili.bili.pipeline.FlacPcmPipeline;
 import com.zhongbai233.net_music_can_play_bili.bili.pipeline.OpenALTappedAudioInputStream;
 import com.zhongbai233.net_music_can_play_bili.bili.stream.ChunkPrefetchInputStream;
 import com.zhongbai233.net_music_can_play_bili.bili.stream.Fmp4StreamParser;
+import com.zhongbai233.net_music_can_play_bili.bili.stream.HttpRangeClient;
 import com.zhongbai233.net_music_can_play_bili.bili.stream.BlockingAudioPipe;
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
@@ -36,6 +37,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayDeque;
 import java.util.Arrays;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -48,9 +50,15 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int PIPE_BUFFER_SIZE = 4 * 1024 * 1024;
     private static final int FORMAT_WAIT_SECONDS = 15;
+    private static final long WORKER_JOIN_TIMEOUT_MILLIS = 2_000L;
     private static final int MP3_SYNC_SCAN_BYTES = 512 * 1024;
+    private static final int FMP4_INIT_PROBE_BYTES = 4 * 1024 * 1024;
+    private static final int FMP4_MOOF_SCAN_BYTES = 2 * 1024 * 1024;
+    private static final int FMP4_SEEK_MAX_ATTEMPTS = 3;
+    private static final double FMP4_CLOSE_FRAGMENT_SECONDS = 15.0D;
     private static final int MAX_HTTP_REDIRECTS = 5;
     private static final long RANGE_SEEK_PREROLL_BYTES = 256 * 1024L;
+    private static final long FMP4_SEEK_PREROLL_BYTES = 256 * 1024L;
     private static final long ALLOWED_URL_TTL_MILLIS = TimeUnit.MINUTES.toMillis(10);
     private static final int[] MP3_MPEG1_LAYER1_BITRATES = { 0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384,
             416, 448, 0 };
@@ -72,6 +80,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             .connectTimeout(java.time.Duration.ofSeconds(10))
             .build();
     private static final ConcurrentHashMap<String, PlaybackContextQueue> ALLOWED_URLS = new ConcurrentHashMap<>();
+    private static final Set<ActiveStreamControl> ACTIVE_MODERN_STREAMS = ConcurrentHashMap.newKeySet();
 
     public static void allowUrl(String url) {
         allowUrl(url, null);
@@ -100,6 +109,14 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         if (!key.equals(url)) {
             LOGGER.debug("Registered modern audio context: strippedSync=true offset={}s", context.startOffsetSeconds());
         }
+    }
+
+    public static void closeModernStreams() {
+        for (ActiveStreamControl control : ACTIVE_MODERN_STREAMS) {
+            control.close();
+        }
+        ACTIVE_MODERN_STREAMS.clear();
+        ALLOWED_URLS.clear();
     }
 
     @Override
@@ -133,6 +150,19 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     public AudioInputStream handle(URL url) throws UnsupportedAudioFileException, IOException {
         PlaybackContext playbackContext = consumeAllowedUrl(url);
         URL requestUrl = PlaybackSync.strip(url);
+
+        // 回退：当 side-channel 中找不到 context 时（如 URL 被重定向修改），
+        // 直接从 URL fragment 中解析已播放偏移，确保 seek 不会丢失位置。
+        if (playbackContext == null) {
+            PlaybackSync.Metadata fallbackSync = PlaybackSync.parse(url.toString());
+            if (fallbackSync.hasSession()) {
+                playbackContext = new PlaybackContext(
+                        null, 0L, fallbackSync.sessionId(),
+                        fallbackSync.elapsedMillis(), fallbackSync.totalMillis());
+                LOGGER.debug("HTTP audio handler fallback: parsed offset={}s from URL fragment",
+                        playbackContext.startOffsetSeconds());
+            }
+        }
 
         if (playbackContext != null && isNativeNetMusicHost(requestUrl)) {
             LOGGER.debug("HTTP audio handler using NetMusic fallback host={} startOffset={}s",
@@ -180,18 +210,29 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 modernTurntable ? "AudioStreamWorker" : "BiliCompatAudioStreamWorker");
         worker.setDaemon(true);
         worker.start();
+        ActiveStreamControl streamControl = modernTurntable
+                ? new ActiveStreamControl(url, closed, bodyRef, worker, fallbackPipe, pipelineRef, formatReady)
+                : null;
+        if (streamControl != null) {
+            ACTIVE_MODERN_STREAMS.add(streamControl);
+        }
 
-        awaitFormat(url, closed, bodyRef, worker, formatReady);
+        try {
+            awaitFormat(url, closed, bodyRef, worker, formatReady);
+        } catch (IOException e) {
+            closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipelineRef.get(), streamControl);
+            throw e;
+        }
         try {
             throwIfFailed(errorRef);
         } catch (IOException | UnsupportedAudioFileException e) {
-            closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipelineRef.get());
+            closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipelineRef.get(), streamControl);
             throw e;
         }
 
         AudioDecodePipeline pipeline = pipelineRef.get();
         if (pipeline == null) {
-            closeWorker(url, closed, bodyRef, worker, fallbackPipe, null);
+            closeWorker(url, closed, bodyRef, worker, fallbackPipe, null, streamControl);
             throw new IOException("unable to detect audio format");
         }
 
@@ -213,18 +254,18 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                         new PcmDitheringStream(decoded, decodedFormat, fmt16),
                         fmt16, AudioSystem.NOT_SPECIFIED);
             }
-            return managedStream(decoded, closed, worker, url, bodyRef, fallbackPipe, pipeline);
+            return managedStream(decoded, closed, worker, url, bodyRef, fallbackPipe, pipeline, streamControl);
         }
         if (pipeline instanceof FlacOpenALPipeline flacPipeline) {
             AudioInputStream tapped = flacPipeline.openTappedStream();
-            return managedStream(tapped, closed, worker, url, bodyRef, fallbackPipe, pipeline);
+            return managedStream(tapped, closed, worker, url, bodyRef, fallbackPipe, pipeline, streamControl);
         }
         if (pipeline.usesOpenAlOutput()) {
-            return silentStream(format, closed, worker, url, bodyRef, fallbackPipe, pipeline);
+            return silentStream(format, closed, worker, url, bodyRef, fallbackPipe, pipeline, streamControl);
         }
         return managedStream(
                 new AudioInputStream(fallbackPipe, format, AudioSystem.NOT_SPECIFIED),
-                closed, worker, url, bodyRef, fallbackPipe, pipeline);
+                closed, worker, url, bodyRef, fallbackPipe, pipeline, streamControl);
     }
 
     private static PlaybackContext consumeAllowedUrl(URL url) {
@@ -671,6 +712,302 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         }
     }
 
+    private static Fmp4StreamStart openFmp4StreamStart(URL url, PlaybackContext playbackContext,
+            float startOffsetSeconds) throws IOException {
+        if (playbackContext != null && startOffsetSeconds > 1.0f && playbackContext.totalMillis() > 0L) {
+            Fmp4StreamStart ranged = tryOpenFmp4RangeSeek(url, playbackContext, startOffsetSeconds);
+            if (ranged != null) {
+                return ranged;
+            }
+        }
+        return new Fmp4StreamStart(new ChunkPrefetchInputStream(url), startOffsetSeconds);
+    }
+
+    private static Fmp4StreamStart tryOpenFmp4RangeSeek(URL url, PlaybackContext playbackContext,
+            float targetSeconds) {
+        ChunkPrefetchInputStream lastRange = null;
+        try {
+            Fmp4InitSegment init = readFmp4InitSegment(url);
+            long contentLength = init.contentLength();
+            if (contentLength <= 0L) {
+                return null;
+            }
+
+            long elapsedMillis = Math.max(0L, playbackContext.elapsedMillis());
+            long totalMillis = Math.max(1L, playbackContext.totalMillis());
+            double ratio = Math.max(0.0D, Math.min(0.98D, elapsedMillis / (double) totalMillis));
+            long estimatedOffset = Math.min(contentLength - 1L, Math.max(0L, Math.round(contentLength * ratio)));
+            long rangeStart = Math.max(init.bytes().length, estimatedOffset - FMP4_SEEK_PREROLL_BYTES);
+
+            int timescale = init.timescale() > 0 ? init.timescale() : 48000;
+            for (int attempt = 0; attempt < FMP4_SEEK_MAX_ATTEMPTS; attempt++) {
+                ChunkPrefetchInputStream range = new ChunkPrefetchInputStream(url, rangeStart);
+                lastRange = range;
+                try {
+                    MoofProbe probe = readMoofProbe(range, targetSeconds, timescale);
+                    if (probe == null) {
+                        closeQuietly(range);
+                        lastRange = null;
+                        long nextStart = Math.min(contentLength - 1L, rangeStart + FMP4_MOOF_SCAN_BYTES);
+                        if (attempt + 1 >= FMP4_SEEK_MAX_ATTEMPTS || nextStart <= rangeStart) {
+                            return null;
+                        }
+                        rangeStart = nextStart;
+                        continue;
+                    }
+
+                    byte[] probeBytes = probe.bytes();
+                    MoofCandidate candidate = probe.candidate();
+                    long absoluteMoofOffset = rangeStart + candidate.offset();
+                    if (attempt + 1 < FMP4_SEEK_MAX_ATTEMPTS
+                            && shouldRetryFmp4RangeSeek(candidate, targetSeconds)) {
+                        long nextStart = nextFmp4RangeStart(candidate, targetSeconds, totalMillis,
+                                contentLength, absoluteMoofOffset, init.bytes().length);
+                        if (Math.abs(nextStart - rangeStart) > FMP4_SEEK_PREROLL_BYTES) {
+                            closeQuietly(range);
+                            lastRange = null;
+                            rangeStart = nextStart;
+                            continue;
+                        }
+                    }
+
+                    float residualSeconds = residualStartOffsetSeconds(targetSeconds, candidate, totalMillis,
+                            contentLength, absoluteMoofOffset);
+                    InputStream tail = new SequenceInputStream(
+                            new ByteArrayInputStream(probeBytes, candidate.offset(),
+                                    probeBytes.length - candidate.offset()),
+                            range);
+                    lastRange = null;
+                    InputStream combined = new SequenceInputStream(new ByteArrayInputStream(init.bytes()), tail);
+                    LOGGER.debug("fMP4 range seek: target={}s fragment={}s residual={}s byte={} totalBytes={} host={}",
+                            targetSeconds, candidate.fragmentSeconds(), residualSeconds, absoluteMoofOffset,
+                            contentLength,
+                            url.getHost());
+                    return new Fmp4StreamStart(combined, residualSeconds);
+                } finally {
+                    if (lastRange == range) {
+                        closeQuietly(range);
+                        lastRange = null;
+                    }
+                }
+            }
+            return null;
+        } catch (IOException | RuntimeException e) {
+            LOGGER.debug("fMP4 range seek unavailable, falling back to decoded skip: {}", e.getMessage());
+            closeQuietly(lastRange);
+            return null;
+        }
+    }
+
+    private static Fmp4InitSegment readFmp4InitSegment(URL url) throws IOException {
+        HttpRangeClient client = new HttpRangeClient();
+        try (HttpRangeClient.CdnResponse response = client.getRange(url, 0L, FMP4_INIT_PROBE_BYTES - 1L)) {
+            int status = response.statusCode();
+            if (status != 206 && status != 200) {
+                throw new IOException("HTTP " + status + " while probing fMP4 init segment");
+            }
+            long contentLength = response.totalLength() > 0L ? response.totalLength() : response.contentLength();
+            java.io.ByteArrayOutputStream prefix = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[64 * 1024];
+            Fmp4InitSegment init = null;
+            while (prefix.size() < FMP4_INIT_PROBE_BYTES) {
+                int request = Math.min(buffer.length, FMP4_INIT_PROBE_BYTES - prefix.size());
+                int n = response.body().read(buffer, 0, request);
+                if (n < 0) {
+                    break;
+                }
+                if (n == 0) {
+                    continue;
+                }
+                prefix.write(buffer, 0, n);
+                init = extractFmp4InitSegment(prefix.toByteArray(), contentLength);
+                if (init != null) {
+                    break;
+                }
+            }
+            if (init == null) {
+                throw new IOException("unable to read complete fMP4 init segment");
+            }
+            return init;
+        }
+    }
+
+    private static Fmp4InitSegment extractFmp4InitSegment(byte[] prefix, long contentLength) {
+        int pos = 0;
+        while (pos + 8 <= prefix.length) {
+            Mp4Box box = readCompleteMp4Box(prefix, pos, prefix.length);
+            if (box == null) {
+                return null;
+            }
+            if (isBoxType(prefix, pos + 4, 'm', 'o', 'o', 'v')) {
+                byte[] initBytes = Arrays.copyOf(prefix, pos + (int) box.size());
+                byte[] moovPayload = Arrays.copyOfRange(prefix, pos + box.headerSize(), pos + (int) box.size());
+                Fmp4ToMp4Converter.ParseResult moov = Fmp4ToMp4Converter.parseMoov(moovPayload);
+                return new Fmp4InitSegment(initBytes, contentLength, moov.timescale);
+            }
+            pos += (int) box.size();
+        }
+        return null;
+    }
+
+    private static MoofProbe readMoofProbe(InputStream range, float targetSeconds, int timescale) throws IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[256 * 1024];
+        MoofCandidate best = null;
+        while (out.size() < FMP4_MOOF_SCAN_BYTES) {
+            int request = Math.min(buffer.length, FMP4_MOOF_SCAN_BYTES - out.size());
+            int n = range.read(buffer, 0, request);
+            if (n < 0) {
+                break;
+            }
+            if (n == 0) {
+                continue;
+            }
+            out.write(buffer, 0, n);
+            byte[] data = out.toByteArray();
+            best = findBestMoofCandidate(data, data.length, targetSeconds, timescale);
+            if (isCloseMoofCandidate(best, targetSeconds)) {
+                return new MoofProbe(data, best);
+            }
+        }
+        if (best == null) {
+            byte[] data = out.toByteArray();
+            best = findBestMoofCandidate(data, data.length, targetSeconds, timescale);
+            return best != null ? new MoofProbe(data, best) : null;
+        }
+        return new MoofProbe(out.toByteArray(), best);
+    }
+
+    private static boolean isCloseMoofCandidate(MoofCandidate candidate, float targetSeconds) {
+        if (candidate == null || Double.isNaN(candidate.fragmentSeconds())) {
+            return false;
+        }
+        return Math.abs(candidate.fragmentSeconds() - targetSeconds) <= FMP4_CLOSE_FRAGMENT_SECONDS;
+    }
+
+    private static boolean shouldRetryFmp4RangeSeek(MoofCandidate candidate, float targetSeconds) {
+        return candidate != null
+                && !Double.isNaN(candidate.fragmentSeconds())
+                && Math.abs(candidate.fragmentSeconds() - targetSeconds) > FMP4_CLOSE_FRAGMENT_SECONDS;
+    }
+
+    private static long nextFmp4RangeStart(MoofCandidate candidate, float targetSeconds, long totalMillis,
+            long contentLength, long absoluteMoofOffset, int initLength) {
+        double bytesPerSecond = contentLength / Math.max(1.0D, totalMillis / 1000.0D);
+        double deltaSeconds = targetSeconds - candidate.fragmentSeconds();
+        long adjusted = absoluteMoofOffset + Math.round(deltaSeconds * bytesPerSecond) - FMP4_SEEK_PREROLL_BYTES;
+        return Math.max(initLength, Math.min(contentLength - 1L, adjusted));
+    }
+
+    private static MoofCandidate findBestMoofCandidate(byte[] probe, int length, float targetSeconds, int timescale) {
+        MoofCandidate first = null;
+        MoofCandidate bestBeforeTarget = null;
+        for (int i = 0; i + 8 <= length; i++) {
+            if (!isBoxType(probe, i + 4, 'm', 'o', 'o', 'f')) {
+                continue;
+            }
+            MoofCandidate candidate = readMoofCandidate(probe, i, length, timescale);
+            if (candidate == null) {
+                continue;
+            }
+            if (first == null) {
+                first = candidate;
+            }
+            if (!Double.isNaN(candidate.fragmentSeconds())) {
+                if (candidate.fragmentSeconds() <= targetSeconds + 0.05D) {
+                    bestBeforeTarget = candidate;
+                } else if (bestBeforeTarget != null) {
+                    break;
+                }
+            }
+            Mp4Box box = readCompleteMp4Box(probe, i, length);
+            if (box != null && box.size() <= Integer.MAX_VALUE) {
+                i += Math.max(0, (int) box.size() - 1);
+            }
+        }
+        return bestBeforeTarget != null ? bestBeforeTarget : first;
+    }
+
+    private static MoofCandidate readMoofCandidate(byte[] probe, int offset, int length, int timescale) {
+        Mp4Box box = readCompleteMp4Box(probe, offset, length);
+        if (box == null || box.size() > Integer.MAX_VALUE || box.size() < box.headerSize()) {
+            return null;
+        }
+        byte[] moofPayload = Arrays.copyOfRange(probe, offset + box.headerSize(), offset + (int) box.size());
+        Fmp4ToMp4Converter.ParseResult moof = Fmp4ToMp4Converter.parseMoof(moofPayload);
+        if (moof.sampleCount <= 0 && moof.baseMediaDecodeTime < 0L) {
+            return null;
+        }
+        double fragmentSeconds = moof.baseMediaDecodeTime >= 0L && timescale > 0
+                ? moof.baseMediaDecodeTime / (double) timescale
+                : Double.NaN;
+        return new MoofCandidate(offset, fragmentSeconds);
+    }
+
+    private static float residualStartOffsetSeconds(float targetSeconds, MoofCandidate candidate, long totalMillis,
+            long contentLength, long absoluteMoofOffset) {
+        double fragmentSeconds = candidate.fragmentSeconds();
+        if (Double.isNaN(fragmentSeconds) && contentLength > 0L && totalMillis > 0L) {
+            fragmentSeconds = (totalMillis / 1000.0D) * (absoluteMoofOffset / (double) contentLength);
+        }
+        if (Double.isNaN(fragmentSeconds)) {
+            return targetSeconds;
+        }
+        return (float) Math.max(0.0D, Math.min(targetSeconds, targetSeconds - fragmentSeconds));
+    }
+
+    private static Mp4Box readCompleteMp4Box(byte[] data, int offset, int length) {
+        if (offset < 0 || offset + 8 > length) {
+            return null;
+        }
+        long size = readUInt32(data, offset);
+        int headerSize = 8;
+        if (size == 1L) {
+            if (offset + 16 > length) {
+                return null;
+            }
+            size = readUInt64(data, offset + 8);
+            headerSize = 16;
+        }
+        if (size < headerSize || size > length - offset) {
+            return null;
+        }
+        return new Mp4Box(size, headerSize);
+    }
+
+    private static long readUInt32(byte[] data, int offset) {
+        return ((long) data[offset] & 0xFF) << 24
+                | ((long) data[offset + 1] & 0xFF) << 16
+                | ((long) data[offset + 2] & 0xFF) << 8
+                | ((long) data[offset + 3] & 0xFF);
+    }
+
+    private static long readUInt64(byte[] data, int offset) {
+        long value = 0L;
+        for (int i = 0; i < 8; i++) {
+            value = (value << 8) | (data[offset + i] & 0xFFL);
+        }
+        return value;
+    }
+
+    private static boolean isBoxType(byte[] data, int offset, char a, char b, char c, char d) {
+        return offset >= 0 && offset + 4 <= data.length
+                && data[offset] == (byte) a
+                && data[offset + 1] == (byte) b
+                && data[offset + 2] == (byte) c
+                && data[offset + 3] == (byte) d;
+    }
+
+    private static void closeQuietly(InputStream stream) {
+        if (stream == null) {
+            return;
+        }
+        try {
+            stream.close();
+        } catch (IOException ignored) {
+        }
+    }
+
     private static void streamDecode(
             URL url,
             BlockingAudioPipe fallbackPipe,
@@ -684,54 +1021,59 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         long[] decoded = { 0L };
         long[] mdatBytes = { 0L };
 
-        try (InputStream body = new ChunkPrefetchInputStream(url)) {
-            bodyRef.set(body);
-            if (closed.get()) {
-                return;
+        try {
+            Fmp4StreamStart streamStart = openFmp4StreamStart(url, playbackContext, startOffsetSeconds);
+            final float effectiveStartOffsetSeconds = streamStart.startOffsetSeconds();
+            try (InputStream body = streamStart.stream()) {
+                bodyRef.set(body);
+                if (closed.get()) {
+                    return;
+                }
+                Fmp4StreamParser parser = new Fmp4StreamParser();
+                parser.parse(body, closed, new Fmp4StreamParser.Callback() {
+                    @Override
+                    public void onMoov(Fmp4ToMp4Converter.ParseResult parseResult, byte[] moovData)
+                            throws IOException, UnsupportedAudioFileException {
+                        if (pipelineRef.get() != null) {
+                            return;
+                        }
+                        AudioDecodePipeline pipeline = createPipeline(url, parseResult, moovData, fallbackPipe, closed,
+                                playbackContext, effectiveStartOffsetSeconds);
+                        activatePipeline(url, pipelineRef, pipeline, formatReady);
+                    }
+
+                    @Override
+                    public void onMoof(int[] sampleSizes, byte[] moofData) throws IOException {
+                        AudioDecodePipeline pipeline = pipelineRef.get();
+                        if (pipeline != null) {
+                            pipeline.onMoof(sampleSizes);
+                        }
+                    }
+
+                    @Override
+                    public void onMdat(InputStream payload, long size) throws IOException {
+                        AudioDecodePipeline pipeline = pipelineRef.get();
+                        if (pipeline == null) {
+                            Fmp4StreamParser.skipFully(payload, size);
+                            return;
+                        }
+                        decoded[0] += pipeline.onMdat(payload, size);
+                        mdatBytes[0] += Math.max(0L, size);
+                    }
+
+                    @Override
+                    public void onRawEac3(InputStream payload) throws IOException, UnsupportedAudioFileException {
+                        DolbyEc3Pipeline pipeline = createRawDolbyPipeline(closed, playbackContext,
+                                effectiveStartOffsetSeconds);
+                        activatePipeline(url, pipelineRef, pipeline, formatReady);
+                        decoded[0] += pipeline.onRawStream(payload);
+                    }
+                });
+
+                AudioDecodePipeline pipeline = pipelineRef.get();
+                LOGGER.debug("Audio stream finished: decoded={} mdatBytes={} {}",
+                        decoded[0], mdatBytes[0], pipeline != null ? pipeline.statsSummary() : "");
             }
-            Fmp4StreamParser parser = new Fmp4StreamParser();
-            parser.parse(body, closed, new Fmp4StreamParser.Callback() {
-                @Override
-                public void onMoov(Fmp4ToMp4Converter.ParseResult parseResult, byte[] moovData)
-                        throws IOException, UnsupportedAudioFileException {
-                    if (pipelineRef.get() != null) {
-                        return;
-                    }
-                    AudioDecodePipeline pipeline = createPipeline(url, parseResult, moovData, fallbackPipe, closed,
-                            playbackContext, startOffsetSeconds);
-                    activatePipeline(url, pipelineRef, pipeline, formatReady);
-                }
-
-                @Override
-                public void onMoof(int[] sampleSizes, byte[] moofData) throws IOException {
-                    AudioDecodePipeline pipeline = pipelineRef.get();
-                    if (pipeline != null) {
-                        pipeline.onMoof(sampleSizes);
-                    }
-                }
-
-                @Override
-                public void onMdat(InputStream payload, long size) throws IOException {
-                    AudioDecodePipeline pipeline = pipelineRef.get();
-                    if (pipeline == null) {
-                        Fmp4StreamParser.skipFully(payload, size);
-                        return;
-                    }
-                    decoded[0] += pipeline.onMdat(payload, size);
-                    mdatBytes[0] += Math.max(0L, size);
-                }
-
-                @Override
-                public void onRawEac3(InputStream payload) throws IOException, UnsupportedAudioFileException {
-                    DolbyEc3Pipeline pipeline = createRawDolbyPipeline(closed, playbackContext, startOffsetSeconds);
-                    activatePipeline(url, pipelineRef, pipeline, formatReady);
-                    decoded[0] += pipeline.onRawStream(payload);
-                }
-            });
-
-            AudioDecodePipeline pipeline = pipelineRef.get();
-            LOGGER.debug("Audio stream finished: decoded={} mdatBytes={} {}",
-                    decoded[0], mdatBytes[0], pipeline != null ? pipeline.statsSummary() : "");
         } catch (EOFException e) {
             LOGGER.debug("Audio stream EOF: decoded={} mdatBytes={}", decoded[0], mdatBytes[0]);
         } catch (IOException e) {
@@ -838,7 +1180,8 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             URL url,
             AtomicReference<InputStream> bodyRef,
             BlockingAudioPipe fallbackPipe,
-            AudioDecodePipeline pipeline) {
+            AudioDecodePipeline pipeline,
+            ActiveStreamControl streamControl) {
         return new AudioInputStream(fallbackPipe, format, AudioSystem.NOT_SPECIFIED) {
             @Override
             public int read() {
@@ -860,7 +1203,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
 
             @Override
             public void close() throws IOException {
-                closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipeline);
+                closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipeline, streamControl);
                 super.close();
             }
         };
@@ -873,13 +1216,14 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             URL url,
             AtomicReference<InputStream> bodyRef,
             BlockingAudioPipe fallbackPipe,
-            AudioDecodePipeline pipeline) {
+            AudioDecodePipeline pipeline,
+            ActiveStreamControl streamControl) {
         return new AudioInputStream(delegate, delegate.getFormat(), AudioSystem.NOT_SPECIFIED) {
             @Override
             public void close() throws IOException {
                 IOException error = null;
                 try {
-                    closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipeline);
+                    closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipeline, streamControl);
                 } catch (IOException e) {
                     error = e;
                 }
@@ -944,16 +1288,32 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             AtomicReference<InputStream> bodyRef,
             Thread worker,
             BlockingAudioPipe fallbackPipe,
-            AudioDecodePipeline pipeline) throws IOException {
+            AudioDecodePipeline pipeline,
+            ActiveStreamControl streamControl) throws IOException {
         if (closed.compareAndSet(false, true)) {
             BiliPlaybackDiagnostics.markClosed(url);
-            closeBody(bodyRef);
-            fallbackPipe.closeWriter();
-            fallbackPipe.close();
-            worker.interrupt();
-            if (pipeline != null) {
-                pipeline.close();
-            }
+        }
+        closeBody(bodyRef);
+        fallbackPipe.closeWriter();
+        fallbackPipe.close();
+        worker.interrupt();
+        if (pipeline != null) {
+            pipeline.close();
+        }
+        joinWorker(worker);
+        if (streamControl != null) {
+            streamControl.unregister();
+        }
+    }
+
+    private static void joinWorker(Thread worker) {
+        if (worker == null || worker == Thread.currentThread() || !worker.isAlive()) {
+            return;
+        }
+        try {
+            worker.join(WORKER_JOIN_TIMEOUT_MILLIS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -1002,6 +1362,56 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         String lower = host.toLowerCase(java.util.Locale.ROOT);
         return lower.contains("bilibili") || lower.contains("bilivideo")
                 || lower.contains("hdslb") || lower.contains("mcdn");
+    }
+
+    private static final class ActiveStreamControl {
+        private final URL url;
+        private final AtomicBoolean closed;
+        private final AtomicReference<InputStream> bodyRef;
+        private final Thread worker;
+        private final BlockingAudioPipe fallbackPipe;
+        private final AtomicReference<AudioDecodePipeline> pipelineRef;
+        private final CountDownLatch formatReady;
+
+        private ActiveStreamControl(URL url, AtomicBoolean closed, AtomicReference<InputStream> bodyRef, Thread worker,
+                BlockingAudioPipe fallbackPipe, AtomicReference<AudioDecodePipeline> pipelineRef,
+                CountDownLatch formatReady) {
+            this.url = url;
+            this.closed = closed;
+            this.bodyRef = bodyRef;
+            this.worker = worker;
+            this.fallbackPipe = fallbackPipe;
+            this.pipelineRef = pipelineRef;
+            this.formatReady = formatReady;
+        }
+
+        private void close() {
+            try {
+                formatReady.countDown();
+                closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipelineRef.get(), this);
+            } catch (IOException e) {
+                LOGGER.debug("Failed to close modern audio stream during client cleanup: {}", e.getMessage());
+            }
+        }
+
+        private void unregister() {
+            ACTIVE_MODERN_STREAMS.remove(this);
+        }
+    }
+
+    private record Fmp4StreamStart(InputStream stream, float startOffsetSeconds) {
+    }
+
+    private record Fmp4InitSegment(byte[] bytes, long contentLength, int timescale) {
+    }
+
+    private record MoofCandidate(int offset, double fragmentSeconds) {
+    }
+
+    private record MoofProbe(byte[] bytes, MoofCandidate candidate) {
+    }
+
+    private record Mp4Box(long size, int headerSize) {
     }
 
     private record PlaybackContext(BlockPos pos, long expiresAtMillis, String sessionId, long elapsedMillis,

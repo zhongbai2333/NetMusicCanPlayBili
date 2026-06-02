@@ -23,7 +23,11 @@ public final class Fmp4ToMp4Converter {
     private static final int TRUN_SAMPLE_SIZE = 0x000200;
     private static final int TRUN_SAMPLE_FLAGS = 0x000400;
     private static final int TRUN_SAMPLE_COMP_TIME = 0x000800;
-    private static final int TFHD_DEFAULT_SAMPLE_SIZE = 0x000008;
+    private static final int TFHD_BASE_DATA_OFFSET = 0x000001;
+    private static final int TFHD_SAMPLE_DESCRIPTION_INDEX = 0x000002;
+    private static final int TFHD_DEFAULT_SAMPLE_DURATION = 0x000008;
+    private static final int TFHD_DEFAULT_SAMPLE_SIZE = 0x000010;
+    private static final int TFHD_DEFAULT_SAMPLE_FLAGS = 0x000020;
     private static final byte[] DEFAULT_ASC = { 0x11, (byte) 0x90 };
 
     public static byte[] convertToStandardMp4(byte[] fmp4Data) throws IOException {
@@ -215,9 +219,9 @@ public final class Fmp4ToMp4Converter {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         byte[] ftyp = makeBox("ftyp", toBytes("isom\u0000\u0000\u0000\u0000isomiso2mp41"));
         out.write(ftyp, 0, ftyp.length);
-        int mdatPayloadOffset = ftyp.length + 8;
+        long mdatPayloadOffset = ftyp.length + 8L;
         byte[] moov = buildMoov(asc, sizes, durs, mdatPayloadOffset);
-        mdatPayloadOffset = ftyp.length + moov.length + 8;
+        mdatPayloadOffset = ftyp.length + moov.length + 8L;
         moov = buildMoov(asc, sizes, durs, mdatPayloadOffset);
         out.write(moov, 0, moov.length);
         writeInt(out, 8 + audioData.length);
@@ -226,7 +230,7 @@ public final class Fmp4ToMp4Converter {
         return out.toByteArray();
     }
 
-    private static byte[] buildMoov(byte[] asc, int[] sizes, int[] durs, int mdatOff) {
+    private static byte[] buildMoov(byte[] asc, int[] sizes, int[] durs, long mdatOff) {
         int timescale = 48000;
         int totalSamples = sizes.length;
         long duration = 0;
@@ -385,13 +389,15 @@ public final class Fmp4ToMp4Converter {
         return out.toByteArray();
     }
 
-    private static byte[] makeStco(int offset) {
+    private static byte[] makeStco(long offset) {
+        // stco box 用 32-bit offset；对大于 4GB 的文件应使用 co64。
+        // 对于音频流，stco offset 为 mdat 起始偏移，通常远小于 4GB。
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         writeInt(out, 16 + 4);
         out.write(toBytes("stco"), 0, 4);
         writeInt(out, 0);
         writeInt(out, 1);
-        writeInt(out, offset);
+        writeInt(out, (int) offset);
         return out.toByteArray();
     }
 
@@ -580,6 +586,8 @@ public final class Fmp4ToMp4Converter {
             b.get(cd);
             if ("tfhd".equals(t))
                 ds = parseTfhd(cd);
+            else if ("tfdt".equals(t))
+                parseTfdt(cd, r);
             else if ("trun".equals(t))
                 parseTrun(cd, r, ds);
         }
@@ -590,11 +598,37 @@ public final class Fmp4ToMp4Converter {
         if (cd.length < 8)
             return 0;
         int flags = ((cd[1] & 0xFF) << 16) | ((cd[2] & 0xFF) << 8) | (cd[3] & 0xFF);
-        if ((flags & TFHD_DEFAULT_SAMPLE_SIZE) != 0 && 12 <= cd.length) {
-            ByteBuffer bb = ByteBuffer.wrap(cd).order(ByteOrder.BIG_ENDIAN);
-            return bb.getInt(8);
+        ByteBuffer bb = ByteBuffer.wrap(cd).order(ByteOrder.BIG_ENDIAN);
+        int pos = 8;
+        if ((flags & TFHD_BASE_DATA_OFFSET) != 0) {
+            pos += 8;
+        }
+        if ((flags & TFHD_SAMPLE_DESCRIPTION_INDEX) != 0) {
+            pos += 4;
+        }
+        if ((flags & TFHD_DEFAULT_SAMPLE_DURATION) != 0) {
+            pos += 4;
+        }
+        if ((flags & TFHD_DEFAULT_SAMPLE_SIZE) != 0 && pos + 4 <= cd.length) {
+            return bb.getInt(pos);
+        }
+        if ((flags & TFHD_DEFAULT_SAMPLE_FLAGS) != 0) {
+            pos += 4;
         }
         return 0;
+    }
+
+    private static void parseTfdt(byte[] cd, ParseResult r) {
+        if (cd.length < 8) {
+            return;
+        }
+        int version = cd[0] & 0xFF;
+        ByteBuffer bb = ByteBuffer.wrap(cd).order(ByteOrder.BIG_ENDIAN);
+        if (version == 1 && cd.length >= 12) {
+            r.baseMediaDecodeTime = Math.max(0L, bb.getLong(4));
+        } else {
+            r.baseMediaDecodeTime = bb.getInt(4) & 0xFFFFFFFFL;
+        }
     }
 
     private static void parseTrun(byte[] cd, ParseResult r, int defaultSampleSize) {
@@ -700,8 +734,27 @@ public final class Fmp4ToMp4Converter {
             int cs = s - 8;
             byte[] cd = new byte[cs];
             b.get(cd);
-            if ("minf".equals(t))
+            if ("mdhd".equals(t))
+                parseMdhd(cd, r);
+            else if ("minf".equals(t))
                 parseMinf(cd, r);
+        }
+    }
+
+    private static void parseMdhd(byte[] cd, ParseResult r) {
+        if (cd.length < 20) {
+            return;
+        }
+        int version = cd[0] & 0xFF;
+        ByteBuffer bb = ByteBuffer.wrap(cd).order(ByteOrder.BIG_ENDIAN);
+        int timescale = 0;
+        if (version == 1 && cd.length >= 32) {
+            timescale = bb.getInt(20);
+        } else if (version == 0) {
+            timescale = bb.getInt(12);
+        }
+        if (timescale > 0) {
+            r.timescale = timescale;
         }
     }
 
@@ -907,6 +960,8 @@ public final class Fmp4ToMp4Converter {
         public int defaultSampleSize;
         public int sampleCount;
         public int[] sampleSizes;
+        public int timescale;
+        public long baseMediaDecodeTime = -1L;
 
         void ensureCapacity(int min) {
             if (sampleSizes == null)

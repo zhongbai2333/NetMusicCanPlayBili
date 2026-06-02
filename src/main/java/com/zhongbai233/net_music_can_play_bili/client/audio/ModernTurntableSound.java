@@ -18,6 +18,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Util;
 
 import java.net.URL;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
@@ -58,6 +59,7 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
         this.y = pos.getY() + 0.5D;
         this.z = pos.getZ() + 0.5D;
         this.volume = Math.max(0.01F, 4.0F * clientVolume);
+        ModernTurntablePlaybackTracker.registerSound(this);
     }
 
     @Override
@@ -104,7 +106,7 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
             if (lyricPos >= 0) {
                 lyricRecord.updateCurrentLine(lyricPos);
                 if (turntable != null && turntable.isPlaying()) {
-                    turntable.setClientLyricRecord(lyricRecord, sessionId);
+                    turntable.setClientLyricRecord(lyricRecord, sessionId, lyricPos);
                 }
             }
         }
@@ -129,7 +131,17 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
         ModernTurntablePlaybackTracker.markStreamStarted(pos, sessionId);
         return CompletableFuture.supplyAsync(() -> {
             try {
-                return new NetMusicAudioStream(songUrl);
+                if (isStopped()) {
+                    throw stoppedBeforeStreamReady();
+                }
+                AudioStream stream = new NetMusicAudioStream(songUrl);
+                if (isStopped()) {
+                    stream.close();
+                    throw stoppedBeforeStreamReady();
+                }
+                return stream;
+            } catch (CancellationException e) {
+                throw e;
             } catch (Exception e) {
                 BiliPlaybackDiagnostics.markFailed(songUrl, e);
                 finishSession();
@@ -139,22 +151,30 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
         }, Util.backgroundExecutor());
     }
 
+    private CancellationException stoppedBeforeStreamReady() {
+        finishSession();
+        return new CancellationException("modern turntable sound stopped before stream creation");
+    }
+
     /**
-     * 返回有效的歌词 tick 位置。
-     * 现代唱片机走自己的 OpenAL 管线（StereoOpenALHandler），从 DolbyAudioRegistry 获取实际播放位置。
-     * 在 OpenAL 预缓冲完成并开始播放之前返回 -1，歌词不推进。
+     * 返回有效的歌词 tick 位置
      */
     private int effectiveLyricTick() {
-        long posTicks = com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry.getStereoPositionTicks(pos);
+        long posTicks = com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry.getAnyPositionTicks(pos);
         if (posTicks >= 0L) {
             long value = (long) lyricStartTick + posTicks;
             return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, value));
         }
-        // StereoOpenALHandler 尚未开始播放（预缓冲未完成或非 OpenAL 管线），不推进歌词
         return -1;
     }
 
+    void stopFromTracker() {
+        finishSession();
+        stop();
+    }
+
     private void finishSession() {
+        ModernTurntablePlaybackTracker.unregisterSound(this);
         if (!sessionFinished) {
             sessionFinished = true;
             ModernTurntablePlaybackTracker.finish(pos, sessionId);

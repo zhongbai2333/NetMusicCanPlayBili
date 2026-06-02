@@ -10,7 +10,7 @@ import com.zhongbai233.net_music_can_play_bili.bili.codec.OpenALSpatialAudio;
 public class SpeakerAudioRelay {
     private static final int SAMPLES_PER_BLOCK = 256;
     private static final float[] MONO_POS = { 0, 0, 1.0f };
-    private static final int MIN_PUMP_PENDING = 40;
+    private static final int MIN_PUMP_PENDING = 4;
 
     private volatile OpenALSpatialAudio spatialAudio;
     private volatile boolean initialized;
@@ -18,7 +18,7 @@ public class SpeakerAudioRelay {
     private volatile int channelIndex = -1;
     private volatile float userVolume = 1.0f;
     private volatile float[] speakerPos;
-    private long initNanos;
+    private volatile boolean handlerStarted;
     private int pendingFed = 0;
     private int sampleRate = 48000;
 
@@ -43,6 +43,10 @@ public class SpeakerAudioRelay {
             this.sampleRate = sr;
     }
 
+    public void setHandlerStarted(boolean v) {
+        this.handlerStarted = v;
+    }
+
     public void feedChannel(float[] monoPcm) {
         if (closed || monoPcm == null || monoPcm.length == 0)
             return;
@@ -54,7 +58,7 @@ public class SpeakerAudioRelay {
             spatialAudio = new OpenALSpatialAudio();
             spatialAudio.init(1, 0, sampleRate); // 必须用正确采样率，否则播速偏差
             pendingFed = 0;
-            initNanos = System.nanoTime();
+            started = false;
             initialized = true;
         }
 
@@ -80,12 +84,8 @@ public class SpeakerAudioRelay {
         OpenALSpatialAudio sa = spatialAudio;
         if (sa == null)
             return;
-        // 检查是否已度过 init 静音期
-        if (!started && initNanos > 0L) {
-            long elapsedMs = (System.nanoTime() - initNanos) / 1_000_000L;
-            if (elapsedMs >= 280) {
-                started = true;
-            }
+        if (!started && handlerStarted) {
+            started = true;
         }
         sa.updatePositions(new float[][] { MONO_POS }, new float[0][0], listenerPos,
                 forward(speakerPos, listenerPos));
@@ -135,7 +135,7 @@ public class SpeakerAudioRelay {
     public void cleanup() {
         closed = true;
         started = false;
-        initNanos = 0L;
+        handlerStarted = false;
         pendingFed = 0;
         if (spatialAudio != null) {
             spatialAudio.cleanup();

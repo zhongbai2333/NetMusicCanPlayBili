@@ -65,6 +65,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     private boolean needsResolveOnLoad;
     private transient LyricRecord clientLyricRecord;
     private transient String clientLyricSessionId = "";
+    private transient int clientLyricTick = -1;
 
     public ModernTurntableBlockEntity(BlockPos pos, BlockState blockState) {
         super(ModBlockEntities.MODERN_TURNTABLE.get(), pos, blockState);
@@ -73,7 +74,10 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     @Override
     public void setRemoved() {
         super.setRemoved();
-        stopPlayback();
+        syncedPlayers.clear();
+        clientLyricRecord = null;
+        clientLyricSessionId = "";
+        clientLyricTick = -1;
     }
 
     private final ResourceHandler<ItemResource> itemHandler = new ResourceHandler<>() {
@@ -243,12 +247,21 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         return clientLyricRecord;
     }
 
+    public int getClientLyricTick() {
+        return clientLyricTick;
+    }
+
     public void setClientLyricRecord(LyricRecord lyricRecord, String sessionId) {
+        setClientLyricRecord(lyricRecord, sessionId, -1);
+    }
+
+    public void setClientLyricRecord(LyricRecord lyricRecord, String sessionId, int lyricTick) {
         if (level != null && !level.isClientSide()) {
             return;
         }
         clientLyricRecord = lyricRecord;
         clientLyricSessionId = normalizeSessionId(sessionId);
+        clientLyricTick = lyricTick;
     }
 
     public void clearClientLyricRecord(String sessionId) {
@@ -259,11 +272,12 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         if (normalized.isBlank() || clientLyricSessionId.isBlank() || clientLyricSessionId.equals(normalized)) {
             clientLyricRecord = null;
             clientLyricSessionId = "";
+            clientLyricTick = -1;
         }
     }
 
     public long getPlaybackElapsedMillis(long gameTime) {
-        if (playing && startedGameTime > 0L) {
+        if (playing) {
             return Math.min(durationSeconds * 1000L, Math.max(0L, (gameTime - startedGameTime) * 50L));
         }
         long elapsedTicks = storedElapsedTicks();
@@ -282,6 +296,19 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         stopPlayback();
         markDirty();
         return removed;
+    }
+
+    public ItemStack removeDiscForBlockRemoval() {
+        ItemStack removed = disc;
+        disc = ItemStack.EMPTY;
+        stopPlaybackWithoutBlockUpdate();
+        setChanged();
+        return removed;
+    }
+
+    public void stopPlaybackForBlockRemoval() {
+        stopPlaybackWithoutBlockUpdate();
+        setChanged();
     }
 
     public void startFromDisc(ServerPlayer triggerPlayer) {
@@ -341,6 +368,11 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         if (!playing && playUrl.isBlank()) {
             return;
         }
+        stopPlaybackWithoutBlockUpdate();
+        markDirty();
+    }
+
+    private void stopPlaybackWithoutBlockUpdate() {
         playing = false;
         rawUrl = "";
         playUrl = "";
@@ -351,7 +383,6 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         savedElapsedTicks = 0L;
         seekGeneration = 0;
         syncedPlayers.clear();
-        markDirty();
     }
 
     public void replayFromBeginning(ServerPlayer player) {
@@ -435,7 +466,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     }
 
     private long snapshotElapsedTicks(long gameTime) {
-        if (playing && startedGameTime > 0L) {
+        if (playing) {
             long liveElapsedTicks = Math.max(0L, gameTime - startedGameTime);
             return saveElapsedTicks(Math.max(storedElapsedTicks(), liveElapsedTicks));
         }
@@ -496,7 +527,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     }
 
     private long elapsedMillis(long gameTime) {
-        if (!playing || startedGameTime <= 0L) {
+        if (!playing) {
             return 0L;
         }
         // 与 getPlaybackElapsedMillis 对齐：超过歌曲总时长的已播放时间视为已结束
@@ -504,7 +535,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     }
 
     private int elapsedSeconds(long gameTime) {
-        if (!playing || startedGameTime <= 0L) {
+        if (!playing) {
             return 0;
         }
         long elapsed = Math.max(0L, (gameTime - startedGameTime) / 20L);

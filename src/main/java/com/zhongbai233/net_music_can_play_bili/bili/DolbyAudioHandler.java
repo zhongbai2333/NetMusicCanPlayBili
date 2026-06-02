@@ -57,6 +57,8 @@ public class DolbyAudioHandler {
 
     private int frameCount;
     private int nullPcmCount;
+    /** 已喂入 OpenAL 的 E-AC-3 帧总数（在 feedOpenAL 中递增） */
+    private long totalFramesFedToOpenAL;
     private boolean didFirstDiag;
     private boolean didFirstDiagSpatial;
     private boolean didFirstPositionDiag;
@@ -98,6 +100,9 @@ public class DolbyAudioHandler {
             playbackStarted = true;
             lastFrameFeedNanos = System.nanoTime();
             frameBudget = MAX_FRAMES_PER_TICK;
+            for (SpeakerAudioRelay relay : relays) {
+                relay.setHandlerStarted(true);
+            }
             LOGGER.debug("Dolby OpenAL 预缓冲完成: {} 帧", processedQueue.size());
         }
         updateFrameBudget();
@@ -198,6 +203,9 @@ public class DolbyAudioHandler {
     public void addRelay(SpeakerAudioRelay relay) {
         if (relay != null && !relays.contains(relay)) {
             relay.setSampleRate(48000); // EC-3 Dolby 固定 48kHz，显式设置以防 relay 默认值被意外覆盖
+            if (playbackStarted) {
+                relay.setHandlerStarted(true); // 已开始播放时新 relay 立即获得启动信号
+            }
             relays.add(relay);
         }
     }
@@ -217,6 +225,22 @@ public class DolbyAudioHandler {
         float ageSeconds = ageNanos / 1_000_000_000.0f;
         float decay = Math.max(0.0f, 1.0f - ageSeconds * 2.5f);
         return clampGain(lastAudioLevel * decay);
+    }
+
+    public long getPositionTicks() {
+        if (!playbackStarted) {
+            return -1L;
+        }
+        OpenALSpatialAudio sa = spatialAudio;
+        long consumed;
+        if (sa != null) {
+            consumed = sa.getConsumedSamples();
+            if (consumed > 0L) {
+                return consumed * 20L / 48000L;
+            }
+        }
+
+        return totalFramesFedToOpenAL * 1536L * 20L / 48000L;
     }
 
     public void cleanup() {
@@ -427,6 +451,7 @@ public class DolbyAudioHandler {
                 sa.updateObjectFrameBlock(pf.objPcmCh, off);
             }
         }
+        totalFramesFedToOpenAL++;
         // 拆分声道转发：每个 relay 只拿到它选的声道数据
         for (SpeakerAudioRelay relay : relays) {
             int ch = relay.getChannelIndex();

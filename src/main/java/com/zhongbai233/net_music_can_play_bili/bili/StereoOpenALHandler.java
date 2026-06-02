@@ -153,6 +153,10 @@ public class StereoOpenALHandler {
             started = true;
             lastFrameFeedNanos = System.nanoTime();
             frameBudget = Math.min(MAX_BLOCKS_PER_TICK, sampleRate / 20.0 / SAMPLES_PER_BLOCK);
+            // 统一通知所有 relay 可以开始播放（替代各自独立的 280ms 计时器）
+            for (SpeakerAudioRelay relay : relays) {
+                relay.setHandlerStarted(true);
+            }
             LOGGER.debug("Stereo OpenAL 预缓冲完成: {} blocks, 开始播放", pcmQueue.size());
         }
 
@@ -235,6 +239,9 @@ public class StereoOpenALHandler {
     public void addRelay(SpeakerAudioRelay relay) {
         if (relay != null && !relays.contains(relay)) {
             relay.setSampleRate(sampleRate); // 注入正确采样率（如 44100Hz AAC/FLAC），避免 relay 用错误速率播放
+            if (started) {
+                relay.setHandlerStarted(true); // 已开始播放时新 relay 立即获得启动信号
+            }
             relays.add(relay);
         }
     }
@@ -319,6 +326,7 @@ public class StereoOpenALHandler {
 
     /**
      * 当前已播放的歌词 tick 数。1 tick = 50ms 音频时间。
+     * 使用 OpenAL 实际消费的样本数（而非已喂入数），消除 ~256ms 预缓冲偏差
      * 
      * @return 播放位置（tick），未开始播放时返回 -1
      */
@@ -326,7 +334,9 @@ public class StereoOpenALHandler {
         if (!started) {
             return -1L;
         }
-        return totalSamplesFed * 20L / sampleRate;
+        OpenALSpatialAudio sa = spatialAudio;
+        long consumed = sa != null ? sa.getConsumedSamples() : totalSamplesFed;
+        return consumed * 20L / sampleRate;
     }
 
     public List<String> describeState() {
