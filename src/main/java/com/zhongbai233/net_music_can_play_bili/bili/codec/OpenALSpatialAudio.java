@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.openal.AL;
 import org.lwjgl.openal.AL10;
+import org.lwjgl.openal.AL11;
 import org.lwjgl.openal.ALC;
 import org.lwjgl.openal.ALC10;
 import org.lwjgl.openal.EXTFloat32;
@@ -65,6 +66,8 @@ public class OpenALSpatialAudio {
     private boolean initialized;
     /** 设备重置后所有 source/buffer 失效，标记为需重建 */
     private volatile boolean deviceLost;
+    /** OpenAL 已消费的 buffer 总数（每次 unqueue 时 +1），用于精确播放位置 */
+    private long totalConsumedBuffers;
 
     public OpenALSpatialAudio() {
     }
@@ -90,6 +93,7 @@ public class OpenALSpatialAudio {
         this.numBeds = numBedChannels;
         this.numObjects = numDynamicObjects;
         this.deviceLost = false;
+        this.totalConsumedBuffers = 0L;
         this.uploadScratch = BufferUtils.createByteBuffer(SAMPLES_PER_BUFFER * bytesPerSample)
                 .order(ByteOrder.LITTLE_ENDIAN);
 
@@ -235,38 +239,84 @@ public class OpenALSpatialAudio {
         return numObjects;
     }
 
-    /** 释放所有 OpenAL 资源 */
+    public long getConsumedSamples() {
+        long baseSamples = totalConsumedBuffers * (long) SAMPLES_PER_BUFFER;
+        if (!initialized || deviceLost || !ensureOpenAlContext("getConsumedSamples")) {
+            return baseSamples;
+        }
+        int source = primarySource();
+        if (source == 0) {
+            return baseSamples;
+        }
+        int byteOffset;
+        try {
+            byteOffset = AL10.alGetSourcei(source, AL11.AL_BYTE_OFFSET);
+        } catch (Throwable ignored) {
+            return baseSamples;
+        }
+        if (checkDeviceLost("getConsumedSamples:alGetSourcei")) {
+            return baseSamples;
+        }
+        long sampleOffset = Math.max(0L, byteOffset / Math.max(1, bytesPerSample));
+        return baseSamples + Math.min(SAMPLES_PER_BUFFER - 1L, sampleOffset);
+    }
+
     public void cleanup() {
         initialized = false;
+        int[] bedSourcesToDelete = bedSources;
+        int[] objectSourcesToDelete = objectSources;
+        int[][] bedBuffersToDelete = bedBuffers;
+        int[][] objBuffersToDelete = objBuffers;
+        clearLocalReferences();
+        Thread cleanupThread = new Thread(
+                () -> safeCleanupNative(bedSourcesToDelete, objectSourcesToDelete, bedBuffersToDelete,
+                        objBuffersToDelete),
+                "OpenALSpatialCleanup");
+        cleanupThread.setDaemon(true);
+        cleanupThread.start();
+    }
+
+    private void safeCleanupNative(int[] bedSourcesToDelete, int[] objectSourcesToDelete, int[][] bedBuffersToDelete,
+            int[][] objBuffersToDelete) {
         if (!ensureOpenAlContext("cleanup")) {
-            clearLocalReferences();
             return;
         }
-        if (bedSources != null) {
-            for (int src : bedSources) {
-                stopAndDelete(src);
+        if (bedSourcesToDelete != null) {
+            for (int src : bedSourcesToDelete) {
+                try {
+                    stopAndDelete(src);
+                } catch (Throwable ignored) {
+                }
             }
         }
-        if (objectSources != null) {
-            for (int src : objectSources) {
-                stopAndDelete(src);
+        if (objectSourcesToDelete != null) {
+            for (int src : objectSourcesToDelete) {
+                try {
+                    stopAndDelete(src);
+                } catch (Throwable ignored) {
+                }
             }
         }
-        if (bedBuffers != null) {
-            for (int[] chBufs : bedBuffers) {
+        if (bedBuffersToDelete != null) {
+            for (int[] chBufs : bedBuffersToDelete) {
                 for (int buf : chBufs) {
-                    AL10.alDeleteBuffers(buf);
+                    try {
+                        AL10.alDeleteBuffers(buf);
+                    } catch (Throwable ignored) {
+                    }
                 }
             }
         }
-        if (objBuffers != null) {
-            for (int[] objBufs : objBuffers) {
+        if (objBuffersToDelete != null) {
+            for (int[] objBufs : objBuffersToDelete) {
                 for (int buf : objBufs) {
-                    AL10.alDeleteBuffers(buf);
+                    try {
+                        AL10.alDeleteBuffers(buf);
+                    } catch (Throwable ignored) {
+                    }
                 }
             }
         }
-        clearLocalReferences();
     }
 
     private void detectAudioFormat() {
@@ -287,6 +337,16 @@ public class OpenALSpatialAudio {
         objectGains = null;
         uploadScratch = null;
         deviceLost = false;
+    }
+
+    private int primarySource() {
+        if (bedSources != null && bedSources.length > 0) {
+            return bedSources[0];
+        }
+        if (objectSources != null && objectSources.length > 0) {
+            return objectSources[0];
+        }
+        return 0;
     }
 
     @SuppressWarnings("unchecked")
@@ -371,6 +431,9 @@ public class OpenALSpatialAudio {
             int buf = AL10.alSourceUnqueueBuffers(sourceId);
             if (buf == 0 && checkDeviceLost("pumpSource:alSourceUnqueueBuffers")) {
                 return;
+            }
+            if (sourceId == primarySource()) {
+                totalConsumedBuffers++;
             }
             float[] pcm = pending != null ? pending.pollFirst() : null;
             fillBuffer(buf, pcm, gain);

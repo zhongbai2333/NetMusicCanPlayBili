@@ -30,9 +30,16 @@ public final class ChunkPrefetchInputStream extends InputStream {
     private volatile long readPosition;
     private volatile Mode mode = Mode.UNKNOWN;
     private volatile long totalLength = -1L;
+    private final long startByteOffset;
 
     public ChunkPrefetchInputStream(URL url) throws IOException {
-        this(url, new HttpRangeClient(), DEFAULT_CHUNK_SIZE, DEFAULT_LOW_WATER, DEFAULT_HIGH_WATER);
+        this(url, 0L);
+    }
+
+    /** @param startByteOffset 首次 Range 请求的起始字节偏移；0 表示从头下载 */
+    public ChunkPrefetchInputStream(URL url, long startByteOffset) throws IOException {
+        this(url, new HttpRangeClient(), DEFAULT_CHUNK_SIZE, DEFAULT_LOW_WATER, DEFAULT_HIGH_WATER,
+                Math.max(0L, startByteOffset));
     }
 
     public ChunkPrefetchInputStream(
@@ -41,16 +48,27 @@ public final class ChunkPrefetchInputStream extends InputStream {
             int chunkSize,
             int lowWater,
             int highWater) throws IOException {
+        this(url, client, chunkSize, lowWater, highWater, 0L);
+    }
+
+    public ChunkPrefetchInputStream(
+            URL url,
+            HttpRangeClient client,
+            int chunkSize,
+            int lowWater,
+            int highWater,
+            long startByteOffset) throws IOException {
         this.url = url;
         this.client = client;
         this.chunkSize = Math.max(1024 * 1024, chunkSize);
         this.lowWater = Math.max(this.chunkSize, lowWater);
         this.highWater = Math.max(this.lowWater, highWater);
+        this.startByteOffset = Math.max(0L, startByteOffset);
         this.spool = new TempFileByteSpool("http-prefetch-");
         this.downloader = new Thread(this::downloadLoop, "HttpPrefetch");
         this.downloader.setDaemon(true);
-        LOGGER.debug("HTTP chunk prefetch init: chunk={} lowWater={} highWater={} urlHost={}",
-                this.chunkSize, this.lowWater, this.highWater, url.getHost());
+        LOGGER.debug("HTTP chunk prefetch init: chunk={} lowWater={} highWater={} startOffset={} urlHost={}",
+                this.chunkSize, this.lowWater, this.highWater, this.startByteOffset, url.getHost());
         this.downloader.start();
     }
 
@@ -113,11 +131,11 @@ public final class ChunkPrefetchInputStream extends InputStream {
     private void downloadWithRangeProbe() throws IOException {
         // 非 B站 CDN 的服务器优先尝试全量 GET（单 TCP 连接），
         // 避免跨域/跨境 QoS 对多连接限速导致的吞吐量骤降。
-        if (!isBiliCdnHost() && tryFullDownload()) {
+        if (!isBiliCdnHost() && startByteOffset == 0L && tryFullDownload()) {
             return;
         }
 
-        long nextStart = 0L;
+        long nextStart = startByteOffset;
         while (!closed && !spool.isComplete()) {
             if (mode == Mode.RANGE) {
                 waitUntilCacheNeedsData();

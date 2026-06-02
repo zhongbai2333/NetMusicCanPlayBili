@@ -20,6 +20,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.HorizontalDirectionalBlock;
@@ -120,7 +121,6 @@ public class ModernTurntableBlock extends HorizontalDirectionalBlock implements 
             return InteractionResult.SUCCESS;
         }
 
-        @SuppressWarnings("null")
         ItemMusicCD.SongInfo songInfo = ItemMusicCD.getSongInfo(stack);
         if (songInfo == null) {
             player.sendSystemMessage(Component.translatable(
@@ -164,9 +164,18 @@ public class ModernTurntableBlock extends HorizontalDirectionalBlock implements 
             ItemStack tool) {
         if (!level.isClientSide() && blockEntity instanceof ModernTurntableBlockEntity turntable
                 && turntable.hasDisc()) {
-            popResource(level, pos, turntable.removeDisc());
+            popResource(level, pos, turntable.removeDiscForBlockRemoval());
         }
         super.playerDestroy(level, player, pos, state, blockEntity, tool);
+    }
+
+    @Override
+    public void destroy(LevelAccessor level, BlockPos pos, BlockState state) {
+        if (level instanceof Level realLevel && !realLevel.isClientSide()
+                && realLevel.getBlockEntity(pos) instanceof ModernTurntableBlockEntity turntable) {
+            turntable.stopPlaybackForBlockRemoval();
+        }
+        super.destroy(level, pos, state);
     }
 
     private static void ejectDisc(Level level, BlockPos pos, ModernTurntableBlockEntity turntable) {

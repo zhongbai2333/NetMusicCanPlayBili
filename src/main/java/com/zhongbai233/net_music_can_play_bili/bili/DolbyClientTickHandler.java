@@ -23,8 +23,7 @@ public final class DolbyClientTickHandler {
 
     @SubscribeEvent
     public static void onPlayerLoggedOut(ClientPlayerNetworkEvent.LoggingOut event) {
-        com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker.clear();
-        lastTrackedLevel = null;
+        cleanupClientPlayback();
     }
 
     @SubscribeEvent
@@ -46,7 +45,7 @@ public final class DolbyClientTickHandler {
         if (mc.level != lastTrackedLevel) {
             lastTrackedLevel = mc.level;
             if (lastTrackedLevel == null) {
-                com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker.clear();
+                cleanupClientPlayback();
             }
         }
 
@@ -90,5 +89,12 @@ public final class DolbyClientTickHandler {
         };
 
         DolbyAudioRegistry.updatePositions(listenerPos);
+    }
+
+    private static void cleanupClientPlayback() {
+        com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker.stopAllSounds();
+        HttpAudioStreamHandler.closeModernStreams();
+        DolbyAudioRegistry.cleanup();
+        lastTrackedLevel = null;
     }
 }

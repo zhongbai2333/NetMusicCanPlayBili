@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.audio;
 
 import com.zhongbai233.net_music_can_play_bili.bili.AudioUtils;
+import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 
 import java.util.concurrent.ConcurrentHashMap;
@@ -9,6 +10,7 @@ public final class ModernTurntablePlaybackTracker {
     private static final long STOP_GRACE_MILLIS = 5_000L;
     private static final long DUPLICATE_SUPPRESS_MILLIS = 1_500L;
     private static final ConcurrentHashMap<BlockPos, ActiveSession> ACTIVE = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<ModernTurntableSound, Boolean> ACTIVE_SOUNDS = new ConcurrentHashMap<>();
 
     private ModernTurntablePlaybackTracker() {
     }
@@ -23,7 +25,7 @@ public final class ModernTurntablePlaybackTracker {
         BlockPos key = AudioUtils.copyPos(pos);
         ActiveSession previous = ACTIVE.get(key);
         if (previous != null && previous.sessionId().equals(sessionId)) {
-            if (previous.streamStarted() && previous.expiresAtMillis() > now) {
+            if (previous.expiresAtMillis() > now) {
                 return false;
             }
             if (previous.suppressUntilMillis() > now) {
@@ -41,6 +43,30 @@ public final class ModernTurntablePlaybackTracker {
         ACTIVE.computeIfPresent(pos, (ignored, active) -> active.sessionId().equals(sessionId)
                 ? new ActiveSession(active.sessionId(), active.expiresAtMillis(), active.suppressUntilMillis(), true)
                 : active);
+    }
+
+    public static void registerSound(ModernTurntableSound sound) {
+        if (sound != null) {
+            ACTIVE_SOUNDS.put(sound, Boolean.TRUE);
+        }
+    }
+
+    public static void unregisterSound(ModernTurntableSound sound) {
+        if (sound != null) {
+            ACTIVE_SOUNDS.remove(sound);
+        }
+    }
+
+    public static void stopAllSounds() {
+        Minecraft minecraft = Minecraft.getInstance();
+        for (ModernTurntableSound sound : ACTIVE_SOUNDS.keySet()) {
+            sound.stopFromTracker();
+            if (minecraft != null) {
+                minecraft.getSoundManager().stop(sound);
+            }
+        }
+        ACTIVE_SOUNDS.clear();
+        clear();
     }
 
     public static void finish(BlockPos pos, String sessionId) {

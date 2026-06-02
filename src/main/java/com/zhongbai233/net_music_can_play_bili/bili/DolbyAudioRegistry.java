@@ -28,6 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class DolbyAudioRegistry {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_ACTIVE_TURNTABLES = 16;
+    private static final long CLEANUP_TIMEOUT_MILLIS = 2_000L;
     private static final AtomicInteger ANONYMOUS_COUNTER = new AtomicInteger();
     private static final ConcurrentMap<BlockPos, DolbyEntry> DOLBY_HANDLERS = new ConcurrentHashMap<>();
     private static final ConcurrentMap<BlockPos, StereoEntry> STEREO_HANDLERS = new ConcurrentHashMap<>();
@@ -341,6 +342,24 @@ public class DolbyAudioRegistry {
         return entry.handler().getPositionTicks();
     }
 
+    public static long getAnyPositionTicks(BlockPos pos) {
+        if (pos == null) {
+            return -1L;
+        }
+        BlockPos key = keyFor(pos);
+        StereoEntry stereo = STEREO_HANDLERS.get(key);
+        if (stereo != null) {
+            long ticks = stereo.handler().getPositionTicks();
+            if (ticks >= 0L)
+                return ticks;
+        }
+        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
+        if (dolby != null) {
+            return dolby.handler().getPositionTicks();
+        }
+        return -1L;
+    }
+
     public static List<String> describeActiveSources() {
         float[] listener = listenerPos;
         if (!isActive()) {
@@ -371,14 +390,67 @@ public class DolbyAudioRegistry {
     }
 
     public static void cleanup() {
+        List<Runnable> cleanupTasks = new ArrayList<>();
         for (DolbyEntry entry : DOLBY_HANDLERS.values()) {
-            entry.cleanup();
+            cleanupTasks.add(entry::cleanup);
         }
         for (StereoEntry entry : STEREO_HANDLERS.values()) {
-            entry.cleanup();
+            cleanupTasks.add(entry::cleanup);
+        }
+        for (SpeakerAudioRelay relay : RELAYS.values()) {
+            cleanupTasks.add(relay::cleanup);
         }
         DOLBY_HANDLERS.clear();
         STEREO_HANDLERS.clear();
+        RELAYS.clear();
+        RELAY_TURNTABLE.clear();
+        MACHINE_OVERRIDES.clear();
+        fallbackMachinePos = null;
+        listenerPos = null;
+        runCleanupTasks(cleanupTasks);
+    }
+
+    private static void runCleanupTasks(List<Runnable> cleanupTasks) {
+        if (cleanupTasks.isEmpty()) {
+            return;
+        }
+        List<Thread> threads = new ArrayList<>(cleanupTasks.size());
+        for (int i = 0; i < cleanupTasks.size(); i++) {
+            Runnable task = cleanupTasks.get(i);
+            Thread thread = new Thread(() -> {
+                try {
+                    task.run();
+                } catch (Throwable t) {
+                    LOGGER.debug("OpenAL registry cleanup task failed: {}", t.toString());
+                }
+            }, "DolbyRegistryCleanup-" + i);
+            thread.setDaemon(true);
+            thread.start();
+            threads.add(thread);
+        }
+
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(CLEANUP_TIMEOUT_MILLIS);
+        int unfinished = 0;
+        for (Thread thread : threads) {
+            long remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+            if (remainingMillis <= 0L) {
+                unfinished++;
+                continue;
+            }
+            try {
+                thread.join(remainingMillis);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                unfinished++;
+                break;
+            }
+            if (thread.isAlive()) {
+                unfinished++;
+            }
+        }
+        if (unfinished > 0) {
+            LOGGER.debug("OpenAL registry cleanup timed out with {} task(s) still running", unfinished);
+        }
     }
 
     private static void closeDolbyAt(BlockPos key) {
