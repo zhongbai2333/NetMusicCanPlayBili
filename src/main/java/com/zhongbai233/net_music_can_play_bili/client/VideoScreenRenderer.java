@@ -35,8 +35,11 @@ public final class VideoScreenRenderer {
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
             ByteBuffer init = ByteBuffer.allocateDirect(COLS * ROWS * 4);
-            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA, COLS, ROWS, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, init);
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, COLS, ROWS, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, init);
             LOGGER.info("GUI纹理 id={}", texId);
+
+            // 调试：检查纹理数据
+            if (GL11.glGetError() != 0) LOGGER.error("glTexImage2D 失败");
         });
 
         new Thread(() -> {
@@ -69,8 +72,14 @@ public final class VideoScreenRenderer {
         String fs = "#version 330\nin vec2 uv;out vec4 c;uniform sampler2D s;void main(){c=texture(s,uv);}";
         prog = GL20.glCreateProgram();
         int vsh = GL20.glCreateShader(GL20.GL_VERTEX_SHADER); GL20.glShaderSource(vsh, vs); GL20.glCompileShader(vsh);
+        if (GL20.glGetShaderi(vsh, GL20.GL_COMPILE_STATUS) == 0)
+            LOGGER.error("VS error: {}", GL20.glGetShaderInfoLog(vsh));
         int fsh = GL20.glCreateShader(GL20.GL_FRAGMENT_SHADER); GL20.glShaderSource(fsh, fs); GL20.glCompileShader(fsh);
+        if (GL20.glGetShaderi(fsh, GL20.GL_COMPILE_STATUS) == 0)
+            LOGGER.error("FS error: {}", GL20.glGetShaderInfoLog(fsh));
         GL20.glAttachShader(prog, vsh); GL20.glAttachShader(prog, fsh); GL20.glLinkProgram(prog);
+        if (GL20.glGetProgrami(prog, GL20.GL_LINK_STATUS) == 0)
+            LOGGER.error("Link error: {}", GL20.glGetProgramInfoLog(prog));
         GL20.glDeleteShader(vsh); GL20.glDeleteShader(fsh);
         glOk = true;
         LOGGER.info("GL OK: VAO={} Prog={}", vao, prog);
@@ -81,6 +90,10 @@ public final class VideoScreenRenderer {
         ByteBuffer b = ByteBuffer.allocateDirect(rgba.length); b.put(rgba); b.flip();
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, texId);
         GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, COLS, ROWS, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, b);
+        // 首帧检查
+        if (rgba[0] != 0 || rgba[1] != 0 || rgba[2] != 0) {
+            LOGGER.info("非黑帧! pixel0=#{:02X}{:02X}{:02X}", rgba[0]&0xFF, rgba[1]&0xFF, rgba[2]&0xFF);
+        }
     }
 
     /** CPU 侧构建正交投影矩阵: 屏幕坐标 → NDC */
