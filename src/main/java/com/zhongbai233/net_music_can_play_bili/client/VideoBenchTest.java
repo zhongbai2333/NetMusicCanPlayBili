@@ -3,6 +3,9 @@ package com.zhongbai233.net_music_can_play_bili.client;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.codec.FfmpegSubprocessDecoder;
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import org.slf4j.Logger;
 
@@ -18,6 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 2. 测量解码性能
  * 3. 分析首帧 RGBA 数据
  */
+@EventBusSubscriber(value = Dist.CLIENT)
 public final class VideoBenchTest {
 
     private static final Logger LOGGER = LogUtils.getLogger();
@@ -157,6 +161,7 @@ public final class VideoBenchTest {
      * 在客户端首次 tick 时自动运行 bench。
      * B站视频 ID 通过系统属性传入: -Dbili.video.bench=BV1GJ411x7h7
      */
+    @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
         String benchVideoId = System.getProperty("bili.video.bench", "");
         if (benchVideoId.isBlank())

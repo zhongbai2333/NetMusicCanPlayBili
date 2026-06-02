@@ -13,7 +13,6 @@ public final class ModernTurntableClientEvents {
 
     public static void register(IEventBus modEventBus) {
         modEventBus.addListener(ModernTurntableClientEvents::registerRenderers);
-        modEventBus.addListener(VideoBenchTest::onClientTick);
     }
 
     private static void registerRenderers(EntityRenderersEvent.RegisterRenderers event) {
