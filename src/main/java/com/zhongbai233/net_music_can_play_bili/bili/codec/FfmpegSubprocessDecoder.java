@@ -83,19 +83,21 @@ public class FfmpegSubprocessDecoder implements AutoCloseable {
         }
         LOGGER.info("已下载 {}KB", total / 1024);
 
-        // 2. 启动 ffmpeg 解码
+        // 2. 启动 ffmpeg 解码（不做缩放，原分辨率输出）
         List<String> cmd = new ArrayList<>();
         cmd.add("ffmpeg");
         cmd.add("-v"); cmd.add("error");
         cmd.add("-i"); cmd.add(tempFile.toAbsolutePath().toString());
 
+        // 用 fps filter 做帧率控制 + 缩放
         if (fps > 0) {
-            cmd.add("-r"); cmd.add(String.valueOf(fps));
+            cmd.add("-filter:v");
+            cmd.add("fps=" + fps + ",scale=" + width + ":" + height + ":flags=bilinear,format=rgba");
+        } else {
+            cmd.add("-filter:v");
+            cmd.add("scale=" + width + ":" + height + ":flags=bilinear,format=rgba");
         }
-        cmd.add("-vf");
-        cmd.add("scale=" + width + ":" + height + ":flags=bilinear");
 
-        cmd.add("-pix_fmt"); cmd.add("rgba");
         cmd.add("-f"); cmd.add("rawvideo");
         cmd.add("-an");
         cmd.add("pipe:1");
