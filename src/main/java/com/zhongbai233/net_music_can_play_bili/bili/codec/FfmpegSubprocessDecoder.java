@@ -42,11 +42,12 @@ public class FfmpegSubprocessDecoder implements AutoCloseable {
         List<String> cmd = new ArrayList<>();
         cmd.add("ffmpeg");
         cmd.add("-v"); cmd.add("error");
-        // B站 CDN 需要这些 header
-        cmd.add("-headers");
-        cmd.add("Referer: https://www.bilibili.com/\r\n" +
-                "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n" +
-                "Origin: https://www.bilibili.com");
+        // B站 CDN 需要这些 header（每个 header 单独一个 -headers）
+        cmd.add("-headers"); cmd.add("Referer: https://www.bilibili.com/");
+        cmd.add("-headers"); cmd.add("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+        cmd.add("-headers"); cmd.add("Origin: https://www.bilibili.com");
+        // 超时防止卡死
+        cmd.add("-timeout"); cmd.add("15000000"); // 15s in microseconds
         cmd.add("-i"); cmd.add(videoUrl);
 
         // 解码参数
