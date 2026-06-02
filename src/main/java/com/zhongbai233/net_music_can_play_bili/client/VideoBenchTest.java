@@ -49,56 +49,54 @@ public final class VideoBenchTest {
         LOGGER.info("  视频: {}", testVideoUrl.substring(0, Math.min(80, testVideoUrl.length())));
         LOGGER.info("══════════════════════════════════════════");
 
-        CompletableFuture.runAsync(() -> {
-            long startMs = System.currentTimeMillis();
+        long startMs = System.currentTimeMillis();
 
-            try (FfmpegSubprocessDecoder dec = new FfmpegSubprocessDecoder(
-                    testVideoUrl, TARGET_W, TARGET_H, TARGET_FPS)) {
+        try (FfmpegSubprocessDecoder dec = new FfmpegSubprocessDecoder(
+                testVideoUrl, TARGET_W, TARGET_H, TARGET_FPS)) {
 
-                int frameCount = 0;
-                long firstFrameMs = 0;
-                byte[] firstFrame = null;
+            int frameCount = 0;
+            long firstFrameMs = 0;
+            byte[] firstFrame = null;
 
-                for (int i = 0; i < MAX_FRAMES; i++) {
-                    byte[] rgba = dec.getNextFrame();
-                    if (rgba == null) break;
+            for (int i = 0; i < MAX_FRAMES; i++) {
+                byte[] rgba = dec.getNextFrame();
+                if (rgba == null) break;
 
-                    if (frameCount == 0) {
-                        firstFrameMs = System.currentTimeMillis() - startMs;
-                        firstFrame = rgba;
-                    }
-                    frameCount++;
+                if (frameCount == 0) {
+                    firstFrameMs = System.currentTimeMillis() - startMs;
+                    firstFrame = rgba;
                 }
-
-                long totalMs = System.currentTimeMillis() - startMs;
-                double avgMsPerFrame = frameCount > 0 ? (double) totalMs / frameCount : 0;
-                double effectiveFps = avgMsPerFrame > 0 ? 1000.0 / avgMsPerFrame : 0;
-
-                LOGGER.info("─────────────── Bench 结果 ───────────────");
-                LOGGER.info("  解码帧数:     {}", frameCount);
-                LOGGER.info("  首帧延迟:     {}ms", firstFrameMs);
-                LOGGER.info("  总耗时:       {}ms", totalMs);
-                LOGGER.info("  平均每帧:     {:.1f}ms", avgMsPerFrame);
-                LOGGER.info("  等效 FPS:     {:.1f}", effectiveFps);
-                LOGGER.info("  帧大小:       {}×{} = {}B/帧",
-                        TARGET_W, TARGET_H, TARGET_W * TARGET_H * 4);
-
-                if (firstFrame != null) {
-                    analyzeFirstFrame(firstFrame);
-                }
-
-                LOGGER.info("  评估: {} {}",
-                        effectiveFps >= TARGET_FPS ? "✅" : "⚠️",
-                        effectiveFps >= TARGET_FPS
-                                ? "解码性能充足，可支持实时播放"
-                                : "解码性能不足，需降低分辨率或帧率");
-
-            } catch (Exception e) {
-                LOGGER.error("视频解码测试失败: {}", e.getMessage(), e);
+                frameCount++;
             }
 
-            LOGGER.info("══════════════════════════════════════════");
-        });
+            long totalMs = System.currentTimeMillis() - startMs;
+            double avgMsPerFrame = frameCount > 0 ? (double) totalMs / frameCount : 0;
+            double effectiveFps = avgMsPerFrame > 0 ? 1000.0 / avgMsPerFrame : 0;
+
+            LOGGER.info("─────────────── Bench 结果 ───────────────");
+            LOGGER.info("  解码帧数:     {}", frameCount);
+            LOGGER.info("  首帧延迟:     {}ms", firstFrameMs);
+            LOGGER.info("  总耗时:       {}ms", totalMs);
+            LOGGER.info("  平均每帧:     {:.1f}ms", avgMsPerFrame);
+            LOGGER.info("  等效 FPS:     {:.1f}", effectiveFps);
+            LOGGER.info("  帧大小:       {}×{} = {}B/帧",
+                    TARGET_W, TARGET_H, TARGET_W * TARGET_H * 4);
+
+            if (firstFrame != null) {
+                analyzeFirstFrame(firstFrame);
+            }
+
+            LOGGER.info("  评估: {} {}",
+                    effectiveFps >= TARGET_FPS ? "✅" : "⚠️",
+                    effectiveFps >= TARGET_FPS
+                            ? "解码性能充足，可支持实时播放"
+                            : "解码性能不足，需降低分辨率或帧率");
+
+        } catch (Exception e) {
+            LOGGER.error("视频解码测试失败: {}", e.getMessage(), e);
+        }
+
+        LOGGER.info("══════════════════════════════════════════");
     }
 
     private static void analyzeFirstFrame(byte[] rgba) {
