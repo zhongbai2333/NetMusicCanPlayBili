@@ -41,6 +41,8 @@ neoForge {
 
             // Comma-separated list of namespaces to load gametests from. Empty = all namespaces.
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            // 视频解码 bench 测试 (设为 B站 BV 号即可触发，留空跳过)
+            jvmArgument '-Dbili.video.bench=BV1GJ411x7h7'
         }
 
         server {
