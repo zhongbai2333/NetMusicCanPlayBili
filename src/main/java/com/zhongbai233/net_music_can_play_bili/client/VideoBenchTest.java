@@ -95,6 +95,10 @@ public final class VideoBenchTest {
         }
 
         LOGGER.info("══════════════════════════════════════════");
+
+        // 启动世界内视频渲染
+        LOGGER.info("🎬 启动世界内视频渲染...");
+        VideoScreenRenderer.startPlayback(testVideoUrl);
     }
 
     private static void analyzeFirstFrame(byte[] rgba) {
