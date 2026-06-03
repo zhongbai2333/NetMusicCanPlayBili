@@ -2,7 +2,8 @@ package com.zhongbai233.net_music_can_play_bili.client;
 
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
-import com.zhongbai233.net_music_can_play_bili.bili.codec.FfmpegSubprocessDecoder;
+import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.VideoBillboardPreview;
 import net.minecraft.client.Minecraft;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -11,13 +12,14 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 import org.slf4j.Logger;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 视频解码 bench 测试 — 在游戏启动后自动运行一次。
  *
  * 测试内容:
- * 1. 通过系统 ffmpeg 解码 B站视频流
+ * 1. 通过内置 native 解码 B站视频流
  * 2. 测量解码性能
  * 3. 分析首帧 RGBA 数据
  */
@@ -25,11 +27,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class VideoBenchTest {
 
     private static final Logger LOGGER = LogUtils.getLogger();
+    private static final boolean BENCH_FEATURES_ENABLED = VideoFeatureFlags.benchFeaturesEnabled();
     private static final AtomicBoolean hasRun = new AtomicBoolean(false);
-    private static final int TARGET_W = 40;
-    private static final int TARGET_H = 22;
-    private static final int TARGET_FPS = 20;
+    private static final int TARGET_W = 854;
+    private static final int TARGET_H = 480;
+    private static final int TARGET_FPS = 30;
     private static final int MAX_FRAMES = 60;
+    private static final boolean CPU_BARS = VideoFeatureFlags.advancedBoolean("bili.video.cpu_bars", false);
+    private static final boolean RUN_DECODE_BENCH = VideoFeatureFlags.advancedBoolean("bili.video.run_decode_bench",
+            false);
+    private static final int PREFERRED_QUALITY = VideoFeatureFlags.advancedInt("bili.video.preferred_quality", 16);
 
     private VideoBenchTest() {
     }
@@ -50,8 +57,8 @@ public final class VideoBenchTest {
 
         long startMs = System.currentTimeMillis();
 
-        try (FfmpegSubprocessDecoder dec = new FfmpegSubprocessDecoder(
-                testVideoUrl, TARGET_W, TARGET_H, TARGET_FPS)) {
+        try (Fmp4NativeVideoDecoder dec = new Fmp4NativeVideoDecoder(
+                testVideoUrl, 7, TARGET_W, TARGET_H, MAX_FRAMES)) {
 
             int frameCount = 0;
             long firstFrameMs = 0;
@@ -59,7 +66,8 @@ public final class VideoBenchTest {
 
             for (int i = 0; i < MAX_FRAMES; i++) {
                 byte[] rgba = dec.getNextFrame();
-                if (rgba == null) break;
+                if (rgba == null)
+                    break;
 
                 if (frameCount == 0) {
                     firstFrameMs = System.currentTimeMillis() - startMs;
@@ -91,8 +99,14 @@ public final class VideoBenchTest {
                             ? "解码性能充足，可支持实时播放"
                             : "解码性能不足，需降低分辨率或帧率");
 
+            Minecraft.getInstance().execute(() -> VideoBillboardPreview.start(
+                    testVideoUrl, TARGET_W, TARGET_H, TARGET_FPS));
+
         } catch (Exception e) {
             LOGGER.error("视频解码测试失败: {}", e.getMessage(), e);
+            LOGGER.warn("B站视频片段下载/解码失败，改用本地 FFmpeg testsrc2 彩条验证 MC26.1.2 渲染链路");
+            Minecraft.getInstance().execute(() -> VideoBillboardPreview.startTestPattern(
+                    TARGET_W, TARGET_H, TARGET_FPS));
         }
 
         LOGGER.info("══════════════════════════════════════════");
@@ -130,7 +144,8 @@ public final class VideoBenchTest {
                 int g = rgba[i + 1] & 0xFF;
                 int b = rgba[i + 2] & 0xFF;
                 int idx = (r << 16) | (g << 8) | b;
-                if (colorCounts[idx] == 0) uniqueColors++;
+                if (colorCounts[idx] == 0)
+                    uniqueColors++;
                 colorCounts[idx]++;
             }
             LOGGER.info("  唯一颜色数:   {} / {} ({}%)",
@@ -146,7 +161,7 @@ public final class VideoBenchTest {
             int r = rgba[i] & 0xFF;
             int g = rgba[i + 1] & 0xFF;
             int b = rgba[i + 2] & 0xFF;
-            totalGray += (r * 30 + g * 59 + b * 11) / 100;  // 感知亮度
+            totalGray += (r * 30 + g * 59 + b * 11) / 100; // 感知亮度
         }
         int avgGray = (int) (totalGray / pixels);
         LOGGER.info("  平均亮度:     {}", avgGray);
@@ -160,14 +175,29 @@ public final class VideoBenchTest {
      */
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
-        String benchVideoId = System.getProperty("bili.video.bench", "");
-        if (benchVideoId.isBlank())
+        if (!BENCH_FEATURES_ENABLED) {
             return;
-
+        }
         // 只在进入世界后才触发
         var mc = Minecraft.getInstance();
         if (mc.level == null || mc.player == null)
             return;
+
+        if (BiliRealVideoPlaybackBench.tryStart()) {
+            return;
+        }
+
+        String benchVideoId = System.getProperty("bili.video.bench", "");
+        if (benchVideoId.isBlank() && !CPU_BARS)
+            return;
+
+        if (CPU_BARS) {
+            if (hasRun.compareAndSet(false, true)) {
+                LOGGER.info("bili.video.cpu_bars=true，跳过 B站解析/下载，直接启动 CPU 彩条渲染诊断");
+                VideoBillboardPreview.startTestPattern(TARGET_W, TARGET_H, TARGET_FPS);
+            }
+            return;
+        }
 
         tryRunOnceBili(benchVideoId);
     }
@@ -185,13 +215,39 @@ public final class VideoBenchTest {
 
         CompletableFuture.runAsync(() -> {
             try {
+                long start = System.currentTimeMillis();
+                LOGGER.info("[视频预览] 阶段 1/4: 开始解析 B站视频信息 id={}", vid.asInputText());
                 BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(vid);
-                String videoUrl = BiliApiClient.getBestVideoUrl(vid, info.cid(), 32);
-                LOGGER.info("获取视频流 URL: {}", videoUrl.substring(0, Math.min(80, videoUrl.length())));
-                tryRunOnce(videoUrl);
+                LOGGER.info("[视频预览] 阶段 1/4 完成: title='{}', cid={}, duration={}s, 耗时={}ms",
+                        info.displayTitle(), info.cid(), info.duration(), System.currentTimeMillis() - start);
+
+                long playurlStart = System.currentTimeMillis();
+                LOGGER.info("[视频预览] 阶段 2/4: 开始获取 DASH 视频流 URL (preferredQuality={})",
+                        PREFERRED_QUALITY);
+                String videoUrl = BiliApiClient.getBestVideoUrl(vid, info.cid(), PREFERRED_QUALITY);
+                LOGGER.info("[视频预览] 阶段 2/4 完成: urlPrefix={}, 耗时={}ms",
+                        videoUrl.substring(0, Math.min(120, videoUrl.length())),
+                        System.currentTimeMillis() - playurlStart);
+
+                if (RUN_DECODE_BENCH) {
+                    LOGGER.info("[视频预览] 阶段 3/4: 开始 bench 下载/解码");
+                    tryRunOnce(videoUrl);
+                } else {
+                    LOGGER.info("[视频预览] 跳过 bench，直接启动实时 billboard 预览；如需 bench 请加 -Dbili.video.run_decode_bench=true");
+                    Minecraft.getInstance().execute(() -> VideoBillboardPreview.start(
+                            videoUrl, TARGET_W, TARGET_H, TARGET_FPS));
+                }
             } catch (Exception e) {
                 LOGGER.error("获取 B站视频流失败", e);
+                LOGGER.warn("B站解析链路失败，启动 CPU 彩条以保持渲染诊断可见");
+                Minecraft.getInstance().execute(() -> VideoBillboardPreview.startTestPattern(
+                        TARGET_W, TARGET_H, TARGET_FPS));
             }
+        }).orTimeout(90, TimeUnit.SECONDS).exceptionally(e -> {
+            LOGGER.error("B站视频解析/下载链路超过 90 秒未完成，判定卡住", e);
+            Minecraft.getInstance().execute(() -> VideoBillboardPreview.startTestPattern(
+                    TARGET_W, TARGET_H, TARGET_FPS));
+            return null;
         });
     }
 }

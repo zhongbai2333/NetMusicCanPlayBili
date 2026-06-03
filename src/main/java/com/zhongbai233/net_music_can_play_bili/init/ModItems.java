@@ -21,6 +21,9 @@ public final class ModItems {
     public static final DeferredItem<BlockItem> LYRIC_PROJECTOR = ITEMS.registerSimpleBlockItem("lyric_projector",
             ModBlocks.LYRIC_PROJECTOR);
 
+    public static final DeferredItem<BlockItem> VIDEO_PROJECTOR = ITEMS.registerSimpleBlockItem("video_projector",
+            ModBlocks.VIDEO_PROJECTOR);
+
     public static final DeferredItem<BlockItem> SPEAKER = ITEMS.registerSimpleBlockItem("speaker",
             ModBlocks.SPEAKER);
 
@@ -32,6 +35,7 @@ public final class ModItems {
                     .displayItems((parameters, output) -> {
                         output.accept(MODERN_TURNTABLE.get());
                         output.accept(LYRIC_PROJECTOR.get());
+                        output.accept(VIDEO_PROJECTOR.get());
                         output.accept(SPEAKER.get());
                     })
                     .build());

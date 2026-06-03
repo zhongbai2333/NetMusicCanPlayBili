@@ -21,5 +21,9 @@ public final class ModernTurntableNetwork {
                 SpeakerConfigPacket.TYPE,
                 SpeakerConfigPacket.STREAM_CODEC,
                 SpeakerConfigPacket::handle);
+        registrar.playToServer(
+                VideoProjectorConfigPacket.TYPE,
+                VideoProjectorConfigPacket.STREAM_CODEC,
+                VideoProjectorConfigPacket::handle);
     }
 }

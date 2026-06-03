@@ -284,6 +284,13 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         return Math.min(durationSeconds * 1000L, Math.max(0L, elapsedTicks * 50L));
     }
 
+    public PlaybackSync.Metadata getPlaybackSyncMetadata(long gameTime) {
+        if (!playing || playUrl.isBlank()) {
+            return new PlaybackSync.Metadata("", 0L, 0L);
+        }
+        return new PlaybackSync.Metadata(playbackSessionId(), elapsedMillis(gameTime), durationSeconds * 1000L);
+    }
+
     public void setDisc(ItemStack stack) {
         disc = stack.isEmpty() ? ItemStack.EMPTY : stack.copyWithCount(1);
         stopPlayback();

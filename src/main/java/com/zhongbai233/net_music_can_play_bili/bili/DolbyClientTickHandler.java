@@ -92,6 +92,7 @@ public final class DolbyClientTickHandler {
     }
 
     private static void cleanupClientPlayback() {
+        com.zhongbai233.net_music_can_play_bili.client.renderer.VideoBillboardPreview.stop();
         com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker.stopAllSounds();
         HttpAudioStreamHandler.closeModernStreams();
         DolbyAudioRegistry.cleanup();

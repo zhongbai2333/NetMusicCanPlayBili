@@ -1,6 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.bili;
 
-import com.zhongbai233.net_music_can_play_bili.bili.codec.OpenALSpatialAudio;
+import com.zhongbai233.net_music_can_play_bili.media.audio.OpenALSpatialAudio;
 
 /**
  * 音响独立音频输出 — 单声道，只接收已拆分好的目标声道 PCM

@@ -119,6 +119,22 @@ public final class BiliApiClient {
     public record VideoSelection(VideoId videoId, int page) {
     }
 
+    public record VideoStream(int quality, int codecId, int width, int height, String frameRate, String codecs,
+            String baseUrl) {
+        public String codecName() {
+            return switch (codecId) {
+                case 7 -> "H.264";
+                case 12 -> "HEVC";
+                case 13 -> "AV1";
+                default -> "codecId=" + codecId;
+            };
+        }
+
+        public String displaySize() {
+            return width > 0 && height > 0 ? width + "x" + height : "unknown";
+        }
+    }
+
     public record SubtitleInfo(String lan, String url) {
         public boolean isAiGenerated() {
             return lan != null && lan.toLowerCase().startsWith("ai-");
@@ -298,11 +314,11 @@ public final class BiliApiClient {
         // 杜比全景声 (EC-3) — 仅在用户开启且 FFmpeg native 可用时纳入选择
         boolean dolbyOk = allowDolby
                 && BiliConfig.dolbyEnabled
-                && com.zhongbai233.net_music_can_play_bili.bili.codec.Eac3NativeDecoder.isNativeAvailable();
+                && com.zhongbai233.net_music_can_play_bili.media.codec.Eac3NativeDecoder.isNativeAvailable();
         LOGGER.debug("[Dolby] allowDolby={}, dolbyEnabled={}, nativeAvailable={}, dashHasDolby={}",
                 allowDolby,
                 BiliConfig.dolbyEnabled,
-                com.zhongbai233.net_music_can_play_bili.bili.codec.Eac3NativeDecoder.isNativeAvailable(),
+                com.zhongbai233.net_music_can_play_bili.media.codec.Eac3NativeDecoder.isNativeAvailable(),
                 dash.has("dolby"));
         if (dolbyOk && dash.has("dolby") && !dash.get("dolby").isJsonNull()) {
             JsonObject dolby = dash.getAsJsonObject("dolby");
@@ -340,12 +356,18 @@ public final class BiliApiClient {
 
     // 获取 DASH 视频流直链
     public static String getBestVideoUrl(VideoId id, long cid, int preferredQuality) throws Exception {
+        return getBestVideoStream(id, cid, preferredQuality).baseUrl();
+    }
+
+    public static VideoStream getBestVideoStream(VideoId id, long cid, int preferredQuality) throws Exception {
         Map<String, String> params = new HashMap<>();
         id.putPlayUrlParam(params);
         params.put("cid", String.valueOf(cid));
+        params.put("qn", String.valueOf(preferredQuality));
         params.put("fnval", "4048");
         params.put("fnver", "0");
         params.put("fourk", "1");
+        params.put("high_quality", "1");
         params.put("platform", "pc");
         Map<String, String> signed = BiliWbiSigner.signParams(params);
 
@@ -378,27 +400,50 @@ public final class BiliApiClient {
             throw new RuntimeException("该视频没有 DASH 视频流");
         }
 
-        // 收集所有视频流，优先选 H.264 同质量的
-        String bestH264 = null;
-        String fallback = null;
+        List<VideoStream> streams = new ArrayList<>();
         for (JsonElement e : videoArr) {
             JsonObject v = e.getAsJsonObject();
             int qid = v.get("id").getAsInt();
             int codecId = v.has("codecid") ? v.get("codecid").getAsInt() : 0;
             String baseUrl = v.get("baseUrl").getAsString();
-
-            if (codecId == 7) {  // H.264
-                bestH264 = baseUrl;
-                if (qid == preferredQuality) {
-                    return baseUrl;  // 正好是想要的 H.264 质量
-                }
-            }
-            if (fallback == null) {
-                fallback = baseUrl;
-            }
+            int width = v.has("width") && !v.get("width").isJsonNull() ? v.get("width").getAsInt() : 0;
+            int height = v.has("height") && !v.get("height").isJsonNull() ? v.get("height").getAsInt() : 0;
+            String frameRate = v.has("frameRate") && !v.get("frameRate").isJsonNull()
+                    ? v.get("frameRate").getAsString()
+                    : "";
+            String codecs = v.has("codecs") && !v.get("codecs").isJsonNull()
+                    ? v.get("codecs").getAsString()
+                    : "";
+            streams.add(new VideoStream(qid, codecId, width, height, frameRate, codecs, baseUrl));
         }
 
-        return bestH264 != null ? bestH264 : fallback;
+        VideoStream exactH264 = bestBy(streams, preferredQuality, 7, false);
+        if (exactH264 != null) {
+            return exactH264;
+        }
+        VideoStream exactAny = bestBy(streams, preferredQuality, 0, false);
+        if (exactAny != null) {
+            return exactAny;
+        }
+        VideoStream h264AtOrBelow = bestBy(streams, preferredQuality, 7, true);
+        if (h264AtOrBelow != null) {
+            return h264AtOrBelow;
+        }
+        VideoStream anyAtOrBelow = bestBy(streams, preferredQuality, 0, true);
+        if (anyAtOrBelow != null) {
+            return anyAtOrBelow;
+        }
+        return streams.stream()
+                .max((a, b) -> Integer.compare(a.quality(), b.quality()))
+                .orElseThrow(() -> new RuntimeException("该视频没有可用 DASH 视频流"));
+    }
+
+    private static VideoStream bestBy(List<VideoStream> streams, int preferredQuality, int codecId, boolean atOrBelow) {
+        return streams.stream()
+                .filter(s -> codecId == 0 || s.codecId() == codecId)
+                .filter(s -> atOrBelow ? s.quality() <= preferredQuality : s.quality() == preferredQuality)
+                .max((a, b) -> Integer.compare(a.quality(), b.quality()))
+                .orElse(null);
     }
 
     // 获取字幕并转为 NetEase 歌词 JSON 格式

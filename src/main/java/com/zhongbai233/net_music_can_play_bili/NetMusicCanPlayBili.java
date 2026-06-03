@@ -10,7 +10,7 @@ import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
 import com.zhongbai233.net_music_can_play_bili.init.ModItems;
 import com.zhongbai233.net_music_can_play_bili.network.ModernTurntableNetwork;
-import com.zhongbai233.net_music_can_play_bili.bili.stream.TempFileByteSpool;
+import com.zhongbai233.net_music_can_play_bili.media.stream.TempFileByteSpool;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;

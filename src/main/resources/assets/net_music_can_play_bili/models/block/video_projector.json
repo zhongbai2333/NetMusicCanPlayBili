@@ -1,0 +1,7 @@
+﻿{
+  "parent": "net_music_can_play_bili:block/projector",
+  "textures": {
+    "projector": "net_music_can_play_bili:block/video_projector",
+    "particle": "net_music_can_play_bili:block/video_projector"
+  }
+}

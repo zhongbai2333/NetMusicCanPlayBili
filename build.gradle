@@ -39,10 +39,35 @@ neoForge {
         client {
             client()
 
-            // Comma-separated list of namespaces to load gametests from. Empty = all namespaces.
+            // Limit GameTest discovery to this mod namespace when running the development client.
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
-            // 视频解码 bench 测试 (设为 B站 BV 号即可触发，留空跳过)
-            jvmArgument '-Dbili.video.bench=BV1GJ411x7h7'
+            // 正式播放默认走自动策略；高级视频参数仅在显式启用诊断开关时生效
+            jvmArgument '-Dbili.video.advanced_features=false'
+            jvmArgument '-Dbili.video.enable_bench_features=false'
+            // 以下参数保留给视频链路诊断使用，默认不会影响正式播放行为
+            jvmArgument '-Dbili.video.real_bench=true'
+            jvmArgument '-Dbili.video.real_bench.bv=BV1qM4y1w716'
+            jvmArgument '-Dbili.video.real_bench.frames=120'
+            jvmArgument '-Dbili.video.real_bench.warmup_frames=10'
+            jvmArgument '-Dbili.video.real_bench.stop_on_threshold=false'
+            jvmArgument '-Dbili.video.real_bench.decode_only=false'
+            jvmArgument '-Dbili.video.real_bench.decode_no_output=false'
+            jvmArgument '-Dbili.video.real_bench.output_format=rgba'
+            jvmArgument '-Dbili.video.real_bench.preview=false'
+            jvmArgument '-Dbili.video.real_bench.realtime=false'
+            jvmArgument '-Dbili.video.real_bench.max_fps=30'
+            jvmArgument '-Dbili.video.real_bench.qualities=16,32,64,80,120,125,126,127'
+            jvmArgument '-Dbili.video.native.hwaccel=d3d11va'
+            jvmArgument '-Dbili.video.ffmpeg.hwaccel=cuda'
+            jvmArgument '-Dbili.video.ffmpeg.decoder=h264_cuvid'
+            jvmArgument '-Dbili.video.ffmpeg.verbose=true'
+            // 旧版单项解码诊断入口；留空表示不启用
+            jvmArgument '-Dbili.video.bench='
+            // 动态纹理通道诊断：true=跳过 FFmpeg，直接生成 CPU 彩条验证渲染/上传链路
+            jvmArgument '-Dbili.video.cpu_bars=false'
+            // 离线渲染/上传诊断：不走网络/FFmpeg，逐档验证 480p→8K 动态纹理上传压力
+            jvmArgument '-Dbili.video.render_bench=false'
+            jvmArgument '-Dbili.video.render_bench.upload_mode=rgba,yuv420'
         }
 
         server {
@@ -51,9 +76,7 @@ neoForge {
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
         }
 
-        // This run config launches GameTestServer and runs all registered gametests, then exits.
-        // By default, the server will crash when no gametests are provided.
-        // The gametest system is also enabled by default for other run configs under the /test command.
+        // Dedicated GameTest runner for development validation.
         gameTestServer {
             type = "gameTestServer"
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
@@ -62,41 +85,32 @@ neoForge {
         data {
             clientData()
 
-            // example of overriding the workingDirectory set in configureEach above, uncomment if you want to use it
+            // Optional: use a separate working directory when generating data.
             // gameDirectory = project.file('run-data')
 
-            // Specify the modid for data generation, where to output the resulting resource, and where to look for existing resources.
+            // Generate this mod's resources while reusing existing assets as input.
             programArguments.addAll '--mod', project.mod_id, '--all', '--output', file('src/generated/resources/').getAbsolutePath(), '--existing', file('src/main/resources/').getAbsolutePath()
         }
 
-        // applies to all the run configs above
+        // Shared logging setup for local NeoForge run configurations.
         configureEach {
-            // Recommended logging data for a userdev environment
-            // The markers can be added/remove as needed separated by commas.
-            // "SCAN": For mods scan.
-            // "REGISTRIES": For firing of registry events.
-            // "REGISTRYDUMP": For getting the contents of all registries.
+            // Keep registry lifecycle logs visible during local development.
             systemProperty 'forge.logging.markers', 'REGISTRIES'
 
-            // Recommended logging level for the console
-            // You can set various levels here.
-            // Please read: https://stackoverflow.com/questions/2031163/when-to-use-the-different-log-levels
+            // Local run configs stay verbose; release logging is controlled by the packaged runtime.
             logLevel = org.slf4j.event.Level.DEBUG
         }
     }
 
     mods {
-        // define mod <-> source bindings
-        // these are used to tell the game which sources are for which mod
-        // mostly optional in a single mod project
-        // but multi mod projects should define one per mod
+        // Bind the main source set to this mod id for NeoForge userdev.
         "${mod_id}" {
             sourceSet(sourceSets.main)
         }
     }
 }
 
-// Include resources generated by data generators.
+// Include resources emitted by the data generator.
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 
@@ -104,8 +118,7 @@ dependencies {
     compileOnly "maven.modrinth:net-music:mCrjhdSq"
 }
 
-// This block of code expands all declared replace properties in the specified resource targets.
-// A missing property will result in an error. Properties are expanded using ${} Groovy notation.
+// Expand mod metadata templates from Gradle properties.
 var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
     var replaceProperties = [minecraft_version      : minecraft_version,
                              minecraft_version_range: minecraft_version_range,
@@ -124,13 +137,12 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
     into "build/generated/sources/modMetadata"
 }
 
-// Include the output of "generateModMetadata" as an input directory for the build
-// this works with both building through Gradle and the IDE.
+// Add generated metadata to both Gradle and IDE builds.
 sourceSets.main.resources.srcDir generateModMetadata
-// To avoid having to run "generateModMetadata" manually, make it run on every project reload
+// Keep IDE metadata fresh on project reload.
 neoForge.ideSyncTask generateModMetadata
 
-// Example configuration to allow publishing using the maven-publish plugin
+// Local Maven publication target for development artifacts.
 publishing {
     publications {
         register('mavenJava', MavenPublication) {
@@ -144,7 +156,7 @@ publishing {
     }
 }
 
-// IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
+// Ensure IDE navigation has dependency sources and Javadocs available.
 idea {
     module {
         downloadSources = true

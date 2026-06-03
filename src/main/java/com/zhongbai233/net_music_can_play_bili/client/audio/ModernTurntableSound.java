@@ -6,6 +6,7 @@ import com.github.tartaricacid.netmusic.client.audio.NetMusicAudioStream;
 import com.github.tartaricacid.netmusic.init.InitSounds;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.VideoBillboardPreview;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.sounds.AbstractTickableSoundInstance;
 import net.minecraft.client.resources.sounds.Sound;
@@ -178,6 +179,7 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
         if (!sessionFinished) {
             sessionFinished = true;
             ModernTurntablePlaybackTracker.finish(pos, sessionId);
+            VideoBillboardPreview.stopIfSession(sessionId);
             var level = Minecraft.getInstance().level;
             if (level != null && level.getBlockEntity(pos) instanceof ModernTurntableBlockEntity turntable) {
                 turntable.clearClientLyricRecord(sessionId);

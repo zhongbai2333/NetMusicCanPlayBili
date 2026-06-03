@@ -4,6 +4,7 @@ import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.blockentity.LyricProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.SpeakerBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.neoforged.neoforge.registries.DeferredHolder;
@@ -28,6 +29,13 @@ public final class ModBlockEntities {
                     () -> new BlockEntityType<>(
                             LyricProjectorBlockEntity::new,
                             Set.of(ModBlocks.LYRIC_PROJECTOR.get())));
+
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<VideoProjectorBlockEntity>> VIDEO_PROJECTOR = BLOCK_ENTITY_TYPES
+            .register(
+                    "video_projector",
+                    () -> new BlockEntityType<>(
+                            VideoProjectorBlockEntity::new,
+                            Set.of(ModBlocks.VIDEO_PROJECTOR.get())));
 
     public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<SpeakerBlockEntity>> SPEAKER = BLOCK_ENTITY_TYPES
             .register(

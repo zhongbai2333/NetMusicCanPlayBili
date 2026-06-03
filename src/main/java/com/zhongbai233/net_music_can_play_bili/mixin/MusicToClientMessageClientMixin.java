@@ -18,6 +18,7 @@ import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntableSound;
+import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.sounds.SoundInstance;
 import net.minecraft.sounds.SoundSource;
@@ -81,6 +82,7 @@ public abstract class MusicToClientMessageClientMixin {
 
         if (modernTurntable) {
             HttpAudioStreamHandler.allowUrl(playUrl, message.pos());
+            ModernTurntableVideoClient.syncFromPlayback(message.rawUrl(), message.pos(), sync);
         }
 
         BiliPlaybackDiagnostics.beginPlayback(message.songName(), message.rawUrl(), playUrl);
