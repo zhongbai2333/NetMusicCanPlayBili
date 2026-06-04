@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 
 import javax.sound.sampled.UnsupportedAudioFileException;
 import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.SequenceInputStream;
@@ -45,6 +46,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             System.getProperty("bili.video.native.seek.close_fragment_seconds", "3.0"));
     private static final double FMP4_SEEK_LEAD_SECONDS = Double.parseDouble(
             System.getProperty("bili.video.native.seek.lead_seconds", "4.0"));
+    private static final int FMP4_STREAM_RECOVERY_ATTEMPTS = Integer.getInteger(
+            "bili.video.native.stream_recovery_attempts", 3);
     private static final byte[] DECODE_ONLY_FRAME = new byte[0];
 
     private final URL videoUrl;
@@ -56,6 +59,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private final boolean outputYuv420;
     private final long startOffsetMillis;
     private final long totalMillis;
+    private final int fps;
     private final BlockingQueue<byte[]> frames = new ArrayBlockingQueue<>(MAX_PENDING_FRAMES);
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean started = new AtomicBoolean(false);
@@ -103,6 +107,13 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     public Fmp4NativeVideoDecoder(String videoUrl, int codecId, int targetWidth, int targetHeight, int maxFrames,
             boolean outputFrames, boolean outputYuv420, String requestedHwaccel, long startOffsetMillis,
             long totalMillis) throws IOException {
+        this(videoUrl, codecId, targetWidth, targetHeight, maxFrames, outputFrames, outputYuv420, requestedHwaccel,
+                startOffsetMillis, totalMillis, 60);
+    }
+
+    public Fmp4NativeVideoDecoder(String videoUrl, int codecId, int targetWidth, int targetHeight, int maxFrames,
+            boolean outputFrames, boolean outputYuv420, String requestedHwaccel, long startOffsetMillis,
+            long totalMillis, int fps) throws IOException {
         this.videoUrl = URI.create(videoUrl).toURL();
         this.codecId = codecId == CODEC_HEVC ? CODEC_HEVC : CODEC_H264;
         this.targetWidth = targetWidth;
@@ -112,6 +123,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         this.outputYuv420 = outputYuv420;
         this.startOffsetMillis = Math.max(0L, startOffsetMillis);
         this.totalMillis = Math.max(0L, totalMillis);
+        this.fps = Math.max(1, fps);
         this.decoder = new VideoNativeDecoder(this.codecId, targetWidth, targetHeight);
         if (requestedHwaccel != null) {
             this.decoder.setRequestedHwaccel(requestedHwaccel);
@@ -171,12 +183,37 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
 
     private void parseAndDecode() throws IOException {
         long startMs = System.currentTimeMillis();
-        Fmp4StreamStart seekStart = openStreamStart();
+        long streamStartOffsetMillis = startOffsetMillis;
+        int recoveries = 0;
+        while (!closed.get() && totalFrames < maxFrames) {
+            try {
+                parseStreamOnce(streamStartOffsetMillis);
+                break;
+            } catch (UnsupportedAudioFileException e) {
+                throw new IOException(e);
+            } catch (IOException e) {
+                if (closed.get() || !isRecoverableStreamException(e)
+                        || recoveries >= FMP4_STREAM_RECOVERY_ATTEMPTS) {
+                    throw e;
+                }
+                recoveries++;
+                streamStartOffsetMillis = estimateCurrentOffsetMillis();
+                LOGGER.warn("Native video stream interrupted ({}), recovery {}/{} from ~{}ms",
+                        e.getMessage(), recoveries, FMP4_STREAM_RECOVERY_ATTEMPTS, streamStartOffsetMillis);
+                resetParserStateForRecovery();
+            }
+        }
+        LOGGER.info("Native video decode complete: frames={}, codecId={}, target={}x{}, elapsed={}ms",
+                totalFrames, codecId, targetWidth, targetHeight, System.currentTimeMillis() - startMs);
+    }
+
+    private void parseStreamOnce(long offsetMillis) throws IOException, UnsupportedAudioFileException {
+        Fmp4StreamStart seekStart = openStreamStart(offsetMillis);
         try (InputStream stream = seekStart.stream()) {
-            framesToDrop = Math.max(0, Math.round(seekStart.residualSeconds() * 60.0F));
-            if (startOffsetMillis > 0L) {
+            framesToDrop = Math.max(0, Math.round(seekStart.residualSeconds() * fps));
+            if (offsetMillis > 0L) {
                 LOGGER.info("Native video range seek: requested={}ms residual={}s dropFrames={}",
-                        startOffsetMillis, seekStart.residualSeconds(), framesToDrop);
+                        offsetMillis, seekStart.residualSeconds(), framesToDrop);
             }
             new Fmp4StreamParser().parse(stream, closed, new Fmp4StreamParser.Callback() {
                 @Override
@@ -224,15 +261,40 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     throw new UnsupportedAudioFileException("video stream is not fMP4 video");
                 }
             });
-        } catch (UnsupportedAudioFileException e) {
-            throw new IOException(e);
         }
-        LOGGER.info("Native video decode complete: frames={}, codecId={}, target={}x{}, elapsed={}ms",
-                totalFrames, codecId, targetWidth, targetHeight, System.currentTimeMillis() - startMs);
     }
 
-    private Fmp4StreamStart openStreamStart() throws IOException {
-        if (startOffsetMillis <= 1_000L) {
+    private long estimateCurrentOffsetMillis() {
+        long decodedMillis = Math.round(totalFrames * 1000.0D / fps);
+        long offset = Math.max(0L, startOffsetMillis + decodedMillis);
+        return totalMillis > 0L ? Math.min(totalMillis, offset) : offset;
+    }
+
+    private void resetParserStateForRecovery() {
+        pendingSampleSizes = new int[0];
+        framesToDrop = 0;
+        sentConfig = false;
+        decoder.flush();
+    }
+
+    private static boolean isRecoverableStreamException(IOException error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            if (current instanceof EOFException) {
+                return true;
+            }
+            if (current instanceof IOException && current.getMessage() != null) {
+                String message = current.getMessage().toLowerCase(java.util.Locale.ROOT);
+                if (message.contains("closed") || message.contains("eof reached")
+                        || message.contains("ended early")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private Fmp4StreamStart openStreamStart(long offsetMillis) throws IOException {
+        if (offsetMillis <= 1_000L) {
             HttpRangeClient.CdnResponse response = http.get(videoUrl);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 response.close();
@@ -241,21 +303,21 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             return new Fmp4StreamStart(response.body(), 0.0F);
         }
 
-        Fmp4StreamStart ranged = tryOpenRangeSeek();
+        Fmp4StreamStart ranged = tryOpenRangeSeek(offsetMillis);
         if (ranged != null) {
             return ranged;
         }
         LOGGER.warn("Native video range seek unavailable for offset={}ms; 使用内置 native 从头解码并丢帧追赶，不调用系统 ffmpeg。",
-                startOffsetMillis);
+                offsetMillis);
         HttpRangeClient.CdnResponse response = http.get(videoUrl);
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             response.close();
             throw new IOException("DASH video HTTP " + response.statusCode());
         }
-        return new Fmp4StreamStart(response.body(), startOffsetMillis / 1000.0F);
+        return new Fmp4StreamStart(response.body(), offsetMillis / 1000.0F);
     }
 
-    private Fmp4StreamStart tryOpenRangeSeek() {
+    private Fmp4StreamStart tryOpenRangeSeek(long offsetMillis) {
         InputStream lastRange = null;
         try {
             Fmp4InitSegment init = readInitSegment();
@@ -263,7 +325,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             if (contentLength <= 0L) {
                 return null;
             }
-            float playbackSeconds = startOffsetMillis / 1000.0F;
+            float playbackSeconds = offsetMillis / 1000.0F;
             double durationSeconds = totalMillis > 0L ? totalMillis / 1000.0D
                     : Math.max(playbackSeconds + FMP4_SEEK_LEAD_SECONDS + 60.0D, 1.0D);
             float targetSeconds = seekTargetSeconds(playbackSeconds, durationSeconds);

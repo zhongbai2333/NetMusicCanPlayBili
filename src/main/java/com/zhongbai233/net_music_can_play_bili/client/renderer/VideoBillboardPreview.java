@@ -601,7 +601,7 @@ public final class VideoBillboardPreview {
             for (String hwaccel : VideoFeatureFlags.requestedHwaccelCandidates()) {
                 try {
                     return new Fmp4NativeVideoDecoder(videoUrl, codecId, targetWidth, targetHeight,
-                            Integer.MAX_VALUE, true, false, hwaccel, startOffsetMillis, totalMillis);
+                            Integer.MAX_VALUE, true, false, hwaccel, startOffsetMillis, totalMillis, fps);
                 } catch (IOException e) {
                     last = e;
                     LOGGER.warn("Native 视频解码器启动失败 hwaccel={}，尝试下一个候选: {}", hwaccel, e.toString());

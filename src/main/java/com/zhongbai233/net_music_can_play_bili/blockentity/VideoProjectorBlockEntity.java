@@ -26,6 +26,7 @@ public class VideoProjectorBlockEntity extends BlockEntity {
     private static final String PROJ_HEIGHT = "ProjHeight";
     private static final String PROJ_DISTANCE = "ProjDistance";
     private static final String PREFERRED_QUALITY = "PreferredQuality";
+    public static final int DEFAULT_PREFERRED_QUALITY = 116;
 
     @Nullable
     private BlockPos linkedTurntablePos;
@@ -34,8 +35,8 @@ public class VideoProjectorBlockEntity extends BlockEntity {
     private float projectionScale = 1.0F;
     private float projectionHeight = 1.8F;
     private float projectionDistance = 0.0F;
-    /** B站 qn：这里只表示“尝试该画质/最高画质”，实际会受登录/VIP/接口返回限制自动降级 */
-    private int preferredQuality = 127;
+    /** B站 qn：默认尝试 1080P60；实际会受登录/VIP/接口返回限制自动降级 */
+    private int preferredQuality = DEFAULT_PREFERRED_QUALITY;
 
     public VideoProjectorBlockEntity(BlockPos pos, BlockState blockState) {
         super(ModBlockEntities.VIDEO_PROJECTOR.get(), pos, blockState);
@@ -136,7 +137,8 @@ public class VideoProjectorBlockEntity extends BlockEntity {
         super.setRemoved();
         if (level != null && level.isClientSide()) {
             com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry.unlink(worldPosition);
-            com.zhongbai233.net_music_can_play_bili.client.renderer.VideoBillboardPreview.stopIfProjector(worldPosition);
+            com.zhongbai233.net_music_can_play_bili.client.renderer.VideoBillboardPreview
+                    .stopIfProjector(worldPosition);
         }
     }
 
@@ -156,6 +158,7 @@ public class VideoProjectorBlockEntity extends BlockEntity {
     @Override
     protected void loadAdditional(ValueInput input) {
         super.loadAdditional(input);
+        int oldPreferredQuality = this.preferredQuality;
         this.linkedTurntablePos = LinkHelper.loadLinkFromBE(input,
                 LINK_KEY + "_has", LINK_KEY + "_x", LINK_KEY + "_y", LINK_KEY + "_z");
         this.projectionYaw = input.getFloatOr(PROJ_YAW, 180.0F);
@@ -163,8 +166,11 @@ public class VideoProjectorBlockEntity extends BlockEntity {
         this.projectionScale = input.getFloatOr(PROJ_SCALE, 1.0F);
         this.projectionHeight = input.getFloatOr(PROJ_HEIGHT, 1.8F);
         this.projectionDistance = input.getFloatOr(PROJ_DISTANCE, 0.0F);
-        this.preferredQuality = input.getIntOr(PREFERRED_QUALITY, 127);
+        this.preferredQuality = input.getIntOr(PREFERRED_QUALITY, DEFAULT_PREFERRED_QUALITY);
         refreshClientLinkRegistration();
+        if (level != null && level.isClientSide() && oldPreferredQuality != preferredQuality) {
+            com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient.refreshProjector(worldPosition);
+        }
     }
 
     private void refreshClientLinkRegistration() {

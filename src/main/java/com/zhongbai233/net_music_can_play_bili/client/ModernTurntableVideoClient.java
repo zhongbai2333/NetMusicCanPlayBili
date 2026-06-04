@@ -33,7 +33,7 @@ public final class ModernTurntableVideoClient {
     private static final boolean ENABLED = Boolean.parseBoolean(
             System.getProperty("bili.video.turntable.enabled", "true"));
     private static final int DEFAULT_PREFERRED_QUALITY = VideoFeatureFlags.advancedInt("bili.video.turntable.quality",
-            127);
+            116);
     private static final int DEFAULT_FPS = VideoFeatureFlags.advancedInt("bili.video.turntable.default_fps", 60);
     private static final boolean PREFER_NATIVE = VideoFeatureFlags.advancedBoolean("bili.video.projector.native", true);
     private static final String DECODER_OVERRIDE = VideoFeatureFlags.advancedString("bili.video.ffmpeg.decoder", "")
@@ -41,6 +41,7 @@ public final class ModernTurntableVideoClient {
 
     private static final Set<String> ACTIVE_SESSION_IDS = ConcurrentHashMap.newKeySet();
     private static final ConcurrentHashMap<BlockPos, String> ACTIVE_SESSION_BY_TURNTABLE = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, Integer> ACTIVE_QUALITY_BY_SESSION = new ConcurrentHashMap<>();
 
     private ModernTurntableVideoClient() {
     }
@@ -50,6 +51,7 @@ public final class ModernTurntableVideoClient {
             return;
         }
         ACTIVE_SESSION_IDS.remove(sessionId);
+        ACTIVE_QUALITY_BY_SESSION.remove(sessionId);
         ACTIVE_SESSION_BY_TURNTABLE.entrySet().removeIf(entry -> sessionId.equals(entry.getValue()));
     }
 
@@ -66,6 +68,50 @@ public final class ModernTurntableVideoClient {
             return;
         }
         syncFromPlayback(rawUrl, turntable.getBlockPos(), sync);
+    }
+
+    public static void refreshProjector(BlockPos projectorPos) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (projectorPos == null || minecraft.level == null) {
+            return;
+        }
+        Runnable refresh = () -> refreshProjectorOnClientThread(projectorPos.immutable());
+        if (minecraft.isSameThread()) {
+            refresh.run();
+        } else {
+            minecraft.execute(refresh);
+        }
+    }
+
+    private static void refreshProjectorOnClientThread(BlockPos projectorPos) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null) {
+            return;
+        }
+        BlockEntity projectorBe = minecraft.level.getBlockEntity(projectorPos);
+        if (!(projectorBe instanceof VideoProjectorBlockEntity projector)) {
+            VideoBillboardPreview.stopIfProjector(projectorPos);
+            return;
+        }
+        BlockPos turntablePos = projector.getLinkedTurntablePos();
+        if (turntablePos == null) {
+            VideoBillboardPreview.stopIfProjector(projectorPos);
+            return;
+        }
+        BlockEntity turntableBe = minecraft.level.getBlockEntity(turntablePos);
+        if (!(turntableBe instanceof ModernTurntableBlockEntity turntable) || !turntable.isPlaying()) {
+            VideoBillboardPreview.stopIfProjector(projectorPos);
+            return;
+        }
+        PlaybackSync.Metadata sync = turntable.getPlaybackSyncMetadata(turntable.getLevel().getGameTime());
+        if (!sync.hasSession()) {
+            VideoBillboardPreview.stopIfProjector(projectorPos);
+            return;
+        }
+        LOGGER.info("视频投影仪配置变化，刷新视频同步: projector={} turntable={} session={}", projectorPos, turntablePos,
+                sync.sessionId());
+        VideoBillboardPreview.stopIfSession(sync.sessionId());
+        syncFromPlayback(turntable.getRawUrl(), turntablePos, sync);
     }
 
     public static void syncFromPlayback(String rawUrl, BlockPos turntablePos, PlaybackSync.Metadata sync) {
@@ -89,15 +135,17 @@ public final class ModernTurntableVideoClient {
                 .map(projector -> projector.getBlockPos().immutable())
                 .toList();
         long elapsedMillis = Math.max(0L, sync.elapsedMillis());
+        int preferredQuality = preferredQuality(projectors);
         String existingForTurntable = ACTIVE_SESSION_BY_TURNTABLE.get(turntablePos);
         if (existingForTurntable != null && VideoBillboardPreview.isSessionRunning(existingForTurntable)) {
             if (existingForTurntable.equals(sessionId)) {
                 VideoBillboardPreview.updateSessionProjectors(existingForTurntable, projectorPositions);
-                if (VideoBillboardPreview.isSessionRunningAtOffset(existingForTurntable, elapsedMillis)) {
+                if (isSessionRunningAtQuality(existingForTurntable, preferredQuality)
+                        && VideoBillboardPreview.isSessionRunningAtOffset(existingForTurntable, elapsedMillis)) {
                     return;
                 }
-                LOGGER.info("现代化唱片机视频检测到拖动进度：session={} offset={}ms，重启视频同步",
-                        sessionId, elapsedMillis);
+                LOGGER.info("现代化唱片机视频检测到同步参数变化：session={} offset={}ms quality={}，重启视频同步",
+                        sessionId, elapsedMillis, preferredQuality);
                 VideoBillboardPreview.stopIfSession(sessionId);
             } else {
                 LOGGER.info("现代化唱片机视频切换会话：{} -> {}", existingForTurntable, sessionId);
@@ -107,17 +155,19 @@ public final class ModernTurntableVideoClient {
         }
         if (VideoBillboardPreview.isSessionRunning(sessionId)) {
             VideoBillboardPreview.updateSessionProjectors(sessionId, projectorPositions);
-            if (VideoBillboardPreview.isSessionRunningAtOffset(sessionId, elapsedMillis)) {
+            if (isSessionRunningAtQuality(sessionId, preferredQuality)
+                    && VideoBillboardPreview.isSessionRunningAtOffset(sessionId, elapsedMillis)) {
                 ACTIVE_SESSION_IDS.add(sessionId);
                 ACTIVE_SESSION_BY_TURNTABLE.put(turntablePos.immutable(), sessionId);
                 return;
             }
-            LOGGER.info("现代化唱片机视频检测到同 session seek：session={} offset={}ms，重启视频同步",
-                    sessionId, elapsedMillis);
+            LOGGER.info("现代化唱片机视频检测到同 session 参数变化：session={} offset={}ms quality={}，重启视频同步",
+                    sessionId, elapsedMillis, preferredQuality);
             VideoBillboardPreview.stopIfSession(sessionId);
         }
         if (!ACTIVE_SESSION_IDS.add(sessionId)) {
-            if (VideoBillboardPreview.isSessionRunningAtOffset(sessionId, elapsedMillis)) {
+            if (isSessionRunningAtQuality(sessionId, preferredQuality)
+                    && VideoBillboardPreview.isSessionRunningAtOffset(sessionId, elapsedMillis)) {
                 ACTIVE_SESSION_BY_TURNTABLE.put(turntablePos.immutable(), sessionId);
                 return;
             }
@@ -129,17 +179,13 @@ public final class ModernTurntableVideoClient {
             VideoBillboardPreview.stopIfSession(sessionId);
             ACTIVE_SESSION_IDS.add(sessionId);
         }
-        if (VideoBillboardPreview.isSessionRunningAtOffset(sessionId, elapsedMillis)) {
+        if (isSessionRunningAtQuality(sessionId, preferredQuality)
+                && VideoBillboardPreview.isSessionRunningAtOffset(sessionId, elapsedMillis)) {
             ACTIVE_SESSION_BY_TURNTABLE.put(turntablePos.immutable(), sessionId);
             return;
         }
         ACTIVE_SESSION_BY_TURNTABLE.put(turntablePos.immutable(), sessionId);
-        int preferredQuality = projectors.stream()
-                .mapToInt(projector -> projector.getPreferredQuality() > 0
-                        ? projector.getPreferredQuality()
-                        : DEFAULT_PREFERRED_QUALITY)
-                .max()
-                .orElse(DEFAULT_PREFERRED_QUALITY);
+        ACTIVE_QUALITY_BY_SESSION.put(sessionId, preferredQuality);
         long requestNanoTime = System.nanoTime();
         CompletableFuture.runAsync(() -> startResolved(selection, turntablePos, projectorPositions, preferredQuality,
                 sync, requestNanoTime))
@@ -149,6 +195,20 @@ public final class ModernTurntableVideoClient {
                     LOGGER.warn("现代化唱片机视频同步启动失败: {}", cleanRawUrl, error);
                     return null;
                 });
+    }
+
+    private static int preferredQuality(List<VideoProjectorBlockEntity> projectors) {
+        return projectors.stream()
+                .mapToInt(projector -> projector.getPreferredQuality() > 0
+                        ? projector.getPreferredQuality()
+                        : DEFAULT_PREFERRED_QUALITY)
+                .max()
+                .orElse(DEFAULT_PREFERRED_QUALITY);
+    }
+
+    private static boolean isSessionRunningAtQuality(String sessionId, int preferredQuality) {
+        Integer activeQuality = ACTIVE_QUALITY_BY_SESSION.get(sessionId);
+        return activeQuality != null && activeQuality == preferredQuality;
     }
 
     private static void startResolved(BiliApiClient.VideoSelection selection, BlockPos turntablePos,

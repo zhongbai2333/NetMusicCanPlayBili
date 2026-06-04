@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.gui;
 
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.network.VideoProjectorConfigPacket;
 import net.minecraft.client.Minecraft;
@@ -82,11 +83,15 @@ public class VideoProjectorScreen extends BlackGoldScreen {
         addResetButton(resetX, rowY, 1.0f, scaleS);
         rowY += 30;
 
-        int qualityIndex = qualityIndex(be != null ? be.getPreferredQuality() : 127);
+        int qualityIndex = qualityIndex(be != null ? be.getPreferredQuality()
+                : VideoProjectorBlockEntity.DEFAULT_PREFERRED_QUALITY);
         qualityBtn = addCycleWidget(sliderX, rowY, QUALITY_LABELS, qualityIndex,
                 v -> {
-                    if (be != null)
+                    if (be != null) {
                         be.setPreferredQuality(QUALITY_VALUES[Math.clamp(v, 0, QUALITY_VALUES.length - 1)]);
+                        sendConfigToServer(be);
+                        ModernTurntableVideoClient.refreshProjector(blockPos);
+                    }
                 });
     }
 
@@ -104,7 +109,13 @@ public class VideoProjectorScreen extends BlackGoldScreen {
     @Override
     protected void onSave() {
         VideoProjectorBlockEntity be = getProjectorBE();
-        if (be != null && minecraft != null && minecraft.getConnection() != null) {
+        if (be != null) {
+            sendConfigToServer(be);
+        }
+    }
+
+    private void sendConfigToServer(VideoProjectorBlockEntity be) {
+        if (minecraft != null && minecraft.getConnection() != null) {
             minecraft.getConnection().send(new VideoProjectorConfigPacket(
                     blockPos,
                     be.getProjectionYaw(), be.getProjectionPitch(), be.getProjectionScale(),
