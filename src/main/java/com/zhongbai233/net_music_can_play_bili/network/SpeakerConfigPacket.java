@@ -21,7 +21,7 @@ public record SpeakerConfigPacket(BlockPos pos, int channelIndex, float volume,
 
     public static final StreamCodec<RegistryFriendlyByteBuf, SpeakerConfigPacket> STREAM_CODEC = StreamCodec
             .composite(
-                    BlockPos.STREAM_CODEC, SpeakerConfigPacket::pos,
+                    BlockPos.STREAM_CODEC, packet -> packet.pos(),
                     ByteBufCodecs.INT, p -> p.channelIndex(),
                     ByteBufCodecs.FLOAT, p -> p.volume(),
                     ByteBufCodecs.BOOL, p -> p.autoMixJoc(),

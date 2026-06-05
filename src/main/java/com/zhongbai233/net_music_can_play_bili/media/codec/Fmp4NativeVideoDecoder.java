@@ -22,6 +22,7 @@ import java.util.Arrays;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -38,17 +39,31 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private static final int FMP4_INIT_PROBE_BYTES = Integer.getInteger("bili.video.native.seek.init_probe_bytes",
             4 * 1024 * 1024);
     private static final int FMP4_MOOF_SCAN_BYTES = Integer.getInteger("bili.video.native.seek.moof_scan_bytes",
-            2 * 1024 * 1024);
-    private static final int FMP4_SEEK_MAX_ATTEMPTS = Integer.getInteger("bili.video.native.seek.max_attempts", 8);
+            8 * 1024 * 1024);
+    private static final int FMP4_SEEK_MAX_ATTEMPTS = Integer.getInteger("bili.video.native.seek.max_attempts", 12);
     private static final long FMP4_SEEK_PREROLL_BYTES = Long.getLong("bili.video.native.seek.preroll_bytes",
-            256L * 1024L);
+            1L * 1024L * 1024L);
     private static final double FMP4_CLOSE_FRAGMENT_SECONDS = Double.parseDouble(
             System.getProperty("bili.video.native.seek.close_fragment_seconds", "3.0"));
+    private static final double FMP4_TARGET_EPSILON_SECONDS = Double.parseDouble(
+            System.getProperty("bili.video.native.seek.target_epsilon_seconds", "0.25"));
     private static final double FMP4_SEEK_LEAD_SECONDS = Double.parseDouble(
-            System.getProperty("bili.video.native.seek.lead_seconds", "4.0"));
+            System.getProperty("bili.video.native.seek.lead_seconds", "0.0"));
+    private static final boolean FMP4_RANGE_SEEK_ENABLED = Boolean.parseBoolean(
+            System.getProperty("bili.video.native.seek.enabled", "false"));
+    private static final long FMP4_RANGE_SEEK_AUTO_OFFSET_MILLIS = Long.getLong(
+            "bili.video.native.seek.auto_offset_ms", 5_000L);
+    private static final double FMP4_FALLBACK_MAX_RESIDUAL_SECONDS = Double.parseDouble(
+            System.getProperty("bili.video.native.seek.fallback_max_residual_seconds", "-1.0"));
     private static final int FMP4_STREAM_RECOVERY_ATTEMPTS = Integer.getInteger(
             "bili.video.native.stream_recovery_attempts", 3);
     private static final byte[] DECODE_ONLY_FRAME = new byte[0];
+    private static final boolean REUSE_OUTPUT_BUFFERS = Boolean.parseBoolean(
+            System.getProperty("bili.video.native.reuse_output_buffers", "true"));
+    private static final long SEGMENT_BASE_TTL_MILLIS = TimeUnit.MINUTES.toMillis(30);
+    private static final int MAX_SEGMENT_BASE_ENTRIES = Integer.getInteger(
+            "bili.video.segment_base_cache.max_entries", 512);
+    private static final ConcurrentHashMap<String, SegmentBaseInfo> SEGMENT_BASE_BY_URL = new ConcurrentHashMap<>();
 
     private final URL videoUrl;
     private final int codecId;
@@ -60,7 +75,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private final long startOffsetMillis;
     private final long totalMillis;
     private final int fps;
-    private final BlockingQueue<byte[]> frames = new ArrayBlockingQueue<>(MAX_PENDING_FRAMES);
+    private final BlockingQueue<DecodedFrame> frames = new ArrayBlockingQueue<>(MAX_PENDING_FRAMES);
+    private final BlockingQueue<byte[]> reusableBuffers = new ArrayBlockingQueue<>(MAX_PENDING_FRAMES);
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean finished = new AtomicBoolean(false);
@@ -71,9 +87,16 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private byte[] decoderConfig;
     private int nalLengthSize = 4;
     private int[] pendingSampleSizes = new int[0];
+    private long[] pendingSamplePtsNanos = new long[0];
+    private int pendingSampleIndex;
     private boolean sentConfig;
     private int totalFrames;
-    private int framesToDrop;
+    private int fallbackFramesToDrop;
+    private long timelineStartNanos;
+    private long dropBeforeMediaPtsNanos;
+    private long lastDecodedMediaPtsNanos = -1L;
+    private int streamTimescale;
+    private final java.util.ArrayDeque<Long> pendingDecodedPtsNanos = new java.util.ArrayDeque<>();
     private volatile IOException failure;
     private Thread worker;
 
@@ -130,10 +153,33 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
     }
 
+    public static void registerSegmentBase(String videoUrl, long initStart, long initEnd, long indexStart,
+            long indexEnd) {
+        if (videoUrl == null || videoUrl.isBlank() || initStart < 0L || initEnd < initStart
+                || indexStart < 0L || indexEnd < indexStart) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        cleanupSegmentBaseInfo(now);
+        SEGMENT_BASE_BY_URL.put(videoUrl, new SegmentBaseInfo(initStart, initEnd, indexStart, indexEnd, now));
+    }
+
     public byte[] getNextFrame() throws IOException {
+        DecodedFrame frame = getNextDecodedFrame();
+        if (frame == null) {
+            return null;
+        }
+        try {
+            return Arrays.copyOf(frame.rgba(), frame.rgba().length);
+        } finally {
+            frame.close();
+        }
+    }
+
+    public DecodedFrame getNextDecodedFrame() throws IOException {
         ensureStarted();
         while (true) {
-            byte[] frame;
+            DecodedFrame frame;
             try {
                 frame = frames.poll(250L, TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
@@ -182,7 +228,6 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     }
 
     private void parseAndDecode() throws IOException {
-        long startMs = System.currentTimeMillis();
         long streamStartOffsetMillis = startOffsetMillis;
         int recoveries = 0;
         while (!closed.get() && totalFrames < maxFrames) {
@@ -203,18 +248,14 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                 resetParserStateForRecovery();
             }
         }
-        LOGGER.info("Native video decode complete: frames={}, codecId={}, target={}x{}, elapsed={}ms",
-                totalFrames, codecId, targetWidth, targetHeight, System.currentTimeMillis() - startMs);
     }
 
     private void parseStreamOnce(long offsetMillis) throws IOException, UnsupportedAudioFileException {
         Fmp4StreamStart seekStart = openStreamStart(offsetMillis);
         try (InputStream stream = seekStart.stream()) {
-            framesToDrop = Math.max(0, Math.round(seekStart.residualSeconds() * fps));
-            if (offsetMillis > 0L) {
-                LOGGER.info("Native video range seek: requested={}ms residual={}s dropFrames={}",
-                        offsetMillis, seekStart.residualSeconds(), framesToDrop);
-            }
+            fallbackFramesToDrop = Math.max(0, Math.round(seekStart.residualSeconds() * fps));
+            timelineStartNanos = Math.max(0L, Math.round(seekStart.fragmentSeconds() * 1_000_000_000.0D));
+            dropBeforeMediaPtsNanos = Math.max(0L, offsetMillis * 1_000_000L);
             new Fmp4StreamParser().parse(stream, closed, new Fmp4StreamParser.Callback() {
                 @Override
                 public void onMoov(Fmp4ToMp4Converter.ParseResult parseResult, byte[] moovData)
@@ -225,13 +266,19 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     }
                     decoderConfig = config.annexBConfig();
                     nalLengthSize = config.nalLengthSize();
-                    LOGGER.info("Native video: decoder config ready codecId={}, nalLengthSize={}, config={}B",
-                            codecId, nalLengthSize, decoderConfig.length);
+                    int videoTimescale = Fmp4ToMp4Converter.parseVideoTimescale(moovData);
+                    streamTimescale = videoTimescale > 0 ? videoTimescale : parseResult.timescale;
                 }
 
                 @Override
                 public void onMoof(int[] sampleSizes, byte[] moofData) {
-                    pendingSampleSizes = sampleSizes != null ? sampleSizes : new int[0];
+                    Fmp4ToMp4Converter.SampleTable table = Fmp4ToMp4Converter.extractSampleTableFromMoof(
+                            moofData, streamTimescale > 0 ? streamTimescale : fps, fps);
+                    pendingSampleSizes = table.sampleSizes().length > 0
+                            ? table.sampleSizes()
+                            : sampleSizes != null ? sampleSizes : new int[0];
+                    pendingSamplePtsNanos = table.ptsNanos();
+                    pendingSampleIndex = 0;
                 }
 
                 @Override
@@ -241,7 +288,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     }
                     if (pendingSampleSizes.length == 0) {
                         byte[] all = Fmp4StreamParser.readFully(payload, size);
-                        decodeSample(all);
+                        decodeSample(all, nextSamplePtsNanos());
                         return;
                     }
                     for (int sampleSize : pendingSampleSizes) {
@@ -252,7 +299,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                             continue;
                         }
                         byte[] sample = Fmp4StreamParser.readFully(payload, sampleSize);
-                        decodeSample(sample);
+                        decodeSample(sample, nextSamplePtsNanos());
                     }
                 }
 
@@ -265,6 +312,10 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     }
 
     private long estimateCurrentOffsetMillis() {
+        if (lastDecodedMediaPtsNanos >= 0L) {
+            long offset = lastDecodedMediaPtsNanos / 1_000_000L;
+            return totalMillis > 0L ? Math.min(totalMillis, offset) : offset;
+        }
         long decodedMillis = Math.round(totalFrames * 1000.0D / fps);
         long offset = Math.max(0L, startOffsetMillis + decodedMillis);
         return totalMillis > 0L ? Math.min(totalMillis, offset) : offset;
@@ -272,7 +323,13 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
 
     private void resetParserStateForRecovery() {
         pendingSampleSizes = new int[0];
-        framesToDrop = 0;
+        pendingSamplePtsNanos = new long[0];
+        pendingSampleIndex = 0;
+        pendingDecodedPtsNanos.clear();
+        fallbackFramesToDrop = 0;
+        timelineStartNanos = 0L;
+        dropBeforeMediaPtsNanos = 0L;
+        streamTimescale = 0;
         sentConfig = false;
         decoder.flush();
     }
@@ -300,25 +357,33 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                 response.close();
                 throw new IOException("DASH video HTTP " + response.statusCode());
             }
-            return new Fmp4StreamStart(response.body(), 0.0F);
+            return new Fmp4StreamStart(response.body(), 0.0F, 0.0D);
         }
 
-        Fmp4StreamStart ranged = tryOpenRangeSeek(offsetMillis);
-        if (ranged != null) {
-            return ranged;
+        boolean shouldTryRangeSeek = FMP4_RANGE_SEEK_ENABLED
+                || offsetMillis >= Math.max(1_001L, FMP4_RANGE_SEEK_AUTO_OFFSET_MILLIS);
+        if (shouldTryRangeSeek) {
+            Fmp4StreamStart ranged = tryOpenRangeSeek(offsetMillis);
+            if (ranged != null) {
+                return ranged;
+            }
         }
-        LOGGER.warn("Native video range seek unavailable for offset={}ms; 使用内置 native 从头解码并丢帧追赶，不调用系统 ffmpeg。",
-                offsetMillis);
+        double requestedResidualSeconds = offsetMillis / 1000.0D;
+        float fallbackResidualSeconds = (float) Math.max(0.0D,
+                FMP4_FALLBACK_MAX_RESIDUAL_SECONDS >= 0.0D
+                        ? Math.min(requestedResidualSeconds, FMP4_FALLBACK_MAX_RESIDUAL_SECONDS)
+                        : requestedResidualSeconds);
         HttpRangeClient.CdnResponse response = http.get(videoUrl);
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             response.close();
             throw new IOException("DASH video HTTP " + response.statusCode());
         }
-        return new Fmp4StreamStart(response.body(), offsetMillis / 1000.0F);
+        return new Fmp4StreamStart(response.body(), fallbackResidualSeconds, 0.0D);
     }
 
     private Fmp4StreamStart tryOpenRangeSeek(long offsetMillis) {
         InputStream lastRange = null;
+        long seekStartNanos = System.nanoTime();
         try {
             Fmp4InitSegment init = readInitSegment();
             long contentLength = init.contentLength();
@@ -329,6 +394,10 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             double durationSeconds = totalMillis > 0L ? totalMillis / 1000.0D
                     : Math.max(playbackSeconds + FMP4_SEEK_LEAD_SECONDS + 60.0D, 1.0D);
             float targetSeconds = seekTargetSeconds(playbackSeconds, durationSeconds);
+            Fmp4StreamStart sidxStart = tryOpenSidxSeek(init, targetSeconds, playbackSeconds, seekStartNanos);
+            if (sidxStart != null) {
+                return sidxStart;
+            }
             long estimatedOffset = Math.min(contentLength - 1L,
                     Math.max(0L, Math.round(contentLength * Math.min(0.98D, targetSeconds / durationSeconds))));
             long rangeStart = Math.max(init.bytes().length, estimatedOffset - FMP4_SEEK_PREROLL_BYTES);
@@ -349,6 +418,16 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                 }
                 MoofCandidate candidate = probe.candidate();
                 long absoluteMoofOffset = rangeStart + candidate.offset();
+                if (attempt + 1 < FMP4_SEEK_MAX_ATTEMPTS && isAfterTargetCandidate(candidate, targetSeconds)) {
+                    long nextStart = Math.max(init.bytes().length,
+                            absoluteMoofOffset - FMP4_MOOF_SCAN_BYTES - FMP4_SEEK_PREROLL_BYTES);
+                    if (nextStart < rangeStart) {
+                        closeQuietly(lastRange);
+                        lastRange = null;
+                        rangeStart = nextStart;
+                        continue;
+                    }
+                }
                 if (attempt + 1 < FMP4_SEEK_MAX_ATTEMPTS && shouldRetry(candidate, targetSeconds)) {
                     long nextStart = nextRangeStart(candidate, targetSeconds, durationSeconds, contentLength,
                             absoluteMoofOffset, init.bytes().length);
@@ -368,12 +447,13 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                         range.stream());
                 lastRange = null;
                 InputStream combined = new SequenceInputStream(new ByteArrayInputStream(init.bytes()), tail);
-                LOGGER.debug(
-                        "Native video fMP4 range seek: target={}s fragment={}s residual={}s byte={} totalBytes={} host={}",
-                        playbackSeconds, candidate.fragmentSeconds(), residualSeconds, absoluteMoofOffset,
-                        contentLength,
+                LOGGER.info(
+                        "视频fMP4 RangeSeek: target={}s fragment={}s residual={}s timelineStart={}s byte={} totalBytes={} probe={}ms host={}",
+                        playbackSeconds, candidate.fragmentSeconds(), residualSeconds, startOffsetMillis / 1000.0D,
+                        absoluteMoofOffset, contentLength, (System.nanoTime() - seekStartNanos) / 1_000_000L,
                         videoUrl.getHost());
-                return new Fmp4StreamStart(combined, residualSeconds);
+                return new Fmp4StreamStart(combined, residualSeconds,
+                        Double.isNaN(candidate.fragmentSeconds()) ? 0.0D : candidate.fragmentSeconds());
             }
             return null;
         } catch (IOException | RuntimeException e) {
@@ -381,6 +461,154 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             closeQuietly(lastRange);
             return null;
         }
+    }
+
+    private Fmp4StreamStart tryOpenSidxSeek(Fmp4InitSegment init, float targetSeconds, float playbackSeconds,
+            long seekStartNanos) {
+        SegmentBaseInfo info = segmentBaseInfo(videoUrl.toString());
+        if (info == null) {
+            return null;
+        }
+        try (HttpRangeClient.CdnResponse response = http.getRange(videoUrl, info.indexStart(), info.indexEnd())) {
+            int status = response.statusCode();
+            if (status != 206 && status != 200) {
+                return null;
+            }
+            byte[] sidxBytes = readAllBytes(response.body(), Math.max(1L, info.indexEnd() - info.indexStart() + 1L));
+            SidxIndex sidx = parseSidx(sidxBytes, info.indexStart());
+            if (sidx == null || sidx.entries().isEmpty()) {
+                return null;
+            }
+            SidxEntry selected = null;
+            for (SidxEntry entry : sidx.entries()) {
+                if (entry.timeSeconds() <= targetSeconds + 0.05D) {
+                    selected = entry;
+                } else {
+                    break;
+                }
+            }
+            if (selected == null) {
+                selected = sidx.entries().get(0);
+            }
+            ChunkRange range = openRange(selected.byteStart());
+            InputStream stream = range.stream();
+            MoofProbe probe = readMoofProbe(stream, targetSeconds, init.timescale() > 0 ? init.timescale() : 16_000);
+            if (probe == null) {
+                closeQuietly(stream);
+                return null;
+            }
+            MoofCandidate candidate = probe.candidate();
+            double fragmentSeconds = !Double.isNaN(candidate.fragmentSeconds()) ? candidate.fragmentSeconds()
+                    : selected.timeSeconds();
+            float residualSeconds = (float) Math.max(0.0D, targetSeconds - fragmentSeconds);
+            residualSeconds = Math.max(0.0F, residualSeconds - (targetSeconds - playbackSeconds));
+            InputStream tail = new SequenceInputStream(
+                    new ByteArrayInputStream(probe.bytes(), candidate.offset(),
+                            probe.bytes().length - candidate.offset()),
+                    stream);
+            InputStream combined = new SequenceInputStream(new ByteArrayInputStream(init.bytes()), tail);
+            LOGGER.info(
+                    "视频fMP4 SidxSeek: target={}s fragment={}s residual={}s timelineStart={}s byte={} totalBytes={} probe={}ms host={}",
+                    playbackSeconds, fragmentSeconds, residualSeconds, startOffsetMillis / 1000.0D,
+                    selected.byteStart(), init.contentLength(), (System.nanoTime() - seekStartNanos) / 1_000_000L,
+                    videoUrl.getHost());
+            return new Fmp4StreamStart(combined, residualSeconds, fragmentSeconds);
+        } catch (IOException | RuntimeException e) {
+            LOGGER.debug("Native video fMP4 sidx seek unavailable: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private static byte[] readAllBytes(InputStream stream, long maxBytes) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream((int) Math.min(maxBytes, 1024 * 1024L));
+        byte[] buffer = new byte[64 * 1024];
+        long remaining = maxBytes;
+        while (remaining > 0L) {
+            int n = stream.read(buffer, 0, (int) Math.min(buffer.length, remaining));
+            if (n < 0) {
+                break;
+            }
+            if (n == 0) {
+                continue;
+            }
+            out.write(buffer, 0, n);
+            remaining -= n;
+        }
+        return out.toByteArray();
+    }
+
+    private static SidxIndex parseSidx(byte[] data, long absoluteStart) {
+        int sidxOffset = -1;
+        Mp4Box sidxBox = null;
+        for (int pos = 0; pos + 8 <= data.length;) {
+            Mp4Box box = readCompleteMp4Box(data, pos, data.length);
+            if (box == null || box.size() <= 0L || box.size() > Integer.MAX_VALUE) {
+                break;
+            }
+            if (isBoxType(data, pos + 4, 's', 'i', 'd', 'x')) {
+                sidxOffset = pos;
+                sidxBox = box;
+                break;
+            }
+            pos += (int) box.size();
+        }
+        if (sidxOffset < 0 || sidxBox == null) {
+            return null;
+        }
+        int p = sidxOffset + sidxBox.headerSize();
+        int end = sidxOffset + (int) sidxBox.size();
+        if (p + 12 > end) {
+            return null;
+        }
+        int version = data[p] & 0xFF;
+        p += 4; // version + flags
+        p += 4; // reference_ID
+        long timescale = readUInt32(data, p);
+        p += 4;
+        long earliestPresentationTime;
+        long firstOffset;
+        if (version == 0) {
+            if (p + 8 > end) {
+                return null;
+            }
+            earliestPresentationTime = readUInt32(data, p);
+            p += 4;
+            firstOffset = readUInt32(data, p);
+            p += 4;
+        } else {
+            if (p + 16 > end) {
+                return null;
+            }
+            earliestPresentationTime = readUInt64(data, p);
+            p += 8;
+            firstOffset = readUInt64(data, p);
+            p += 8;
+        }
+        if (p + 4 > end || timescale <= 0L) {
+            return null;
+        }
+        p += 2; // reserved
+        int referenceCount = ((data[p] & 0xFF) << 8) | (data[p + 1] & 0xFF);
+        p += 2;
+        long currentTime = earliestPresentationTime;
+        long currentByte = absoluteStart + sidxOffset + sidxBox.size() + firstOffset;
+        List<SidxEntry> entries = new ArrayList<>();
+        for (int i = 0; i < referenceCount && p + 12 <= end; i++) {
+            long ref = readUInt32(data, p);
+            p += 4;
+            boolean referenceType = (ref & 0x8000_0000L) != 0L;
+            long size = ref & 0x7FFF_FFFFL;
+            long duration = readUInt32(data, p);
+            p += 4;
+            p += 4; // SAP
+            if (!referenceType && size > 0L) {
+                double timeSeconds = currentTime / (double) timescale;
+                entries.add(new SidxEntry(timeSeconds, currentByte, currentByte + size - 1L));
+            }
+            currentTime += duration;
+            currentByte += size;
+        }
+        return entries.isEmpty() ? null : new SidxIndex(timescale, entries);
     }
 
     private Fmp4InitSegment readInitSegment() throws IOException {
@@ -507,13 +735,24 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     }
 
     private static boolean isCloseCandidate(MoofCandidate candidate, float targetSeconds) {
-        return candidate != null && !Double.isNaN(candidate.fragmentSeconds())
-                && Math.abs(candidate.fragmentSeconds() - targetSeconds) <= FMP4_CLOSE_FRAGMENT_SECONDS;
+        if (candidate == null || Double.isNaN(candidate.fragmentSeconds())) {
+            return false;
+        }
+        double delta = targetSeconds - candidate.fragmentSeconds();
+        return delta >= -FMP4_TARGET_EPSILON_SECONDS && delta <= FMP4_CLOSE_FRAGMENT_SECONDS;
     }
 
     private static boolean shouldRetry(MoofCandidate candidate, float targetSeconds) {
+        if (candidate == null || Double.isNaN(candidate.fragmentSeconds())) {
+            return false;
+        }
+        double delta = targetSeconds - candidate.fragmentSeconds();
+        return delta < -FMP4_TARGET_EPSILON_SECONDS || delta > FMP4_CLOSE_FRAGMENT_SECONDS;
+    }
+
+    private static boolean isAfterTargetCandidate(MoofCandidate candidate, float targetSeconds) {
         return candidate != null && !Double.isNaN(candidate.fragmentSeconds())
-                && Math.abs(candidate.fragmentSeconds() - targetSeconds) > FMP4_CLOSE_FRAGMENT_SECONDS;
+                && candidate.fragmentSeconds() > targetSeconds + FMP4_TARGET_EPSILON_SECONDS;
     }
 
     private static long nextRangeStart(MoofCandidate candidate, float targetSeconds, double durationSeconds,
@@ -595,10 +834,57 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
     }
 
-    private record Fmp4StreamStart(InputStream stream, float residualSeconds) {
+    private record Fmp4StreamStart(InputStream stream, float residualSeconds, double fragmentSeconds) {
     }
 
     private record Fmp4InitSegment(byte[] bytes, long contentLength, int timescale) {
+    }
+
+    private static SegmentBaseInfo segmentBaseInfo(String url) {
+        SegmentBaseInfo info = SEGMENT_BASE_BY_URL.get(url);
+        if (info == null) {
+            return null;
+        }
+        long now = System.currentTimeMillis();
+        if (now - info.createdAtMillis() > SEGMENT_BASE_TTL_MILLIS) {
+            SEGMENT_BASE_BY_URL.remove(url, info);
+            return null;
+        }
+        return info;
+    }
+
+    private static void cleanupSegmentBaseInfo(long now) {
+        if (SEGMENT_BASE_BY_URL.isEmpty()) {
+            return;
+        }
+        SEGMENT_BASE_BY_URL.entrySet().removeIf(
+                entry -> now - entry.getValue().createdAtMillis() > SEGMENT_BASE_TTL_MILLIS);
+        int maxEntries = Math.max(1, MAX_SEGMENT_BASE_ENTRIES);
+        while (SEGMENT_BASE_BY_URL.size() > maxEntries) {
+            String oldestKey = null;
+            long oldestCreatedAt = Long.MAX_VALUE;
+            for (var entry : SEGMENT_BASE_BY_URL.entrySet()) {
+                long createdAt = entry.getValue().createdAtMillis();
+                if (createdAt < oldestCreatedAt) {
+                    oldestCreatedAt = createdAt;
+                    oldestKey = entry.getKey();
+                }
+            }
+            if (oldestKey == null) {
+                return;
+            }
+            SEGMENT_BASE_BY_URL.remove(oldestKey);
+        }
+    }
+
+    private record SegmentBaseInfo(long initStart, long initEnd, long indexStart, long indexEnd,
+            long createdAtMillis) {
+    }
+
+    private record SidxIndex(long timescale, List<SidxEntry> entries) {
+    }
+
+    private record SidxEntry(double timeSeconds, long byteStart, long byteEnd) {
     }
 
     private record ChunkRange(InputStream stream) {
@@ -613,7 +899,15 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private record Mp4Box(long size, int headerSize) {
     }
 
-    private void decodeSample(byte[] mp4Sample) throws IOException {
+    private long nextSamplePtsNanos() {
+        int index = pendingSampleIndex++;
+        if (pendingSamplePtsNanos != null && index >= 0 && index < pendingSamplePtsNanos.length) {
+            return pendingSamplePtsNanos[index];
+        }
+        return -1L;
+    }
+
+    private void decodeSample(byte[] mp4Sample, long samplePtsNanos) throws IOException {
         if (mp4Sample.length == 0 || totalFrames >= maxFrames) {
             return;
         }
@@ -624,10 +918,11 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
         writeLengthPrefixedSampleAsAnnexB(mp4Sample, nalLengthSize, annexB);
         byte[] packet = annexB.toByteArray();
-        if (!decoder.sendPacket(packet)) {
+        if (!decoder.sendPacket(packet, samplePtsNanos)) {
             throw new IOException(
                     "VideoNativeDecoder.sendPacket failed codecId=" + codecId + ", packet=" + packet.length);
         }
+        pendingDecodedPtsNanos.addLast(samplePtsNanos);
         drainFrames();
     }
 
@@ -637,18 +932,29 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             return;
         }
         while (totalFrames < maxFrames) {
-            if (framesToDrop > 0) {
-                if (!decoder.receiveFrameNoCopy()) {
-                    return;
-                }
-                framesToDrop--;
-                totalFrames++;
+            if (drainDropFrameNoOutput()) {
                 continue;
             }
-            byte[] frame = outputYuv420 ? decoder.getVideoFrameYuv420() : decoder.getVideoFrame();
+            DecodedFrame frame = outputYuv420 ? getNextYuv420Frame() : getNextRgbaFrame();
             if (frame == null) {
                 return;
             }
+            Long fallbackPtsNanos = pendingDecodedPtsNanos.isEmpty() ? null : pendingDecodedPtsNanos.removeFirst();
+            long samplePtsNanos = decoder.lastFramePtsNanos();
+            if (samplePtsNanos < 0L && fallbackPtsNanos != null) {
+                samplePtsNanos = fallbackPtsNanos.longValue();
+            }
+            long mediaPtsNanos = samplePtsNanos >= 0L
+                    ? samplePtsNanos
+                    : timelineStartNanos + Math.round((totalFrames + 1) * 1_000_000_000.0D / fps);
+            lastDecodedMediaPtsNanos = mediaPtsNanos;
+            if (shouldDropDecodedFrame(mediaPtsNanos, samplePtsNanos >= 0L)) {
+                frame.close();
+                totalFrames++;
+                continue;
+            }
+            long relativePtsNanos = mediaPtsNanos - startOffsetMillis * 1_000_000L;
+            frame = frame.withPtsNanos(Math.max(0L, relativePtsNanos));
             while (!closed.get()) {
                 try {
                     if (frames.offer(frame, 250L, TimeUnit.MILLISECONDS)) {
@@ -667,6 +973,65 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
     }
 
+    private boolean drainDropFrameNoOutput() {
+        boolean shouldDropByPts = dropBeforeMediaPtsNanos > 0L
+                && !pendingDecodedPtsNanos.isEmpty()
+                && pendingDecodedPtsNanos.peekFirst() != null
+                && pendingDecodedPtsNanos.peekFirst().longValue() >= 0L
+                && pendingDecodedPtsNanos.peekFirst().longValue() + 1_000_000L < dropBeforeMediaPtsNanos;
+        boolean shouldDropByFallback = fallbackFramesToDrop > 0;
+        if (!shouldDropByPts && !shouldDropByFallback) {
+            return false;
+        }
+        if (!decoder.receiveFrameNoCopy()) {
+            return false;
+        }
+        Long fallbackPtsNanos = pendingDecodedPtsNanos.isEmpty() ? null : pendingDecodedPtsNanos.removeFirst();
+        long samplePtsNanos = decoder.lastFramePtsNanos();
+        if (samplePtsNanos < 0L && fallbackPtsNanos != null) {
+            samplePtsNanos = fallbackPtsNanos.longValue();
+        }
+        if (samplePtsNanos >= 0L) {
+            lastDecodedMediaPtsNanos = samplePtsNanos;
+            if (samplePtsNanos + 1_000_000L >= dropBeforeMediaPtsNanos) {
+                dropBeforeMediaPtsNanos = 0L;
+            }
+        }
+        if (shouldDropByFallback && fallbackFramesToDrop > 0) {
+            fallbackFramesToDrop--;
+        }
+        totalFrames++;
+        return true;
+    }
+
+    private boolean shouldDropDecodedFrame(long mediaPtsNanos, boolean hasRealPts) {
+        if (hasRealPts) {
+            return dropBeforeMediaPtsNanos > 0L && mediaPtsNanos + 1_000_000L < dropBeforeMediaPtsNanos;
+        }
+        if (fallbackFramesToDrop > 0) {
+            fallbackFramesToDrop--;
+            return true;
+        }
+        return false;
+    }
+
+    private DecodedFrame getNextRgbaFrame() {
+        if (!REUSE_OUTPUT_BUFFERS) {
+            return DecodedFrame.wrap(decoder.getVideoFrame());
+        }
+        byte[] buffer = reusableBuffers.poll();
+        byte[] output = buffer != null ? buffer : new byte[Math.max(1, targetWidth) * Math.max(1, targetHeight) * 4];
+        if (!decoder.getVideoFrameInto(output)) {
+            reusableBuffers.offer(output);
+            return null;
+        }
+        return new DecodedFrame(output, () -> reusableBuffers.offer(output));
+    }
+
+    private DecodedFrame getNextYuv420Frame() {
+        return DecodedFrame.wrap(decoder.getVideoFrameYuv420());
+    }
+
     private void drainFramesNoOutput() {
         while (totalFrames < maxFrames) {
             if (!decoder.receiveFrameNoCopy()) {
@@ -674,7 +1039,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             }
             while (!closed.get()) {
                 try {
-                    if (frames.offer(DECODE_ONLY_FRAME, 250L, TimeUnit.MILLISECONDS)) {
+                    if (frames.offer(DecodedFrame.wrap(DECODE_ONLY_FRAME), 250L, TimeUnit.MILLISECONDS)) {
                         break;
                     }
                 } catch (InterruptedException e) {
@@ -903,10 +1268,11 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
         if (thread == null || thread == Thread.currentThread() || !thread.isAlive()) {
             closeDecoderOnce();
-        } else {
-            LOGGER.warn("Native video worker 未及时退出，延后释放 FFmpeg decoder 以避免 native use-after-free");
         }
-        frames.clear();
+        DecodedFrame frame;
+        while ((frame = frames.poll()) != null) {
+            frame.close();
+        }
     }
 
     private void closeDecoderOnce() {
@@ -916,5 +1282,48 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     }
 
     private record DecoderConfig(int nalLengthSize, byte[] annexBConfig) {
+    }
+
+    public static final class DecodedFrame implements AutoCloseable {
+        private final byte[] rgba;
+        private final Runnable release;
+        private final long ptsNanos;
+        private boolean closed;
+
+        private DecodedFrame(byte[] rgba, Runnable release) {
+            this(rgba, release, -1L);
+        }
+
+        private DecodedFrame(byte[] rgba, Runnable release, long ptsNanos) {
+            this.rgba = rgba;
+            this.release = release;
+            this.ptsNanos = ptsNanos;
+        }
+
+        static DecodedFrame wrap(byte[] rgba) {
+            return rgba != null ? new DecodedFrame(rgba, null) : null;
+        }
+
+        public byte[] rgba() {
+            return rgba;
+        }
+
+        public long ptsNanos() {
+            return ptsNanos;
+        }
+
+        private DecodedFrame withPtsNanos(long ptsNanos) {
+            return new DecodedFrame(rgba, release, ptsNanos);
+        }
+
+        @Override
+        public void close() {
+            if (!closed) {
+                closed = true;
+                if (release != null) {
+                    release.run();
+                }
+            }
+        }
     }
 }

@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ModernTurntableTimeline;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
@@ -14,13 +15,12 @@ import net.neoforged.neoforge.client.event.SubmitCustomGeometryEvent;
 import org.slf4j.Logger;
 
 import java.io.IOException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArraySet;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -28,6 +28,14 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 final class VideoPlaybackInstance {
     private static final Logger LOGGER = LogUtils.getLogger();
+    /**
+     * 可选视频相位补偿。默认不补偿，避免掩盖 OpenAL 音频 pacing 问题；需要按设备/驱动微调时再通过
+     * JVM 参数启用。
+     */
+    private static final long AUDIO_OUTPUT_LATENCY_COMPENSATION_MILLIS = Long.getLong(
+            "bili.video.pipeline.audio_latency_compensation_ms", 0L);
+    private static final long CHASE_WINDOW_MILLIS = Long.getLong("bili.video.pipeline.chase_window_ms", 10_000L);
+    private static final long SLOWDOWN_WINDOW_MILLIS = Long.getLong("bili.video.pipeline.slowdown_window_ms", 2_500L);
 
     private final String videoUrl;
     private final int targetWidth;
@@ -39,8 +47,12 @@ final class VideoPlaybackInstance {
     private final long totalMillis;
     private final boolean preferNative;
     private final String decoderOverride;
-    private final Identifier textureId;
+    private final Identifier firstTextureId;
+    private final Identifier secondTextureId;
+    private final Identifier loadingTextureId;
     private final BlockPos turntablePos;
+    private final VideoFrameQueue frameQueue = new VideoFrameQueue(
+            Integer.getInteger("bili.video.pipeline.queue_capacity", 3));
     private final AtomicLong generation = new AtomicLong();
     private final Set<BlockPos> projectorPositions = new CopyOnWriteArraySet<>();
     private volatile boolean running;
@@ -48,7 +60,18 @@ final class VideoPlaybackInstance {
     private volatile long startNanoTime;
     private volatile Thread decodeThread;
     private volatile AutoCloseable decoder;
-    private volatile DynamicTexture texture;
+    private volatile DynamicTexture frontTexture;
+    private volatile DynamicTexture backTexture;
+    private volatile DynamicTexture loadingTexture;
+    private volatile Identifier frontTextureId;
+    private volatile Identifier backTextureId;
+    private volatile boolean firstFrameLogged;
+    private volatile boolean firstSubmitLogged;
+    private volatile long firstDecodedNanoTime;
+    private volatile boolean startupBufferReady;
+    private volatile long lastUploadPumpNanoTime;
+    private volatile long decoderStartOffsetMillis;
+    private volatile long lastUploadedPtsNanos = -1L;
 
     VideoPlaybackInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             String sessionId, long startOffsetMillis, long totalMillis, Collection<BlockPos> projectorPositions,
@@ -64,29 +87,44 @@ final class VideoPlaybackInstance {
         this.preferNative = preferNative;
         this.decoderOverride = decoderOverride;
         this.turntablePos = turntablePos != null ? turntablePos.immutable() : null;
-        this.textureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
-                "dynamic/bili_video_preview_" + Integer.toUnsignedString(sessionId.hashCode(), 16));
+        String textureSuffix = Integer.toUnsignedString(sessionId.hashCode(), 16);
+        this.firstTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
+                "dynamic/bili_video_preview_" + textureSuffix + "_a");
+        this.secondTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
+                "dynamic/bili_video_preview_" + textureSuffix + "_b");
+        this.loadingTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
+                "dynamic/bili_video_preview_" + textureSuffix + "_loading");
+        this.frontTextureId = firstTextureId;
+        this.backTextureId = secondTextureId;
         replaceProjectors(projectorPositions);
     }
 
     void start() {
         running = true;
         hasFrame = false;
+        firstFrameLogged = false;
+        firstSubmitLogged = false;
+        firstDecodedNanoTime = 0L;
+        startupBufferReady = false;
+        lastUploadPumpNanoTime = System.nanoTime();
+        decoderStartOffsetMillis = startOffsetMillis;
+        lastUploadedPtsNanos = -1L;
+        frameQueue.clear();
         startNanoTime = System.nanoTime();
         long gen = generation.incrementAndGet();
         Thread thread = new Thread(() -> decode(gen), "bili-video-" + sessionId);
         thread.setDaemon(true);
         decodeThread = thread;
         thread.start();
-        LOGGER.info("视频会话已启动: session={} {}x{} @ {}fps projectors={}", sessionId, targetWidth, targetHeight,
-                fps, projectorPositions);
     }
 
     private void decode(long gen) {
         long frameIntervalNs = Math.max(1L, 1_000_000_000L / fps);
         long frameIndex = 0L;
+        long effectiveStartOffsetMillis = effectiveDecoderStartOffsetMillis();
+        decoderStartOffsetMillis = effectiveStartOffsetMillis;
         try (AutoCloseable dec = VideoBillboardPreview.openDecoder(videoUrl, targetWidth, targetHeight, fps, codecId,
-                preferNative, decoderOverride, startOffsetMillis, totalMillis)) {
+                preferNative, decoderOverride, effectiveStartOffsetMillis, totalMillis)) {
             decoder = dec;
             while (running && gen == generation.get()) {
                 if (!waitWhilePaused(gen)) {
@@ -95,51 +133,75 @@ final class VideoPlaybackInstance {
                 if (projectorPositions.isEmpty()) {
                     break;
                 }
-                byte[] frame = VideoBillboardPreview.nextFrame(dec);
+                if (frameIndex > 0L) {
+                    waitForDecodeLead(frameIntervalNs, gen);
+                }
+                long waitStartNs = System.nanoTime();
+                VideoBillboardPreview.DecodedFrame frame = VideoBillboardPreview.nextDecodedFrame(dec);
+                long waitNs = System.nanoTime() - waitStartNs;
+                if (frameIndex == 0L && waitNs > 2_000_000_000L) {
+                    LOGGER.warn("视频流水线首帧等待耗时较长: session={}, wait={}ms, startOffset={}ms, queue={}",
+                            sessionId, waitNs / 1_000_000L, effectiveStartOffsetMillis, frameQueue.size());
+                }
                 if (frame == null) {
                     break;
                 }
                 frameIndex++;
-                int dropped = 0;
-                long nowNs = System.nanoTime();
-                while (running && gen == generation.get()
-                        && nowNs - expectedFrameTimeNs(frameIndex, frameIntervalNs) > frameIntervalNs * 2L
-                        && dropped < VideoBillboardPreview.MAX_CATCH_UP_DROPS_PER_TICK) {
-                    byte[] next = VideoBillboardPreview.nextFrame(dec);
-                    if (next == null) {
-                        frame = null;
-                        break;
-                    }
-                    frame = next;
-                    frameIndex++;
-                    dropped++;
-                    nowNs = System.nanoTime();
+                long ptsNanos = frame.ptsNanos() >= 0L ? frame.ptsNanos() : frameIndex * frameIntervalNs;
+                if (!firstFrameLogged && shouldDropStaleStartupFrame(ptsNanos)) {
+                    frame.close();
+                    continue;
                 }
-                if (frame == null) {
+                if (!firstFrameLogged) {
+                    firstFrameLogged = true;
+                    firstDecodedNanoTime = System.nanoTime();
+                }
+                if (!frameQueue.offer(new DecodedVideoFrame(frameIndex, ptsNanos, frame),
+                        () -> running && gen == generation.get())) {
+                    frame.close();
                     break;
                 }
-                long waitNs = expectedFrameTimeNs(frameIndex, frameIntervalNs) - System.nanoTime();
-                if (waitNs > 0L) {
-                    try {
-                        sleepUntilFrame(frameIndex, frameIntervalNs, gen);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                }
-                if (upload(frame, gen) < 0L) {
-                    break;
-                }
+                warnIfUploadPumpStalled();
             }
         } catch (Exception e) {
             if (!running && isInterruptedWait(e)) {
-                LOGGER.debug("视频会话已停止: session={}", sessionId);
                 return;
             }
             LOGGER.error("视频会话解码失败: session={}", sessionId, e);
         } finally {
             running = false;
             decoder = null;
+        }
+    }
+
+    private boolean shouldDropStaleStartupFrame(long ptsNanos) {
+        long maxStartupLagNs = Long.getLong("bili.video.pipeline.startup_drop_lag_ms", 750L) * 1_000_000L;
+        if (maxStartupLagNs <= 0L) {
+            return false;
+        }
+        long playbackNs = playbackNanos();
+        boolean drop = playbackNs - ptsNanos > maxStartupLagNs;
+        return drop && frameQueue.isEmpty();
+    }
+
+    private void waitForDecodeLead(long frameIntervalNs, long gen) throws InterruptedException {
+        long maxLeadNs = Math.max(frameIntervalNs * frameQueue.capacity(),
+                Long.getLong("bili.video.pipeline.max_decode_lead_ms", 250L) * 1_000_000L);
+        while (running && gen == generation.get() && frameQueue.isFull()
+                && frameQueue.latestPtsNanos() - playbackNanos() > maxLeadNs) {
+            warnIfUploadPumpStalled();
+            java.util.concurrent.TimeUnit.MILLISECONDS.sleep(5L);
+        }
+    }
+
+    private void warnIfUploadPumpStalled() {
+        long thresholdNs = Long.getLong("bili.video.pipeline.upload_pump_warn_ms", 1000L) * 1_000_000L;
+        long idleNs = System.nanoTime() - lastUploadPumpNanoTime;
+        if (thresholdNs > 0L && frameQueue.isFull() && idleNs > thresholdNs) {
+            lastUploadPumpNanoTime = System.nanoTime();
+            LOGGER.warn("视频流水线上传泵疑似停滞: session={}, queue={}, latestPts={}ms, clock={}ms, idle={}ms",
+                    sessionId, frameQueue.size(), frameQueue.latestPtsNanos() / 1_000_000L,
+                    playbackNanos() / 1_000_000L, idleNs / 1_000_000L);
         }
     }
 
@@ -160,19 +222,6 @@ final class VideoPlaybackInstance {
         return running && gen == generation.get();
     }
 
-    private void sleepUntilFrame(long frameIndex, long frameIntervalNs, long gen) throws InterruptedException {
-        while (running && gen == generation.get()) {
-            if (isGamePaused()) {
-                waitWhilePaused(gen);
-            }
-            long remainingNs = expectedFrameTimeNs(frameIndex, frameIntervalNs) - System.nanoTime();
-            if (remainingNs <= 0L) {
-                return;
-            }
-            java.util.concurrent.TimeUnit.NANOSECONDS.sleep(Math.min(remainingNs, 25_000_000L));
-        }
-    }
-
     private static boolean isGamePaused() {
         Minecraft minecraft = Minecraft.getInstance();
         return minecraft != null && minecraft.isPaused();
@@ -191,34 +240,78 @@ final class VideoPlaybackInstance {
         return false;
     }
 
-    private long expectedFrameTimeNs(long frameIndex, long frameIntervalNs) {
-        return startNanoTime + frameIndex * frameIntervalNs;
+    private long playbackNanos() {
+        long synced = syncedPlaybackNanos();
+        if (synced >= 0L) {
+            return synced;
+        }
+        long startNs = startNanoTime;
+        return startNs > 0L ? Math.max(0L, System.nanoTime() - startNs) : 0L;
     }
 
-    private long upload(byte[] rgba, long gen) {
-        Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.level == null || gen != generation.get() || !running) {
-            return -1L;
+    private long syncedPlaybackNanos() {
+        long baseOffsetMillis = Math.max(startOffsetMillis, decoderStartOffsetMillis);
+        long synced = ModernTurntableTimeline.relativeNanos(turntablePos,
+                baseOffsetMillis + AUDIO_OUTPUT_LATENCY_COMPENSATION_MILLIS);
+        return synced;
+    }
+
+    private long effectiveDecoderStartOffsetMillis() {
+        long synced = ModernTurntableTimeline.mediaMillis(turntablePos);
+        long offset = synced >= 0L ? Math.max(startOffsetMillis, synced) : startOffsetMillis;
+        return totalMillis > 0L ? Math.min(totalMillis, offset) : offset;
+    }
+
+    void pumpUploadOnRenderThread() {
+        lastUploadPumpNanoTime = System.nanoTime();
+        if (!running && frameQueue.isEmpty()) {
+            return;
         }
-        CompletableFuture<Long> future = new CompletableFuture<>();
-        minecraft.execute(() -> {
-            if (gen != generation.get() || !running) {
-                future.complete(-1L);
-                return;
+        if (!startupBufferReady && shouldWaitForStartupBuffer()) {
+            return;
+        }
+        startupBufferReady = true;
+        long playbackNs = playbackNanos();
+        DecodedVideoFrame frame = frameQueue.pollBestFrame(playbackNs,
+                Long.getLong("bili.video.pipeline.early_tolerance_ms", 12L) * 1_000_000L);
+        if (frame == null) {
+            return;
+        }
+        long maxVisibleLagNs = Long.getLong("bili.video.pipeline.max_visible_lag_ms", 250L) * 1_000_000L;
+        if (maxVisibleLagNs > 0L && playbackNs - frame.ptsNanos() > maxVisibleLagNs) {
+            DecodedVideoFrame chase = frameQueue.pollBestFrame(playbackNs, 0L);
+            if (chase != null) {
+                frame.close();
+                frame = chase;
             }
-            long startNs = System.nanoTime();
-            boolean ok = uploadOnRenderThread(rgba);
-            future.complete(ok ? System.nanoTime() - startNs : -1L);
-        });
-        try {
-            return future.get();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return -1L;
-        } catch (ExecutionException e) {
-            LOGGER.error("视频会话上传帧失败: session={}", sessionId, e);
-            return -1L;
         }
+        try {
+            if (uploadOnRenderThread(frame.rgba())) {
+                lastUploadedPtsNanos = frame.ptsNanos();
+            }
+        } finally {
+            frame.close();
+        }
+    }
+
+    private boolean shouldWaitForStartupBuffer() {
+        int requiredFrames = Integer.getInteger("bili.video.pipeline.startup_prebuffer_frames", 2);
+        if (requiredFrames <= 1 || hasFrame) {
+            return false;
+        }
+        if (frameQueue.size() >= requiredFrames) {
+            return false;
+        }
+        long firstDecodedNs = firstDecodedNanoTime;
+        if (firstDecodedNs <= 0L) {
+            return false;
+        }
+        long maxWaitNs = Long.getLong("bili.video.pipeline.startup_prebuffer_max_wait_ms", 250L) * 1_000_000L;
+        boolean wait = System.nanoTime() - firstDecodedNs < maxWaitNs;
+        if (!wait) {
+            return false;
+        }
+        return wait;
     }
 
     private boolean uploadOnRenderThread(byte[] rgba) {
@@ -227,43 +320,97 @@ final class VideoPlaybackInstance {
             return false;
         }
         ensureTexture();
-        NativeImage image = texture.getPixels();
+        NativeImage image = backTexture.getPixels();
         if (image == null || image.isClosed()) {
             return false;
         }
         VideoFrameUploader.uploadRgba(image, rgba, targetWidth, targetHeight);
-        texture.upload();
+        backTexture.upload();
+        swapTextures();
         hasFrame = true;
         return true;
     }
 
     private void ensureTexture() {
-        if (texture != null) {
-            NativeImage image = texture.getPixels();
+        if (frontTexture != null && backTexture != null) {
+            NativeImage image = frontTexture.getPixels();
+            NativeImage backImage = backTexture.getPixels();
             if (image != null && !image.isClosed() && image.getWidth() == targetWidth
-                    && image.getHeight() == targetHeight) {
+                    && image.getHeight() == targetHeight
+                    && backImage != null && !backImage.isClosed() && backImage.getWidth() == targetWidth
+                    && backImage.getHeight() == targetHeight) {
                 return;
             }
         }
         releaseTexture();
-        texture = new DynamicTexture("bili_video_" + sessionId, targetWidth, targetHeight, false);
-        Minecraft.getInstance().getTextureManager().register(textureId, texture);
+        frontTexture = new DynamicTexture("bili_video_" + sessionId + "_front", targetWidth, targetHeight, false);
+        backTexture = new DynamicTexture("bili_video_" + sessionId + "_back", targetWidth, targetHeight, false);
+        frontTextureId = firstTextureId;
+        backTextureId = secondTextureId;
+        Minecraft.getInstance().getTextureManager().register(frontTextureId, frontTexture);
+        Minecraft.getInstance().getTextureManager().register(backTextureId, backTexture);
+    }
+
+    private void swapTextures() {
+        DynamicTexture oldFront = frontTexture;
+        frontTexture = backTexture;
+        backTexture = oldFront;
+        Identifier oldFrontId = frontTextureId;
+        frontTextureId = backTextureId;
+        backTextureId = oldFrontId;
     }
 
     void submit(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera) {
-        if (!hasFrame || texture == null) {
-            return;
+        if (!firstSubmitLogged) {
+            firstSubmitLogged = true;
         }
+        pumpUploadOnRenderThread();
         List<BlockPos> stale = new ArrayList<>();
         for (BlockPos pos : projectorPositions) {
             if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
                 stale.add(pos);
                 continue;
             }
-            VideoBillboardPreview.submitProjectorGeometry(event, minecraft, camera, projector, textureId, targetWidth,
-                    targetHeight);
+            if (hasFrame && frontTexture != null) {
+                VideoBillboardPreview.submitProjectorGeometry(event, minecraft, camera, projector, frontTextureId,
+                        targetWidth, targetHeight);
+            } else if (Boolean.parseBoolean(System.getProperty("bili.video.pipeline.loading_placeholder", "true"))) {
+                ensureLoadingTexture();
+                updateLoadingTexture();
+                VideoBillboardPreview.submitProjectorGeometry(event, minecraft, camera, projector, loadingTextureId,
+                        LoadingTexture.WIDTH, LoadingTexture.HEIGHT);
+            }
         }
         projectorPositions.removeAll(stale);
+    }
+
+    private void ensureLoadingTexture() {
+        if (loadingTexture != null) {
+            NativeImage image = loadingTexture.getPixels();
+            if (image != null && !image.isClosed()) {
+                return;
+            }
+        }
+        if (loadingTexture != null) {
+            Minecraft.getInstance().getTextureManager().release(loadingTextureId);
+            loadingTexture.close();
+        }
+        loadingTexture = new DynamicTexture("bili_video_" + sessionId + "_loading", LoadingTexture.WIDTH,
+                LoadingTexture.HEIGHT, false);
+        Minecraft.getInstance().getTextureManager().register(loadingTextureId, loadingTexture);
+        updateLoadingTexture();
+    }
+
+    private void updateLoadingTexture() {
+        if (loadingTexture == null) {
+            return;
+        }
+        NativeImage image = loadingTexture.getPixels();
+        if (image == null || image.isClosed()) {
+            return;
+        }
+        LoadingTexture.draw(image, System.nanoTime() - startNanoTime, frameQueue.size(), frameQueue.capacity());
+        loadingTexture.upload();
     }
 
     boolean isWithinAudioRange(Minecraft minecraft) {
@@ -289,11 +436,56 @@ final class VideoPlaybackInstance {
     }
 
     boolean isRunningAtOffset(long requestedOffsetMillis) {
+        return isRunningAtOffset(requestedOffsetMillis, 1_500L);
+    }
+
+    boolean isRunningAtOffset(long requestedOffsetMillis, long toleranceMillis) {
         if (!running) {
             return false;
         }
-        long expectedOffset = startOffsetMillis + Math.max(0L, (System.nanoTime() - startNanoTime) / 1_000_000L);
-        return Math.abs(expectedOffset - Math.max(0L, requestedOffsetMillis)) < 1_500L;
+        long tolerance = Math.max(0L, toleranceMillis);
+        if (hasFrame) {
+            long elapsedMillis = Math.max(0L, (System.nanoTime() - startNanoTime) / 1_000_000L);
+            long estimatedDisplayedMillis = totalMillis > 0L
+                    ? Math.min(totalMillis, startOffsetMillis + elapsedMillis)
+                    : startOffsetMillis + elapsedMillis;
+            if (Math.abs(estimatedDisplayedMillis - Math.max(0L, requestedOffsetMillis)) < tolerance) {
+                return true;
+            }
+        }
+        if (!hasFrame) {
+            // Decoder is still seeking/decoding the first visible frame. Treat the session
+            // as compatible
+            // so periodic projector refresh / server sync packets do not repeatedly kill
+            // the decoder before
+            // it can produce that first frame.
+            return true;
+        }
+        long expectedOffset = Math.max(startOffsetMillis, decoderStartOffsetMillis);
+        return Math.abs(expectedOffset - Math.max(0L, requestedOffsetMillis)) < tolerance;
+    }
+
+    boolean canChaseToOffset(long requestedOffsetMillis) {
+        if (!running) {
+            return false;
+        }
+        if (!hasFrame) {
+            // 首帧还在加载/seek：此时最容易被 3 秒同步包误杀，必须继续复用当前解码器。
+            return true;
+        }
+        long target = totalMillis > 0L ? Math.min(totalMillis, Math.max(0L, requestedOffsetMillis))
+                : Math.max(0L, requestedOffsetMillis);
+        long current = mediaMillis();
+        if (current < 0L) {
+            return true;
+        }
+        long delta = target - current;
+        if (delta >= 0L) {
+            long queuedTargetMillis = Math.max(startOffsetMillis, decoderStartOffsetMillis)
+                    + Math.max(0L, frameQueue.latestPtsNanos() / 1_000_000L);
+            return target <= queuedTargetMillis + Math.max(0L, CHASE_WINDOW_MILLIS);
+        }
+        return -delta <= Math.max(0L, SLOWDOWN_WINDOW_MILLIS);
     }
 
     void replaceProjectors(Collection<BlockPos> positions) {
@@ -315,6 +507,10 @@ final class VideoPlaybackInstance {
         return pos != null && turntablePos != null && turntablePos.equals(pos);
     }
 
+    boolean isSession(String candidateSessionId) {
+        return sessionId.equals(candidateSessionId != null ? candidateSessionId : "");
+    }
+
     boolean hasProjectors() {
         return !projectorPositions.isEmpty();
     }
@@ -331,6 +527,27 @@ final class VideoPlaybackInstance {
         return hasFrame;
     }
 
+    long mediaMillis() {
+        long uploadedPts = lastUploadedPtsNanos;
+        if (!hasFrame || uploadedPts < 0L) {
+            return -1L;
+        }
+        long clockMillis = Math.max(0L, uploadedPts / 1_000_000L);
+        long baseOffsetMillis = Math.max(startOffsetMillis, decoderStartOffsetMillis);
+        long value = Math.max(0L, baseOffsetMillis + clockMillis - AUDIO_OUTPUT_LATENCY_COMPENSATION_MILLIS);
+        return totalMillis > 0L ? Math.min(totalMillis, value) : value;
+    }
+
+    long queuedMediaMillis() {
+        long latestPts = frameQueue.latestPtsNanos();
+        if (latestPts <= 0L) {
+            return -1L;
+        }
+        long baseOffsetMillis = Math.max(startOffsetMillis, decoderStartOffsetMillis);
+        long value = Math.max(0L, baseOffsetMillis + latestPts / 1_000_000L);
+        return totalMillis > 0L ? Math.min(totalMillis, value) : value;
+    }
+
     VideoBillboardPreview.VideoStatus status() {
         return new VideoBillboardPreview.VideoStatus(targetWidth, targetHeight, fps, hasFrame, true);
     }
@@ -338,6 +555,7 @@ final class VideoPlaybackInstance {
     void stop() {
         running = false;
         generation.incrementAndGet();
+        frameQueue.clear();
         AutoCloseable dec = decoder;
         decoder = null;
         if (dec != null) {
@@ -363,10 +581,232 @@ final class VideoPlaybackInstance {
     }
 
     private void releaseTexture() {
-        if (texture != null) {
-            Minecraft.getInstance().getTextureManager().release(textureId);
-            texture.close();
-            texture = null;
+        if (frontTexture != null) {
+            Minecraft.getInstance().getTextureManager().release(frontTextureId);
+            frontTexture.close();
+            frontTexture = null;
+        }
+        if (backTexture != null && !backTextureId.equals(frontTextureId)) {
+            Minecraft.getInstance().getTextureManager().release(backTextureId);
+            backTexture.close();
+            backTexture = null;
+        } else if (backTexture != null) {
+            backTexture.close();
+            backTexture = null;
+        }
+        if (loadingTexture != null) {
+            Minecraft.getInstance().getTextureManager().release(loadingTextureId);
+            loadingTexture.close();
+            loadingTexture = null;
+        }
+        frontTextureId = firstTextureId;
+        backTextureId = secondTextureId;
+    }
+
+    private static final class LoadingTexture {
+        static final int WIDTH = 320;
+        static final int HEIGHT = 180;
+        private static final int BG = 0xFF08090D;
+        private static final int PANEL = 0xFF151923;
+        private static final int GOLD = 0xFFFFD166;
+        private static final int GOLD_DIM = 0xFF7A6230;
+        private static final int TEXT = 0xFFE8E8E8;
+        private static final int SHADOW = 0xAA000000;
+
+        private LoadingTexture() {
+        }
+
+        static void draw(NativeImage image, long elapsedNs, int queuedFrames, int capacity) {
+            fill(image, 0, 0, WIDTH, HEIGHT, BG);
+            fill(image, 18, 18, WIDTH - 36, HEIGHT - 36, PANEL);
+            rect(image, 18, 18, WIDTH - 36, HEIGHT - 36, GOLD_DIM);
+
+            int phase = (int) ((elapsedNs / 300_000_000L) % 4L);
+            drawCenteredText(image, "LOADING" + dots(phase), 62, TEXT);
+            drawCenteredText(image, "DECODING", 84, 0xFFB8C1CC);
+            drawCenteredText(image, "PLEASE WAIT", 100, 0xFF8F9BA8);
+
+            int barX = 58;
+            int barY = 126;
+            int barW = 204;
+            int barH = 10;
+            rect(image, barX, barY, barW, barH, GOLD_DIM);
+            int segmentW = 42;
+            int movingX = barX + 2 + (int) (((elapsedNs / 12_000_000L) % Math.max(1, barW - segmentW - 4)));
+            fill(image, movingX, barY + 2, segmentW, barH - 4, GOLD);
+
+            int buffered = capacity <= 0 ? 0 : Math.min(barW - 4, Math.max(0, queuedFrames) * (barW - 4) / capacity);
+            fill(image, barX + 2, barY + barH + 8, buffered, 3, GOLD_DIM);
+        }
+
+        private static String dots(int phase) {
+            return switch (phase) {
+                case 1 -> ".";
+                case 2 -> "..";
+                case 3 -> "...";
+                default -> "";
+            };
+        }
+
+        private static void rect(NativeImage image, int x, int y, int w, int h, int color) {
+            fill(image, x, y, w, 1, color);
+            fill(image, x, y + h - 1, w, 1, color);
+            fill(image, x, y, 1, h, color);
+            fill(image, x + w - 1, y, 1, h, color);
+        }
+
+        private static void fill(NativeImage image, int x, int y, int w, int h, int color) {
+            int maxX = Math.min(WIDTH, x + Math.max(0, w));
+            int maxY = Math.min(HEIGHT, y + Math.max(0, h));
+            for (int py = Math.max(0, y); py < maxY; py++) {
+                for (int px = Math.max(0, x); px < maxX; px++) {
+                    image.setPixel(px, py, color);
+                }
+            }
+        }
+
+        private static void drawText(NativeImage image, String text, int x, int y, int color) {
+            drawTextRaw(image, text, x + 1, y + 1, SHADOW);
+            drawTextRaw(image, text, x, y, color);
+        }
+
+        private static void drawCenteredText(NativeImage image, String text, int y, int color) {
+            drawText(image, text, (WIDTH - textWidth(text)) / 2, y, color);
+        }
+
+        private static int textWidth(String text) {
+            int width = 0;
+            for (int i = 0; i < text.length(); i++) {
+                width += text.charAt(i) == ' ' ? 4 : 12;
+            }
+            return Math.max(0, width - 2);
+        }
+
+        private static void drawTextRaw(NativeImage image, String text, int x, int y, int color) {
+            int cursor = x;
+            for (int i = 0; i < text.length(); i++) {
+                char c = Character.toUpperCase(text.charAt(i));
+                if (c == ' ') {
+                    cursor += 4;
+                    continue;
+                }
+                int[] glyph = glyph(c);
+                for (int row = 0; row < 7; row++) {
+                    int bits = glyph[row];
+                    for (int col = 0; col < 5; col++) {
+                        if ((bits & (1 << (4 - col))) != 0) {
+                            fill(image, cursor + col * 2, y + row * 2, 2, 2, color);
+                        }
+                    }
+                }
+                cursor += 12;
+            }
+        }
+
+        private static int[] glyph(char c) {
+            return switch (c) {
+                case 'A' -> new int[] { 0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001 };
+                case 'C' -> new int[] { 0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110 };
+                case 'D' -> new int[] { 0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110 };
+                case 'E' -> new int[] { 0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111 };
+                case 'G' -> new int[] { 0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110 };
+                case 'I' -> new int[] { 0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111 };
+                case 'K' -> new int[] { 0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001 };
+                case 'L' -> new int[] { 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111 };
+                case 'M' -> new int[] { 0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001 };
+                case 'N' -> new int[] { 0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001 };
+                case 'O' -> new int[] { 0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110 };
+                case 'P' -> new int[] { 0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000 };
+                case 'R' -> new int[] { 0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001 };
+                case 'S' -> new int[] { 0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110 };
+                case 'T' -> new int[] { 0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100 };
+                case 'V' -> new int[] { 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100 };
+                case 'W' -> new int[] { 0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001 };
+                case '.' -> new int[] { 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100 };
+                default -> new int[] { 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000 };
+            };
+        }
+    }
+
+    private record DecodedVideoFrame(long frameIndex, long ptsNanos, VideoBillboardPreview.DecodedFrame frame) {
+        byte[] rgba() {
+            return frame.rgba();
+        }
+
+        void close() {
+            frame.close();
+        }
+    }
+
+    private static final class VideoFrameQueue {
+        private final int capacity;
+        private final ArrayDeque<DecodedVideoFrame> frames = new ArrayDeque<>();
+        private long latestPtsNanos;
+
+        VideoFrameQueue(int capacity) {
+            this.capacity = Math.max(1, capacity);
+        }
+
+        synchronized boolean offer(DecodedVideoFrame frame, java.util.function.BooleanSupplier shouldContinue)
+                throws InterruptedException {
+            while (frames.size() >= capacity && shouldContinue.getAsBoolean()) {
+                wait(5L);
+            }
+            if (!shouldContinue.getAsBoolean()) {
+                return false;
+            }
+            latestPtsNanos = Math.max(latestPtsNanos, frame.ptsNanos());
+            frames.addLast(frame);
+            notifyAll();
+            return true;
+        }
+
+        synchronized DecodedVideoFrame pollBestFrame(long playbackNanos, long earlyToleranceNanos) {
+            DecodedVideoFrame best = null;
+            long visibleUntil = playbackNanos + Math.max(0L, earlyToleranceNanos);
+            while (!frames.isEmpty()) {
+                DecodedVideoFrame next = frames.peekFirst();
+                if (next.ptsNanos() > visibleUntil) {
+                    break;
+                }
+                DecodedVideoFrame polled = frames.pollFirst();
+                if (best != null) {
+                    best.close();
+                }
+                best = polled;
+            }
+            if (best != null) {
+                notifyAll();
+            }
+            return best;
+        }
+
+        synchronized void clear() {
+            for (DecodedVideoFrame frame : frames) {
+                frame.close();
+            }
+            frames.clear();
+            notifyAll();
+        }
+
+        synchronized boolean isFull() {
+            return frames.size() >= capacity;
+        }
+
+        synchronized boolean isEmpty() {
+            return frames.isEmpty();
+        }
+
+        synchronized int size() {
+            return frames.size();
+        }
+
+        int capacity() {
+            return capacity;
+        }
+
+        synchronized long latestPtsNanos() {
+            return latestPtsNanos;
         }
     }
 }

@@ -5,15 +5,13 @@ import com.mojang.logging.LogUtils;
 import org.lwjgl.system.MemoryUtil;
 import org.slf4j.Logger;
 
-import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 
 /**
- * DynamicTexture 像素写入工具，集中处理 RGBA 字节流、NativeImage 内存直写和诊断通道映射。
+ * DynamicTexture 像素写入工具，集中处理 RGBA 字节流、NativeImage 公开指针直写和诊断通道映射。
  */
 final class VideoFrameUploader {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final Field NATIVE_IMAGE_PIXELS_FIELD = findNativeImagePixelsField();
     private static final String PIXEL_MODE = System.getProperty("bili.video.pixel.mode", "normal");
     private static final boolean FAST_NATIVE_UPLOAD = Boolean.parseBoolean(
             System.getProperty("bili.video.fast_native_upload", "true"));
@@ -26,7 +24,7 @@ final class VideoFrameUploader {
     }
 
     static boolean fastNativeUploadAvailable() {
-        return FAST_NATIVE_UPLOAD && NATIVE_IMAGE_PIXELS_FIELD != null;
+        return FAST_NATIVE_UPLOAD;
     }
 
     static boolean uploadRgba(NativeImage image, byte[] rgba, int frameWidth, int frameHeight) {
@@ -108,24 +106,14 @@ final class VideoFrameUploader {
     }
 
     private static long getNativeImagePixelsAddress(NativeImage image) {
-        if (NATIVE_IMAGE_PIXELS_FIELD == null) {
+        if (image == null || image.isClosed()) {
             return 0L;
         }
         try {
-            return NATIVE_IMAGE_PIXELS_FIELD.getLong(image);
-        } catch (IllegalAccessException e) {
+            return image.getPointer();
+        } catch (RuntimeException e) {
+            LOGGER.debug("NativeImage getPointer 不可用，视频上传将回退到逐像素 setPixel 路径: {}", e.toString());
             return 0L;
-        }
-    }
-
-    private static Field findNativeImagePixelsField() {
-        try {
-            Field field = NativeImage.class.getDeclaredField("pixels");
-            field.setAccessible(true);
-            return field;
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            LOGGER.warn("NativeImage pixels 字段不可访问，视频上传将回退到逐像素 setPixel 路径", e);
-            return null;
         }
     }
 

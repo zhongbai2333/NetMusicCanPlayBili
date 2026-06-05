@@ -17,8 +17,8 @@ public class StereoOpenALHandler {
 
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int SAMPLES_PER_BLOCK = 256;
-    private static final int QUEUE_CAPACITY = 2048;
-    private static final int PREBUFFER_BLOCKS = 192;
+    private static final int QUEUE_CAPACITY = 512;
+    private static final int PREBUFFER_BLOCKS = 96;
     private static final int MAX_BLOCKS_PER_TICK = 64;
     private static final float[][] BED_POSITIONS = {
             { -0.5f, 0, 0.866f }, { 0.5f, 0, 0.866f },
@@ -143,6 +143,11 @@ public class StereoOpenALHandler {
 
     /** 每次客户端位置同步调用：推进 OpenAL 播放 + 更新空间位置 */
     public void tick(float[] machinePos, float[] listenerPos) {
+        tick(machinePos, listenerPos, Long.MAX_VALUE);
+    }
+
+    /** 每次客户端位置同步调用：推进 OpenAL 播放 + 更新空间位置 */
+    public void tick(float[] machinePos, float[] listenerPos, long targetRelativeTicks) {
         if (closed || !initialized)
             return;
         if (net.minecraft.client.Minecraft.getInstance().isPaused())
@@ -161,7 +166,7 @@ public class StereoOpenALHandler {
         }
 
         updateFrameBudget();
-        int allowed = Math.min((int) frameBudget, MAX_BLOCKS_PER_TICK);
+        int allowed = isAheadOfTarget(targetRelativeTicks) ? 0 : Math.min((int) frameBudget, MAX_BLOCKS_PER_TICK);
         int fed = 0;
         float[][] block;
         while (fed < allowed && (block = pcmQueue.poll()) != null) {
@@ -207,6 +212,14 @@ public class StereoOpenALHandler {
         for (SpeakerAudioRelay relay : relays) {
             relay.tick(listenerPos);
         }
+    }
+
+    private boolean isAheadOfTarget(long targetRelativeTicks) {
+        if (targetRelativeTicks == Long.MAX_VALUE || !started) {
+            return false;
+        }
+        long positionTicks = getPositionTicks();
+        return positionTicks >= 0L && positionTicks > targetRelativeTicks;
     }
 
     /** 所有音响 relay 是否都已度过初始静音期，正在输出真实 PCM */
@@ -337,6 +350,13 @@ public class StereoOpenALHandler {
         OpenALSpatialAudio sa = spatialAudio;
         long consumed = sa != null ? sa.getConsumedSamples() : totalSamplesFed;
         return consumed * 20L / sampleRate;
+    }
+
+    public long getFedPositionTicks() {
+        if (!started) {
+            return -1L;
+        }
+        return Math.max(0L, totalSamplesFed) * 20L / sampleRate;
     }
 
     public List<String> describeState() {

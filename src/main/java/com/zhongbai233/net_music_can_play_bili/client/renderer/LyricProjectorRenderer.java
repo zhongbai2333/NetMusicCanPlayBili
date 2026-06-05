@@ -9,7 +9,7 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.LyricProjectorBlockEn
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSubtitleLyricService;
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ModernTurntableTimeline;
 import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
 import it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap;
 import net.minecraft.client.Minecraft;
@@ -29,9 +29,9 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 歌词投影仪渲染器
@@ -41,14 +41,19 @@ public class LyricProjectorRenderer
     private static final float TEXT_SCALE = 0.025F;
     private static final float TRANSLATED_LINE_OFFSET = 12.0F;
     private static final long SCROLL_DURATION_MS = 500;
+    private static final long SCROLL_MIN_DURATION_MS = Long.getLong("bili.lyric.scroll.min_duration_ms", 120L);
+    private static final long SCROLL_FAST_GAP_MS = Long.getLong("bili.lyric.scroll.fast_gap_ms", 850L);
+    private static final long SCROLL_CATCHUP_LAG_MS = Long.getLong("bili.lyric.scroll.catchup_lag_ms", 250L);
     private static final float LINE_STEP = 14.0F;
     private static final int VISIBLE_LINES_ABOVE = 2;
     private static final int VISIBLE_LINES_BELOW = 2;
     private static final long AI_BASE_RESYNC_TICKS = 40L;
     private static final int SCROLL_SEEK_RESET_TICKS = 200;
+    private static final long SCROLL_STATE_TTL_MILLIS = 120_000L;
+    private static long lastScrollStateCleanupMillis;
 
     /** 轮换模式动画状态：记录每个投影仪的上一当前行索引与切换时间 */
-    private static final Map<BlockPos, ScrollState> scrollStates = new HashMap<>();
+    private static final Map<BlockPos, ScrollState> scrollStates = new ConcurrentHashMap<>();
 
     private final Font font;
 
@@ -71,8 +76,8 @@ public class LyricProjectorRenderer
         state.currentLyricColor = ConfigEvent.PLAYER_ORIGINAL_COLOR;
         state.transLyricColor = ConfigEvent.PLAYER_TRANSLATED_COLOR;
         state.visible = false;
-        state.linkedPos = projector.getLinkedTurntablePos();
-        state.projectorPos = projector.getBlockPos();
+        state.linkedPos = immutable(projector.getLinkedTurntablePos());
+        state.projectorPos = immutable(projector.getBlockPos());
         state.projectionYaw = projector.getProjectionYaw();
         state.projectionPitch = projector.getProjectionPitch();
         state.projectionScale = projector.getProjectionScale();
@@ -98,18 +103,16 @@ public class LyricProjectorRenderer
         ClientLinkRegistry.link(projector.getBlockPos(), state.linkedPos);
 
         if (!turntable.isPlaying()) {
-            scrollStates.remove(projector.getBlockPos());
             syncActivatedState(projector, false);
             return;
         }
 
         LyricRecord lyricRecord = turntable.getClientLyricRecord();
         if (lyricRecord == null) {
-            scrollStates.remove(projector.getBlockPos());
             syncActivatedState(projector, false);
             return;
         }
-        int lyricTickOverride = -1;
+        int lyricTickOverride = resolveProjectorLyricTick(state.linkedPos, turntable);
 
         // 动态 AI 字幕刷新：当 allowAi 开启但尚未缓存 AI 歌词时，异步获取
         if (state.allowAi) {
@@ -118,23 +121,11 @@ public class LyricProjectorRenderer
                 String cachedUrl = projector.getCachedAiRawUrl();
                 LyricRecord aiCached = projector.getCachedAiLyricRecord();
                 if (aiCached != null && rawUrl.equals(cachedUrl)) {
-                    int audioLyricTick = turntable.getClientLyricTick();
-                    if (audioLyricTick >= 0) {
-                        lyricTickOverride = audioLyricTick;
-                    } else {
-                        long dolbyTicks = DolbyAudioRegistry.getAnyPositionTicks(state.linkedPos);
-                        if (dolbyTicks >= 0L) {
-                            long baseTick = projector.getCachedAiBaseTick();
-                            long expectedBaseTick = Math.max(0L,
-                                    turntable.getPlaybackElapsedMillis(level.getGameTime()) / 50L - dolbyTicks);
-                            if (baseTick < 0L || Math.abs(baseTick - expectedBaseTick) > AI_BASE_RESYNC_TICKS) {
-                                baseTick = expectedBaseTick;
-                                projector.setCachedAiBaseTick(baseTick);
-                                resetScrollState(projector.getBlockPos(), aiCached);
-                            }
-                            int currentTick = (int) Math.min(Integer.MAX_VALUE,
-                                    Math.max(0L, baseTick + dolbyTicks));
-                            lyricTickOverride = currentTick;
+                    if (lyricTickOverride >= 0) {
+                        long baseTick = projector.getCachedAiBaseTick();
+                        if (baseTick < 0L || Math.abs(baseTick - lyricTickOverride) > AI_BASE_RESYNC_TICKS) {
+                            projector.setCachedAiBaseTick(lyricTickOverride);
+                            markScrollStateResynced(state.projectorPos, aiCached);
                         }
                     }
                     lyricRecord = aiCached;
@@ -217,23 +208,28 @@ public class LyricProjectorRenderer
                     }
                     state.scrollFutureLines = future;
 
-                    BlockPos pos = projector.getBlockPos();
+                    BlockPos pos = state.projectorPos;
                     ScrollState sc = scrollStates.computeIfAbsent(pos, k -> new ScrollState());
+                    sc.lastSeenMillis = System.currentTimeMillis();
+                    cleanupStaleScrollStates(sc.lastSeenMillis);
 
-                    // 检测换歌（LyricRecord 变了），清理旧历史
-                    int recordId = System.identityHashCode(lyricRecord);
-                    if (sc.recordId != recordId) {
+                    int recordSignature = lyricMapSignature(active);
+                    if (sc.recordSignature != recordSignature) {
                         sc.history.clear();
                         sc.currentTick = 0;
                         sc.currentText = null;
-                        sc.recordId = recordId;
+                        sc.recordSignature = recordSignature;
                         sc.skipAnimationOnce = true;
                     }
 
                     int newTick = currentKey;
+                    int nextTick = nextLyricTick(active, newTick);
+                    long animationDuration = adaptiveScrollDurationMillis(newTick, nextTick);
+                    boolean naturalForwardStep = isNaturalForwardStep(active, sc.currentTick, newTick);
                     boolean timelineJump = sc.currentText != null
                             && (newTick < sc.currentTick
-                                    || Math.abs(newTick - sc.currentTick) > SCROLL_SEEK_RESET_TICKS);
+                                    || (!naturalForwardStep
+                                            && Math.abs(newTick - sc.currentTick) > SCROLL_SEEK_RESET_TICKS));
                     if (timelineJump) {
                         sc.history.clear();
                         sc.currentText = null;
@@ -249,9 +245,18 @@ public class LyricProjectorRenderer
                         }
                         sc.currentTick = newTick;
                         sc.currentText = activeLine;
-                        sc.switchTime = sc.skipAnimationOnce
-                                ? System.currentTimeMillis() - SCROLL_DURATION_MS
-                                : System.currentTimeMillis();
+                        sc.animationDurationMillis = animationDuration;
+                        long now = System.currentTimeMillis();
+                        long lyricLagMillis = lyricTickOverride >= 0 ? Math.max(0L, (lyricTickOverride - newTick) * 50L)
+                                : 0L;
+                        if (sc.skipAnimationOnce) {
+                            sc.switchTime = now - animationDuration;
+                        } else if (lyricLagMillis > SCROLL_CATCHUP_LAG_MS) {
+                            long completed = Math.min(animationDuration, lyricLagMillis - SCROLL_CATCHUP_LAG_MS);
+                            sc.switchTime = now - completed;
+                        } else {
+                            sc.switchTime = now;
+                        }
                         sc.skipAnimationOnce = false;
                     }
                 }
@@ -264,17 +269,12 @@ public class LyricProjectorRenderer
     /**
      * 根据歌词是否可见，更新方块的 ACTIVATED 状态
      */
-    private static void resetScrollState(BlockPos pos, LyricRecord lyricRecord) {
-        ScrollState sc = scrollStates.get(pos);
+    private static void markScrollStateResynced(BlockPos pos, LyricRecord lyricRecord) {
+        ScrollState sc = scrollStates.get(immutable(pos));
         if (sc == null) {
             return;
         }
-        sc.history.clear();
-        sc.currentTick = 0;
-        sc.currentText = null;
-        sc.recordId = lyricRecord != null ? System.identityHashCode(lyricRecord) : 0;
-        sc.switchTime = System.currentTimeMillis() - SCROLL_DURATION_MS;
-        sc.skipAnimationOnce = true;
+        sc.recordSignature = lyricRecord != null ? lyricMapSignature(lyricRecord.getLyrics()) : 0;
     }
 
     private static void syncActivatedState(LyricProjectorBlockEntity projector, boolean visible) {
@@ -356,8 +356,9 @@ public class LyricProjectorRenderer
         float progress = 1.0F;
         if (sc != null) {
             long elapsed = System.currentTimeMillis() - sc.switchTime;
-            if (elapsed < SCROLL_DURATION_MS) {
-                float raw = (float) elapsed / SCROLL_DURATION_MS;
+            long duration = Math.max(SCROLL_MIN_DURATION_MS, sc.animationDurationMillis);
+            if (elapsed < duration) {
+                float raw = (float) elapsed / duration;
                 progress = 1.0f - (float) Math.pow(1.0 - raw, 3);
             }
         }
@@ -455,6 +456,89 @@ public class LyricProjectorRenderer
         return elapsed.isEmpty() ? lyrics.firstIntKey() : elapsed.lastIntKey();
     }
 
+    private static boolean isNaturalForwardStep(Int2ObjectSortedMap<String> lyrics, int oldTick, int newTick) {
+        if (lyrics == null || lyrics.isEmpty() || newTick <= oldTick) {
+            return false;
+        }
+        Int2ObjectSortedMap<String> between = lyrics.subMap(oldTick + 1, newTick + 1);
+        int nonBlankCount = 0;
+        for (String line : between.values()) {
+            if (line != null && !line.isBlank()) {
+                nonBlankCount++;
+                if (nonBlankCount > 1) {
+                    return false;
+                }
+            }
+        }
+        return nonBlankCount == 1;
+    }
+
+    private static int nextLyricTick(Int2ObjectSortedMap<String> lyrics, int currentTick) {
+        if (lyrics == null || lyrics.isEmpty()) {
+            return -1;
+        }
+        Int2ObjectSortedMap<String> tail = lyrics.tailMap(currentTick + 1);
+        for (var entry : tail.int2ObjectEntrySet()) {
+            String line = entry.getValue();
+            if (line != null && !line.isBlank()) {
+                return entry.getIntKey();
+            }
+        }
+        return -1;
+    }
+
+    private static long adaptiveScrollDurationMillis(int currentTick, int nextTick) {
+        if (nextTick <= currentTick) {
+            return SCROLL_DURATION_MS;
+        }
+        long gapMillis = Math.max(0L, (nextTick - currentTick) * 50L);
+        if (gapMillis <= 0L) {
+            return SCROLL_MIN_DURATION_MS;
+        }
+        long target = Math.min(SCROLL_DURATION_MS, Math.max(SCROLL_MIN_DURATION_MS, gapMillis * 2L / 3L));
+        if (gapMillis <= SCROLL_FAST_GAP_MS) {
+            target = Math.min(target, Math.max(SCROLL_MIN_DURATION_MS, gapMillis / 2L));
+        }
+        return target;
+    }
+
+    private static int lyricMapSignature(Int2ObjectSortedMap<String> lyrics) {
+        if (lyrics == null || lyrics.isEmpty()) {
+            return 0;
+        }
+        int hash = 1;
+        hash = 31 * hash + lyrics.size();
+        hash = 31 * hash + lyrics.firstIntKey();
+        hash = 31 * hash + lyrics.lastIntKey();
+        for (var entry : lyrics.int2ObjectEntrySet()) {
+            hash = 31 * hash + entry.getIntKey();
+            String value = entry.getValue();
+            hash = 31 * hash + (value != null ? value.hashCode() : 0);
+        }
+        return hash;
+    }
+
+    private static int resolveProjectorLyricTick(BlockPos turntablePos, ModernTurntableBlockEntity turntable) {
+        int timelineTick = ModernTurntableTimeline.mediaTick(turntablePos);
+        if (timelineTick >= 0) {
+            return timelineTick;
+        }
+        return turntable.getClientLyricTick();
+    }
+
+    private static BlockPos immutable(BlockPos pos) {
+        return pos != null ? pos.immutable() : null;
+    }
+
+    private static void cleanupStaleScrollStates(long nowMillis) {
+        if (nowMillis - lastScrollStateCleanupMillis < SCROLL_STATE_TTL_MILLIS) {
+            return;
+        }
+        lastScrollStateCleanupMillis = nowMillis;
+        scrollStates.entrySet()
+                .removeIf(entry -> nowMillis - entry.getValue().lastSeenMillis > SCROLL_STATE_TTL_MILLIS);
+    }
+
     public static class State extends BlockEntityRenderState {
         public MutableComponent currentLine = Component.empty();
         public MutableComponent translatedLine;
@@ -478,9 +562,11 @@ public class LyricProjectorRenderer
     private static class ScrollState {
         int currentTick;
         String currentText;
-        int recordId;
+        int recordSignature;
         final List<String> history = new ArrayList<>();
         long switchTime;
+        long animationDurationMillis = SCROLL_DURATION_MS;
+        long lastSeenMillis;
         boolean skipAnimationOnce;
     }
 }

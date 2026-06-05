@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.bili;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
 
@@ -29,6 +30,8 @@ public class DolbyAudioRegistry {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_ACTIVE_TURNTABLES = 16;
     private static final long CLEANUP_TIMEOUT_MILLIS = 2_000L;
+    private static final long AUDIO_SYNC_AHEAD_TOLERANCE_TICKS = Long.getLong(
+            "bili.audio.openal.ahead_tolerance_ticks", 0L);
     private static final AtomicInteger ANONYMOUS_COUNTER = new AtomicInteger();
     private static final ConcurrentMap<BlockPos, DolbyEntry> DOLBY_HANDLERS = new ConcurrentHashMap<>();
     private static final ConcurrentMap<BlockPos, StereoEntry> STEREO_HANDLERS = new ConcurrentHashMap<>();
@@ -66,11 +69,16 @@ public class DolbyAudioRegistry {
     }
 
     public static void register(DolbyAudioHandler handler, BlockPos pos) {
+        register(handler, pos, 0f);
+    }
+
+    public static void register(DolbyAudioHandler handler, BlockPos pos, float startOffsetSeconds) {
         if (handler == null) {
             return;
         }
         BlockPos key = keyFor(pos);
-        DolbyEntry entry = new DolbyEntry(key, centerFor(pos), handler, System.currentTimeMillis());
+        DolbyEntry entry = new DolbyEntry(key, centerFor(pos), handler, System.currentTimeMillis(),
+                startOffsetTicks(startOffsetSeconds));
         handler.setUserVolume(volumeFor(key));
         closeStereoAt(key);
         DolbyEntry old = DOLBY_HANDLERS.put(key, entry);
@@ -99,11 +107,16 @@ public class DolbyAudioRegistry {
     }
 
     public static void registerStereo(StereoOpenALHandler handler, BlockPos pos) {
+        registerStereo(handler, pos, 0f);
+    }
+
+    public static void registerStereo(StereoOpenALHandler handler, BlockPos pos, float startOffsetSeconds) {
         if (handler == null) {
             return;
         }
         BlockPos key = keyFor(pos);
-        StereoEntry entry = new StereoEntry(key, centerFor(pos), handler, System.currentTimeMillis());
+        StereoEntry entry = new StereoEntry(key, centerFor(pos), handler, System.currentTimeMillis(),
+                startOffsetTicks(startOffsetSeconds));
         handler.setUserVolume(volumeFor(key));
         closeDolbyAt(key);
         StereoEntry old = STEREO_HANDLERS.put(key, entry);
@@ -157,12 +170,30 @@ public class DolbyAudioRegistry {
         DolbyAudioRegistry.listenerPos = currentListenerPos;
         for (DolbyEntry entry : DOLBY_HANDLERS.values()) {
             float[] pos = resolveMachinePos(entry.pos(), entry.machinePos());
-            entry.handler().tick(pos, currentListenerPos);
+            entry.handler().tick(pos, currentListenerPos, targetRelativeTicks(entry));
         }
         for (StereoEntry entry : STEREO_HANDLERS.values()) {
             float[] pos = resolveMachinePos(entry.pos(), entry.machinePos());
-            entry.handler().tick(pos, currentListenerPos);
+            entry.handler().tick(pos, currentListenerPos, targetRelativeTicks(entry));
         }
+    }
+
+    private static long targetRelativeTicks(AudioEntry entry) {
+        var mc = net.minecraft.client.Minecraft.getInstance();
+        if (mc == null || mc.level == null || entry == null || entry.pos() == null
+                || entry.pos().getX() == Integer.MIN_VALUE) {
+            return Long.MAX_VALUE;
+        }
+        if (!(mc.level.getBlockEntity(entry.pos()) instanceof ModernTurntableBlockEntity turntable)
+                || !turntable.isPlaying()) {
+            return Long.MAX_VALUE;
+        }
+        long targetTicks = turntable.getPlaybackElapsedMillis(mc.level.getGameTime()) / 50L;
+        return Math.max(0L, targetTicks - entry.startOffsetTicks() + AUDIO_SYNC_AHEAD_TOLERANCE_TICKS);
+    }
+
+    private static long startOffsetTicks(float startOffsetSeconds) {
+        return Math.max(0L, Math.round(Math.max(0f, startOffsetSeconds) * 20.0D));
     }
 
     private static float[] resolveMachinePos(BlockPos handlerKey, float[] originalPos) {
@@ -360,6 +391,132 @@ public class DolbyAudioRegistry {
         return -1L;
     }
 
+    public static long getAnyMediaMillis(BlockPos pos) {
+        if (pos == null) {
+            return -1L;
+        }
+        BlockPos key = keyFor(pos);
+        long relayMillis = getRelayMediaMillis(key);
+        StereoEntry stereo = STEREO_HANDLERS.get(key);
+        if (stereo != null) {
+            long ticks = stereo.handler().getPositionTicks();
+            if (ticks >= 0L) {
+                long mainMillis = Math.max(0L, stereo.startOffsetTicks() + ticks) * 50L;
+                return relayMillis >= 0L ? Math.max(mainMillis, relayMillis) : mainMillis;
+            }
+        }
+        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
+        if (dolby != null) {
+            long ticks = dolby.handler().getPositionTicks();
+            if (ticks >= 0L) {
+                long mainMillis = Math.max(0L, dolby.startOffsetTicks() + ticks) * 50L;
+                return relayMillis >= 0L ? Math.max(mainMillis, relayMillis) : mainMillis;
+            }
+        }
+        return relayMillis;
+    }
+
+    public static AudioTimeline getAudioTimeline(BlockPos pos) {
+        if (pos == null) {
+            return AudioTimeline.EMPTY;
+        }
+        BlockPos key = keyFor(pos);
+        RelayTimeline relayTimeline = getRelayTimeline(key);
+        long mainMillis = -1L;
+        long mainFedMillis = -1L;
+        StereoEntry stereo = STEREO_HANDLERS.get(key);
+        if (stereo != null) {
+            long ticks = stereo.handler().getPositionTicks();
+            if (ticks >= 0L) {
+                mainMillis = Math.max(0L, stereo.startOffsetTicks() + ticks) * 50L;
+            }
+            long fedTicks = stereo.handler().getFedPositionTicks();
+            if (fedTicks >= 0L) {
+                mainFedMillis = Math.max(0L, stereo.startOffsetTicks() + fedTicks) * 50L;
+            }
+        } else {
+            DolbyEntry dolby = DOLBY_HANDLERS.get(key);
+            if (dolby != null) {
+                long ticks = dolby.handler().getPositionTicks();
+                if (ticks >= 0L) {
+                    mainMillis = Math.max(0L, dolby.startOffsetTicks() + ticks) * 50L;
+                }
+                long fedTicks = dolby.handler().getFedPositionTicks();
+                if (fedTicks >= 0L) {
+                    mainFedMillis = Math.max(0L, dolby.startOffsetTicks() + fedTicks) * 50L;
+                }
+            }
+        }
+        long combinedMillis = mainMillis >= 0L ? mainMillis : relayTimeline.mediaMillis();
+        return new AudioTimeline(mainMillis, mainFedMillis, relayTimeline.mediaMillis(), combinedMillis,
+                relayTimeline.startedCount(), relayTimeline.registeredCount());
+    }
+
+    private static long getRelayMediaMillis(BlockPos turntableKey) {
+        long best = -1L;
+        for (var entry : RELAY_TURNTABLE.entrySet()) {
+            if (!turntableKey.equals(keyFor(entry.getValue()))) {
+                continue;
+            }
+            SpeakerAudioRelay relay = RELAYS.get(entry.getKey());
+            if (relay == null) {
+                continue;
+            }
+            long ticks = relay.getPositionTicks();
+            if (ticks >= 0L) {
+                long startOffsetTicks = startOffsetTicksFor(turntableKey);
+                best = Math.max(best, Math.max(0L, startOffsetTicks + ticks) * 50L);
+            }
+        }
+        return best;
+    }
+
+    private static RelayTimeline getRelayTimeline(BlockPos turntableKey) {
+        long best = -1L;
+        int registered = 0;
+        int started = 0;
+        for (var entry : RELAY_TURNTABLE.entrySet()) {
+            if (!turntableKey.equals(keyFor(entry.getValue()))) {
+                continue;
+            }
+            registered++;
+            SpeakerAudioRelay relay = RELAYS.get(entry.getKey());
+            if (relay == null) {
+                continue;
+            }
+            if (relay.isStarted()) {
+                started++;
+            }
+            long ticks = relay.getPositionTicks();
+            if (ticks >= 0L) {
+                long startOffsetTicks = startOffsetTicksFor(turntableKey);
+                best = Math.max(best, Math.max(0L, startOffsetTicks + ticks) * 50L);
+            }
+        }
+        return new RelayTimeline(best, started, registered);
+    }
+
+    private record RelayTimeline(long mediaMillis, int startedCount, int registeredCount) {
+    }
+
+    public record AudioTimeline(long mainMillis, long mainFedMillis, long relayMillis, long combinedMillis,
+            int relayStartedCount, int relayRegisteredCount) {
+        private static final AudioTimeline EMPTY = new AudioTimeline(-1L, -1L, -1L, -1L, 0, 0);
+
+        public long audibleMillis() {
+            return mainMillis >= 0L ? mainMillis : relayMillis;
+        }
+    }
+
+    private static long startOffsetTicksFor(BlockPos key) {
+        StereoEntry stereo = STEREO_HANDLERS.get(key);
+        if (stereo != null) {
+            return stereo.startOffsetTicks();
+        }
+        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
+        return dolby != null ? dolby.startOffsetTicks() : 0L;
+    }
+
     public static List<String> describeActiveSources() {
         float[] listener = listenerPos;
         if (!isActive()) {
@@ -371,7 +528,7 @@ public class DolbyAudioRegistry {
                 DOLBY_HANDLERS.size(), STEREO_HANDLERS.size()));
 
         DOLBY_HANDLERS.values().stream()
-                .sorted(Comparator.comparingLong(DolbyEntry::createdAtMillis))
+                .sorted(Comparator.comparingLong(entry -> entry.createdAtMillis()))
                 .forEach(entry -> {
                     lines.add(String.format("Dolby @ %s", AudioUtils.fmtPos(entry.machinePos())));
                     for (String line : entry.handler().describeSources(entry.machinePos(), listener)) {
@@ -379,7 +536,7 @@ public class DolbyAudioRegistry {
                     }
                 });
         STEREO_HANDLERS.values().stream()
-                .sorted(Comparator.comparingLong(StereoEntry::createdAtMillis))
+                .sorted(Comparator.comparingLong(entry -> entry.createdAtMillis()))
                 .forEach(entry -> {
                     lines.add(String.format("Stereo @ %s", AudioUtils.fmtPos(entry.machinePos())));
                     for (String line : entry.handler().describeState()) {
@@ -700,10 +857,13 @@ public class DolbyAudioRegistry {
 
         long createdAtMillis();
 
+        long startOffsetTicks();
+
         void cleanup();
     }
 
-    private record DolbyEntry(BlockPos pos, float[] machinePos, DolbyAudioHandler handler, long createdAtMillis)
+    private record DolbyEntry(BlockPos pos, float[] machinePos, DolbyAudioHandler handler, long createdAtMillis,
+            long startOffsetTicks)
             implements AudioEntry {
         @Override
         public void cleanup() {
@@ -711,7 +871,8 @@ public class DolbyAudioRegistry {
         }
     }
 
-    private record StereoEntry(BlockPos pos, float[] machinePos, StereoOpenALHandler handler, long createdAtMillis)
+    private record StereoEntry(BlockPos pos, float[] machinePos, StereoOpenALHandler handler, long createdAtMillis,
+            long startOffsetTicks)
             implements AudioEntry {
         @Override
         public void cleanup() {

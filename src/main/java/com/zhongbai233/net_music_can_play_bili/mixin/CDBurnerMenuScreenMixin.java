@@ -5,13 +5,11 @@ import com.github.tartaricacid.netmusic.network.NetworkHandler;
 import com.github.tartaricacid.netmusic.network.message.SetMusicIDMessage;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliAudioResolver;
-import com.zhongbai233.net_music_can_play_bili.util.MixinReflectionHelper;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -79,8 +77,9 @@ public abstract class CDBurnerMenuScreenMixin {
             }
         };
 
-        MixinReflectionHelper.addWidget((Screen) (Object) this, this.net_music_can_play_bili$pageLabel);
-        MixinReflectionHelper.addWidget((Screen) (Object) this, this.net_music_can_play_bili$pageField);
+        ScreenAccessor screen = (ScreenAccessor) this;
+        screen.net_music_can_play_bili$addRenderableWidget(this.net_music_can_play_bili$pageLabel);
+        screen.net_music_can_play_bili$addRenderableWidget(this.net_music_can_play_bili$pageField);
     }
 
     @Inject(method = "handleCraftButton", at = @At("HEAD"), cancellable = true)

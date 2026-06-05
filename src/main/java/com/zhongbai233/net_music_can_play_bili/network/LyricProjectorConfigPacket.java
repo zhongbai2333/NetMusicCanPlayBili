@@ -21,7 +21,7 @@ public record LyricProjectorConfigPacket(BlockPos pos, float yaw, float pitch, f
 
     public static final StreamCodec<RegistryFriendlyByteBuf, LyricProjectorConfigPacket> STREAM_CODEC = StreamCodec
             .composite(
-                    BlockPos.STREAM_CODEC, LyricProjectorConfigPacket::pos,
+                    BlockPos.STREAM_CODEC, packet -> packet.pos(),
                     ByteBufCodecs.FLOAT, p -> p.yaw(),
                     ByteBufCodecs.FLOAT, p -> p.pitch(),
                     ByteBufCodecs.FLOAT, p -> p.scale(),

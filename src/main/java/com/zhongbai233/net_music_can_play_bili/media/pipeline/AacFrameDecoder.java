@@ -13,7 +13,7 @@ import java.util.function.BooleanSupplier;
 
 final class AacFrameDecoder {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int MIN_AAC_SAMPLE_SIZE = 20;
+    private static final int AAC_FRAME_SAMPLES = 1024;
 
     private final Decoder decoder;
     private final SampleBuffer sampleBuffer;
@@ -64,10 +64,13 @@ final class AacFrameDecoder {
 
             byte[] sample = Fmp4StreamParser.readFully(input, sampleSize);
             remaining -= sampleSize;
-            if (sampleSize < MIN_AAC_SAMPLE_SIZE) {
+            if (sampleSize <= 0) {
                 continue;
             }
             if (decodeOne(sample, sink)) {
+                decodedThisBox++;
+            } else {
+                emitSilenceFrame(sink);
                 decodedThisBox++;
             }
         }
@@ -84,7 +87,7 @@ final class AacFrameDecoder {
     }
 
     private long decodePartialTail(InputStream input, long remaining, PcmSink sink) throws IOException {
-        if (remaining < MIN_AAC_SAMPLE_SIZE) {
+        if (remaining <= 0L) {
             Fmp4StreamParser.skipFully(input, remaining);
             return 0L;
         }
@@ -112,6 +115,15 @@ final class AacFrameDecoder {
             LOGGER.trace("Skipping undecodable AAC frame(size={}): {}", sample.length, e.getMessage());
             return false;
         }
+    }
+
+    private void emitSilenceFrame(PcmSink sink) throws IOException {
+        int frameSize = format.getFrameSize();
+        if (frameSize <= 0) {
+            int bytesPerSample = Math.max(1, (format.getSampleSizeInBits() + 7) / 8);
+            frameSize = bytesPerSample * Math.max(1, format.getChannels());
+        }
+        sink.accept(new byte[Math.max(1, AAC_FRAME_SAMPLES * frameSize)], format);
     }
 
     @FunctionalInterface

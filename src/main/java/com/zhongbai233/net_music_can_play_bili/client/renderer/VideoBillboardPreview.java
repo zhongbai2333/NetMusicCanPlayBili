@@ -21,6 +21,7 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import net.neoforged.neoforge.client.event.SubmitCustomGeometryEvent;
 import org.joml.Vector3fc;
 import org.slf4j.Logger;
@@ -120,6 +121,13 @@ public final class VideoBillboardPreview {
                 null);
     }
 
+    public static void startPreviewAt(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
+            String sessionId, long startOffsetMillis, long totalMillis, boolean preferNative, String decoderOverride) {
+        startInternal(videoUrl, targetWidth, targetHeight, fps, codecId, preferNative, decoderOverride,
+                sessionId == null ? "" : sessionId, Math.max(0L, startOffsetMillis), Math.max(0L, totalMillis),
+                null);
+    }
+
     public static void startSynced(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             String sessionId, long startOffsetMillis, BlockPos anchorPos, String decoderOverride) {
         startSynced(videoUrl, targetWidth, targetHeight, fps, codecId, sessionId, startOffsetMillis, 0L, anchorPos,
@@ -169,7 +177,7 @@ public final class VideoBillboardPreview {
         }
         VideoPlaybackInstance existing = INSTANCES.get(sessionId);
         long normalizedOffset = Math.max(0L, startOffsetMillis);
-        if (existing != null && existing.isRunningAtOffset(normalizedOffset)) {
+        if (existing != null && existing.canChaseToOffset(normalizedOffset)) {
             existing.replaceProjectors(projectors);
             return;
         }
@@ -196,8 +204,6 @@ public final class VideoBillboardPreview {
             if (isSessionRunningAtOffset(normalizedSession, normalizedOffset)) {
                 return;
             }
-            LOGGER.info("视频投影仪检测到同一播放会话 seek：{}ms -> {}ms，重启视频解码", activeStartOffsetMillis,
-                    normalizedOffset);
             stopForReplace();
         }
         if (!normalizedSession.isBlank() && running) {
@@ -237,10 +243,6 @@ public final class VideoBillboardPreview {
         thread.setDaemon(true);
         decodeThread = thread;
         thread.start();
-        LOGGER.info("视频 billboard 预览已启动: {}x{} @ {}fps, pixelMode={}, route={}, codecId={}, decoder={}",
-                targetWidth, targetHeight, fps, VideoFrameUploader.pixelMode(), "native",
-                codecId,
-                decoderOverride == null || decoderOverride.isBlank() ? "default" : decoderOverride);
     }
 
     public static void startTestPattern(int targetWidth, int targetHeight, int fps) {
@@ -267,7 +269,9 @@ public final class VideoBillboardPreview {
     }
 
     public static void stop() {
-        INSTANCES.values().forEach(VideoPlaybackInstance::stop);
+        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+            instance.stop();
+        }
         INSTANCES.clear();
         running = false;
         started.set(false);
@@ -374,6 +378,18 @@ public final class VideoBillboardPreview {
         return false;
     }
 
+    public static boolean hasSessionForTurntable(BlockPos turntablePos, String sessionId) {
+        if (turntablePos == null || sessionId == null || sessionId.isBlank()) {
+            return false;
+        }
+        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+            if (instance.isForTurntable(turntablePos) && instance.isSession(sessionId)) {
+                return true;
+            }
+        }
+        return running && started.get() && sessionId.equals(activeSessionId);
+    }
+
     public static boolean isSessionRunning(String sessionId) {
         String normalized = sessionId != null ? sessionId : "";
         VideoPlaybackInstance instance = INSTANCES.get(normalized);
@@ -401,16 +417,45 @@ public final class VideoBillboardPreview {
     }
 
     public static boolean isSessionRunningAtOffset(String sessionId, long requestedOffsetMillis) {
+        return isSessionRunningAtOffset(sessionId, requestedOffsetMillis, 1_500L);
+    }
+
+    public static boolean isSessionRunningAtOffset(String sessionId, long requestedOffsetMillis,
+            long toleranceMillis) {
         if (!isSessionRunning(sessionId)) {
             return false;
         }
         VideoPlaybackInstance instance = INSTANCES.get(sessionId != null ? sessionId : "");
         if (instance != null) {
-            return instance.isRunningAtOffset(Math.max(0L, requestedOffsetMillis));
+            return instance.isRunningAtOffset(Math.max(0L, requestedOffsetMillis), Math.max(0L, toleranceMillis));
         }
         long expectedOffset = activeStartOffsetMillis
                 + Math.max(0L, (System.nanoTime() - activeStartNanoTime) / 1_000_000L);
-        return Math.abs(expectedOffset - Math.max(0L, requestedOffsetMillis)) < 1_500L;
+        return Math.abs(expectedOffset - Math.max(0L, requestedOffsetMillis)) < Math.max(0L, toleranceMillis);
+    }
+
+    public static boolean canSessionChaseToOffset(String sessionId, long requestedOffsetMillis) {
+        if (!isSessionRunning(sessionId)) {
+            return false;
+        }
+        VideoPlaybackInstance instance = INSTANCES.get(sessionId != null ? sessionId : "");
+        if (instance != null) {
+            return instance.canChaseToOffset(Math.max(0L, requestedOffsetMillis));
+        }
+        return isSessionRunningAtOffset(sessionId, requestedOffsetMillis,
+                Long.getLong("bili.video.pipeline.chase_window_ms", 10_000L));
+    }
+
+    public static boolean isSessionWaitingForFirstFrame(String sessionId) {
+        String normalized = sessionId != null ? sessionId : "";
+        if (normalized.isBlank()) {
+            return false;
+        }
+        VideoPlaybackInstance instance = INSTANCES.get(normalized);
+        if (instance != null) {
+            return instance.isRunning() && !instance.hasFrame();
+        }
+        return running && started.get() && normalized.equals(activeSessionId) && !hasFrame;
     }
 
     public static VideoStatus getStatusForProjector(BlockPos projectorPos) {
@@ -427,6 +472,22 @@ public final class VideoBillboardPreview {
             return VideoStatus.empty();
         }
         return new VideoStatus(width, height, activeFps, hasFrame, !activeSessionId.isBlank());
+    }
+
+    public static VideoSyncStatus getSyncStatus(String sessionId) {
+        String normalized = sessionId != null ? sessionId : "";
+        VideoPlaybackInstance instance = INSTANCES.get(normalized);
+        if (instance != null) {
+            return new VideoSyncStatus(instance.isRunning(), instance.hasFrame(), instance.mediaMillis(),
+                    instance.queuedMediaMillis(), instance.status().width(), instance.status().height(),
+                    instance.status().fps());
+        }
+        if (running && started.get() && !normalized.isBlank() && normalized.equals(activeSessionId)) {
+            long mediaMillis = activeStartOffsetMillis
+                    + Math.max(0L, (System.nanoTime() - activeStartNanoTime) / 1_000_000L);
+            return new VideoSyncStatus(true, hasFrame, mediaMillis, -1L, width, height, activeFps);
+        }
+        return VideoSyncStatus.empty();
     }
 
     private static void replaceActiveProjectors(Collection<BlockPos> projectorPositions) {
@@ -460,12 +521,10 @@ public final class VideoBillboardPreview {
                     continue;
                 }
                 if (activeRequiresProjector && !isActiveProjectorValid()) {
-                    LOGGER.info("视频投影仪已不存在，停止视频 billboard 预览");
                     break;
                 }
                 byte[] frame = nextFrame(decoder);
                 if (frame == null) {
-                    LOGGER.info("视频 billboard 预览解码结束");
                     break;
                 }
                 frameIndex++;
@@ -477,7 +536,6 @@ public final class VideoBillboardPreview {
                         && dropped < MAX_CATCH_UP_DROPS_PER_TICK) {
                     byte[] catchUpFrame = nextFrame(decoder);
                     if (catchUpFrame == null) {
-                        LOGGER.info("视频 billboard 预览解码结束");
                         frame = null;
                         break;
                     }
@@ -637,10 +695,57 @@ public final class VideoBillboardPreview {
     }
 
     static byte[] nextFrame(AutoCloseable decoder) throws Exception {
+        DecodedFrame frame = nextDecodedFrame(decoder);
+        return frame != null ? frame.rgba() : null;
+    }
+
+    static DecodedFrame nextDecodedFrame(AutoCloseable decoder) throws Exception {
         if (decoder instanceof Fmp4NativeVideoDecoder nativeDecoder) {
-            return nativeDecoder.getNextFrame();
+            return DecodedFrame.wrap(nativeDecoder.getNextDecodedFrame());
         }
         throw new IOException("unsupported video decoder: " + decoder.getClass().getName());
+    }
+
+    static final class DecodedFrame implements AutoCloseable {
+        private final byte[] rgba;
+        private final AutoCloseable delegate;
+        private final long ptsNanos;
+
+        private DecodedFrame(byte[] rgba, AutoCloseable delegate) {
+            this(rgba, delegate, -1L);
+        }
+
+        private DecodedFrame(byte[] rgba, AutoCloseable delegate, long ptsNanos) {
+            this.rgba = rgba;
+            this.delegate = delegate;
+            this.ptsNanos = ptsNanos;
+        }
+
+        static DecodedFrame wrap(byte[] rgba) {
+            return rgba != null ? new DecodedFrame(rgba, null) : null;
+        }
+
+        static DecodedFrame wrap(Fmp4NativeVideoDecoder.DecodedFrame frame) {
+            return frame != null ? new DecodedFrame(frame.rgba(), frame, frame.ptsNanos()) : null;
+        }
+
+        byte[] rgba() {
+            return rgba;
+        }
+
+        long ptsNanos() {
+            return ptsNanos;
+        }
+
+        @Override
+        public void close() {
+            if (delegate != null) {
+                try {
+                    delegate.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
     }
 
     private record PlaybackRequest(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
@@ -661,7 +766,7 @@ public final class VideoBillboardPreview {
         }
         return positions.stream()
                 .filter(pos -> pos != null)
-                .map(BlockPos::immutable)
+                .map(pos -> pos.immutable())
                 .toList();
     }
 
@@ -672,6 +777,13 @@ public final class VideoBillboardPreview {
 
         public boolean active() {
             return width > 0 && height > 0 && fps > 0;
+        }
+    }
+
+    public record VideoSyncStatus(boolean running, boolean hasFrame, long mediaMillis, long queuedMediaMillis,
+            int width, int height, int fps) {
+        static VideoSyncStatus empty() {
+            return new VideoSyncStatus(false, false, -1L, -1L, 0, 0, 0);
         }
     }
 
@@ -978,9 +1090,6 @@ public final class VideoBillboardPreview {
         height = frameHeight;
         texture = new DynamicTexture("bili_video_billboard_preview", frameWidth, frameHeight, false);
         Minecraft.getInstance().getTextureManager().register(TEXTURE_ID, texture);
-        LOGGER.info("视频 billboard 动态纹理已创建: {} ({}x{}), pixelMode={}, fastNativeUpload={}",
-                TEXTURE_ID, frameWidth, frameHeight, VideoFrameUploader.pixelMode(),
-                VideoFrameUploader.fastNativeUploadAvailable());
     }
 
     private static void ensurePackedBenchTexture(int textureWidth, int textureHeight) {
@@ -1017,10 +1126,23 @@ public final class VideoBillboardPreview {
     }
 
     @SubscribeEvent
+    public static void onRenderFrame(RenderFrameEvent.Pre event) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null || minecraft.player == null || INSTANCES.isEmpty()) {
+            return;
+        }
+        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+            instance.pumpUploadOnRenderThread();
+        }
+    }
+
+    @SubscribeEvent
     public static void onSubmitCustomGeometry(SubmitCustomGeometryEvent event) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level == null || minecraft.player == null) {
-            INSTANCES.values().forEach(VideoPlaybackInstance::stop);
+            for (VideoPlaybackInstance instance : INSTANCES.values()) {
+                instance.stop();
+            }
             INSTANCES.clear();
             running = false;
             hasFrame = false;

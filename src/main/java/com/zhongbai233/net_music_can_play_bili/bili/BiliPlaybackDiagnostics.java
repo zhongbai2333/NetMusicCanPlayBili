@@ -1,8 +1,5 @@
 package com.zhongbai233.net_music_can_play_bili.bili;
 
-import com.mojang.logging.LogUtils;
-import org.slf4j.Logger;
-
 import javax.sound.sampled.AudioFormat;
 import java.net.URI;
 import java.net.URL;
@@ -14,7 +11,6 @@ import java.util.List;
  * Used by commands so routine playback does not need to spam the log.
  */
 public final class BiliPlaybackDiagnostics {
-    private static final Logger LOGGER = LogUtils.getLogger();
     private static volatile Snapshot current = Snapshot.empty();
 
     private BiliPlaybackDiagnostics() {
@@ -34,7 +30,6 @@ public final class BiliPlaybackDiagnostics {
                 System.currentTimeMillis(),
                 false,
                 "");
-        LOGGER.debug("NetMusic 播放开始: {}", cleanSongName);
     }
 
     public static void updateFormat(URL url, String container, String codec, AudioFormat format, String detail) {
@@ -54,8 +49,6 @@ public final class BiliPlaybackDiagnostics {
                 System.currentTimeMillis(),
                 false,
                 old.lastError());
-        LOGGER.debug("NetMusic 音频格式: {} / {}, {}, {}",
-                cleanContainer, cleanCodec, audioFormatSummary(format), cleanDetail.isBlank() ? "normal" : cleanDetail);
     }
 
     public static void markClosed(URL url) {
@@ -128,14 +121,6 @@ public final class BiliPlaybackDiagnostics {
 
     private static String clean(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
-    }
-
-    private static String audioFormatSummary(AudioFormat format) {
-        if (format == null) {
-            return "unknown";
-        }
-        return String.format("%s, %.0f Hz, %d ch, %d bit",
-                format.getEncoding(), format.getSampleRate(), format.getChannels(), format.getSampleSizeInBits());
     }
 
     private static String hostOf(String value) {

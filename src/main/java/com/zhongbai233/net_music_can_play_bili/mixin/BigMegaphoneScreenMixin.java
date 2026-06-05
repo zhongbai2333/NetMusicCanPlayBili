@@ -11,8 +11,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.lang.reflect.Field;
-
 /**
  * 大喇叭 B站直播支持
  */
@@ -21,17 +19,6 @@ public abstract class BigMegaphoneScreenMixin {
 
     @Shadow
     private EditBox urlTextField;
-
-    private static final Field ON_PRESS_FIELD;
-
-    static {
-        try {
-            ON_PRESS_FIELD = Button.class.getDeclaredField("onPress");
-            ON_PRESS_FIELD.setAccessible(true);
-        } catch (NoSuchFieldException e) {
-            throw new RuntimeException(e);
-        }
-    }
 
     @Inject(method = "init", at = @At("TAIL"))
     private void net_music_can_play_bili$hookButtons(CallbackInfo ci) {
@@ -43,23 +30,20 @@ public abstract class BigMegaphoneScreenMixin {
                 if (!isStart && !isSave)
                     continue;
 
-                try {
-                    Button.OnPress original = (Button.OnPress) ON_PRESS_FIELD.get(btn);
-                    Button.OnPress wrapped = btn2 -> {
-                        String text = this.urlTextField.getValue().trim();
-                        if (text.startsWith("live:")) {
-                            String saved = text;
-                            this.urlTextField.setValue("http://live/" + text.substring(5) + ".m3u8");
-                            original.onPress(btn2);
-                            this.urlTextField.setValue(saved);
-                        } else {
-                            original.onPress(btn2);
-                        }
-                    };
-                    ON_PRESS_FIELD.set(btn, wrapped);
-                } catch (IllegalAccessException e) {
-                    throw new RuntimeException(e);
-                }
+                ButtonAccessor bridge = (ButtonAccessor) btn;
+                Button.OnPress original = bridge.net_music_can_play_bili$getOnPress();
+                Button.OnPress wrapped = btn2 -> {
+                    String text = this.urlTextField.getValue().trim();
+                    if (text.startsWith("live:")) {
+                        String saved = text;
+                        this.urlTextField.setValue("http://live/" + text.substring(5) + ".m3u8");
+                        original.onPress(btn2);
+                        this.urlTextField.setValue(saved);
+                    } else {
+                        original.onPress(btn2);
+                    }
+                };
+                bridge.net_music_can_play_bili$setOnPress(wrapped);
             }
         }
     }

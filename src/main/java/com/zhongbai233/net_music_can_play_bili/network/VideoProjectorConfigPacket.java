@@ -21,7 +21,7 @@ public record VideoProjectorConfigPacket(BlockPos pos, float yaw, float pitch, f
 
     public static final StreamCodec<RegistryFriendlyByteBuf, VideoProjectorConfigPacket> STREAM_CODEC = StreamCodec
             .composite(
-                    BlockPos.STREAM_CODEC, VideoProjectorConfigPacket::pos,
+                    BlockPos.STREAM_CODEC, packet -> packet.pos(),
                     ByteBufCodecs.FLOAT, p -> p.yaw(),
                     ByteBufCodecs.FLOAT, p -> p.pitch(),
                     ByteBufCodecs.FLOAT, p -> p.scale(),

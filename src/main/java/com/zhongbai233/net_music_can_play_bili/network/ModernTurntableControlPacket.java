@@ -32,9 +32,9 @@ public record ModernTurntableControlPacket(BlockPos pos, Action action, long tar
     public static final StreamCodec<RegistryFriendlyByteBuf, ModernTurntableControlPacket> STREAM_CODEC = StreamCodec
             .composite(
                     BlockPos.STREAM_CODEC,
-                    ModernTurntableControlPacket::pos,
+                    packet -> packet.pos(),
                     ACTION_CODEC,
-                    ModernTurntableControlPacket::action,
+                    packet -> packet.action(),
                     new StreamCodec<RegistryFriendlyByteBuf, Long>() {
                         @Override
                         public Long decode(RegistryFriendlyByteBuf buffer) {
@@ -46,7 +46,7 @@ public record ModernTurntableControlPacket(BlockPos pos, Action action, long tar
                             buffer.writeVarLong(value);
                         }
                     },
-                    ModernTurntableControlPacket::targetMillis,
+                    packet -> packet.targetMillis(),
                     (pos, action, targetMillis) -> new ModernTurntableControlPacket(pos, action, targetMillis));
 
     @Override

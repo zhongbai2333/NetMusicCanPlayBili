@@ -7,6 +7,8 @@ import com.github.tartaricacid.netmusic.init.InitSounds;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.VideoBillboardPreview;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ModernTurntablePlaybackDiagnostics;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ModernTurntableTimeline;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.sounds.AbstractTickableSoundInstance;
 import net.minecraft.client.resources.sounds.Sound;
@@ -34,7 +36,7 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
     private final BlockPos pos;
     private final LyricRecord lyricRecord;
     private final String sessionId;
-    private final int lyricStartTick;
+    private final int fallbackLyricStartTick;
     private int tick;
     private boolean sessionFinished;
 
@@ -54,7 +56,7 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
         this.pos = pos;
         this.lyricRecord = lyricRecord;
         this.sessionId = sessionId != null ? sessionId : "";
-        this.lyricStartTick = (int) Math.min(Integer.MAX_VALUE,
+        this.fallbackLyricStartTick = (int) Math.min(Integer.MAX_VALUE,
                 Math.max(0L, Math.round(Math.max(0L, startOffsetMillis) / 50.0D)));
         this.x = pos.getX() + 0.5D;
         this.y = pos.getY() + 0.5D;
@@ -112,6 +114,10 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
             }
         }
 
+        if (turntable != null && turntable.isPlaying()) {
+            ModernTurntablePlaybackDiagnostics.logEveryThreeSeconds(pos, sessionId);
+        }
+
         if (level.getGameTime() % 8L == 0L) {
             var random = level.getRandom();
             for (int i = 0; i < 2; i++) {
@@ -161,12 +167,11 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
      * 返回有效的歌词 tick 位置
      */
     private int effectiveLyricTick() {
-        long posTicks = com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry.getAnyPositionTicks(pos);
-        if (posTicks >= 0L) {
-            long value = (long) lyricStartTick + posTicks;
-            return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, value));
+        int mediaTick = ModernTurntableTimeline.mediaTick(pos);
+        if (mediaTick >= 0) {
+            return mediaTick;
         }
-        return -1;
+        return fallbackLyricStartTick;
     }
 
     void stopFromTracker() {
@@ -178,6 +183,7 @@ public class ModernTurntableSound extends AbstractTickableSoundInstance {
         ModernTurntablePlaybackTracker.unregisterSound(this);
         if (!sessionFinished) {
             sessionFinished = true;
+            ModernTurntablePlaybackDiagnostics.finish(sessionId);
             ModernTurntablePlaybackTracker.finish(pos, sessionId);
             VideoBillboardPreview.stopIfSession(sessionId);
             var level = Minecraft.getInstance().level;

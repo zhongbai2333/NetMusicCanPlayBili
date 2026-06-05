@@ -66,8 +66,10 @@ public class OpenALSpatialAudio {
     private boolean initialized;
     /** 设备重置后所有 source/buffer 失效，标记为需重建 */
     private volatile boolean deviceLost;
-    /** OpenAL 已消费的 buffer 总数（每次 unqueue 时 +1），用于精确播放位置 */
-    private long totalConsumedBuffers;
+    /** Primary source 已消费的真实媒体 buffer 数；补静音/启动静音不计入媒体时间线。 */
+    private long mediaConsumedBuffers;
+    /** Primary source 当前 OpenAL 队列中每个 buffer 是否承载真实媒体 PCM。 */
+    private ArrayDeque<Boolean> primaryQueuedMediaFlags;
 
     public OpenALSpatialAudio() {
     }
@@ -93,7 +95,8 @@ public class OpenALSpatialAudio {
         this.numBeds = numBedChannels;
         this.numObjects = numDynamicObjects;
         this.deviceLost = false;
-        this.totalConsumedBuffers = 0L;
+        this.mediaConsumedBuffers = 0L;
+        this.primaryQueuedMediaFlags = new ArrayDeque<>(NUM_BUFFERS * 2);
         this.uploadScratch = BufferUtils.createByteBuffer(SAMPLES_PER_BUFFER * bytesPerSample)
                 .order(ByteOrder.LITTLE_ENDIAN);
 
@@ -113,6 +116,10 @@ public class OpenALSpatialAudio {
         if (!initSourceGroup("object", numObjects, objectSources, objBuffers))
             return;
 
+        for (int b = 0; b < NUM_BUFFERS; b++) {
+            primaryQueuedMediaFlags.offerLast(Boolean.FALSE);
+        }
+
         // 启动所有声源播放
         for (int ch = 0; ch < numBeds; ch++) {
             AL10.alSourcePlay(bedSources[ch]);
@@ -123,8 +130,9 @@ public class OpenALSpatialAudio {
 
         initialized = true;
         LOGGER.debug(
-                "OpenAL spatial init: beds={}, objects={}, format={}, sourceRelative=false(world-follow), spatialize=force, hrtf={}, preloadBuffers={} (~{}ms)",
-                numBeds, numObjects, useFloat32 ? "float32" : "int16", FORCE_HRTF ? "force" : "vanilla", NUM_BUFFERS,
+                "OpenAL 空间声初始化摘要: beds={} objects={} format={} sampleRate={}Hz sourceMode=world-follow spatialize=force hrtf={} preloadBuffers={} preload={}ms",
+                numBeds, numObjects, useFloat32 ? "float32" : "int16", actualSampleRate,
+                FORCE_HRTF ? "force" : "vanilla", NUM_BUFFERS,
                 Math.round(NUM_BUFFERS * SAMPLES_PER_BUFFER * 1000.0 / actualSampleRate));
     }
 
@@ -240,7 +248,7 @@ public class OpenALSpatialAudio {
     }
 
     public long getConsumedSamples() {
-        long baseSamples = totalConsumedBuffers * (long) SAMPLES_PER_BUFFER;
+        long baseSamples = mediaConsumedBuffers * (long) SAMPLES_PER_BUFFER;
         if (!initialized || deviceLost || !ensureOpenAlContext("getConsumedSamples")) {
             return baseSamples;
         }
@@ -257,8 +265,34 @@ public class OpenALSpatialAudio {
         if (checkDeviceLost("getConsumedSamples:alGetSourcei")) {
             return baseSamples;
         }
+        if (primaryQueuedMediaFlags == null || !Boolean.TRUE.equals(primaryQueuedMediaFlags.peekFirst())) {
+            return baseSamples;
+        }
         long sampleOffset = Math.max(0L, byteOffset / Math.max(1, bytesPerSample));
         return baseSamples + Math.min(SAMPLES_PER_BUFFER - 1L, sampleOffset);
+    }
+
+    /**
+     * 清空所有已排入 OpenAL 但尚未真正播放的媒体 buffer，并重新排入静音预滚
+     * 
+     * @return flush 后 primary source 已真实消费的媒体 sample 数
+     */
+    public long flushQueuedAudio() {
+        long consumedSamples = getConsumedSamples();
+        if (!initialized || deviceLost || !ensureOpenAlContext("flushQueuedAudio")) {
+            return consumedSamples;
+        }
+        clearPendingQueues(bedPending);
+        clearPendingQueues(objPending);
+        flushSourceGroup(bedSources, bedBuffers);
+        flushSourceGroup(objectSources, objBuffers);
+        if (primaryQueuedMediaFlags != null) {
+            primaryQueuedMediaFlags.clear();
+            for (int b = 0; b < NUM_BUFFERS; b++) {
+                primaryQueuedMediaFlags.offerLast(Boolean.FALSE);
+            }
+        }
+        return consumedSamples;
     }
 
     public void cleanup() {
@@ -337,6 +371,8 @@ public class OpenALSpatialAudio {
         objectGains = null;
         uploadScratch = null;
         deviceLost = false;
+        primaryQueuedMediaFlags = null;
+        mediaConsumedBuffers = 0L;
     }
 
     private int primarySource() {
@@ -421,6 +457,52 @@ public class OpenALSpatialAudio {
         queue.offerLast(copy);
     }
 
+    private static void clearPendingQueues(ArrayDeque<float[]>[] queues) {
+        if (queues == null) {
+            return;
+        }
+        for (ArrayDeque<float[]> queue : queues) {
+            if (queue != null) {
+                queue.clear();
+            }
+        }
+    }
+
+    private void flushSourceGroup(int[] sources, int[][] buffers) {
+        if (sources == null || buffers == null) {
+            return;
+        }
+        for (int i = 0; i < Math.min(sources.length, buffers.length); i++) {
+            int source = sources[i];
+            if (source == 0) {
+                continue;
+            }
+            try {
+                AL10.alSourceStop(source);
+                int queued = AL10.alGetSourcei(source, AL10.AL_BUFFERS_QUEUED);
+                while (queued-- > 0) {
+                    AL10.alSourceUnqueueBuffers(source);
+                    if (checkDeviceLost("flushQueuedAudio:alSourceUnqueueBuffers")) {
+                        return;
+                    }
+                }
+                for (int buffer : buffers[i]) {
+                    fillBuffer(buffer, null, 1.0f);
+                    AL10.alSourceQueueBuffers(source, buffer);
+                    if (checkDeviceLost("flushQueuedAudio:alSourceQueueBuffers")) {
+                        return;
+                    }
+                }
+                AL10.alSourcePlay(source);
+            } catch (Throwable error) {
+                if (checkDeviceLost("flushQueuedAudio")) {
+                    return;
+                }
+                LOGGER.debug("OpenAL source flush failed: {}", error.toString());
+            }
+        }
+    }
+
     private void pumpSource(int sourceId, ArrayDeque<float[]> pending, float gain) {
         int processed = AL10.alGetSourcei(sourceId, AL10.AL_BUFFERS_PROCESSED);
         if (checkDeviceLost("pumpSource:alGetSourcei")) {
@@ -432,14 +514,21 @@ public class OpenALSpatialAudio {
             if (buf == 0 && checkDeviceLost("pumpSource:alSourceUnqueueBuffers")) {
                 return;
             }
-            if (sourceId == primarySource()) {
-                totalConsumedBuffers++;
-            }
             float[] pcm = pending != null ? pending.pollFirst() : null;
+            if (sourceId == primarySource()) {
+                boolean consumedMedia = primaryQueuedMediaFlags != null
+                        && Boolean.TRUE.equals(primaryQueuedMediaFlags.pollFirst());
+                if (consumedMedia) {
+                    mediaConsumedBuffers++;
+                }
+            }
             fillBuffer(buf, pcm, gain);
             AL10.alSourceQueueBuffers(sourceId, buf);
             if (checkDeviceLost("pumpSource:alSourceQueueBuffers")) {
                 return;
+            }
+            if (sourceId == primarySource() && primaryQueuedMediaFlags != null) {
+                primaryQueuedMediaFlags.offerLast(pcm != null);
             }
         }
         if (AL10.alGetSourcei(sourceId, AL10.AL_SOURCE_STATE) != AL10.AL_PLAYING
@@ -755,7 +844,6 @@ public class OpenALSpatialAudio {
             LOGGER.error("OpenAL genSource({}[{}]) 返回 0: 设备 source 已耗尽或未初始化", type, index);
             return 0;
         }
-        LOGGER.debug("OpenAL genSource({}[{}]) -> {}", type, index, source);
         return source;
     }
 

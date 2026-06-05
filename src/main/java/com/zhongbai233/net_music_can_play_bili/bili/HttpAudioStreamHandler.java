@@ -57,10 +57,14 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     private static final int FMP4_MOOF_SCAN_BYTES = 2 * 1024 * 1024;
     private static final int FMP4_SEEK_MAX_ATTEMPTS = 3;
     private static final double FMP4_CLOSE_FRAGMENT_SECONDS = 15.0D;
+    private static final double FMP4_TARGET_EPSILON_SECONDS = 0.05D;
     private static final int MAX_HTTP_REDIRECTS = 5;
     private static final long RANGE_SEEK_PREROLL_BYTES = 256 * 1024L;
     private static final long FMP4_SEEK_PREROLL_BYTES = 256 * 1024L;
     private static final long ALLOWED_URL_TTL_MILLIS = TimeUnit.MINUTES.toMillis(10);
+    private static final long SEGMENT_BASE_TTL_MILLIS = TimeUnit.MINUTES.toMillis(30);
+    private static final int MAX_SEGMENT_BASE_ENTRIES = Integer.getInteger(
+            "bili.audio.segment_base_cache.max_entries", 512);
     private static final int[] MP3_MPEG1_LAYER1_BITRATES = { 0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384,
             416, 448, 0 };
     private static final int[] MP3_MPEG1_LAYER2_BITRATES = { 0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256,
@@ -81,10 +85,22 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             .connectTimeout(java.time.Duration.ofSeconds(10))
             .build();
     private static final ConcurrentHashMap<String, PlaybackContextQueue> ALLOWED_URLS = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, SegmentBaseInfo> SEGMENT_BASE_BY_URL = new ConcurrentHashMap<>();
     private static final Set<ActiveStreamControl> ACTIVE_MODERN_STREAMS = ConcurrentHashMap.newKeySet();
 
     public static void allowUrl(String url) {
         allowUrl(url, null);
+    }
+
+    public static void registerSegmentBase(String audioUrl, long initStart, long initEnd, long indexStart,
+            long indexEnd) {
+        if (audioUrl == null || audioUrl.isBlank() || initStart < 0L || initEnd < initStart
+                || indexStart < 0L || indexEnd < indexStart) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        cleanupSegmentBaseInfo(now);
+        SEGMENT_BASE_BY_URL.put(audioUrl, new SegmentBaseInfo(initStart, initEnd, indexStart, indexEnd, now));
     }
 
     public static void allowUrl(String url, BlockPos pos) {
@@ -107,9 +123,6 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             contexts.add(context);
             return contexts;
         });
-        if (!key.equals(url)) {
-            LOGGER.debug("Registered modern audio context: strippedSync=true offset={}s", context.startOffsetSeconds());
-        }
     }
 
     public static void closeModernStreams() {
@@ -118,6 +131,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         }
         ACTIVE_MODERN_STREAMS.clear();
         ALLOWED_URLS.clear();
+        SEGMENT_BASE_BY_URL.clear();
     }
 
     @Override
@@ -160,14 +174,10 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 playbackContext = new PlaybackContext(
                         null, 0L, fallbackSync.sessionId(),
                         fallbackSync.elapsedMillis(), fallbackSync.totalMillis());
-                LOGGER.debug("HTTP audio handler fallback: parsed offset={}s from URL fragment",
-                        playbackContext.startOffsetSeconds());
             }
         }
 
         if (playbackContext != null && isNativeNetMusicHost(requestUrl)) {
-            LOGGER.debug("HTTP audio handler using NetMusic fallback host={} startOffset={}s",
-                    requestUrl.getHost(), playbackContext.startOffsetSeconds());
             return fallbackHttpStream(requestUrl, playbackContext, null);
         }
 
@@ -194,9 +204,6 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             throws UnsupportedAudioFileException, IOException {
         boolean modernTurntable = playbackContext != null;
         final float startOffsetSeconds = startOffsetSeconds(playbackContext);
-        LOGGER.debug("HTTP audio handler probing {}://{}/... mode={} startOffset={}s",
-                url.getProtocol(), url.getHost(), modernTurntable ? "modern-turntable" : "netmusic-compatible",
-                startOffsetSeconds);
 
         BlockingAudioPipe fallbackPipe = new BlockingAudioPipe(PIPE_BUFFER_SIZE);
         AtomicReference<AudioDecodePipeline> pipelineRef = new AtomicReference<>();
@@ -238,9 +245,15 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         }
 
         AudioFormat format = pipeline.format();
-        LOGGER.debug("HTTP audio ready: container={} codec={} format={}Hz/{}ch/{}bit detail={}",
+        LOGGER.debug(
+                "HTTP 音频管线摘要: mode={} session={} pos={} offset={}s total={}ms container={} codec={} format={}Hz/{}ch/{}bit detail={} host={}",
+                modernTurntable ? "modern-turntable" : "compat",
+                playbackContext != null ? playbackContext.sessionId() : "",
+                playbackContext != null ? playbackContext.pos() : null, startOffsetSeconds, playbackContext != null
+                        ? playbackContext.totalMillis()
+                        : 0L,
                 pipeline.container(), pipeline.codec(), format.getSampleRate(), format.getChannels(),
-                format.getSampleSizeInBits(), pipeline.detail());
+                format.getSampleSizeInBits(), pipeline.detail(), url.getHost());
 
         if (pipeline instanceof FlacPcmPipeline flacPipeline) {
             AudioInputStream decoded = flacPipeline.openDecodedStream();
@@ -606,7 +619,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         pcm = requireReadablePcm(pcm, "no decoded PCM after HTTP seek");
         StereoOpenALHandler stereo = new StereoOpenALHandler();
         stereo.setSampleRate((int) pcm.getFormat().getSampleRate());
-        DolbyAudioRegistry.registerStereo(stereo, playbackContext.pos());
+        DolbyAudioRegistry.registerStereo(stereo, playbackContext.pos(), playbackContext.startOffsetSeconds());
         return new OpenALTappedAudioInputStream(pcm, stereo, () -> {
             DolbyAudioRegistry.unregisterStereo(stereo);
             stereo.cleanup();
@@ -734,6 +747,11 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 return null;
             }
 
+            Fmp4StreamStart sidxStart = tryOpenFmp4SidxSeek(url, playbackContext, init, targetSeconds);
+            if (sidxStart != null) {
+                return sidxStart;
+            }
+
             long elapsedMillis = Math.max(0L, playbackContext.elapsedMillis());
             long totalMillis = Math.max(1L, playbackContext.totalMillis());
             double ratio = Math.max(0.0D, Math.min(0.98D, elapsedMillis / (double) totalMillis));
@@ -772,6 +790,13 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                         }
                     }
 
+                    if (isAfterTargetMoofCandidate(candidate, targetSeconds)) {
+                        LOGGER.debug(
+                                "fMP4 range seek candidate is after target: target={}s fragment={}s byte={} attemptsExhausted=true; falling back to decoded skip",
+                                targetSeconds, candidate.fragmentSeconds(), absoluteMoofOffset);
+                        return null;
+                    }
+
                     float residualSeconds = residualStartOffsetSeconds(targetSeconds, candidate, totalMillis,
                             contentLength, absoluteMoofOffset);
                     InputStream tail = new SequenceInputStream(
@@ -780,10 +805,10 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                             range);
                     lastRange = null;
                     InputStream combined = new SequenceInputStream(new ByteArrayInputStream(init.bytes()), tail);
-                    LOGGER.debug("fMP4 range seek: target={}s fragment={}s residual={}s byte={} totalBytes={} host={}",
-                            targetSeconds, candidate.fragmentSeconds(), residualSeconds, absoluteMoofOffset,
-                            contentLength,
-                            url.getHost());
+                    LOGGER.info(
+                            "音频fMP4 RangeSeek: target={}s fragment={}s residual={}s timelineStart={}s byte={} totalBytes={} host={}",
+                            targetSeconds, candidate.fragmentSeconds(), residualSeconds,
+                            playbackContext.startOffsetSeconds(), absoluteMoofOffset, contentLength, url.getHost());
                     return new Fmp4StreamStart(combined, residualSeconds);
                 } finally {
                     if (lastRange == range) {
@@ -797,6 +822,92 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             LOGGER.debug("fMP4 range seek unavailable, falling back to decoded skip: {}", e.getMessage());
             closeQuietly(lastRange);
             return null;
+        }
+    }
+
+    private static Fmp4StreamStart tryOpenFmp4SidxSeek(URL url, PlaybackContext playbackContext, Fmp4InitSegment init,
+            float targetSeconds) {
+        SegmentBaseInfo info = segmentBaseInfo(url.toString());
+        if (info == null) {
+            return null;
+        }
+        try {
+            byte[] sidxBytes = readRangeBytes(url, info.indexStart(), info.indexEnd());
+            SidxIndex sidx = parseSidx(sidxBytes, info.indexStart());
+            if (sidx == null || sidx.entries().isEmpty()) {
+                return null;
+            }
+            SidxEntry selected = null;
+            for (SidxEntry entry : sidx.entries()) {
+                if (entry.timeSeconds() <= targetSeconds + FMP4_TARGET_EPSILON_SECONDS) {
+                    selected = entry;
+                } else {
+                    break;
+                }
+            }
+            if (selected == null) {
+                selected = sidx.entries().get(0);
+            }
+            ChunkPrefetchInputStream range = new ChunkPrefetchInputStream(url, selected.byteStart());
+            try {
+                int timescale = init.timescale() > 0 ? init.timescale()
+                        : (int) Math.min(Integer.MAX_VALUE, sidx.timescale());
+                MoofProbe probe = readMoofProbe(range, targetSeconds, timescale > 0 ? timescale : 48000);
+                if (probe == null) {
+                    closeQuietly(range);
+                    return null;
+                }
+                byte[] probeBytes = probe.bytes();
+                MoofCandidate candidate = probe.candidate();
+                double fragmentSeconds = !Double.isNaN(candidate.fragmentSeconds())
+                        ? candidate.fragmentSeconds()
+                        : selected.timeSeconds();
+                float residualSeconds = (float) Math.max(0.0D,
+                        Math.min(targetSeconds, targetSeconds - fragmentSeconds));
+                InputStream tail = new SequenceInputStream(
+                        new ByteArrayInputStream(probeBytes, candidate.offset(),
+                                probeBytes.length - candidate.offset()),
+                        range);
+                InputStream combined = new SequenceInputStream(new ByteArrayInputStream(init.bytes()), tail);
+                LOGGER.info(
+                        "音频fMP4 SidxSeek: target={}s fragment={}s residual={}s timelineStart={}s byte={} totalBytes={} host={}",
+                        targetSeconds, fragmentSeconds, residualSeconds, playbackContext.startOffsetSeconds(),
+                        selected.byteStart(), init.contentLength(), url.getHost());
+                return new Fmp4StreamStart(combined, residualSeconds);
+            } catch (IOException | RuntimeException e) {
+                closeQuietly(range);
+                throw e;
+            }
+        } catch (IOException | RuntimeException e) {
+            LOGGER.debug("fMP4 audio sidx seek unavailable, falling back to range seek: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private static byte[] readRangeBytes(URL url, long start, long end) throws IOException {
+        HttpRangeClient client = new HttpRangeClient();
+        try (HttpRangeClient.CdnResponse response = client.getRange(url, start, end)) {
+            int status = response.statusCode();
+            if (status != 206 && status != 200) {
+                throw new IOException("HTTP " + status + " while reading fMP4 sidx");
+            }
+            long maxBytes = Math.max(1L, end - start + 1L);
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(
+                    (int) Math.min(maxBytes, 1024 * 1024L));
+            byte[] buffer = new byte[64 * 1024];
+            long remaining = maxBytes;
+            while (remaining > 0L) {
+                int n = response.body().read(buffer, 0, (int) Math.min(buffer.length, remaining));
+                if (n < 0) {
+                    break;
+                }
+                if (n == 0) {
+                    continue;
+                }
+                out.write(buffer, 0, n);
+                remaining -= n;
+            }
+            return out.toByteArray();
         }
     }
 
@@ -883,13 +994,22 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         if (candidate == null || Double.isNaN(candidate.fragmentSeconds())) {
             return false;
         }
-        return Math.abs(candidate.fragmentSeconds() - targetSeconds) <= FMP4_CLOSE_FRAGMENT_SECONDS;
+        double delta = targetSeconds - candidate.fragmentSeconds();
+        return delta >= -FMP4_TARGET_EPSILON_SECONDS && delta <= FMP4_CLOSE_FRAGMENT_SECONDS;
     }
 
     private static boolean shouldRetryFmp4RangeSeek(MoofCandidate candidate, float targetSeconds) {
+        if (candidate == null || Double.isNaN(candidate.fragmentSeconds())) {
+            return false;
+        }
+        double delta = targetSeconds - candidate.fragmentSeconds();
+        return delta < -FMP4_TARGET_EPSILON_SECONDS || delta > FMP4_CLOSE_FRAGMENT_SECONDS;
+    }
+
+    private static boolean isAfterTargetMoofCandidate(MoofCandidate candidate, float targetSeconds) {
         return candidate != null
                 && !Double.isNaN(candidate.fragmentSeconds())
-                && Math.abs(candidate.fragmentSeconds() - targetSeconds) > FMP4_CLOSE_FRAGMENT_SECONDS;
+                && candidate.fragmentSeconds() > targetSeconds + FMP4_TARGET_EPSILON_SECONDS;
     }
 
     private static long nextFmp4RangeStart(MoofCandidate candidate, float targetSeconds, long totalMillis,
@@ -955,6 +1075,79 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             return targetSeconds;
         }
         return (float) Math.max(0.0D, Math.min(targetSeconds, targetSeconds - fragmentSeconds));
+    }
+
+    private static SidxIndex parseSidx(byte[] data, long absoluteStart) {
+        int sidxOffset = -1;
+        Mp4Box sidxBox = null;
+        for (int pos = 0; pos + 8 <= data.length;) {
+            Mp4Box box = readCompleteMp4Box(data, pos, data.length);
+            if (box == null || box.size() <= 0L || box.size() > Integer.MAX_VALUE) {
+                break;
+            }
+            if (isBoxType(data, pos + 4, 's', 'i', 'd', 'x')) {
+                sidxOffset = pos;
+                sidxBox = box;
+                break;
+            }
+            pos += (int) box.size();
+        }
+        if (sidxOffset < 0 || sidxBox == null) {
+            return null;
+        }
+        int p = sidxOffset + sidxBox.headerSize();
+        int end = sidxOffset + (int) sidxBox.size();
+        if (p + 12 > end) {
+            return null;
+        }
+        int version = data[p] & 0xFF;
+        p += 4; // version + flags
+        p += 4; // reference_ID
+        long timescale = readUInt32(data, p);
+        p += 4;
+        long earliestPresentationTime;
+        long firstOffset;
+        if (version == 0) {
+            if (p + 8 > end) {
+                return null;
+            }
+            earliestPresentationTime = readUInt32(data, p);
+            p += 4;
+            firstOffset = readUInt32(data, p);
+            p += 4;
+        } else {
+            if (p + 16 > end) {
+                return null;
+            }
+            earliestPresentationTime = readUInt64(data, p);
+            p += 8;
+            firstOffset = readUInt64(data, p);
+            p += 8;
+        }
+        if (p + 4 > end || timescale <= 0L) {
+            return null;
+        }
+        p += 2; // reserved
+        int referenceCount = ((data[p] & 0xFF) << 8) | (data[p + 1] & 0xFF);
+        p += 2;
+        long currentTime = earliestPresentationTime;
+        long currentByte = absoluteStart + sidxOffset + sidxBox.size() + firstOffset;
+        java.util.ArrayList<SidxEntry> entries = new java.util.ArrayList<>();
+        for (int i = 0; i < referenceCount && p + 12 <= end; i++) {
+            long ref = readUInt32(data, p);
+            p += 4;
+            boolean referenceType = (ref & 0x8000_0000L) != 0L;
+            long size = ref & 0x7FFF_FFFFL;
+            long duration = readUInt32(data, p);
+            p += 4;
+            p += 4; // SAP
+            if (!referenceType && size > 0L) {
+                entries.add(new SidxEntry(currentTime / (double) timescale, currentByte, currentByte + size - 1L));
+            }
+            currentTime += duration;
+            currentByte += size;
+        }
+        return entries.isEmpty() ? null : new SidxIndex(timescale, entries);
     }
 
     private static Mp4Box readCompleteMp4Box(byte[] data, int offset, int length) {
@@ -1126,21 +1319,27 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             float startOffsetSeconds) throws IOException, UnsupportedAudioFileException {
         boolean modernTurntable = playbackContext != null;
         BlockPos sourcePos = playbackContext != null ? playbackContext.pos() : null;
+        float timelineStartOffsetSeconds = playbackContext != null
+                ? playbackContext.startOffsetSeconds()
+                : startOffsetSeconds;
         if ("ec-3".equals(parseResult.audioCodec)) {
             if (modernTurntable && Eac3NativeDecoder.isNativeAvailable()) {
-                return new DolbyEc3Pipeline("fMP4", closed, sourcePos, startOffsetSeconds);
+                return new DolbyEc3Pipeline("fMP4", closed, sourcePos, startOffsetSeconds,
+                        timelineStartOffsetSeconds);
             }
             throw new UnsupportedAudioFileException(
                     "EC-3 requires modern turntable Dolby playback and native decoder support");
         }
         if (parseResult.flacDfLa != null) {
             return modernTurntable
-                    ? new FlacOpenALPipeline(parseResult.flacDfLa.clone(), closed, sourcePos, startOffsetSeconds)
+                    ? new FlacOpenALPipeline(parseResult.flacDfLa.clone(), closed, sourcePos, startOffsetSeconds,
+                            timelineStartOffsetSeconds)
                     : new FlacPcmPipeline(parseResult.flacDfLa.clone(), fallbackPipe);
         }
         if (parseResult.asc != null) {
             return modernTurntable
-                    ? new AacOpenALPipeline(parseResult.asc.clone(), closed, sourcePos, startOffsetSeconds)
+                    ? new AacOpenALPipeline(parseResult.asc.clone(), closed, sourcePos, startOffsetSeconds,
+                            timelineStartOffsetSeconds)
                     : new AacPcmPipeline(parseResult.asc.clone(), fallbackPipe);
         }
         String codecs = Fmp4ToMp4Converter.listAudioCodecs(moovData);
@@ -1155,7 +1354,8 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             throw new UnsupportedAudioFileException("raw E-AC-3 requires Dolby playback and native decoder support");
         }
         BlockPos sourcePos = playbackContext.pos();
-        return new DolbyEc3Pipeline("raw", closed, sourcePos, startOffsetSeconds);
+        return new DolbyEc3Pipeline("raw", closed, sourcePos, startOffsetSeconds,
+                playbackContext.startOffsetSeconds());
     }
 
     private static void activatePipeline(
@@ -1170,8 +1370,6 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         BiliPlaybackDiagnostics.updateFormat(url, pipeline.container(), pipeline.codec(),
                 pipeline.format(), pipeline.detail());
         formatReady.countDown();
-        LOGGER.debug("Pipeline selected: container={} codec={} detail={}",
-                pipeline.container(), pipeline.codec(), pipeline.detail());
     }
 
     private static AudioInputStream silentStream(
@@ -1404,6 +1602,53 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     }
 
     private record Fmp4InitSegment(byte[] bytes, long contentLength, int timescale) {
+    }
+
+    private static SegmentBaseInfo segmentBaseInfo(String url) {
+        SegmentBaseInfo info = SEGMENT_BASE_BY_URL.get(url);
+        if (info == null) {
+            return null;
+        }
+        long now = System.currentTimeMillis();
+        if (now - info.createdAtMillis() > SEGMENT_BASE_TTL_MILLIS) {
+            SEGMENT_BASE_BY_URL.remove(url, info);
+            return null;
+        }
+        return info;
+    }
+
+    private static void cleanupSegmentBaseInfo(long now) {
+        if (SEGMENT_BASE_BY_URL.isEmpty()) {
+            return;
+        }
+        SEGMENT_BASE_BY_URL.entrySet().removeIf(
+                entry -> now - entry.getValue().createdAtMillis() > SEGMENT_BASE_TTL_MILLIS);
+        int maxEntries = Math.max(1, MAX_SEGMENT_BASE_ENTRIES);
+        while (SEGMENT_BASE_BY_URL.size() > maxEntries) {
+            String oldestKey = null;
+            long oldestCreatedAt = Long.MAX_VALUE;
+            for (var entry : SEGMENT_BASE_BY_URL.entrySet()) {
+                long createdAt = entry.getValue().createdAtMillis();
+                if (createdAt < oldestCreatedAt) {
+                    oldestCreatedAt = createdAt;
+                    oldestKey = entry.getKey();
+                }
+            }
+            if (oldestKey == null) {
+                return;
+            }
+            SEGMENT_BASE_BY_URL.remove(oldestKey);
+        }
+    }
+
+    private record SegmentBaseInfo(long initStart, long initEnd, long indexStart, long indexEnd,
+            long createdAtMillis) {
+    }
+
+    private record SidxIndex(long timescale, java.util.List<SidxEntry> entries) {
+    }
+
+    private record SidxEntry(double timeSeconds, long byteStart, long byteEnd) {
     }
 
     private record MoofCandidate(int offset, double fragmentSeconds) {

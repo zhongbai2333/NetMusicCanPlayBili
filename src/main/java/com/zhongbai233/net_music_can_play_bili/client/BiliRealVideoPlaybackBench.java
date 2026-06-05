@@ -63,6 +63,9 @@ public final class BiliRealVideoPlaybackBench {
     }
 
     public static boolean tryStart() {
+        if (Boolean.getBoolean("bili.playback.auto_bench")) {
+            return false;
+        }
         if (!BENCH_FEATURES_ENABLED) {
             return false;
         }

@@ -33,6 +33,7 @@ public final class Fmp4ToMp4Converter {
     public static byte[] convertToStandardMp4(byte[] fmp4Data) throws IOException {
         ByteBuffer buf = ByteBuffer.wrap(fmp4Data).order(ByteOrder.BIG_ENDIAN);
         byte[] asc = null;
+        int audioTimescale = 48_000;
         List<Integer> allSizes = new ArrayList<>();
         List<Integer> allDurs = new ArrayList<>();
         List<byte[]> mdatChunks = new ArrayList<>();
@@ -45,21 +46,26 @@ public final class Fmp4ToMp4Converter {
                 byte[] moovData = new byte[(int) dataSize];
                 buf.get(moovData);
                 ParseResult pr = parseMoov(moovData);
-                if (pr.asc != null)
+                if (pr.asc != null) {
                     asc = pr.asc;
+                }
+                if (pr.timescale > 0) {
+                    audioTimescale = pr.timescale;
+                }
             } else if ("moof".equals(box.type)) {
                 byte[] moofData = new byte[(int) dataSize];
                 buf.get(moofData);
                 ParseResult pr = parseMoof(moofData);
                 if (pr.sampleSizes != null) {
-                    for (int sz : pr.sampleSizes) {
+                    for (int i = 0; i < pr.sampleSizes.length; i++) {
+                        int sz = pr.sampleSizes[i];
                         allSizes.add(sz);
-                        allDurs.add(1024);
+                        allDurs.add(sampleDuration(pr, i, audioTimescale));
                     }
                 } else if (pr.defaultSampleSize > 0 && pr.sampleCount > 0) {
                     for (int i = 0; i < pr.sampleCount; i++) {
                         allSizes.add(pr.defaultSampleSize);
-                        allDurs.add(1024);
+                        allDurs.add(sampleDuration(pr, i, audioTimescale));
                     }
                 }
             } else if ("mdat".equals(box.type)) {
@@ -76,21 +82,26 @@ public final class Fmp4ToMp4Converter {
             LOGGER.warn("AAC ASC 提取失败，回退到默认 ASC (48000Hz 立体声)。低品质流可能产生噪音。");
             asc = DEFAULT_ASC;
         }
-        int skipCnt = 0, skipB = 0;
-        while (skipCnt < allSizes.size() && allSizes.get(skipCnt) < 20) {
-            skipB += allSizes.get(skipCnt);
-            skipCnt++;
-        }
         ByteArrayOutputStream raw = new ByteArrayOutputStream();
         for (byte[] c : mdatChunks)
             raw.write(c);
         byte[] full = raw.toByteArray();
-        byte[] audioData = new byte[full.length - skipB];
-        System.arraycopy(full, skipB, audioData, 0, audioData.length);
-        int[] sizes = allSizes.subList(skipCnt, allSizes.size()).stream().mapToInt(i -> i).toArray();
-        int[] durs = allDurs.subList(skipCnt, allDurs.size()).stream().mapToInt(i -> i).toArray();
+        byte[] audioData = full;
+        int[] sizes = allSizes.stream().mapToInt(i -> i).toArray();
+        int[] durs = allDurs.stream().mapToInt(i -> i).toArray();
         LOGGER.debug("[Fmp4ToAdts] MP4转换: {}帧, {}B AAC", sizes.length, audioData.length);
-        return buildStandardMp4(asc, sizes, durs, audioData);
+        return buildStandardMp4(asc, sizes, durs, audioData, audioTimescale);
+    }
+
+    private static int sampleDuration(ParseResult pr, int index, int fallbackTimescale) {
+        if (pr.sampleDurations != null && index >= 0 && index < pr.sampleDurations.length
+                && pr.sampleDurations[index] > 0L) {
+            return (int) Math.min(Integer.MAX_VALUE, pr.sampleDurations[index]);
+        }
+        if (pr.defaultSampleDuration > 0L) {
+            return (int) Math.min(Integer.MAX_VALUE, pr.defaultSampleDuration);
+        }
+        return 1024;
     }
 
     /** 从 fMP4 头部的 moov box 快速提取音频格式，用于流式播放前预知采样率/声道 */
@@ -201,6 +212,42 @@ public final class Fmp4ToMp4Converter {
         return new int[0];
     }
 
+    public static SampleTable extractSampleTableFromMoof(byte[] moofData, int timescale, int fallbackFps) {
+        ParseResult pr = parseMoof(moofData);
+        int count = pr.sampleCount;
+        if (count <= 0 && pr.sampleSizes != null) {
+            count = pr.sampleSizes.length;
+        }
+        if (count <= 0) {
+            return SampleTable.EMPTY;
+        }
+        int[] sizes = pr.sampleSizes;
+        if ((sizes == null || sizes.length < count) && pr.defaultSampleSize > 0) {
+            sizes = new int[count];
+            java.util.Arrays.fill(sizes, pr.defaultSampleSize);
+        }
+        if (sizes == null) {
+            sizes = new int[0];
+        }
+
+        long[] ptsNanos = new long[count];
+        long decodeTime = Math.max(0L, pr.baseMediaDecodeTime);
+        int scale = Math.max(1, timescale);
+        long fallbackDuration = Math.max(1L, Math.round(scale / (double) Math.max(1, fallbackFps)));
+        for (int i = 0; i < count; i++) {
+            long duration = pr.sampleDurations != null && i < pr.sampleDurations.length && pr.sampleDurations[i] > 0L
+                    ? pr.sampleDurations[i]
+                    : pr.defaultSampleDuration > 0L ? pr.defaultSampleDuration : fallbackDuration;
+            long compositionOffset = pr.sampleCompositionOffsets != null && i < pr.sampleCompositionOffsets.length
+                    ? pr.sampleCompositionOffsets[i]
+                    : 0L;
+            ptsNanos[i] = Math.max(0L,
+                    Math.round(Math.max(0L, decodeTime + compositionOffset) * 1_000_000_000.0D / scale));
+            decodeTime += duration;
+        }
+        return new SampleTable(sizes, ptsNanos);
+    }
+
     /** AAC ASC（AudioSpecificConfig）→ AudioFormat */
     private static AudioFormat ascToAudioFormat(byte[] asc) {
         if (asc == null || asc.length < 2)
@@ -215,14 +262,14 @@ public final class Fmp4ToMp4Converter {
         return new AudioFormat(rate, 16, channels, true, false);
     }
 
-    private static byte[] buildStandardMp4(byte[] asc, int[] sizes, int[] durs, byte[] audioData) {
+    private static byte[] buildStandardMp4(byte[] asc, int[] sizes, int[] durs, byte[] audioData, int timescale) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         byte[] ftyp = makeBox("ftyp", toBytes("isom\u0000\u0000\u0000\u0000isomiso2mp41"));
         out.write(ftyp, 0, ftyp.length);
         long mdatPayloadOffset = ftyp.length + 8L;
-        byte[] moov = buildMoov(asc, sizes, durs, mdatPayloadOffset);
+        byte[] moov = buildMoov(asc, sizes, durs, mdatPayloadOffset, timescale);
         mdatPayloadOffset = ftyp.length + moov.length + 8L;
-        moov = buildMoov(asc, sizes, durs, mdatPayloadOffset);
+        moov = buildMoov(asc, sizes, durs, mdatPayloadOffset, timescale);
         out.write(moov, 0, moov.length);
         writeInt(out, 8 + audioData.length);
         out.write(toBytes("mdat"), 0, 4);
@@ -230,8 +277,8 @@ public final class Fmp4ToMp4Converter {
         return out.toByteArray();
     }
 
-    private static byte[] buildMoov(byte[] asc, int[] sizes, int[] durs, long mdatOff) {
-        int timescale = 48000;
+    private static byte[] buildMoov(byte[] asc, int[] sizes, int[] durs, long mdatOff, int timescale) {
+        timescale = Math.max(1, timescale);
         int totalSamples = sizes.length;
         long duration = 0;
         for (int d : durs)
@@ -240,7 +287,7 @@ public final class Fmp4ToMp4Converter {
         byte[] tkhd = makeTkhd(1, duration);
         byte[] mdhd = makeMdhd(timescale, duration);
         byte[] hdlr = makeHdlr();
-        byte[] stsd = makeStsd(asc);
+        byte[] stsd = makeStsd(asc, timescale);
         byte[] stts = makeStts(totalSamples, durs);
         byte[] stsz = makeStsz(sizes);
         byte[] stsc = makeStsc(totalSamples);
@@ -295,7 +342,7 @@ public final class Fmp4ToMp4Converter {
         return makeBox("dinf", makeFullBox("dref", drefPayload.toByteArray()));
     }
 
-    private static byte[] makeStsd(byte[] asc) {
+    private static byte[] makeStsd(byte[] asc, int timescale) {
         byte[] esds = makeEsds(asc);
         ByteArrayOutputStream mp4a = new ByteArrayOutputStream();
         writeInt(mp4a, 8 + 28 + esds.length);
@@ -309,7 +356,7 @@ public final class Fmp4ToMp4Converter {
         writeShort(mp4a, 16);
         writeShort(mp4a, 0);
         writeShort(mp4a, 0);
-        writeInt(mp4a, 48000 << 16);
+        writeInt(mp4a, Math.max(1, timescale) << 16);
         mp4a.write(esds, 0, esds.length);
         byte[] mp4aBytes = mp4a.toByteArray();
         ByteArrayOutputStream stsd = new ByteArrayOutputStream();
@@ -585,7 +632,7 @@ public final class Fmp4ToMp4Converter {
             byte[] cd = new byte[cs];
             b.get(cd);
             if ("tfhd".equals(t))
-                ds = parseTfhd(cd);
+                ds = parseTfhd(cd, r);
             else if ("tfdt".equals(t))
                 parseTfdt(cd, r);
             else if ("trun".equals(t))
@@ -594,7 +641,7 @@ public final class Fmp4ToMp4Converter {
         return ds;
     }
 
-    private static int parseTfhd(byte[] cd) {
+    private static int parseTfhd(byte[] cd, ParseResult r) {
         if (cd.length < 8)
             return 0;
         int flags = ((cd[1] & 0xFF) << 16) | ((cd[2] & 0xFF) << 8) | (cd[3] & 0xFF);
@@ -607,6 +654,9 @@ public final class Fmp4ToMp4Converter {
             pos += 4;
         }
         if ((flags & TFHD_DEFAULT_SAMPLE_DURATION) != 0) {
+            if (pos + 4 <= cd.length) {
+                r.defaultSampleDuration = bb.getInt(pos) & 0xFFFFFFFFL;
+            }
             pos += 4;
         }
         if ((flags & TFHD_DEFAULT_SAMPLE_SIZE) != 0 && pos + 4 <= cd.length) {
@@ -647,23 +697,45 @@ public final class Fmp4ToMp4Converter {
         if (hfs && pos + 4 <= cd.length)
             pos += 4;
         r.sampleCount += sc;
+        r.ensureTimingCapacity(r.sampleDurations != null ? r.sampleDurations.length + sc : sc);
+        int ti = r.sampleDurations.length - sc;
         if (hss && sc > 0) {
             r.ensureCapacity(r.sampleSizes != null ? r.sampleSizes.length + sc : sc);
             int wi = r.sampleSizes.length - sc;
             for (int i = 0; i < sc; i++) {
-                if (hsd && pos + 4 <= cd.length)
+                if (hsd && pos + 4 <= cd.length) {
+                    r.sampleDurations[ti + i] = trun.getInt(pos) & 0xFFFFFFFFL;
                     pos += 4;
+                }
                 if (pos + 4 <= cd.length) {
                     r.sampleSizes[wi + i] = trun.getInt(pos);
                     pos += 4;
                 }
                 if (hsf && pos + 4 <= cd.length)
                     pos += 4;
-                if (hct && pos + 4 <= cd.length)
+                if (hct && pos + 4 <= cd.length) {
+                    r.sampleCompositionOffsets[ti + i] = trun.getInt(pos);
                     pos += 4;
+                }
             }
-        } else if (defaultSampleSize > 0)
-            r.defaultSampleSize = defaultSampleSize;
+        } else {
+            for (int i = 0; i < sc; i++) {
+                if (hsd && pos + 4 <= cd.length) {
+                    r.sampleDurations[ti + i] = trun.getInt(pos) & 0xFFFFFFFFL;
+                    pos += 4;
+                }
+                if (hss && pos + 4 <= cd.length)
+                    pos += 4;
+                if (hsf && pos + 4 <= cd.length)
+                    pos += 4;
+                if (hct && pos + 4 <= cd.length) {
+                    r.sampleCompositionOffsets[ti + i] = trun.getInt(pos);
+                    pos += 4;
+                }
+            }
+            if (defaultSampleSize > 0)
+                r.defaultSampleSize = defaultSampleSize;
+        }
     }
 
     public static ParseResult parseMoov(byte[] data) {
@@ -1054,8 +1126,11 @@ public final class Fmp4ToMp4Converter {
         public byte[] asc;
         public byte[] flacDfLa;
         public int defaultSampleSize;
+        public long defaultSampleDuration;
         public int sampleCount;
         public int[] sampleSizes;
+        public long[] sampleDurations;
+        public long[] sampleCompositionOffsets;
         public int timescale;
         public long baseMediaDecodeTime = -1L;
 
@@ -1068,5 +1143,23 @@ public final class Fmp4ToMp4Converter {
                 System.arraycopy(o, 0, sampleSizes, 0, o.length);
             }
         }
+
+        void ensureTimingCapacity(int min) {
+            if (sampleDurations == null) {
+                sampleDurations = new long[min];
+                sampleCompositionOffsets = new long[min];
+            } else if (sampleDurations.length < min) {
+                long[] oldDurations = sampleDurations;
+                long[] oldOffsets = sampleCompositionOffsets;
+                sampleDurations = new long[min];
+                sampleCompositionOffsets = new long[min];
+                System.arraycopy(oldDurations, 0, sampleDurations, 0, oldDurations.length);
+                System.arraycopy(oldOffsets, 0, sampleCompositionOffsets, 0, oldOffsets.length);
+            }
+        }
+    }
+
+    public record SampleTable(int[] sampleSizes, long[] ptsNanos) {
+        public static final SampleTable EMPTY = new SampleTable(new int[0], new long[0]);
     }
 }

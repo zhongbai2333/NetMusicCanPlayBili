@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.block;
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import com.mojang.serialization.MapCodec;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableClientHooks;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
 import net.minecraft.ChatFormatting;
@@ -161,12 +162,7 @@ public class ModernTurntableBlock extends HorizontalDirectionalBlock implements 
     }
 
     private static void openClientScreen(BlockPos pos) {
-        try {
-            Class<?> client = Class.forName("com.zhongbai233.net_music_can_play_bili.client.ModernTurntableClient");
-            client.getMethod("openScreen", BlockPos.class).invoke(null, pos);
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("Failed to open modern turntable screen", e);
-        }
+        ModernTurntableClientHooks.openModernTurntableScreen(pos);
     }
 
     @Override

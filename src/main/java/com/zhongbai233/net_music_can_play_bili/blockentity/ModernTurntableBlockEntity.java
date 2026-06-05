@@ -183,7 +183,6 @@ public class ModernTurntableBlockEntity extends BlockEntity {
             syncedPlayers.clear();
             markDirty();
             syncNearbyPlayers(serverLevel, remainingSeconds(serverLevel.getGameTime()));
-            LOGGER.debug("现代化唱片机恢复播放: {} ({}s, 续播 {}ms)", songName, durationSeconds, elapsedTicks * 50L);
             return;
         }
         // B站 存储选集的 URL：重新解析 CDN 直链
@@ -204,8 +203,6 @@ public class ModernTurntableBlockEntity extends BlockEntity {
                             syncedPlayers.clear();
                             markDirty();
                             syncNearbyPlayers(serverLevel, remainingSeconds(serverLevel.getGameTime()));
-                            LOGGER.debug("现代化唱片机恢复播放(B站): {} ({}s, 续播 {}ms)", songName, durationSeconds,
-                                    elapsedTicks * 50L);
                         }
                     }
                 }, serverLevel.getServer())
@@ -368,7 +365,6 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         syncedPlayers.clear();
         markDirty();
         syncNearbyPlayers(serverLevel, durationSeconds);
-        LOGGER.debug("现代化唱片机开始播放: {} ({}s)", songName, durationSeconds);
     }
 
     public void stopPlayback() {
@@ -514,8 +510,6 @@ public class ModernTurntableBlockEntity extends BlockEntity {
                         Math.max(1, remainingSeconds),
                         songName);
                 NetworkHandler.sendToClientPlayer(message, player);
-                LOGGER.debug("现代化唱片机同步播放给玩家: {} -> {} (剩余 {}s)",
-                        songName, player.getScoreboardName(), Math.max(1, remainingSeconds));
             }
         }
         syncedPlayers.retainAll(nearby);
@@ -565,8 +559,6 @@ public class ModernTurntableBlockEntity extends BlockEntity {
                 : saveElapsedTicks(storedElapsedTicks());
         output.putInt(ELAPSED_SECONDS_TAG, (int) (elapsedTicks / 20L));
         output.putLong(ELAPSED_TICKS_TAG, elapsedTicks);
-        LOGGER.trace("现代化唱片机保存: playing={} startedGameTime={} duration={} elapsedTicks={}",
-                playing, startedGameTime, durationSeconds, elapsedTicks);
     }
 
     @Override
@@ -584,8 +576,6 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         saveElapsedTicks(savedElapsedTicks);
         syncedPlayers.clear();
         needsResolveOnLoad = playing && durationSeconds > 0 && savedElapsedTicks < (long) durationSeconds * 20L;
-        LOGGER.trace("现代化唱片机加载: playing={} startedGameTime={} duration={} elapsedTicks={} needsResolve={}",
-                playing, startedGameTime, durationSeconds, savedElapsedTicks, needsResolveOnLoad);
     }
 
     @Override

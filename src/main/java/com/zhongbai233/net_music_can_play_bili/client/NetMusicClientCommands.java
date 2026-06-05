@@ -1,7 +1,9 @@
 package com.zhongbai233.net_music_can_play_bili.client;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliConfig;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
@@ -27,23 +29,46 @@ public final class NetMusicClientCommands {
     @SubscribeEvent
     public static void onRegisterClientCommands(RegisterClientCommandsEvent event) {
         CommandDispatcher<CommandSourceStack> dispatcher = event.getDispatcher();
-        dispatcher.register(
-                literal("netmusicbili")
-                        .then(literal("status").executes(NetMusicClientCommands::showPlaybackStatus))
-                        .then(literal("dolby")
-                                .then(literal("joc")
-                                        .then(literal("on").executes(ctx -> setJoc(ctx, true)))
-                                        .then(literal("off").executes(ctx -> setJoc(ctx, false)))
-                                        .then(literal("toggle")
-                                                .executes(ctx -> setJoc(ctx, !BiliConfig.dolbyJocEnabled)))
-                                        .then(literal("status").executes(NetMusicClientCommands::showJocStatus)))
-                                .then(literal("objects")
-                                        .then(literal("status").executes(NetMusicClientCommands::showObjectLimit))
-                                        .then(argument("count", IntegerArgumentType.integer(0, 64))
-                                                .executes(ctx -> setObjectLimit(ctx,
-                                                        IntegerArgumentType.getInteger(ctx, "count")))))
-                                .then(literal("source")
-                                        .then(literal("status").executes(NetMusicClientCommands::showSourceStatus)))));
+        LiteralArgumentBuilder<CommandSourceStack> bench = literal("bench")
+                .then(literal("status").executes(NetMusicClientCommands::showBenchStatus))
+                .then(literal("reset").executes(NetMusicClientCommands::resetBench))
+                .then(literal("mark")
+                        .then(argument("label", StringArgumentType.greedyString())
+                                .executes(ctx -> markBench(ctx, StringArgumentType.getString(ctx, "label"))))
+                        .executes(ctx -> markBench(ctx, "manual")))
+                .then(literal("perceived")
+                        .then(argument("delayMs", IntegerArgumentType.integer(-10_000, 10_000))
+                                .then(argument("note", StringArgumentType.greedyString())
+                                        .executes(ctx -> perceivedBench(ctx,
+                                                IntegerArgumentType.getInteger(ctx, "delayMs"),
+                                                StringArgumentType.getString(ctx, "note"))))
+                                .executes(ctx -> perceivedBench(ctx,
+                                        IntegerArgumentType.getInteger(ctx, "delayMs"), ""))))
+                .then(literal("perceptual")
+                        .then(literal("trigger")
+                                .then(argument("label", StringArgumentType.greedyString())
+                                        .executes(ctx -> triggerPerceptualBench(ctx,
+                                                StringArgumentType.getString(ctx, "label"))))
+                                .executes(ctx -> triggerPerceptualBench(ctx, "manual"))));
+
+        LiteralArgumentBuilder<CommandSourceStack> dolby = literal("dolby")
+                .then(literal("joc")
+                        .then(literal("on").executes(ctx -> setJoc(ctx, true)))
+                        .then(literal("off").executes(ctx -> setJoc(ctx, false)))
+                        .then(literal("toggle").executes(ctx -> setJoc(ctx, !BiliConfig.dolbyJocEnabled)))
+                        .then(literal("status").executes(NetMusicClientCommands::showJocStatus)))
+                .then(literal("objects")
+                        .then(literal("status").executes(NetMusicClientCommands::showObjectLimit))
+                        .then(argument("count", IntegerArgumentType.integer(0, 64))
+                                .executes(ctx -> setObjectLimit(ctx,
+                                        IntegerArgumentType.getInteger(ctx, "count")))))
+                .then(literal("source")
+                        .then(literal("status").executes(NetMusicClientCommands::showSourceStatus)));
+
+        dispatcher.register(literal("netmusicbili")
+                .then(literal("status").executes(NetMusicClientCommands::showPlaybackStatus))
+                .then(bench)
+                .then(dolby));
     }
 
     private static void feedback(Component msg) {
@@ -90,6 +115,38 @@ public final class NetMusicClientCommands {
         for (String line : BiliPlaybackDiagnostics.describeCurrentPlayback()) {
             feedback(Component.literal(line));
         }
+        return 1;
+    }
+
+    private static int showBenchStatus(CommandContext<CommandSourceStack> ctx) {
+        PlaybackLatencyBench.logNow();
+        feedback(Component.literal(PlaybackLatencyBench.enabled()
+                ? "播放延迟Bench已开启，详细数据已输出到日志"
+                : "播放延迟Bench未开启；启动参数加 -Dbili.playback.bench=true"));
+        return 1;
+    }
+
+    private static int resetBench(CommandContext<CommandSourceStack> ctx) {
+        PlaybackLatencyBench.reset();
+        feedback(Component.literal("播放延迟Bench已重置"));
+        return 1;
+    }
+
+    private static int markBench(CommandContext<CommandSourceStack> ctx, String label) {
+        PlaybackLatencyBench.markUser(label);
+        feedback(Component.literal("播放延迟Bench标记: " + label));
+        return 1;
+    }
+
+    private static int perceivedBench(CommandContext<CommandSourceStack> ctx, int delayMs, String note) {
+        PlaybackLatencyBench.recordPerceivedDelay(delayMs, note);
+        feedback(Component.literal("播放延迟Bench听感记录: " + delayMs + "ms"));
+        return 1;
+    }
+
+    private static int triggerPerceptualBench(CommandContext<CommandSourceStack> ctx, String label) {
+        PerceptualBenchTrigger.trigger(label);
+        feedback(Component.literal("感知Bench触发文件: " + PerceptualBenchTrigger.triggerPath().toAbsolutePath()));
         return 1;
     }
 }

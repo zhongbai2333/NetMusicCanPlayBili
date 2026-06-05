@@ -44,8 +44,22 @@ neoForge {
             // 正式播放默认走自动策略；高级视频参数仅在显式启用诊断开关时生效
             jvmArgument '-Dbili.video.advanced_features=false'
             jvmArgument '-Dbili.video.enable_bench_features=false'
+            // 播放端到端延迟 Bench：采样视频队列→上传→提交、音频入队→OpenAL→实际消费，不参与同步决策
+            jvmArgument '-Dbili.playback.bench=false'
+            jvmArgument '-Dbili.playback.bench.interval_ms=3000'
+            // 自动多轮视频播放 Bench：进存档后用 BV17q9EBEE9w P2 多起点重复测试前方屏幕并输出汇总报告
+            jvmArgument '-Dbili.playback.auto_bench=false'
+            jvmArgument '-Dbili.playback.auto_bench.bv=BV17q9EBEE9w'
+            jvmArgument '-Dbili.playback.auto_bench.page=2'
+            jvmArgument '-Dbili.playback.auto_bench.quality=116'
+            jvmArgument '-Dbili.playback.auto_bench.rounds=3'
+            jvmArgument '-Dbili.playback.auto_bench.sample_ms=15000'
+            jvmArgument '-Dbili.playback.auto_bench.gap_ms=1500'
+            jvmArgument '-Dbili.playback.auto_bench.starts_ms=2262919,2313499,5317200'
+            // bench 时主输出和音响 relay 同时出声，方便确认完整音频管线确实可听
+            jvmArgument '-Dbili.audio.relay.mute_main_when_started=false'
             // 以下参数保留给视频链路诊断使用，默认不会影响正式播放行为
-            jvmArgument '-Dbili.video.real_bench=true'
+            jvmArgument '-Dbili.video.real_bench=false'
             jvmArgument '-Dbili.video.real_bench.bv=BV1qM4y1w716'
             jvmArgument '-Dbili.video.real_bench.frames=120'
             jvmArgument '-Dbili.video.real_bench.warmup_frames=10'

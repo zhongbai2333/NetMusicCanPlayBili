@@ -54,4 +54,9 @@ public final class ClientLinkRegistry {
     public static Set<BlockPos> getSources(BlockPos targetPos) {
         return LINKS.getOrDefault(targetPos, Set.of());
     }
+
+    /** 客户端断连/切世界时清空所有旧世界链接。 */
+    public static void clear() {
+        LINKS.clear();
+    }
 }

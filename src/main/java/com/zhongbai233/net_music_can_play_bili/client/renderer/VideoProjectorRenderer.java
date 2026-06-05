@@ -22,8 +22,10 @@ import com.mojang.blaze3d.vertex.PoseStack;
 /**
  * 视频投影仪渲染器。
  *
- * <p>实际视频画面由 {@link VideoBillboardPreview}
- * 在全局几何提交事件中渲染；此渲染器负责维护客户端链接表和方块激活状态。</p>
+ * <p>
+ * 实际视频画面由 {@link VideoBillboardPreview}
+ * 在全局几何提交事件中渲染；此渲染器负责维护客户端链接表和方块激活状态。
+ * </p>
  */
 public class VideoProjectorRenderer
         implements BlockEntityRenderer<VideoProjectorBlockEntity, VideoProjectorRenderer.State> {
@@ -59,7 +61,8 @@ public class VideoProjectorRenderer
         state.visible = turntable.isPlaying();
         if (state.visible) {
             VideoBillboardPreview.attachProjectorToTurntable(linkedPos, projector.getBlockPos());
-            if (!VideoBillboardPreview.hasSessionForTurntable(linkedPos)) {
+            var sync = turntable.getPlaybackSyncMetadata(level.getGameTime());
+            if (!sync.hasSession() || !VideoBillboardPreview.hasSessionForTurntable(linkedPos, sync.sessionId())) {
                 ModernTurntableVideoClient.syncFromTurntableIfPossible(turntable);
             }
         }

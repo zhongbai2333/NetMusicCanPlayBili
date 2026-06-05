@@ -4,8 +4,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
 import org.slf4j.Logger;
 
 import java.net.URI;
@@ -24,7 +24,6 @@ import java.util.regex.Pattern;
  * B站 API 客户端：BV/AV 解析、视频信息、DASH 音频流地址
  */
 public final class BiliApiClient {
-
     private static final Logger LOGGER = LogUtils.getLogger();
 
     private static final Pattern BV_FULL_RE = Pattern.compile("^[Bb][Vv][0-9A-Za-z]{10}$");
@@ -120,7 +119,16 @@ public final class BiliApiClient {
     }
 
     public record VideoStream(int quality, int codecId, int width, int height, String frameRate, String codecs,
-            String baseUrl) {
+            String baseUrl, long initStart, long initEnd, long indexStart, long indexEnd) {
+        public VideoStream(int quality, int codecId, int width, int height, String frameRate, String codecs,
+                String baseUrl) {
+            this(quality, codecId, width, height, frameRate, codecs, baseUrl, -1L, -1L, -1L, -1L);
+        }
+
+        public boolean hasSegmentBase() {
+            return initStart >= 0L && initEnd >= initStart && indexStart >= 0L && indexEnd >= indexStart;
+        }
+
         public String codecName() {
             return switch (codecId) {
                 case 7 -> "H.264";
@@ -307,26 +315,28 @@ public final class BiliApiClient {
         if (audioArr != null) {
             for (JsonElement e : audioArr) {
                 JsonObject a = e.getAsJsonObject();
-                streams.put(a.get("id").getAsInt(), a.get("baseUrl").getAsString());
+                String baseUrl = a.get("baseUrl").getAsString();
+                streams.put(a.get("id").getAsInt(), baseUrl);
+                registerAudioSegmentBase(baseUrl, a);
             }
         }
 
         // 杜比全景声 (EC-3) — 仅在用户开启且 FFmpeg native 可用时纳入选择
+        boolean nativeDolbyAvailable = com.zhongbai233.net_music_can_play_bili.media.codec.Eac3NativeDecoder
+                .isNativeAvailable();
+        boolean dashHasDolby = dash.has("dolby") && !dash.get("dolby").isJsonNull();
         boolean dolbyOk = allowDolby
                 && BiliConfig.dolbyEnabled
-                && com.zhongbai233.net_music_can_play_bili.media.codec.Eac3NativeDecoder.isNativeAvailable();
-        LOGGER.debug("[Dolby] allowDolby={}, dolbyEnabled={}, nativeAvailable={}, dashHasDolby={}",
-                allowDolby,
-                BiliConfig.dolbyEnabled,
-                com.zhongbai233.net_music_can_play_bili.media.codec.Eac3NativeDecoder.isNativeAvailable(),
-                dash.has("dolby"));
-        if (dolbyOk && dash.has("dolby") && !dash.get("dolby").isJsonNull()) {
+                && nativeDolbyAvailable;
+        if (dolbyOk && dashHasDolby) {
             JsonObject dolby = dash.getAsJsonObject("dolby");
             if (dolby.has("audio") && !dolby.get("audio").isJsonNull()) {
                 JsonArray dolbyArr = dolby.getAsJsonArray("audio");
                 for (JsonElement e : dolbyArr) {
                     JsonObject a = e.getAsJsonObject();
-                    streams.put(a.get("id").getAsInt(), a.get("baseUrl").getAsString());
+                    String baseUrl = a.get("baseUrl").getAsString();
+                    streams.put(a.get("id").getAsInt(), baseUrl);
+                    registerAudioSegmentBase(baseUrl, a);
                 }
             }
         }
@@ -336,7 +346,9 @@ public final class BiliApiClient {
             JsonObject flac = dash.getAsJsonObject("flac");
             if (flac.has("audio") && !flac.get("audio").isJsonNull()) {
                 JsonObject a = flac.getAsJsonObject("audio");
-                streams.put(a.get("id").getAsInt(), a.get("baseUrl").getAsString());
+                String baseUrl = a.get("baseUrl").getAsString();
+                streams.put(a.get("id").getAsInt(), baseUrl);
+                registerAudioSegmentBase(baseUrl, a);
             }
         }
 
@@ -345,13 +357,41 @@ public final class BiliApiClient {
         }
 
         // B站 API 本身只返回当前用户可用的音质，无需额外 HEAD 验证
+        int selectedQuality = -1;
+        String selectedUrl = null;
         for (int qid : QUALITY_ORDER) {
             String baseUrl = streams.get(qid);
-            if (baseUrl != null && !baseUrl.isEmpty())
-                return baseUrl;
+            if (baseUrl != null && !baseUrl.isEmpty()) {
+                selectedQuality = qid;
+                selectedUrl = baseUrl;
+                break;
+            }
         }
 
-        return streams.values().iterator().next();
+        if (selectedUrl == null) {
+            selectedQuality = streams.keySet().iterator().next();
+            selectedUrl = streams.get(selectedQuality);
+        }
+        LOGGER.debug(
+                "B站音频流选择摘要: id={} cid={} allowDolby={} dolbyConfig={} nativeDolby={} dashDolby={} qualities={} selected={} host={}",
+                id.asInputText(), cid, allowDolby, BiliConfig.dolbyEnabled, nativeDolbyAvailable, dashHasDolby,
+                streams.keySet(), selectedQuality, hostOf(selectedUrl));
+        return selectedUrl;
+    }
+
+    private static void registerAudioSegmentBase(String baseUrl, JsonObject stream) {
+        long[] initRange = parseSegmentBaseRange(stream, "initialization");
+        long[] indexRange = parseSegmentBaseRange(stream, "index_range");
+        HttpAudioStreamHandler.registerSegmentBase(baseUrl, initRange[0], initRange[1], indexRange[0], indexRange[1]);
+    }
+
+    private static String hostOf(String value) {
+        try {
+            String host = URI.create(value).getHost();
+            return host != null ? host : "unknown";
+        } catch (Exception ignored) {
+            return "unknown";
+        }
     }
 
     // 获取 DASH 视频流直链
@@ -414,28 +454,67 @@ public final class BiliApiClient {
             String codecs = v.has("codecs") && !v.get("codecs").isJsonNull()
                     ? v.get("codecs").getAsString()
                     : "";
-            streams.add(new VideoStream(qid, codecId, width, height, frameRate, codecs, baseUrl));
+            long[] initRange = parseSegmentBaseRange(v, "initialization");
+            long[] indexRange = parseSegmentBaseRange(v, "index_range");
+            streams.add(new VideoStream(qid, codecId, width, height, frameRate, codecs, baseUrl,
+                    initRange[0], initRange[1], indexRange[0], indexRange[1]));
         }
 
-        VideoStream exactH264 = bestBy(streams, preferredQuality, 7, false);
-        if (exactH264 != null) {
-            return exactH264;
+        VideoStream selected = bestBy(streams, preferredQuality, 7, false);
+        String reason = "exact-h264";
+        if (selected == null) {
+            selected = bestBy(streams, preferredQuality, 0, false);
+            reason = "exact-any-codec";
         }
-        VideoStream exactAny = bestBy(streams, preferredQuality, 0, false);
-        if (exactAny != null) {
-            return exactAny;
+        if (selected == null) {
+            selected = bestBy(streams, preferredQuality, 7, true);
+            reason = "fallback-h264-at-or-below-ceiling";
         }
-        VideoStream h264AtOrBelow = bestBy(streams, preferredQuality, 7, true);
-        if (h264AtOrBelow != null) {
-            return h264AtOrBelow;
+        if (selected == null) {
+            selected = bestBy(streams, preferredQuality, 0, true);
+            reason = "fallback-any-at-or-below-ceiling";
         }
-        VideoStream anyAtOrBelow = bestBy(streams, preferredQuality, 0, true);
-        if (anyAtOrBelow != null) {
-            return anyAtOrBelow;
+        if (selected == null) {
+            // preferredQuality 是投影仪期望的最高画质上限，不是必须达到的画质。
+            // 如果 B 站返回的流全都高于这个上限，宁可选最低可用流，也不要突破用户配置的上限。
+            selected = streams.stream()
+                    .min((a, b) -> Integer.compare(a.quality(), b.quality()))
+                    .orElseThrow(() -> new RuntimeException("该视频没有可用 DASH 视频流"));
+            reason = "fallback-lowest-available-above-ceiling";
         }
-        return streams.stream()
-                .max((a, b) -> Integer.compare(a.quality(), b.quality()))
-                .orElseThrow(() -> new RuntimeException("该视频没有可用 DASH 视频流"));
+        LOGGER.debug(
+                "B站视频流选择摘要: id={} cid={} qualityCeiling={} available={} selected={} codec={} size={}x{} fps={} reason={} host={}",
+                id.asInputText(), cid, preferredQuality,
+                streams.stream().map(stream -> stream.quality()).distinct().toList(), selected.quality(),
+                selected.codecId(), selected.width(), selected.height(), selected.frameRate(), reason,
+                hostOf(selected.baseUrl()));
+        if (selected.hasSegmentBase()) {
+            Fmp4NativeVideoDecoder.registerSegmentBase(selected.baseUrl(), selected.initStart(), selected.initEnd(),
+                    selected.indexStart(), selected.indexEnd());
+        }
+        return selected;
+    }
+
+    private static long[] parseSegmentBaseRange(JsonObject stream, String key) {
+        if (!stream.has("segment_base") || stream.get("segment_base").isJsonNull()) {
+            return new long[] { -1L, -1L };
+        }
+        JsonObject segmentBase = stream.getAsJsonObject("segment_base");
+        if (!segmentBase.has(key) || segmentBase.get(key).isJsonNull()) {
+            return new long[] { -1L, -1L };
+        }
+        String raw = segmentBase.get(key).getAsString();
+        int dash = raw.indexOf('-');
+        if (dash <= 0 || dash >= raw.length() - 1) {
+            return new long[] { -1L, -1L };
+        }
+        try {
+            long start = Long.parseLong(raw.substring(0, dash).trim());
+            long end = Long.parseLong(raw.substring(dash + 1).trim());
+            return end >= start ? new long[] { start, end } : new long[] { -1L, -1L };
+        } catch (NumberFormatException ignored) {
+            return new long[] { -1L, -1L };
+        }
     }
 
     private static VideoStream bestBy(List<VideoStream> streams, int preferredQuality, int codecId, boolean atOrBelow) {

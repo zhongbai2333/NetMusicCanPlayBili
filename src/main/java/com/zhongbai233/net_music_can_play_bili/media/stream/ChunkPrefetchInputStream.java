@@ -67,8 +67,6 @@ public final class ChunkPrefetchInputStream extends InputStream {
         this.spool = new TempFileByteSpool("http-prefetch-");
         this.downloader = new Thread(this::downloadLoop, "HttpPrefetch");
         this.downloader.setDaemon(true);
-        LOGGER.debug("HTTP chunk prefetch init: chunk={} lowWater={} highWater={} startOffset={} urlHost={}",
-                this.chunkSize, this.lowWater, this.highWater, this.startByteOffset, url.getHost());
         this.downloader.start();
     }
 
@@ -115,8 +113,6 @@ public final class ChunkPrefetchInputStream extends InputStream {
         try {
             downloadWithRangeProbe();
             spool.complete();
-            LOGGER.debug("HTTP chunk prefetch complete: mode={} cached={} total={}",
-                    mode, spool.cachedLength(), totalLength);
         } catch (IOException e) {
             if (!closed) {
                 LOGGER.warn("HTTP chunk prefetch failed at cached={} read={} mode={}: {}",
@@ -154,8 +150,6 @@ public final class ChunkPrefetchInputStream extends InputStream {
                 if (status == 206) {
                     if (mode != Mode.RANGE) {
                         mode = Mode.RANGE;
-                        LOGGER.debug("HTTP range prefetch: contentLength={} total={}",
-                                response.contentLength(), response.totalLength());
                     }
                     if (response.totalLength() > 0) {
                         totalLength = response.totalLength();

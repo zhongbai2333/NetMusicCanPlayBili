@@ -34,13 +34,19 @@ public final class FlacOpenALPipeline extends AbstractAudioPipeline {
 
     public FlacOpenALPipeline(byte[] dfLa, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds)
             throws IOException {
+        this(dfLa, ownerClosed, sourcePos, startOffsetSeconds, startOffsetSeconds);
+    }
+
+    public FlacOpenALPipeline(byte[] dfLa, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds,
+            float timelineStartOffsetSeconds)
+            throws IOException {
         super("fMP4", "flac", null, true);
         this.format = FlacStreamSupport.audioFormat(dfLa);
         this.ownerClosed = ownerClosed;
         this.stereo = new StereoOpenALHandler();
         this.startOffsetSeconds = Math.max(0f, startOffsetSeconds);
         this.stereo.setSampleRate((int) format.getSampleRate());
-        DolbyAudioRegistry.registerStereo(stereo, sourcePos);
+        DolbyAudioRegistry.registerStereo(stereo, sourcePos, timelineStartOffsetSeconds);
         FlacStreamSupport.writeNativeHeader(compressedPipe, dfLa);
     }
 

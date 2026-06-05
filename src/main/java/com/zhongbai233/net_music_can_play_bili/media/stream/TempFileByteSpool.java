@@ -19,6 +19,9 @@ import java.nio.file.Path;
  * 大幅降低下载线程与解析线程之间的锁竞争
  */
 public final class TempFileByteSpool implements Closeable {
+    private static final long READ_WAIT_TIMEOUT_MILLIS = Long.getLong(
+            "bili.media.spool.read_wait_timeout_ms", 15_000L);
+
     private final Path path;
     private final RandomAccessFile readFile;
     private final RandomAccessFile writeFile;
@@ -178,7 +181,16 @@ public final class TempFileByteSpool implements Closeable {
 
     private void waitForData() throws IOException {
         try {
-            wait();
+            if (READ_WAIT_TIMEOUT_MILLIS <= 0L) {
+                wait();
+                return;
+            }
+            long before = cachedLength;
+            wait(READ_WAIT_TIMEOUT_MILLIS);
+            if (!closed && failure == null && !complete && cachedLength == before) {
+                throw new IOException("timed out waiting for temp spool data after "
+                        + READ_WAIT_TIMEOUT_MILLIS + "ms");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("interrupted while waiting for temp spool", e);

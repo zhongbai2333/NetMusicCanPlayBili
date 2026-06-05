@@ -34,11 +34,16 @@ public final class DolbyEc3Pipeline extends AbstractAudioPipeline {
     }
 
     public DolbyEc3Pipeline(String container, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds) {
+        this(container, ownerClosed, sourcePos, startOffsetSeconds, startOffsetSeconds);
+    }
+
+    public DolbyEc3Pipeline(String container, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds,
+            float timelineStartOffsetSeconds) {
         super(container, "ec-3", "Dolby Atmos", true);
         this.ownerClosed = ownerClosed;
         this.dolby = new DolbyAudioHandler();
         this.skipFramesRemaining = skipFrames(startOffsetSeconds);
-        DolbyAudioRegistry.register(dolby, sourcePos);
+        DolbyAudioRegistry.register(dolby, sourcePos, timelineStartOffsetSeconds);
     }
 
     @Override

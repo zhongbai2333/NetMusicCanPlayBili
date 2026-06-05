@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.bili;
 
+import com.zhongbai233.net_music_can_play_bili.client.PlaybackLatencyBench;
 import com.zhongbai233.net_music_can_play_bili.media.audio.OpenALSpatialAudio;
 
 /**
@@ -20,6 +21,7 @@ public class SpeakerAudioRelay {
     private volatile float[] speakerPos;
     private volatile boolean handlerStarted;
     private int pendingFed = 0;
+    private long totalSamplesFed = 0L;
     private int sampleRate = 48000;
 
     public void setChannelIndex(int idx) {
@@ -58,8 +60,10 @@ public class SpeakerAudioRelay {
             spatialAudio = new OpenALSpatialAudio();
             spatialAudio.init(1, 0, sampleRate); // 必须用正确采样率，否则播速偏差
             pendingFed = 0;
+            totalSamplesFed = 0L;
             started = false;
             initialized = true;
+            PlaybackLatencyBench.markAudioOpenAlInitialized(this, kind(), sampleRate);
         }
 
         OpenALSpatialAudio sa = spatialAudio;
@@ -74,6 +78,8 @@ public class SpeakerAudioRelay {
             sa.updateBedFrameBlock(w, blk * SAMPLES_PER_BLOCK);
         }
         pendingFed += numBlocks;
+        totalSamplesFed += (long) monoPcm.length;
+        PlaybackLatencyBench.markAudioFed(this, kind(), numBlocks, totalSamplesFed, pendingFed, sampleRate);
     }
 
     public void tick(float[] listenerPos) {
@@ -86,6 +92,7 @@ public class SpeakerAudioRelay {
             return;
         if (!started && handlerStarted) {
             started = true;
+            PlaybackLatencyBench.markAudioStarted(this, kind(), pendingFed, totalSamplesFed, sampleRate);
         }
         sa.updatePositions(new float[][] { MONO_POS }, new float[0][0], listenerPos,
                 forward(speakerPos, listenerPos));
@@ -99,11 +106,38 @@ public class SpeakerAudioRelay {
             pendingFed = 0;
         } else if (pendingFed >= MIN_PUMP_PENDING)
             sa.pumpQueuedAudio();
+        PlaybackLatencyBench.markAudioConsumed(this, kind(), sa.getConsumedSamples(), sampleRate);
     }
 
     /** 音响是否已度过初始静音期，正在输出真实音频 */
     public boolean isStarted() {
         return started;
+    }
+
+    public long getPositionTicks() {
+        if (!started) {
+            return -1L;
+        }
+        OpenALSpatialAudio sa = spatialAudio;
+        if (sa == null) {
+            return -1L;
+        }
+        long consumed = sa.getConsumedSamples();
+        PlaybackLatencyBench.markAudioConsumed(this, kind(), consumed, sampleRate);
+        return consumed * 20L / Math.max(1, sampleRate);
+    }
+
+    public void flushQueuedAudio() {
+        OpenALSpatialAudio sa = spatialAudio;
+        if (sa != null) {
+            sa.flushQueuedAudio();
+        }
+        pendingFed = 0;
+        totalSamplesFed = 0L;
+    }
+
+    private String kind() {
+        return "speaker-relay-ch" + channelIndex;
     }
 
     private static float[] forward(float[] sp, float[] lp) {
@@ -137,6 +171,7 @@ public class SpeakerAudioRelay {
         started = false;
         handlerStarted = false;
         pendingFed = 0;
+        totalSamplesFed = 0L;
         if (spatialAudio != null) {
             spatialAudio.cleanup();
             spatialAudio = null;

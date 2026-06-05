@@ -53,11 +53,13 @@ public final class BiliSubtitleLyricService {
                 note = "无CC字幕";
             }
 
-            LOGGER.debug("B站占位歌词: {} | hasAnySubtitle={} | sessdata={}",
-                    info.displayTitle(), hasAnySubtitle, !BiliApiClient.sessdata.isBlank());
             String placeholderJson = BiliApiClient.buildPlaceholderNetEaseLyric(info, note);
             LyricRecord record = LyricParser.parseLyric(placeholderJson, songName);
             if (record != null) {
+                LOGGER.debug(
+                        "B站字幕摘要: title='{}' page={} allowAi={} result=placeholder reason={} hasAnySubtitle={} sessdata={}",
+                        info.displayTitle(), info.page(), allowAi, note, hasAnySubtitle,
+                        !BiliApiClient.sessdata.isBlank());
                 return record;
             }
             return null;
