@@ -14,7 +14,7 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 public record LyricProjectorConfigPacket(BlockPos pos, float yaw, float pitch, float scale,
-        float height, float distance, int mode, boolean allowAi) implements CustomPacketPayload {
+        float height, float distanceX, float distanceZ, int mode, boolean allowAi) implements CustomPacketPayload {
 
     public static final Type<LyricProjectorConfigPacket> TYPE = new Type<>(
             Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID, "lyric_projector_config"));
@@ -26,13 +26,14 @@ public record LyricProjectorConfigPacket(BlockPos pos, float yaw, float pitch, f
                     ByteBufCodecs.FLOAT, p -> p.pitch(),
                     ByteBufCodecs.FLOAT, p -> p.scale(),
                     ByteBufCodecs.FLOAT, p -> p.height(),
-                    ByteBufCodecs.FLOAT, p -> p.distance(),
+                    ByteBufCodecs.FLOAT, p -> p.distanceX(),
+                    ByteBufCodecs.FLOAT, p -> p.distanceZ(),
                     ByteBufCodecs.INT, p -> p.mode(),
                     ByteBufCodecs.BOOL, p -> p.allowAi(),
                     (BlockPos pos, Float yaw, Float pitch, Float scale,
-                            Float height, Float distance, Integer mode,
+                            Float height, Float distanceX, Float distanceZ, Integer mode,
                             Boolean allowAi) -> new LyricProjectorConfigPacket(pos, yaw,
-                                    pitch, scale, height, distance, mode, allowAi));
+                                    pitch, scale, height, distanceX, distanceZ, mode, allowAi));
 
     @Override
     public Type<? extends CustomPacketPayload> type() {
@@ -53,7 +54,8 @@ public record LyricProjectorConfigPacket(BlockPos pos, float yaw, float pitch, f
         be.setProjectionPitch(payload.pitch());
         be.setProjectionScale(payload.scale());
         be.setProjectionHeight(payload.height());
-        be.setProjectionDistance(payload.distance());
+        be.setProjectionDistanceX(payload.distanceX());
+        be.setProjectionDistanceZ(payload.distanceZ());
         be.setProjectionMode(payload.mode());
         be.setAllowAi(payload.allowAi());
         be.markDirtyAndSync();

@@ -1354,12 +1354,9 @@ public final class VideoBillboardPreview {
     private static void ensureWorldAnchor(Minecraft minecraft, Camera camera, VideoProjectorBlockEntity projector) {
         if (projector != null) {
             BlockPos pos = projector.getBlockPos();
-            double yawRad = Math.toRadians(projector.getProjectionYaw());
-            double rightX = Math.cos(yawRad);
-            double rightZ = Math.sin(yawRad);
-            anchorX = pos.getX() + 0.5D + rightX * projector.getProjectionDistance();
+            anchorX = pos.getX() + 0.5D + projector.getProjectionDistanceX();
             anchorY = pos.getY() + projector.getProjectionHeight();
-            anchorZ = pos.getZ() + 0.5D + rightZ * projector.getProjectionDistance();
+            anchorZ = pos.getZ() + 0.5D + projector.getProjectionDistanceZ();
             anchorYawDeg = projector.getProjectionYaw();
             anchorInitialized = true;
             return;

@@ -9,6 +9,7 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.LyricProjectorBlockEn
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSubtitleLyricService;
+import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ModernTurntableTimeline;
 import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
 import it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap;
@@ -43,17 +44,16 @@ public class LyricProjectorRenderer
     private static final long SCROLL_DURATION_MS = 500;
     private static final long SCROLL_MIN_DURATION_MS = Long.getLong("bili.lyric.scroll.min_duration_ms", 120L);
     private static final long SCROLL_FAST_GAP_MS = Long.getLong("bili.lyric.scroll.fast_gap_ms", 850L);
-    private static final long SCROLL_CATCHUP_LAG_MS = Long.getLong("bili.lyric.scroll.catchup_lag_ms", 250L);
+    private static final long SCROLL_INTERPOLATION_HALF_LIFE_MS = Long.getLong(
+            "bili.lyric.scroll.interpolation_half_life_ms", 35L);
+    private static final float SCROLL_MAX_INTERPOLATION_LAG = 0.18F;
+    private static final long LYRIC_AUDIO_DELAY_MS = Long.getLong("bili.lyric.audio_delay_ms", 0L);
     private static final float LINE_STEP = 14.0F;
     private static final int VISIBLE_LINES_ABOVE = 2;
     private static final int VISIBLE_LINES_BELOW = 2;
     private static final long AI_BASE_RESYNC_TICKS = 40L;
-    private static final int SCROLL_SEEK_RESET_TICKS = 200;
-    private static final long SCROLL_STATE_TTL_MILLIS = 120_000L;
-    private static long lastScrollStateCleanupMillis;
 
-    /** 轮换模式动画状态：记录每个投影仪的上一当前行索引与切换时间 */
-    private static final Map<BlockPos, ScrollState> scrollStates = new ConcurrentHashMap<>();
+    private static final Map<BlockPos, ScrollProgressState> scrollProgressStates = new ConcurrentHashMap<>();
 
     private final Font font;
 
@@ -82,7 +82,8 @@ public class LyricProjectorRenderer
         state.projectionPitch = projector.getProjectionPitch();
         state.projectionScale = projector.getProjectionScale();
         state.projectionHeight = projector.getProjectionHeight();
-        state.projectionDistance = projector.getProjectionDistance();
+        state.projectionDistanceX = projector.getProjectionDistanceX();
+        state.projectionDistanceZ = projector.getProjectionDistanceZ();
         state.projectionMode = projector.getProjectionMode();
         state.allowAi = projector.getAllowAi();
 
@@ -112,7 +113,7 @@ public class LyricProjectorRenderer
             syncActivatedState(projector, false);
             return;
         }
-        int lyricTickOverride = resolveProjectorLyricTick(state.linkedPos, turntable);
+        float lyricTickOverride = resolveProjectorLyricTick(state.linkedPos, turntable);
 
         // 动态 AI 字幕刷新：当 allowAi 开启但尚未缓存 AI 歌词时，异步获取
         if (state.allowAi) {
@@ -121,11 +122,11 @@ public class LyricProjectorRenderer
                 String cachedUrl = projector.getCachedAiRawUrl();
                 LyricRecord aiCached = projector.getCachedAiLyricRecord();
                 if (aiCached != null && rawUrl.equals(cachedUrl)) {
-                    if (lyricTickOverride >= 0) {
+                    if (lyricTickOverride >= 0.0F) {
                         long baseTick = projector.getCachedAiBaseTick();
-                        if (baseTick < 0L || Math.abs(baseTick - lyricTickOverride) > AI_BASE_RESYNC_TICKS) {
-                            projector.setCachedAiBaseTick(lyricTickOverride);
-                            markScrollStateResynced(state.projectorPos, aiCached);
+                        long roundedTick = Math.round(lyricTickOverride);
+                        if (baseTick < 0L || Math.abs(baseTick - roundedTick) > AI_BASE_RESYNC_TICKS) {
+                            projector.setCachedAiBaseTick(roundedTick);
                         }
                     }
                     lyricRecord = aiCached;
@@ -149,11 +150,13 @@ public class LyricProjectorRenderer
             }
         }
 
-        String current = lyricTickOverride >= 0
-                ? currentLineAt(lyricRecord.getLyrics(), lyricTickOverride)
+        int lyricLookupTick = lyricTickOverride >= 0.0F ? (int) Math.floor(lyricTickOverride)
+                : turntable.getClientLyricTick();
+        String current = lyricTickOverride >= 0.0F
+                ? currentLineAt(lyricRecord.getLyrics(), lyricLookupTick)
                 : currentLine(lyricRecord.getLyrics());
-        String translated = lyricTickOverride >= 0
-                ? currentLineAt(lyricRecord.getTransLyrics(), lyricTickOverride)
+        String translated = lyricTickOverride >= 0.0F
+                ? currentLineAt(lyricRecord.getTransLyrics(), lyricLookupTick)
                 : currentLine(lyricRecord.getTransLyrics());
         boolean hasCurrent = current != null && !current.isBlank();
         boolean hasTranslated = translated != null && !translated.isBlank();
@@ -175,7 +178,9 @@ public class LyricProjectorRenderer
 
         state.lyrics = lyricRecord.getLyrics();
         state.transLyrics = lyricRecord.getTransLyrics();
+        state.scrollPastLines = null;
         state.scrollFutureLines = null;
+        state.scrollProgress = 1.0F;
 
         if (state.projectionMode >= 1) {
             Int2ObjectSortedMap<String> active = state.projectionMode == 2
@@ -185,14 +190,16 @@ public class LyricProjectorRenderer
                 active = state.lyrics;
             }
             if (active != null && !active.isEmpty()) {
-                int currentKey = lyricTickOverride >= 0
-                        ? currentKeyAt(active, lyricTickOverride)
+                int currentKey = lyricTickOverride >= 0.0F
+                        ? currentKeyAt(active, lyricLookupTick)
                         : active.firstIntKey();
                 String activeLine = active.get(currentKey);
                 if (activeLine != null && !activeLine.isBlank()) {
                     state.currentLine = Component.literal(activeLine);
                     state.translatedLine = null;
                     state.currentLyricColor = ConfigEvent.PLAYER_TRANSLATED_COLOR;
+
+                    state.scrollPastLines = collectPastLines(active, currentKey);
 
                     List<String> future = new ArrayList<>();
                     int[] keys = active.keySet().toIntArray();
@@ -207,58 +214,10 @@ public class LyricProjectorRenderer
                         }
                     }
                     state.scrollFutureLines = future;
-
-                    BlockPos pos = state.projectorPos;
-                    ScrollState sc = scrollStates.computeIfAbsent(pos, k -> new ScrollState());
-                    sc.lastSeenMillis = System.currentTimeMillis();
-                    cleanupStaleScrollStates(sc.lastSeenMillis);
-
-                    int recordSignature = lyricMapSignature(active);
-                    if (sc.recordSignature != recordSignature) {
-                        sc.history.clear();
-                        sc.currentTick = 0;
-                        sc.currentText = null;
-                        sc.recordSignature = recordSignature;
-                        sc.skipAnimationOnce = true;
-                    }
-
-                    int newTick = currentKey;
-                    int nextTick = nextLyricTick(active, newTick);
-                    long animationDuration = adaptiveScrollDurationMillis(newTick, nextTick);
-                    boolean naturalForwardStep = isNaturalForwardStep(active, sc.currentTick, newTick);
-                    boolean timelineJump = sc.currentText != null
-                            && (newTick < sc.currentTick
-                                    || (!naturalForwardStep
-                                            && Math.abs(newTick - sc.currentTick) > SCROLL_SEEK_RESET_TICKS));
-                    if (timelineJump) {
-                        sc.history.clear();
-                        sc.currentText = null;
-                        sc.skipAnimationOnce = true;
-                    }
-                    if (newTick != sc.currentTick && !activeLine.equals(sc.currentText)) {
-                        long elapsed = System.currentTimeMillis() - sc.switchTime;
-                        if (!timelineJump && elapsed > SCROLL_DURATION_MS && sc.currentText != null
-                                && !sc.currentText.isBlank()) {
-                            sc.history.add(sc.currentText);
-                            if (sc.history.size() > 10)
-                                sc.history.remove(0);
-                        }
-                        sc.currentTick = newTick;
-                        sc.currentText = activeLine;
-                        sc.animationDurationMillis = animationDuration;
-                        long now = System.currentTimeMillis();
-                        long lyricLagMillis = lyricTickOverride >= 0 ? Math.max(0L, (lyricTickOverride - newTick) * 50L)
-                                : 0L;
-                        if (sc.skipAnimationOnce) {
-                            sc.switchTime = now - animationDuration;
-                        } else if (lyricLagMillis > SCROLL_CATCHUP_LAG_MS) {
-                            long completed = Math.min(animationDuration, lyricLagMillis - SCROLL_CATCHUP_LAG_MS);
-                            sc.switchTime = now - completed;
-                        } else {
-                            sc.switchTime = now;
-                        }
-                        sc.skipAnimationOnce = false;
-                    }
+                    float nowTick = lyricTickOverride >= 0.0F ? lyricTickOverride : currentKey;
+                    int nextTick = nextLyricTick(active, currentKey);
+                    float targetProgress = timelineScrollProgress(currentKey, nextTick, nowTick);
+                    state.scrollProgress = interpolateScrollProgress(state.projectorPos, currentKey, targetProgress);
                 }
             }
         }
@@ -269,14 +228,6 @@ public class LyricProjectorRenderer
     /**
      * 根据歌词是否可见，更新方块的 ACTIVATED 状态
      */
-    private static void markScrollStateResynced(BlockPos pos, LyricRecord lyricRecord) {
-        ScrollState sc = scrollStates.get(immutable(pos));
-        if (sc == null) {
-            return;
-        }
-        sc.recordSignature = lyricRecord != null ? lyricMapSignature(lyricRecord.getLyrics()) : 0;
-    }
-
     private static void syncActivatedState(LyricProjectorBlockEntity projector, boolean visible) {
         var level = projector.getLevel();
         if (level == null)
@@ -323,7 +274,8 @@ public class LyricProjectorRenderer
         float scale = state.projectionScale;
         int mode = state.projectionMode;
 
-        poseStack.translate(0.5D + state.projectionDistance, state.projectionHeight, 0.5D);
+        poseStack.translate(0.5D + state.projectionDistanceX, state.projectionHeight,
+                0.5D + state.projectionDistanceZ);
         poseStack.mulPose(Axis.YP.rotationDegrees(yaw));
         poseStack.mulPose(Axis.XP.rotationDegrees(-pitch));
 
@@ -351,24 +303,13 @@ public class LyricProjectorRenderer
 
     /** 轮换模式：单轨多行滚动，字号和透明度渐变 */
     private void renderScrollMode(State state, PoseStack poseStack, SubmitNodeCollector collector) {
-        ScrollState sc = scrollStates.get(state.projectorPos);
-
-        float progress = 1.0F;
-        if (sc != null) {
-            long elapsed = System.currentTimeMillis() - sc.switchTime;
-            long duration = Math.max(SCROLL_MIN_DURATION_MS, sc.animationDurationMillis);
-            if (elapsed < duration) {
-                float raw = (float) elapsed / duration;
-                progress = 1.0f - (float) Math.pow(1.0 - raw, 3);
-            }
-        }
+        float progress = state.scrollProgress;
 
         List<String> lines = new ArrayList<>();
-        if (sc != null) {
-            int start = Math.max(0, sc.history.size() - VISIBLE_LINES_ABOVE);
-            for (int i = start; i < sc.history.size(); i++) {
-                lines.add(sc.history.get(i));
-            }
+        int pastCount = 0;
+        if (state.scrollPastLines != null) {
+            lines.addAll(state.scrollPastLines);
+            pastCount = state.scrollPastLines.size();
         }
         lines.add(state.currentLine.getString());
         if (state.scrollFutureLines != null) {
@@ -378,7 +319,7 @@ public class LyricProjectorRenderer
         if (lines.isEmpty())
             return;
 
-        int centerIdx = sc != null ? Math.min(sc.history.size(), VISIBLE_LINES_ABOVE) : 0;
+        int centerIdx = Math.min(pastCount, VISIBLE_LINES_ABOVE);
         centerIdx = Math.min(centerIdx, lines.size() - 1);
         if (centerIdx < 0)
             centerIdx = 0;
@@ -456,23 +397,6 @@ public class LyricProjectorRenderer
         return elapsed.isEmpty() ? lyrics.firstIntKey() : elapsed.lastIntKey();
     }
 
-    private static boolean isNaturalForwardStep(Int2ObjectSortedMap<String> lyrics, int oldTick, int newTick) {
-        if (lyrics == null || lyrics.isEmpty() || newTick <= oldTick) {
-            return false;
-        }
-        Int2ObjectSortedMap<String> between = lyrics.subMap(oldTick + 1, newTick + 1);
-        int nonBlankCount = 0;
-        for (String line : between.values()) {
-            if (line != null && !line.isBlank()) {
-                nonBlankCount++;
-                if (nonBlankCount > 1) {
-                    return false;
-                }
-            }
-        }
-        return nonBlankCount == 1;
-    }
-
     private static int nextLyricTick(Int2ObjectSortedMap<String> lyrics, int currentTick) {
         if (lyrics == null || lyrics.isEmpty()) {
             return -1;
@@ -485,6 +409,86 @@ public class LyricProjectorRenderer
             }
         }
         return -1;
+    }
+
+    private static List<String> collectPastLines(Int2ObjectSortedMap<String> lyrics, int currentTick) {
+        List<String> past = new ArrayList<>();
+        if (lyrics == null || lyrics.isEmpty()) {
+            return past;
+        }
+        int[] keys = lyrics.keySet().toIntArray();
+        for (int i = keys.length - 1; i >= 0 && past.size() < VISIBLE_LINES_ABOVE; i--) {
+            int tick = keys[i];
+            if (tick >= currentTick) {
+                continue;
+            }
+            String line = lyrics.get(tick);
+            if (line != null && !line.isBlank()) {
+                past.add(0, line);
+            }
+        }
+        return past;
+    }
+
+    private static float timelineScrollProgress(int currentTick, int nextTick, float nowTick) {
+        if (nextTick <= currentTick || nowTick < currentTick) {
+            return 1.0F;
+        }
+        float elapsedMillis = Math.max(0.0F, (nowTick - currentTick) * 50.0F);
+        long durationMillis = adaptiveScrollDurationMillis(currentTick, nextTick);
+        if (durationMillis <= 0L || elapsedMillis >= durationMillis) {
+            return 1.0F;
+        }
+        float raw = Math.clamp((float) elapsedMillis / durationMillis, 0.0F, 1.0F);
+        return 1.0F - (float) Math.pow(1.0F - raw, 3.0F);
+    }
+
+    private static float interpolateScrollProgress(BlockPos projectorPos, int currentKey, float targetProgress) {
+        if (projectorPos == null) {
+            return targetProgress;
+        }
+        ScrollProgressState state = scrollProgressStates.computeIfAbsent(projectorPos.immutable(),
+                ignored -> new ScrollProgressState());
+        long nowNanos = System.nanoTime();
+        if (state.currentKey != currentKey) {
+            state.currentKey = currentKey;
+            state.targetProgress = targetProgress;
+            state.displayProgress = targetProgress >= 0.98F ? 1.0F : Math.max(0.0F, targetProgress - 0.06F);
+            state.lastUpdateNanos = nowNanos;
+            return state.displayProgress;
+        }
+        if (targetProgress + 0.001F < state.targetProgress) {
+            targetProgress = state.targetProgress;
+        }
+        state.targetProgress = targetProgress;
+
+        long elapsedNanos = state.lastUpdateNanos > 0L ? Math.max(0L, nowNanos - state.lastUpdateNanos) : 0L;
+        state.lastUpdateNanos = nowNanos;
+        if (targetProgress >= 0.999F) {
+            state.displayProgress = 1.0F;
+            return 1.0F;
+        }
+
+        float delta = targetProgress - state.displayProgress;
+        if (delta <= 0.001F) {
+            state.displayProgress = Math.max(state.displayProgress, targetProgress);
+            return state.displayProgress;
+        }
+
+        float alpha = interpolationAlpha(elapsedNanos);
+        float interpolated = state.displayProgress + delta * alpha;
+        float minProgress = Math.max(state.displayProgress, targetProgress - SCROLL_MAX_INTERPOLATION_LAG);
+        state.displayProgress = Math.clamp(Math.max(interpolated, minProgress), 0.0F, targetProgress);
+        return state.displayProgress;
+    }
+
+    private static float interpolationAlpha(long elapsedNanos) {
+        if (elapsedNanos <= 0L) {
+            return 0.0F;
+        }
+        double halfLifeMillis = Math.max(1.0D, SCROLL_INTERPOLATION_HALF_LIFE_MS);
+        double elapsedMillis = elapsedNanos / 1_000_000.0D;
+        return (float) Math.clamp(1.0D - Math.pow(0.5D, elapsedMillis / halfLifeMillis), 0.0D, 1.0D);
     }
 
     private static long adaptiveScrollDurationMillis(int currentTick, int nextTick) {
@@ -502,41 +506,20 @@ public class LyricProjectorRenderer
         return target;
     }
 
-    private static int lyricMapSignature(Int2ObjectSortedMap<String> lyrics) {
-        if (lyrics == null || lyrics.isEmpty()) {
-            return 0;
+    private static float resolveProjectorLyricTick(BlockPos turntablePos, ModernTurntableBlockEntity turntable) {
+        long audibleMillis = DolbyAudioRegistry.getAudioTimeline(turntablePos).audibleMillis();
+        if (audibleMillis >= 0L) {
+            return Math.max(0L, audibleMillis - Math.max(0L, LYRIC_AUDIO_DELAY_MS)) / 50.0F;
         }
-        int hash = 1;
-        hash = 31 * hash + lyrics.size();
-        hash = 31 * hash + lyrics.firstIntKey();
-        hash = 31 * hash + lyrics.lastIntKey();
-        for (var entry : lyrics.int2ObjectEntrySet()) {
-            hash = 31 * hash + entry.getIntKey();
-            String value = entry.getValue();
-            hash = 31 * hash + (value != null ? value.hashCode() : 0);
-        }
-        return hash;
-    }
-
-    private static int resolveProjectorLyricTick(BlockPos turntablePos, ModernTurntableBlockEntity turntable) {
-        int timelineTick = ModernTurntableTimeline.mediaTick(turntablePos);
-        if (timelineTick >= 0) {
-            return timelineTick;
+        long visualMillis = ModernTurntableTimeline.visualMillis(turntablePos);
+        if (visualMillis >= 0L) {
+            return Math.max(0L, visualMillis - Math.max(0L, LYRIC_AUDIO_DELAY_MS)) / 50.0F;
         }
         return turntable.getClientLyricTick();
     }
 
     private static BlockPos immutable(BlockPos pos) {
         return pos != null ? pos.immutable() : null;
-    }
-
-    private static void cleanupStaleScrollStates(long nowMillis) {
-        if (nowMillis - lastScrollStateCleanupMillis < SCROLL_STATE_TTL_MILLIS) {
-            return;
-        }
-        lastScrollStateCleanupMillis = nowMillis;
-        scrollStates.entrySet()
-                .removeIf(entry -> nowMillis - entry.getValue().lastSeenMillis > SCROLL_STATE_TTL_MILLIS);
     }
 
     public static class State extends BlockEntityRenderState {
@@ -551,22 +534,21 @@ public class LyricProjectorRenderer
         public float projectionPitch = 0.0F;
         public float projectionScale = 1.0F;
         public float projectionHeight = 1.2F;
-        public float projectionDistance = 0.0F;
+        public float projectionDistanceX = 0.0F;
+        public float projectionDistanceZ = 0.0F;
         public int projectionMode;
         public boolean allowAi;
         public Int2ObjectSortedMap<String> lyrics;
         public Int2ObjectSortedMap<String> transLyrics;
+        public List<String> scrollPastLines;
         public List<String> scrollFutureLines;
+        public float scrollProgress = 1.0F;
     }
 
-    private static class ScrollState {
-        int currentTick;
-        String currentText;
-        int recordSignature;
-        final List<String> history = new ArrayList<>();
-        long switchTime;
-        long animationDurationMillis = SCROLL_DURATION_MS;
-        long lastSeenMillis;
-        boolean skipAnimationOnce;
+    private static class ScrollProgressState {
+        int currentKey = Integer.MIN_VALUE;
+        float targetProgress = 1.0F;
+        float displayProgress = 1.0F;
+        long lastUpdateNanos;
     }
 }

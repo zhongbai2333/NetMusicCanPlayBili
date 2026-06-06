@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.media.codec;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.media.Fmp4ToMp4Converter;
 import com.zhongbai233.net_music_can_play_bili.media.stream.ChunkPrefetchInputStream;
+import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4RangeSeekSupport;
 import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4StreamParser;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeClient;
 import org.slf4j.Logger;
@@ -385,7 +386,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         InputStream lastRange = null;
         long seekStartNanos = System.nanoTime();
         try {
-            Fmp4InitSegment init = readInitSegment();
+            Fmp4RangeSeekSupport.InitSegment init = readInitSegment();
             long contentLength = init.contentLength();
             if (contentLength <= 0L) {
                 return null;
@@ -405,7 +406,9 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             for (int attempt = 0; attempt < FMP4_SEEK_MAX_ATTEMPTS; attempt++) {
                 ChunkRange range = openRange(rangeStart);
                 lastRange = range.stream();
-                MoofProbe probe = readMoofProbe(range.stream(), targetSeconds, timescale);
+                Fmp4RangeSeekSupport.MoofProbe probe = Fmp4RangeSeekSupport.readMoofProbe(range.stream(),
+                        targetSeconds, timescale, FMP4_MOOF_SCAN_BYTES, FMP4_TARGET_EPSILON_SECONDS,
+                        FMP4_CLOSE_FRAGMENT_SECONDS);
                 if (probe == null) {
                     closeQuietly(lastRange);
                     lastRange = null;
@@ -416,9 +419,11 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     rangeStart = nextStart;
                     continue;
                 }
-                MoofCandidate candidate = probe.candidate();
+                Fmp4RangeSeekSupport.MoofCandidate candidate = probe.candidate();
                 long absoluteMoofOffset = rangeStart + candidate.offset();
-                if (attempt + 1 < FMP4_SEEK_MAX_ATTEMPTS && isAfterTargetCandidate(candidate, targetSeconds)) {
+                if (attempt + 1 < FMP4_SEEK_MAX_ATTEMPTS
+                        && Fmp4RangeSeekSupport.isAfterTargetCandidate(candidate, targetSeconds,
+                                FMP4_TARGET_EPSILON_SECONDS)) {
                     long nextStart = Math.max(init.bytes().length,
                             absoluteMoofOffset - FMP4_MOOF_SCAN_BYTES - FMP4_SEEK_PREROLL_BYTES);
                     if (nextStart < rangeStart) {
@@ -428,9 +433,11 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                         continue;
                     }
                 }
-                if (attempt + 1 < FMP4_SEEK_MAX_ATTEMPTS && shouldRetry(candidate, targetSeconds)) {
-                    long nextStart = nextRangeStart(candidate, targetSeconds, durationSeconds, contentLength,
-                            absoluteMoofOffset, init.bytes().length);
+                if (attempt + 1 < FMP4_SEEK_MAX_ATTEMPTS
+                        && Fmp4RangeSeekSupport.shouldRetry(candidate, targetSeconds,
+                                FMP4_TARGET_EPSILON_SECONDS, FMP4_CLOSE_FRAGMENT_SECONDS)) {
+                    long nextStart = Fmp4RangeSeekSupport.nextRangeStart(candidate, targetSeconds, durationSeconds,
+                            contentLength, absoluteMoofOffset, init.bytes().length, FMP4_SEEK_PREROLL_BYTES);
                     if (Math.abs(nextStart - rangeStart) > FMP4_SEEK_PREROLL_BYTES) {
                         closeQuietly(lastRange);
                         lastRange = null;
@@ -438,8 +445,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                         continue;
                     }
                 }
-                float residualSeconds = residualSeconds(targetSeconds, candidate, durationSeconds, contentLength,
-                        absoluteMoofOffset);
+                float residualSeconds = Fmp4RangeSeekSupport.residualSeconds(targetSeconds, candidate,
+                        durationSeconds, contentLength, absoluteMoofOffset);
                 residualSeconds = Math.max(0.0F, residualSeconds - (targetSeconds - playbackSeconds));
                 InputStream tail = new SequenceInputStream(
                         new ByteArrayInputStream(probe.bytes(), candidate.offset(),
@@ -463,7 +470,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
     }
 
-    private Fmp4StreamStart tryOpenSidxSeek(Fmp4InitSegment init, float targetSeconds, float playbackSeconds,
+    private Fmp4StreamStart tryOpenSidxSeek(Fmp4RangeSeekSupport.InitSegment init, float targetSeconds,
+            float playbackSeconds,
             long seekStartNanos) {
         SegmentBaseInfo info = segmentBaseInfo(videoUrl.toString());
         if (info == null) {
@@ -475,12 +483,12 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                 return null;
             }
             byte[] sidxBytes = readAllBytes(response.body(), Math.max(1L, info.indexEnd() - info.indexStart() + 1L));
-            SidxIndex sidx = parseSidx(sidxBytes, info.indexStart());
+            Fmp4RangeSeekSupport.SidxIndex sidx = Fmp4RangeSeekSupport.parseSidx(sidxBytes, info.indexStart());
             if (sidx == null || sidx.entries().isEmpty()) {
                 return null;
             }
-            SidxEntry selected = null;
-            for (SidxEntry entry : sidx.entries()) {
+            Fmp4RangeSeekSupport.SidxEntry selected = null;
+            for (Fmp4RangeSeekSupport.SidxEntry entry : sidx.entries()) {
                 if (entry.timeSeconds() <= targetSeconds + 0.05D) {
                     selected = entry;
                 } else {
@@ -492,12 +500,14 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             }
             ChunkRange range = openRange(selected.byteStart());
             InputStream stream = range.stream();
-            MoofProbe probe = readMoofProbe(stream, targetSeconds, init.timescale() > 0 ? init.timescale() : 16_000);
+            Fmp4RangeSeekSupport.MoofProbe probe = Fmp4RangeSeekSupport.readMoofProbe(stream, targetSeconds,
+                    init.timescale() > 0 ? init.timescale() : 16_000, FMP4_MOOF_SCAN_BYTES,
+                    FMP4_TARGET_EPSILON_SECONDS, FMP4_CLOSE_FRAGMENT_SECONDS);
             if (probe == null) {
                 closeQuietly(stream);
                 return null;
             }
-            MoofCandidate candidate = probe.candidate();
+            Fmp4RangeSeekSupport.MoofCandidate candidate = probe.candidate();
             double fragmentSeconds = !Double.isNaN(candidate.fragmentSeconds()) ? candidate.fragmentSeconds()
                     : selected.timeSeconds();
             float residualSeconds = (float) Math.max(0.0D, targetSeconds - fragmentSeconds);
@@ -537,81 +547,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         return out.toByteArray();
     }
 
-    private static SidxIndex parseSidx(byte[] data, long absoluteStart) {
-        int sidxOffset = -1;
-        Mp4Box sidxBox = null;
-        for (int pos = 0; pos + 8 <= data.length;) {
-            Mp4Box box = readCompleteMp4Box(data, pos, data.length);
-            if (box == null || box.size() <= 0L || box.size() > Integer.MAX_VALUE) {
-                break;
-            }
-            if (isBoxType(data, pos + 4, 's', 'i', 'd', 'x')) {
-                sidxOffset = pos;
-                sidxBox = box;
-                break;
-            }
-            pos += (int) box.size();
-        }
-        if (sidxOffset < 0 || sidxBox == null) {
-            return null;
-        }
-        int p = sidxOffset + sidxBox.headerSize();
-        int end = sidxOffset + (int) sidxBox.size();
-        if (p + 12 > end) {
-            return null;
-        }
-        int version = data[p] & 0xFF;
-        p += 4; // version + flags
-        p += 4; // reference_ID
-        long timescale = readUInt32(data, p);
-        p += 4;
-        long earliestPresentationTime;
-        long firstOffset;
-        if (version == 0) {
-            if (p + 8 > end) {
-                return null;
-            }
-            earliestPresentationTime = readUInt32(data, p);
-            p += 4;
-            firstOffset = readUInt32(data, p);
-            p += 4;
-        } else {
-            if (p + 16 > end) {
-                return null;
-            }
-            earliestPresentationTime = readUInt64(data, p);
-            p += 8;
-            firstOffset = readUInt64(data, p);
-            p += 8;
-        }
-        if (p + 4 > end || timescale <= 0L) {
-            return null;
-        }
-        p += 2; // reserved
-        int referenceCount = ((data[p] & 0xFF) << 8) | (data[p + 1] & 0xFF);
-        p += 2;
-        long currentTime = earliestPresentationTime;
-        long currentByte = absoluteStart + sidxOffset + sidxBox.size() + firstOffset;
-        List<SidxEntry> entries = new ArrayList<>();
-        for (int i = 0; i < referenceCount && p + 12 <= end; i++) {
-            long ref = readUInt32(data, p);
-            p += 4;
-            boolean referenceType = (ref & 0x8000_0000L) != 0L;
-            long size = ref & 0x7FFF_FFFFL;
-            long duration = readUInt32(data, p);
-            p += 4;
-            p += 4; // SAP
-            if (!referenceType && size > 0L) {
-                double timeSeconds = currentTime / (double) timescale;
-                entries.add(new SidxEntry(timeSeconds, currentByte, currentByte + size - 1L));
-            }
-            currentTime += duration;
-            currentByte += size;
-        }
-        return entries.isEmpty() ? null : new SidxIndex(timescale, entries);
-    }
-
-    private Fmp4InitSegment readInitSegment() throws IOException {
+    private Fmp4RangeSeekSupport.InitSegment readInitSegment() throws IOException {
         try (HttpRangeClient.CdnResponse response = http.getRange(videoUrl, 0L, FMP4_INIT_PROBE_BYTES - 1L)) {
             int status = response.statusCode();
             if (status != 206 && status != 200) {
@@ -620,7 +556,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             long contentLength = response.totalLength() > 0L ? response.totalLength() : response.contentLength();
             ByteArrayOutputStream prefix = new ByteArrayOutputStream();
             byte[] buffer = new byte[64 * 1024];
-            Fmp4InitSegment init = null;
+            Fmp4RangeSeekSupport.InitSegment init = null;
             while (prefix.size() < FMP4_INIT_PROBE_BYTES) {
                 int request = Math.min(buffer.length, FMP4_INIT_PROBE_BYTES - prefix.size());
                 int n = response.body().read(buffer, 0, request);
@@ -631,7 +567,11 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     continue;
                 }
                 prefix.write(buffer, 0, n);
-                init = extractInitSegment(prefix.toByteArray(), contentLength);
+                init = Fmp4RangeSeekSupport.extractInitSegment(prefix.toByteArray(), contentLength,
+                        (moovPayload, moov) -> {
+                            int videoTimescale = Fmp4ToMp4Converter.parseVideoTimescale(moovPayload);
+                            return videoTimescale > 0 ? videoTimescale : moov.timescale;
+                        });
                 if (init != null) {
                     return init;
                 }
@@ -640,127 +580,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
     }
 
-    private static Fmp4InitSegment extractInitSegment(byte[] prefix, long contentLength) {
-        int pos = 0;
-        while (pos + 8 <= prefix.length) {
-            Mp4Box box = readCompleteMp4Box(prefix, pos, prefix.length);
-            if (box == null) {
-                return null;
-            }
-            if (isBoxType(prefix, pos + 4, 'm', 'o', 'o', 'v')) {
-                byte[] initBytes = Arrays.copyOf(prefix, pos + (int) box.size());
-                byte[] moovPayload = Arrays.copyOfRange(prefix, pos + box.headerSize(), pos + (int) box.size());
-                Fmp4ToMp4Converter.ParseResult moov = Fmp4ToMp4Converter.parseMoov(moovPayload);
-                int videoTimescale = Fmp4ToMp4Converter.parseVideoTimescale(moovPayload);
-                int timescale = videoTimescale > 0 ? videoTimescale : moov.timescale;
-                return new Fmp4InitSegment(initBytes, contentLength, timescale);
-            }
-            pos += (int) box.size();
-        }
-        return null;
-    }
-
     private ChunkRange openRange(long start) throws IOException {
         return new ChunkRange(new ChunkPrefetchInputStream(videoUrl, start));
-    }
-
-    private static MoofProbe readMoofProbe(InputStream range, float targetSeconds, int timescale) throws IOException {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        byte[] buffer = new byte[256 * 1024];
-        MoofCandidate best = null;
-        while (out.size() < FMP4_MOOF_SCAN_BYTES) {
-            int request = Math.min(buffer.length, FMP4_MOOF_SCAN_BYTES - out.size());
-            int n = range.read(buffer, 0, request);
-            if (n < 0) {
-                break;
-            }
-            if (n == 0) {
-                continue;
-            }
-            out.write(buffer, 0, n);
-            byte[] data = out.toByteArray();
-            best = findBestMoofCandidate(data, data.length, targetSeconds, timescale);
-            if (isCloseCandidate(best, targetSeconds)) {
-                return new MoofProbe(data, best);
-            }
-        }
-        byte[] data = out.toByteArray();
-        best = best != null ? best : findBestMoofCandidate(data, data.length, targetSeconds, timescale);
-        return best != null ? new MoofProbe(data, best) : null;
-    }
-
-    private static MoofCandidate findBestMoofCandidate(byte[] probe, int length, float targetSeconds, int timescale) {
-        MoofCandidate first = null;
-        MoofCandidate bestBeforeTarget = null;
-        for (int i = 0; i + 8 <= length; i++) {
-            if (!isBoxType(probe, i + 4, 'm', 'o', 'o', 'f')) {
-                continue;
-            }
-            MoofCandidate candidate = readMoofCandidate(probe, i, length, timescale);
-            if (candidate == null) {
-                continue;
-            }
-            if (first == null) {
-                first = candidate;
-            }
-            if (!Double.isNaN(candidate.fragmentSeconds())) {
-                if (candidate.fragmentSeconds() <= targetSeconds + 0.05D) {
-                    bestBeforeTarget = candidate;
-                } else if (bestBeforeTarget != null) {
-                    break;
-                }
-            }
-            Mp4Box box = readCompleteMp4Box(probe, i, length);
-            if (box != null && box.size() <= Integer.MAX_VALUE) {
-                i += Math.max(0, (int) box.size() - 1);
-            }
-        }
-        return bestBeforeTarget != null ? bestBeforeTarget : first;
-    }
-
-    private static MoofCandidate readMoofCandidate(byte[] probe, int offset, int length, int timescale) {
-        Mp4Box box = readCompleteMp4Box(probe, offset, length);
-        if (box == null || box.size() > Integer.MAX_VALUE || box.size() < box.headerSize()) {
-            return null;
-        }
-        byte[] moofPayload = Arrays.copyOfRange(probe, offset + box.headerSize(), offset + (int) box.size());
-        Fmp4ToMp4Converter.ParseResult moof = Fmp4ToMp4Converter.parseMoof(moofPayload);
-        if (moof.sampleCount <= 0 && moof.baseMediaDecodeTime < 0L) {
-            return null;
-        }
-        double fragmentSeconds = moof.baseMediaDecodeTime >= 0L && timescale > 0
-                ? moof.baseMediaDecodeTime / (double) timescale
-                : Double.NaN;
-        return new MoofCandidate(offset, fragmentSeconds);
-    }
-
-    private static boolean isCloseCandidate(MoofCandidate candidate, float targetSeconds) {
-        if (candidate == null || Double.isNaN(candidate.fragmentSeconds())) {
-            return false;
-        }
-        double delta = targetSeconds - candidate.fragmentSeconds();
-        return delta >= -FMP4_TARGET_EPSILON_SECONDS && delta <= FMP4_CLOSE_FRAGMENT_SECONDS;
-    }
-
-    private static boolean shouldRetry(MoofCandidate candidate, float targetSeconds) {
-        if (candidate == null || Double.isNaN(candidate.fragmentSeconds())) {
-            return false;
-        }
-        double delta = targetSeconds - candidate.fragmentSeconds();
-        return delta < -FMP4_TARGET_EPSILON_SECONDS || delta > FMP4_CLOSE_FRAGMENT_SECONDS;
-    }
-
-    private static boolean isAfterTargetCandidate(MoofCandidate candidate, float targetSeconds) {
-        return candidate != null && !Double.isNaN(candidate.fragmentSeconds())
-                && candidate.fragmentSeconds() > targetSeconds + FMP4_TARGET_EPSILON_SECONDS;
-    }
-
-    private static long nextRangeStart(MoofCandidate candidate, float targetSeconds, double durationSeconds,
-            long contentLength, long absoluteMoofOffset, int initLength) {
-        double bytesPerSecond = contentLength / Math.max(1.0D, durationSeconds);
-        double deltaSeconds = targetSeconds - candidate.fragmentSeconds();
-        long adjusted = absoluteMoofOffset + Math.round(deltaSeconds * bytesPerSecond) - FMP4_SEEK_PREROLL_BYTES;
-        return Math.max(initLength, Math.min(contentLength - 1L, adjusted));
     }
 
     private static float seekTargetSeconds(float playbackSeconds, double durationSeconds) {
@@ -770,58 +591,6 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         double upperBound = durationSeconds > 0.0D ? Math.max(0.0D, durationSeconds - 1.0D)
                 : playbackSeconds + FMP4_SEEK_LEAD_SECONDS;
         return (float) Math.max(0.0D, Math.min(upperBound, playbackSeconds + FMP4_SEEK_LEAD_SECONDS));
-    }
-
-    private static float residualSeconds(float targetSeconds, MoofCandidate candidate, double durationSeconds,
-            long contentLength, long absoluteMoofOffset) {
-        double fragmentSeconds = candidate.fragmentSeconds();
-        if (Double.isNaN(fragmentSeconds) && contentLength > 0L && durationSeconds > 0.0D) {
-            fragmentSeconds = durationSeconds * (absoluteMoofOffset / (double) contentLength);
-        }
-        if (Double.isNaN(fragmentSeconds)) {
-            return targetSeconds;
-        }
-        return (float) Math.max(0.0D, Math.min(targetSeconds, targetSeconds - fragmentSeconds));
-    }
-
-    private static Mp4Box readCompleteMp4Box(byte[] data, int offset, int length) {
-        if (offset < 0 || offset + 8 > length) {
-            return null;
-        }
-        long size = readUInt32(data, offset);
-        int headerSize = 8;
-        if (size == 1L) {
-            if (offset + 16 > length) {
-                return null;
-            }
-            size = readUInt64(data, offset + 8);
-            headerSize = 16;
-        }
-        if (size < headerSize || size > length - offset) {
-            return null;
-        }
-        return new Mp4Box(size, headerSize);
-    }
-
-    private static boolean isBoxType(byte[] data, int offset, char a, char b, char c, char d) {
-        return offset >= 0 && offset + 4 <= data.length
-                && data[offset] == (byte) a && data[offset + 1] == (byte) b
-                && data[offset + 2] == (byte) c && data[offset + 3] == (byte) d;
-    }
-
-    private static long readUInt32(byte[] data, int offset) {
-        return ((long) data[offset] & 0xFF) << 24
-                | ((long) data[offset + 1] & 0xFF) << 16
-                | ((long) data[offset + 2] & 0xFF) << 8
-                | ((long) data[offset + 3] & 0xFF);
-    }
-
-    private static long readUInt64(byte[] data, int offset) {
-        long value = 0L;
-        for (int i = 0; i < 8; i++) {
-            value = (value << 8) | (data[offset + i] & 0xFFL);
-        }
-        return value;
     }
 
     private static void closeQuietly(InputStream stream) {
@@ -835,9 +604,6 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     }
 
     private record Fmp4StreamStart(InputStream stream, float residualSeconds, double fragmentSeconds) {
-    }
-
-    private record Fmp4InitSegment(byte[] bytes, long contentLength, int timescale) {
     }
 
     private static SegmentBaseInfo segmentBaseInfo(String url) {
@@ -881,22 +647,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             long createdAtMillis) {
     }
 
-    private record SidxIndex(long timescale, List<SidxEntry> entries) {
-    }
-
-    private record SidxEntry(double timeSeconds, long byteStart, long byteEnd) {
-    }
-
     private record ChunkRange(InputStream stream) {
-    }
-
-    private record MoofCandidate(int offset, double fragmentSeconds) {
-    }
-
-    private record MoofProbe(byte[] bytes, MoofCandidate candidate) {
-    }
-
-    private record Mp4Box(long size, int headerSize) {
     }
 
     private long nextSamplePtsNanos() {

@@ -21,7 +21,7 @@ public class LyricProjectorScreen extends BlackGoldScreen {
 
     @Override
     protected int boxH() {
-        return 310;
+        return 336;
     }
 
     @Override
@@ -59,13 +59,22 @@ public class LyricProjectorScreen extends BlackGoldScreen {
         addResetButton(resetX, rowY, 1.2f, heightS);
         rowY += 26;
 
-        ConfigSlider distS = addConfigSlider(sliderX, rowY, -5.0f, 5.0f,
-                be != null ? be.getProjectionDistance() : 0.0f,
+        ConfigSlider distXS = addConfigSlider(sliderX, rowY, -5.0f, 5.0f,
+                be != null ? be.getProjectionDistanceX() : 0.0f,
                 v -> {
                     if (be != null)
-                        be.setProjectionDistance(v);
+                        be.setProjectionDistanceX(v);
                 });
-        addResetButton(resetX, rowY, 0f, distS);
+        addResetButton(resetX, rowY, 0f, distXS);
+        rowY += 26;
+
+        ConfigSlider distZS = addConfigSlider(sliderX, rowY, -5.0f, 5.0f,
+                be != null ? be.getProjectionDistanceZ() : 0.0f,
+                v -> {
+                    if (be != null)
+                        be.setProjectionDistanceZ(v);
+                });
+        addResetButton(resetX, rowY, 0f, distZS);
         rowY += 26;
 
         ConfigSlider scaleS = addConfigSlider(sliderX, rowY, 0.25f, 3.0f,
@@ -96,17 +105,6 @@ public class LyricProjectorScreen extends BlackGoldScreen {
                 });
     }
 
-    private void addResetButton(int x, int y, float defaultValue, ConfigSlider slider) {
-        addRenderableWidget(new BlackGoldButton(x, y, 14, SLIDER_H,
-                Component.literal("\u21ba"),
-                btn -> {
-                    slider.setFromValue(defaultValue);
-                    if (slider.linkedBox != null) {
-                        slider.linkedBox.setValue(ConfigSlider.fmt(defaultValue));
-                    }
-                }, GOLD));
-    }
-
     @Override
     protected void onSave() {
         LyricProjectorBlockEntity be = getProjectorBE();
@@ -114,7 +112,8 @@ public class LyricProjectorScreen extends BlackGoldScreen {
             minecraft.getConnection().send(new LyricProjectorConfigPacket(
                     blockPos,
                     be.getProjectionYaw(), be.getProjectionPitch(), be.getProjectionScale(),
-                    be.getProjectionHeight(), be.getProjectionDistance(), be.getProjectionMode(),
+                    be.getProjectionHeight(), be.getProjectionDistanceX(), be.getProjectionDistanceZ(),
+                    be.getProjectionMode(),
                     be.getAllowAi()));
         }
     }
@@ -160,7 +159,7 @@ public class LyricProjectorScreen extends BlackGoldScreen {
     private void drawLabels(GuiGraphicsExtractor g, int bx, int by) {
         int lx = bx + PAD, ry = by + HEADER_H + 58;
         String[] labels = { "\u6c34\u5e73\u671d\u5411", "\u4fef\u4ef0\u89d2\u5ea6",
-                "\u6295\u5f71\u9ad8\u5ea6", "\u6295\u5f71\u8ddd\u79bb",
+                "\u6295\u5f71\u9ad8\u5ea6", "\u6295\u5f71X\u8f74", "\u6295\u5f71Z\u8f74",
                 "\u6587\u5b57\u5927\u5c0f", "\u8bed\u8a00/\u6a21\u5f0f", "AI\u5b57\u5e55" };
         for (String lb : labels) {
             g.centeredText(font, Component.literal(lb), lx + 27, ry, TEXT_SECONDARY);

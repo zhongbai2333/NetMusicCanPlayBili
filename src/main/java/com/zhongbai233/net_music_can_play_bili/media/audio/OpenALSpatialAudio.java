@@ -273,6 +273,49 @@ public class OpenALSpatialAudio {
     }
 
     /**
+     * 当前 primary source 中尚未播完的非媒体预滚/启动静音样本数。
+     *
+     * <p>
+     * OpenAL source 初始化时会先排入 {@link #NUM_BUFFERS} 个静音 buffer 来让 source 立即播放，
+     * 真正的媒体 PCM 只能在这些 buffer 被处理后逐步替换进去。媒体消费计数故意不把这些静音算进媒体时间，
+     * 但对视频/歌词同步来说，它们仍然是实际可听声音前面的输出延迟。seek 后这段延迟通常约 256ms，
+     * 需要从对外暴露的“可听媒体时间”里扣除，避免视频先跑。
+     * </p>
+     */
+    public long getOutputDelaySamples() {
+        if (!initialized || deviceLost || !ensureOpenAlContext("getOutputDelaySamples")) {
+            return 0L;
+        }
+        int source = primarySource();
+        if (source == 0 || primaryQueuedMediaFlags == null || primaryQueuedMediaFlags.isEmpty()
+                || Boolean.TRUE.equals(primaryQueuedMediaFlags.peekFirst())) {
+            return 0L;
+        }
+        int byteOffset;
+        try {
+            byteOffset = AL10.alGetSourcei(source, AL11.AL_BYTE_OFFSET);
+        } catch (Throwable ignored) {
+            return 0L;
+        }
+        if (checkDeviceLost("getOutputDelaySamples:alGetSourcei")) {
+            return 0L;
+        }
+        long sampleOffset = Math.max(0L, byteOffset / Math.max(1, bytesPerSample));
+        long delayBuffers = 0L;
+        for (Boolean media : primaryQueuedMediaFlags) {
+            if (Boolean.TRUE.equals(media)) {
+                break;
+            }
+            delayBuffers++;
+        }
+        if (delayBuffers <= 0L) {
+            return 0L;
+        }
+        long delaySamples = delayBuffers * (long) SAMPLES_PER_BUFFER;
+        return Math.max(0L, delaySamples - Math.min(SAMPLES_PER_BUFFER - 1L, sampleOffset));
+    }
+
+    /**
      * 清空所有已排入 OpenAL 但尚未真正播放的媒体 buffer，并重新排入静音预滚
      * 
      * @return flush 后 primary source 已真实消费的媒体 sample 数
@@ -293,6 +336,24 @@ public class OpenALSpatialAudio {
             }
         }
         return consumedSamples;
+    }
+
+    /**
+     * 立即停止所有 OpenAL source 并丢弃待播放队列，用于同一唱片机切换到新播放 session 时
+     * 先把旧音频从实际输出端硬切掉，再异步释放 native 资源。
+     */
+    public void hardStopOutput() {
+        if (!initialized || deviceLost || !ensureOpenAlContext("hardStopOutput")) {
+            return;
+        }
+        clearPendingQueues(bedPending);
+        clearPendingQueues(objPending);
+        stopAndClearSourceGroup(bedSources);
+        stopAndClearSourceGroup(objectSources);
+        if (primaryQueuedMediaFlags != null) {
+            primaryQueuedMediaFlags.clear();
+        }
+        mediaConsumedBuffers = 0L;
     }
 
     public void cleanup() {
@@ -499,6 +560,33 @@ public class OpenALSpatialAudio {
                     return;
                 }
                 LOGGER.debug("OpenAL source flush failed: {}", error.toString());
+            }
+        }
+    }
+
+    private void stopAndClearSourceGroup(int[] sources) {
+        if (sources == null) {
+            return;
+        }
+        for (int source : sources) {
+            if (source == 0) {
+                continue;
+            }
+            try {
+                AL10.alSourcef(source, AL10.AL_GAIN, 0.0f);
+                AL10.alSourceStop(source);
+                int queued = AL10.alGetSourcei(source, AL10.AL_BUFFERS_QUEUED);
+                while (queued-- > 0) {
+                    AL10.alSourceUnqueueBuffers(source);
+                    if (checkDeviceLost("hardStopOutput:alSourceUnqueueBuffers")) {
+                        return;
+                    }
+                }
+            } catch (Throwable error) {
+                if (checkDeviceLost("hardStopOutput")) {
+                    return;
+                }
+                LOGGER.debug("OpenAL source hard-stop failed: {}", error.toString());
             }
         }
     }

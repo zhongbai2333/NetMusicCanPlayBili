@@ -29,12 +29,17 @@ public final class AacOpenALPipeline extends AbstractAudioPipeline {
 
     public AacOpenALPipeline(byte[] asc, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds,
             float timelineStartOffsetSeconds) {
+        this(asc, ownerClosed, sourcePos, startOffsetSeconds, timelineStartOffsetSeconds, "");
+    }
+
+    public AacOpenALPipeline(byte[] asc, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds,
+            float timelineStartOffsetSeconds, String sessionId) {
         super("fMP4", "aac", null, true);
         this.decoder = new AacFrameDecoder(asc, ownerClosed::get);
         this.stereo = new StereoOpenALHandler();
         this.stereo.setSampleRate((int) decoder.format().getSampleRate());
         this.skipBytesRemaining = skipBytes(decoder.format(), startOffsetSeconds);
-        DolbyAudioRegistry.registerStereo(stereo, sourcePos, timelineStartOffsetSeconds);
+        DolbyAudioRegistry.registerStereo(stereo, sourcePos, timelineStartOffsetSeconds, sessionId);
     }
 
     @Override

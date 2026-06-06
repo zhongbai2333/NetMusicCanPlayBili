@@ -25,6 +25,8 @@ public class VideoProjectorBlockEntity extends BlockEntity {
     private static final String PROJ_SCALE = "ProjScale";
     private static final String PROJ_HEIGHT = "ProjHeight";
     private static final String PROJ_DISTANCE = "ProjDistance";
+    private static final String PROJ_DISTANCE_X = "ProjDistanceX";
+    private static final String PROJ_DISTANCE_Z = "ProjDistanceZ";
     private static final String PREFERRED_QUALITY = "PreferredQuality";
     public static final int DEFAULT_PREFERRED_QUALITY = 116;
 
@@ -34,7 +36,8 @@ public class VideoProjectorBlockEntity extends BlockEntity {
     private float projectionPitch = 0.0F;
     private float projectionScale = 1.0F;
     private float projectionHeight = 1.8F;
-    private float projectionDistance = 0.0F;
+    private float projectionDistanceX = 0.0F;
+    private float projectionDistanceZ = 0.0F;
     /** B站 qn：默认尝试 1080P60；实际会受登录/VIP/接口返回限制自动降级 */
     private int preferredQuality = DEFAULT_PREFERRED_QUALITY;
 
@@ -108,11 +111,28 @@ public class VideoProjectorBlockEntity extends BlockEntity {
     }
 
     public float getProjectionDistance() {
-        return projectionDistance;
+        return projectionDistanceX;
     }
 
     public void setProjectionDistance(float v) {
-        this.projectionDistance = v;
+        setProjectionDistanceX(v);
+    }
+
+    public float getProjectionDistanceX() {
+        return projectionDistanceX;
+    }
+
+    public void setProjectionDistanceX(float v) {
+        this.projectionDistanceX = v;
+        setChanged();
+    }
+
+    public float getProjectionDistanceZ() {
+        return projectionDistanceZ;
+    }
+
+    public void setProjectionDistanceZ(float v) {
+        this.projectionDistanceZ = v;
         setChanged();
     }
 
@@ -151,7 +171,8 @@ public class VideoProjectorBlockEntity extends BlockEntity {
         output.putFloat(PROJ_PITCH, projectionPitch);
         output.putFloat(PROJ_SCALE, projectionScale);
         output.putFloat(PROJ_HEIGHT, projectionHeight);
-        output.putFloat(PROJ_DISTANCE, projectionDistance);
+        output.putFloat(PROJ_DISTANCE_X, projectionDistanceX);
+        output.putFloat(PROJ_DISTANCE_Z, projectionDistanceZ);
         output.putInt(PREFERRED_QUALITY, preferredQuality);
     }
 
@@ -165,7 +186,9 @@ public class VideoProjectorBlockEntity extends BlockEntity {
         this.projectionPitch = input.getFloatOr(PROJ_PITCH, 0.0F);
         this.projectionScale = input.getFloatOr(PROJ_SCALE, 1.0F);
         this.projectionHeight = input.getFloatOr(PROJ_HEIGHT, 1.8F);
-        this.projectionDistance = input.getFloatOr(PROJ_DISTANCE, 0.0F);
+        float legacyDistance = input.getFloatOr(PROJ_DISTANCE, 0.0F);
+        this.projectionDistanceX = input.getFloatOr(PROJ_DISTANCE_X, legacyDistance);
+        this.projectionDistanceZ = input.getFloatOr(PROJ_DISTANCE_Z, 0.0F);
         this.preferredQuality = input.getIntOr(PREFERRED_QUALITY, DEFAULT_PREFERRED_QUALITY);
         refreshClientLinkRegistration();
         if (level != null && level.isClientSide() && oldPreferredQuality != preferredQuality) {

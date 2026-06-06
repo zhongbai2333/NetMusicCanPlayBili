@@ -73,17 +73,23 @@ public class DolbyAudioRegistry {
     }
 
     public static void register(DolbyAudioHandler handler, BlockPos pos, float startOffsetSeconds) {
+        register(handler, pos, startOffsetSeconds, "");
+    }
+
+    public static void register(DolbyAudioHandler handler, BlockPos pos, float startOffsetSeconds, String sessionId) {
         if (handler == null) {
             return;
         }
         BlockPos key = keyFor(pos);
+        String normalizedSessionId = normalizeSessionId(sessionId);
+        hardStopIfSessionChanged(key, normalizedSessionId);
         DolbyEntry entry = new DolbyEntry(key, centerFor(pos), handler, System.currentTimeMillis(),
-                startOffsetTicks(startOffsetSeconds));
+                startOffsetTicks(startOffsetSeconds), normalizedSessionId);
         handler.setUserVolume(volumeFor(key));
         closeStereoAt(key);
         DolbyEntry old = DOLBY_HANDLERS.put(key, entry);
         if (old != null) {
-            old.cleanup();
+            hardStopAndCleanup(old);
         }
         // 自动连接已注册的音响 relay
         connectPendingRelays(key, handler);
@@ -111,17 +117,24 @@ public class DolbyAudioRegistry {
     }
 
     public static void registerStereo(StereoOpenALHandler handler, BlockPos pos, float startOffsetSeconds) {
+        registerStereo(handler, pos, startOffsetSeconds, "");
+    }
+
+    public static void registerStereo(StereoOpenALHandler handler, BlockPos pos, float startOffsetSeconds,
+            String sessionId) {
         if (handler == null) {
             return;
         }
         BlockPos key = keyFor(pos);
+        String normalizedSessionId = normalizeSessionId(sessionId);
+        hardStopIfSessionChanged(key, normalizedSessionId);
         StereoEntry entry = new StereoEntry(key, centerFor(pos), handler, System.currentTimeMillis(),
-                startOffsetTicks(startOffsetSeconds));
+                startOffsetTicks(startOffsetSeconds), normalizedSessionId);
         handler.setUserVolume(volumeFor(key));
         closeDolbyAt(key);
         StereoEntry old = STEREO_HANDLERS.put(key, entry);
         if (old != null) {
-            old.cleanup();
+            hardStopAndCleanup(old);
         }
         // 自动连接已注册的音响 relay
         connectPendingRelays(key, handler);
@@ -266,6 +279,7 @@ public class DolbyAudioRegistry {
         SpeakerAudioRelay relay = RELAYS.get(speakerPos);
         if (relay != null) {
             relay.setChannelIndex(channelIndex);
+            relay.setAutoMixJoc(autoMixJoc);
             relay.setUserVolume(volume);
         }
     }
@@ -399,17 +413,19 @@ public class DolbyAudioRegistry {
         long relayMillis = getRelayMediaMillis(key);
         StereoEntry stereo = STEREO_HANDLERS.get(key);
         if (stereo != null) {
-            long ticks = stereo.handler().getPositionTicks();
-            if (ticks >= 0L) {
-                long mainMillis = Math.max(0L, stereo.startOffsetTicks() + ticks) * 50L;
+            long positionMillis = stereo.handler().getPositionMillis();
+            if (positionMillis >= 0L) {
+                long mainMillis = adjustedAudibleMillis(stereo.startOffsetTicks(), positionMillis,
+                        stereo.handler().getOutputDelayMillis());
                 return relayMillis >= 0L ? Math.max(mainMillis, relayMillis) : mainMillis;
             }
         }
         DolbyEntry dolby = DOLBY_HANDLERS.get(key);
         if (dolby != null) {
-            long ticks = dolby.handler().getPositionTicks();
-            if (ticks >= 0L) {
-                long mainMillis = Math.max(0L, dolby.startOffsetTicks() + ticks) * 50L;
+            long positionMillis = dolby.handler().getPositionMillis();
+            if (positionMillis >= 0L) {
+                long mainMillis = adjustedAudibleMillis(dolby.startOffsetTicks(), positionMillis,
+                        dolby.handler().getOutputDelayMillis());
                 return relayMillis >= 0L ? Math.max(mainMillis, relayMillis) : mainMillis;
             }
         }
@@ -424,32 +440,37 @@ public class DolbyAudioRegistry {
         RelayTimeline relayTimeline = getRelayTimeline(key);
         long mainMillis = -1L;
         long mainFedMillis = -1L;
+        String mainSessionId = "";
         StereoEntry stereo = STEREO_HANDLERS.get(key);
         if (stereo != null) {
-            long ticks = stereo.handler().getPositionTicks();
-            if (ticks >= 0L) {
-                mainMillis = Math.max(0L, stereo.startOffsetTicks() + ticks) * 50L;
+            mainSessionId = stereo.sessionId();
+            long positionMillis = stereo.handler().getPositionMillis();
+            if (positionMillis >= 0L) {
+                mainMillis = adjustedAudibleMillis(stereo.startOffsetTicks(), positionMillis,
+                        stereo.handler().getOutputDelayMillis());
             }
-            long fedTicks = stereo.handler().getFedPositionTicks();
-            if (fedTicks >= 0L) {
-                mainFedMillis = Math.max(0L, stereo.startOffsetTicks() + fedTicks) * 50L;
+            long fedMillis = stereo.handler().getFedPositionMillis();
+            if (fedMillis >= 0L) {
+                mainFedMillis = Math.max(0L, startOffsetMillis(stereo.startOffsetTicks()) + fedMillis);
             }
         } else {
             DolbyEntry dolby = DOLBY_HANDLERS.get(key);
             if (dolby != null) {
-                long ticks = dolby.handler().getPositionTicks();
-                if (ticks >= 0L) {
-                    mainMillis = Math.max(0L, dolby.startOffsetTicks() + ticks) * 50L;
+                mainSessionId = dolby.sessionId();
+                long positionMillis = dolby.handler().getPositionMillis();
+                if (positionMillis >= 0L) {
+                    mainMillis = adjustedAudibleMillis(dolby.startOffsetTicks(), positionMillis,
+                            dolby.handler().getOutputDelayMillis());
                 }
-                long fedTicks = dolby.handler().getFedPositionTicks();
-                if (fedTicks >= 0L) {
-                    mainFedMillis = Math.max(0L, dolby.startOffsetTicks() + fedTicks) * 50L;
+                long fedMillis = dolby.handler().getFedPositionMillis();
+                if (fedMillis >= 0L) {
+                    mainFedMillis = Math.max(0L, startOffsetMillis(dolby.startOffsetTicks()) + fedMillis);
                 }
             }
         }
         long combinedMillis = mainMillis >= 0L ? mainMillis : relayTimeline.mediaMillis();
         return new AudioTimeline(mainMillis, mainFedMillis, relayTimeline.mediaMillis(), combinedMillis,
-                relayTimeline.startedCount(), relayTimeline.registeredCount());
+                relayTimeline.startedCount(), relayTimeline.registeredCount(), mainSessionId);
     }
 
     private static long getRelayMediaMillis(BlockPos turntableKey) {
@@ -462,10 +483,11 @@ public class DolbyAudioRegistry {
             if (relay == null) {
                 continue;
             }
-            long ticks = relay.getPositionTicks();
-            if (ticks >= 0L) {
+            long positionMillis = relay.getPositionMillis();
+            if (positionMillis >= 0L) {
                 long startOffsetTicks = startOffsetTicksFor(turntableKey);
-                best = Math.max(best, Math.max(0L, startOffsetTicks + ticks) * 50L);
+                best = Math.max(best,
+                        adjustedAudibleMillis(startOffsetTicks, positionMillis, relay.getOutputDelayMillis()));
             }
         }
         return best;
@@ -487,21 +509,31 @@ public class DolbyAudioRegistry {
             if (relay.isStarted()) {
                 started++;
             }
-            long ticks = relay.getPositionTicks();
-            if (ticks >= 0L) {
+            long positionMillis = relay.getPositionMillis();
+            if (positionMillis >= 0L) {
                 long startOffsetTicks = startOffsetTicksFor(turntableKey);
-                best = Math.max(best, Math.max(0L, startOffsetTicks + ticks) * 50L);
+                best = Math.max(best,
+                        adjustedAudibleMillis(startOffsetTicks, positionMillis, relay.getOutputDelayMillis()));
             }
         }
         return new RelayTimeline(best, started, registered);
+    }
+
+    private static long adjustedAudibleMillis(long startOffsetTicks, long relativeMillis, long outputDelayMillis) {
+        long mediaMillis = Math.max(0L, startOffsetMillis(startOffsetTicks) + Math.max(0L, relativeMillis));
+        return Math.max(0L, mediaMillis - Math.max(0L, outputDelayMillis));
+    }
+
+    private static long startOffsetMillis(long startOffsetTicks) {
+        return Math.max(0L, startOffsetTicks) * 50L;
     }
 
     private record RelayTimeline(long mediaMillis, int startedCount, int registeredCount) {
     }
 
     public record AudioTimeline(long mainMillis, long mainFedMillis, long relayMillis, long combinedMillis,
-            int relayStartedCount, int relayRegisteredCount) {
-        private static final AudioTimeline EMPTY = new AudioTimeline(-1L, -1L, -1L, -1L, 0, 0);
+            int relayStartedCount, int relayRegisteredCount, String sessionId) {
+        private static final AudioTimeline EMPTY = new AudioTimeline(-1L, -1L, -1L, -1L, 0, 0, "");
 
         public long audibleMillis() {
             return mainMillis >= 0L ? mainMillis : relayMillis;
@@ -613,15 +645,49 @@ public class DolbyAudioRegistry {
     private static void closeDolbyAt(BlockPos key) {
         DolbyEntry old = DOLBY_HANDLERS.remove(key);
         if (old != null) {
-            old.cleanup();
+            hardStopAndCleanup(old);
         }
     }
 
     private static void closeStereoAt(BlockPos key) {
         StereoEntry old = STEREO_HANDLERS.remove(key);
         if (old != null) {
-            old.cleanup();
+            hardStopAndCleanup(old);
         }
+    }
+
+    private static void hardStopIfSessionChanged(BlockPos key, String newSessionId) {
+        if (key == null || key.getX() == Integer.MIN_VALUE || newSessionId.isBlank()) {
+            return;
+        }
+        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
+        if (dolby != null && !dolby.sessionId().isBlank() && !newSessionId.equals(dolby.sessionId())) {
+            if (DOLBY_HANDLERS.remove(key, dolby)) {
+                LOGGER.debug("音频会话切换，硬停旧 Dolby 输出: pos={} oldSession={} newSession={}", key, dolby.sessionId(),
+                        newSessionId);
+                hardStopAndCleanup(dolby);
+            }
+        }
+        StereoEntry stereo = STEREO_HANDLERS.get(key);
+        if (stereo != null && !stereo.sessionId().isBlank() && !newSessionId.equals(stereo.sessionId())) {
+            if (STEREO_HANDLERS.remove(key, stereo)) {
+                LOGGER.debug("音频会话切换，硬停旧 Stereo 输出: pos={} oldSession={} newSession={}", key,
+                        stereo.sessionId(), newSessionId);
+                hardStopAndCleanup(stereo);
+            }
+        }
+    }
+
+    private static void hardStopAndCleanup(AudioEntry entry) {
+        if (entry == null) {
+            return;
+        }
+        try {
+            entry.hardStopOutput();
+        } catch (Throwable t) {
+            LOGGER.debug("OpenAL hard-stop failed before cleanup: {}", t.toString());
+        }
+        entry.cleanup();
     }
 
     private static void enforceActiveLimit() {
@@ -859,12 +925,21 @@ public class DolbyAudioRegistry {
 
         long startOffsetTicks();
 
+        String sessionId();
+
+        void hardStopOutput();
+
         void cleanup();
     }
 
     private record DolbyEntry(BlockPos pos, float[] machinePos, DolbyAudioHandler handler, long createdAtMillis,
-            long startOffsetTicks)
+            long startOffsetTicks, String sessionId)
             implements AudioEntry {
+        @Override
+        public void hardStopOutput() {
+            handler.hardStopOutput();
+        }
+
         @Override
         public void cleanup() {
             handler.cleanup();
@@ -872,11 +947,20 @@ public class DolbyAudioRegistry {
     }
 
     private record StereoEntry(BlockPos pos, float[] machinePos, StereoOpenALHandler handler, long createdAtMillis,
-            long startOffsetTicks)
+            long startOffsetTicks, String sessionId)
             implements AudioEntry {
+        @Override
+        public void hardStopOutput() {
+            handler.hardStopOutput();
+        }
+
         @Override
         public void cleanup() {
             handler.cleanup();
         }
+    }
+
+    private static String normalizeSessionId(String sessionId) {
+        return sessionId != null ? sessionId : "";
     }
 }

@@ -23,6 +23,8 @@ public class LyricProjectorBlockEntity extends BlockEntity {
     private static final String PROJ_SCALE = "ProjScale";
     private static final String PROJ_HEIGHT = "ProjHeight";
     private static final String PROJ_DISTANCE = "ProjDistance";
+    private static final String PROJ_DISTANCE_X = "ProjDistanceX";
+    private static final String PROJ_DISTANCE_Z = "ProjDistanceZ";
     private static final String PROJ_MODE = "ProjMode";
     private static final String ALLOW_AI = "AllowAi";
 
@@ -37,8 +39,10 @@ public class LyricProjectorBlockEntity extends BlockEntity {
     private float projectionScale = 1.0F;
     /** 投影高度（方块上方偏移）-5.0~5.0 */
     private float projectionHeight = 1.2F;
-    /** 投影前方距离 -5.0~5.0 */
-    private float projectionDistance = 0.0F;
+    /** 投影 X 轴偏移 -5.0~5.0 */
+    private float projectionDistanceX = 0.0F;
+    /** 投影 Z 轴偏移 -5.0~5.0 */
+    private float projectionDistanceZ = 0.0F;
     /** 字幕显示模式：0=静态, 1=轮换(主字幕), 2=轮换(副字幕) */
     private int projectionMode;
     /** 是否允许显示 AI 字幕 */
@@ -148,11 +152,28 @@ public class LyricProjectorBlockEntity extends BlockEntity {
     }
 
     public float getProjectionDistance() {
-        return projectionDistance;
+        return projectionDistanceX;
     }
 
     public void setProjectionDistance(float v) {
-        this.projectionDistance = v;
+        setProjectionDistanceX(v);
+    }
+
+    public float getProjectionDistanceX() {
+        return projectionDistanceX;
+    }
+
+    public void setProjectionDistanceX(float v) {
+        this.projectionDistanceX = v;
+        setChanged();
+    }
+
+    public float getProjectionDistanceZ() {
+        return projectionDistanceZ;
+    }
+
+    public void setProjectionDistanceZ(float v) {
+        this.projectionDistanceZ = v;
         setChanged();
     }
 
@@ -198,7 +219,8 @@ public class LyricProjectorBlockEntity extends BlockEntity {
         output.putFloat(PROJ_PITCH, projectionPitch);
         output.putFloat(PROJ_SCALE, projectionScale);
         output.putFloat(PROJ_HEIGHT, projectionHeight);
-        output.putFloat(PROJ_DISTANCE, projectionDistance);
+        output.putFloat(PROJ_DISTANCE_X, projectionDistanceX);
+        output.putFloat(PROJ_DISTANCE_Z, projectionDistanceZ);
         output.putInt(PROJ_MODE, projectionMode);
         output.putBoolean(ALLOW_AI, allowAi);
     }
@@ -212,7 +234,9 @@ public class LyricProjectorBlockEntity extends BlockEntity {
         this.projectionPitch = input.getFloatOr(PROJ_PITCH, 0.0F);
         this.projectionScale = input.getFloatOr(PROJ_SCALE, 1.0F);
         this.projectionHeight = input.getFloatOr(PROJ_HEIGHT, 1.2F);
-        this.projectionDistance = input.getFloatOr(PROJ_DISTANCE, 0.0F);
+        float legacyDistance = input.getFloatOr(PROJ_DISTANCE, 0.0F);
+        this.projectionDistanceX = input.getFloatOr(PROJ_DISTANCE_X, legacyDistance);
+        this.projectionDistanceZ = input.getFloatOr(PROJ_DISTANCE_Z, 0.0F);
         this.projectionMode = input.getIntOr(PROJ_MODE, 0);
         this.allowAi = input.getBooleanOr(ALLOW_AI, false);
     }

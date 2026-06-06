@@ -17,6 +17,8 @@ public final class ModernTurntablePlaybackDiagnostics {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final long LOG_INTERVAL_MILLIS = 3_000L;
     private static final long WARN_DRIFT_MILLIS = Long.getLong("bili.playback.diagnostics.warn_drift_ms", 2_000L);
+    private static final long DEBUG_AV_DRIFT_MILLIS = Long.getLong(
+            "bili.playback.diagnostics.debug_av_drift_ms", 250L);
     private static final ConcurrentHashMap<String, Long> LAST_LOG_MILLIS_BY_SESSION = new ConcurrentHashMap<>();
 
     private ModernTurntablePlaybackDiagnostics() {
@@ -59,8 +61,8 @@ public final class ModernTurntablePlaybackDiagnostics {
         long audioMillis = audio.combinedMillis();
         long subtitleMillis = subtitleMillis(turntable);
 
-        LOGGER.info(
-                "播放管线关键时间: local={} server={} pacing={} localDrift={} video={} expectedVideo={} videoQueued={} audio={} audioMain={} audioMainFed={} audioRelay={} audioRelayCount={}/{} expectedAudio={} subtitle={} expectedSubtitle={} driftVideo={} driftAudio={} driftAudioFed={} session={}",
+        LOGGER.debug(
+                "播放管线关键时间: local={} server={} pacing={} localDrift={} video={} expectedVideo={} videoQueued={} audio={} audioMain={} audioMainFed={} audioRelay={} audioRelayCount={}/{} expectedAudio={} subtitle={} expectedSubtitle={} driftVideo={} driftAudio={} driftAudioFed={} session={} audioSession={}",
                 formatMillis(localMillis), formatMillis(serverMillis), formatMillis(timeline.pacingMillis()),
                 formatDelta(localMillis, serverMillis),
                 formatMillis(videoMillis), formatMillis(localMillis), formatMillis(video.queuedMediaMillis()),
@@ -69,9 +71,11 @@ public final class ModernTurntablePlaybackDiagnostics {
                 audio.relayStartedCount(), audio.relayRegisteredCount(), formatMillis(localMillis),
                 formatMillis(subtitleMillis), formatMillis(localMillis),
                 formatDelta(videoMillis, localMillis), formatDelta(audioMillis, localMillis),
-                formatDelta(audio.mainFedMillis(), localMillis), sessionId);
+                formatDelta(audio.mainFedMillis(), localMillis), sessionId, audio.sessionId());
+        debugIfAudioSessionMoved(sessionId, audio.sessionId(), turntablePos, audioMillis, localMillis);
         warnIfLargeDrift(sessionId, localMillis, serverMillis, videoMillis, video.queuedMediaMillis(), audioMillis,
                 audio.mainFedMillis(), timeline.pacingMillis());
+        debugIfPerceptibleAvDrift(sessionId, videoMillis, audioMillis, audio.mainFedMillis());
     }
 
     public static void finish(String sessionId) {
@@ -118,6 +122,36 @@ public final class ModernTurntablePlaybackDiagnostics {
                 formatMillis(audioFedMillis), formatDelta(videoMillis, localMillis),
                 formatDelta(audioMillis, localMillis),
                 formatDelta(localMillis, serverMillis));
+    }
+
+    private static void debugIfPerceptibleAvDrift(String sessionId, long videoMillis, long audioMillis,
+            long audioFedMillis) {
+        long threshold = Math.max(0L, DEBUG_AV_DRIFT_MILLIS);
+        if (threshold <= 0L || videoMillis < 0L || audioMillis < 0L) {
+            return;
+        }
+        long avDrift = audioMillis - videoMillis;
+        if (Math.abs(avDrift) < threshold) {
+            return;
+        }
+        LOGGER.debug(
+                "播放管线可感知音画漂移: session={} video={} audio={} audioFed={} driftAudioVideo={} threshold={}ms",
+                sessionId, formatMillis(videoMillis), formatMillis(audioMillis), formatMillis(audioFedMillis),
+                formatDelta(audioMillis, videoMillis), threshold);
+    }
+
+    private static void debugIfAudioSessionMoved(String playbackSessionId, String audioSessionId, BlockPos turntablePos,
+            long audioMillis, long expectedMillis) {
+        if (playbackSessionId == null || playbackSessionId.isBlank()
+                || audioSessionId == null || audioSessionId.isBlank()
+                || playbackSessionId.equals(audioSessionId)) {
+            return;
+        }
+        LOGGER.warn(
+                "播放管线音频会话位移: pos={} playbackSession={} audioSession={} audio={} expected={} driftAudio={}",
+                turntablePos, playbackSessionId, audioSessionId, formatMillis(audioMillis),
+                formatMillis(expectedMillis),
+                formatDelta(audioMillis, expectedMillis));
     }
 
     private static long driftOrZero(long actual, long expected) {

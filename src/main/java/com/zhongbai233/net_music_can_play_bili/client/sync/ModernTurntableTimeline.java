@@ -44,6 +44,20 @@ public final class ModernTurntableTimeline {
     }
 
     /**
+     * 用于字幕/投影等视觉效果的连续本地媒体时钟。
+     *
+     * <p>
+     * {@link #mediaMillis(BlockPos)} 默认会锚定到 OpenAL 的可听位置；当前音频位置以
+     * 20Hz tick 公开，适合同步歌词行，但直接驱动滚动动画会产生 50ms 台阶感。
+     * 视觉渲染使用本地平滑时钟，保留服务端平滑校正，但不套用音频输出 tick 锚定。
+     * </p>
+     */
+    public static long visualMillis(BlockPos turntablePos) {
+        TimelineSnapshot snapshot = snapshot(turntablePos);
+        return snapshot.pacingMillis();
+    }
+
+    /**
      * 用于音频喂入/泵送的服务端平滑时钟。
      *
      * <p>

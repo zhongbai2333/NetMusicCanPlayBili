@@ -17,6 +17,7 @@ public class SpeakerAudioRelay {
     private volatile boolean initialized;
     private volatile boolean started;
     private volatile int channelIndex = -1;
+    private volatile boolean autoMixJoc;
     private volatile float userVolume = 1.0f;
     private volatile float[] speakerPos;
     private volatile boolean handlerStarted;
@@ -30,6 +31,14 @@ public class SpeakerAudioRelay {
 
     public int getChannelIndex() {
         return channelIndex;
+    }
+
+    public void setAutoMixJoc(boolean v) {
+        this.autoMixJoc = v;
+    }
+
+    public boolean isAutoMixJoc() {
+        return autoMixJoc;
     }
 
     public void setUserVolume(float v) {
@@ -50,6 +59,10 @@ public class SpeakerAudioRelay {
     }
 
     public void feedChannel(float[] monoPcm) {
+        feedMono(monoPcm);
+    }
+
+    public void feedMono(float[] monoPcm) {
         if (closed || monoPcm == null || monoPcm.length == 0)
             return;
 
@@ -115,6 +128,11 @@ public class SpeakerAudioRelay {
     }
 
     public long getPositionTicks() {
+        long millis = getPositionMillis();
+        return millis >= 0L ? millis * 20L / 1000L : -1L;
+    }
+
+    public long getPositionMillis() {
         if (!started) {
             return -1L;
         }
@@ -124,7 +142,16 @@ public class SpeakerAudioRelay {
         }
         long consumed = sa.getConsumedSamples();
         PlaybackLatencyBench.markAudioConsumed(this, kind(), consumed, sampleRate);
-        return consumed * 20L / Math.max(1, sampleRate);
+        return Math.round(consumed * 1000.0D / Math.max(1, sampleRate));
+    }
+
+    public long getOutputDelayMillis() {
+        if (!started) {
+            return 0L;
+        }
+        OpenALSpatialAudio sa = spatialAudio;
+        long delaySamples = sa != null ? sa.getOutputDelaySamples() : 0L;
+        return delaySamples > 0L ? Math.round(delaySamples * 1000.0D / Math.max(1, sampleRate)) : 0L;
     }
 
     public void flushQueuedAudio() {
@@ -134,6 +161,20 @@ public class SpeakerAudioRelay {
         }
         pendingFed = 0;
         totalSamplesFed = 0L;
+    }
+
+    public void hardStopOutput() {
+        started = false;
+        handlerStarted = false;
+        pendingFed = 0;
+        totalSamplesFed = 0L;
+        OpenALSpatialAudio sa = spatialAudio;
+        if (sa != null) {
+            sa.hardStopOutput();
+            sa.cleanup();
+            spatialAudio = null;
+        }
+        initialized = false;
     }
 
     private String kind() {
@@ -167,6 +208,7 @@ public class SpeakerAudioRelay {
     private volatile boolean closed;
 
     public void cleanup() {
+        hardStopOutput();
         closed = true;
         started = false;
         handlerStarted = false;

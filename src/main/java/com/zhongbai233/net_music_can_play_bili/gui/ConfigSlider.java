@@ -29,7 +29,7 @@ public class ConfigSlider extends AbstractSliderButton {
     }
 
     public void setFromValue(float v) {
-        value = Math.clamp((v - min) / (max - min), 0.0, 1.0);
+        value = (v - min) / (max - min);
     }
 
     public double getSliderValue() {

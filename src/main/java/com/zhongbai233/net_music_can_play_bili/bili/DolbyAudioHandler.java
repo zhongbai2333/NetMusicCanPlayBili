@@ -303,6 +303,11 @@ public class DolbyAudioHandler {
     }
 
     public long getPositionTicks() {
+        long millis = getPositionMillis();
+        return millis >= 0L ? millis * 20L / 1000L : -1L;
+    }
+
+    public long getPositionMillis() {
         if (!playbackStarted) {
             return -1L;
         }
@@ -312,23 +317,38 @@ public class DolbyAudioHandler {
             consumed = sa.getConsumedSamples();
             if (consumed > 0L) {
                 PlaybackLatencyBench.markAudioConsumed(this, "dolby", consumed, 48000);
-                return consumed * 20L / 48000L;
+                return Math.round(consumed * 1000.0D / 48000.0D);
             }
         }
 
         PlaybackLatencyBench.markAudioConsumed(this, "dolby", totalFramesFedToOpenAL * 1536L, 48000);
-        return totalFramesFedToOpenAL * 1536L * 20L / 48000L;
+        return Math.round(totalFramesFedToOpenAL * 1536L * 1000.0D / 48000.0D);
     }
 
     /** 已排入 OpenAL 的媒体时间线，用于喂入节流判断，避免把输出端固定延迟误判成音频落后。 */
     public long getFedPositionTicks() {
+        long millis = getFedPositionMillis();
+        return millis >= 0L ? millis * 20L / 1000L : -1L;
+    }
+
+    public long getFedPositionMillis() {
         if (!playbackStarted) {
             return -1L;
         }
-        return totalFramesFedToOpenAL * 1536L * 20L / 48000L;
+        return Math.round(totalFramesFedToOpenAL * 1536L * 1000.0D / 48000.0D);
+    }
+
+    public long getOutputDelayMillis() {
+        if (!playbackStarted) {
+            return 0L;
+        }
+        OpenALSpatialAudio sa = spatialAudio;
+        long delaySamples = sa != null ? sa.getOutputDelaySamples() : 0L;
+        return delaySamples > 0L ? Math.round(delaySamples * 1000.0D / 48000.0D) : 0L;
     }
 
     public void cleanup() {
+        hardStopOutput();
         closed = true;
         rawQueue.clear();
         processedQueue.clear();
@@ -347,6 +367,22 @@ public class DolbyAudioHandler {
         }
         initialized = false;
         LOGGER.debug("DolbyAudioHandler closed ({} frames)", frameCount);
+    }
+
+    public void hardStopOutput() {
+        playbackStarted = false;
+        lastFrameFeedNanos = 0L;
+        frameBudget = 0.0D;
+        totalFramesFedToOpenAL = 0L;
+        rawQueue.clear();
+        processedQueue.clear();
+        OpenALSpatialAudio sa = spatialAudio;
+        if (sa != null) {
+            sa.hardStopOutput();
+        }
+        for (SpeakerAudioRelay relay : relays) {
+            relay.hardStopOutput();
+        }
     }
 
     private void workerLoop() {
@@ -540,13 +576,180 @@ public class DolbyAudioHandler {
         totalFramesFedToOpenAL++;
         PlaybackLatencyBench.markAudioFed(this, "dolby", 1, totalFramesFedToOpenAL * 1536L,
                 processedQueue.size(), 48000);
-        // 拆分声道转发：每个 relay 只拿到它选的声道数据
+        feedRelays(pf);
+    }
+
+    /**
+     * 拆分声道转发；开启“融合未分配声道”的音响会额外接收未被其它音响领取的
+     * bed 声道和 JOC 对象音频，避免 Atmos/JOC 对象在单独音响模式下丢失。
+     */
+    private void feedRelays(ProcessedFrame pf) {
+        if (relays.isEmpty() || pf == null || pf.pcmCh == null || pf.pcmCh.length == 0) {
+            return;
+        }
+        List<SpeakerAudioRelay> mixTargets = autoMixTargets(pf.pcmCh.length);
+        int mixTargetCount = mixTargets.size();
+
         for (SpeakerAudioRelay relay : relays) {
             int ch = relay.getChannelIndex();
-            if (ch >= 0 && ch < pc.length) {
-                relay.feedChannel(pc[ch]);
+            if (ch < 0 || ch >= pf.pcmCh.length) {
+                continue;
+            }
+            if (!relay.isAutoMixJoc() || mixTargetCount == 0) {
+                relay.feedChannel(pf.pcmCh[ch]);
+                continue;
+            }
+            float[] mixed = pf.pcmCh[ch].clone();
+            mixUnassignedBedChannels(mixed, pf.pcmCh, relay, mixTargets, mixTargetCount);
+            mixJocObjects(mixed, pf.objPcmCh, relay, mixTargets, mixTargetCount);
+            relay.feedMono(mixed);
+        }
+    }
+
+    private List<SpeakerAudioRelay> autoMixTargets(int channelCount) {
+        List<SpeakerAudioRelay> targets = new ArrayList<>();
+        for (SpeakerAudioRelay relay : relays) {
+            int ch = relay.getChannelIndex();
+            if (relay.isAutoMixJoc() && ch >= 0 && ch < channelCount) {
+                targets.add(relay);
             }
         }
+        return targets;
+    }
+
+    private void mixUnassignedBedChannels(float[] mixed, float[][] pcmCh,
+            SpeakerAudioRelay relay, List<SpeakerAudioRelay> targets, int targetCount) {
+        int relayChannel = relay.getChannelIndex();
+        for (int ch = 0; ch < pcmCh.length; ch++) {
+            if (ch == relayChannel || isBedChannelClaimedByAnyRelay(ch)) {
+                continue;
+            }
+            int targetIndex = nearestRelayIndexForBedChannel(ch, targets);
+            if (targetIndex < 0 || targets.get(targetIndex) != relay) {
+                continue;
+            }
+            mixInto(mixed, pcmCh[ch], bedMixGain(ch, relayChannel, targetCount));
+        }
+    }
+
+    private boolean isBedChannelClaimedByAnyRelay(int channelIndex) {
+        for (SpeakerAudioRelay relay : relays) {
+            if (relay.getChannelIndex() == channelIndex) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void mixJocObjects(float[] mixed, float[][] objPcmCh, SpeakerAudioRelay relay,
+            List<SpeakerAudioRelay> targets, int targetCount) {
+        if (objPcmCh == null || objPcmCh.length == 0) {
+            return;
+        }
+        for (int obj = 0; obj < objPcmCh.length; obj++) {
+            int targetIndex = nearestRelayIndexForObject(obj, targets);
+            if (targetIndex < 0 || targets.get(targetIndex) != relay) {
+                continue;
+            }
+            mixInto(mixed, objPcmCh[obj], objectMixGain(targetCount));
+        }
+    }
+
+    private int nearestRelayIndexForBedChannel(int bedChannel, List<SpeakerAudioRelay> targets) {
+        float[] source = channelPosition(bedChannel);
+        int best = -1;
+        float bestScore = Float.MAX_VALUE;
+        for (int i = 0; i < targets.size(); i++) {
+            int relayChannel = targets.get(i).getChannelIndex();
+            float score = positionDistanceSquared(source, channelPosition(relayChannel));
+            if (score < bestScore) {
+                bestScore = score;
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    private int nearestRelayIndexForObject(int obj, List<SpeakerAudioRelay> targets) {
+        float[] source = objectPositions != null && obj >= 0 && obj < objectPositions.length
+                ? objectPositions[obj]
+                : null;
+        if (source == null) {
+            return targets.isEmpty() ? -1 : obj % targets.size();
+        }
+        int best = -1;
+        float bestScore = Float.MAX_VALUE;
+        for (int i = 0; i < targets.size(); i++) {
+            int relayChannel = targets.get(i).getChannelIndex();
+            float score = positionDistanceSquared(source, channelPosition(relayChannel));
+            if (score < bestScore) {
+                bestScore = score;
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    private float[] channelPosition(int channelIndex) {
+        if (bedPositions != null && channelIndex >= 0 && channelIndex < bedPositions.length) {
+            return bedPositions[channelIndex];
+        }
+        return approximateChannelPosition(channelIndex);
+    }
+
+    private float bedMixGain(int sourceChannel, int targetChannel, int targetCount) {
+        if (sourceChannel == 3) {
+            return 0.45f / Math.max(1, targetCount); // LFE 低频无方向性，降低融合量防止轰头
+        }
+        if (targetChannel == 3) {
+            return 0.35f; // 避免把全频内容过量塞进 LFE 音响
+        }
+        return 0.65f;
+    }
+
+    private float objectMixGain(int targetCount) {
+        return 0.85f;
+    }
+
+    private static void mixInto(float[] target, float[] source, float gain) {
+        if (target == null || source == null || gain <= 0.0f) {
+            return;
+        }
+        int n = Math.min(target.length, source.length);
+        for (int i = 0; i < n; i++) {
+            target[i] = softClip(target[i] + source[i] * gain);
+        }
+    }
+
+    private static float positionDistanceSquared(float[] a, float[] b) {
+        if (a == null || b == null) {
+            return Float.MAX_VALUE;
+        }
+        float dx = a[0] - b[0];
+        float dy = a[1] - b[1];
+        float dz = a[2] - b[2];
+        return dx * dx + dy * dy + dz * dz;
+    }
+
+    private static float[] approximateChannelPosition(int channelIndex) {
+        float[][] positions = {
+                { -0.50f, 0.0f, 0.86f }, // L
+                { 0.50f, 0.0f, 0.86f }, // R
+                { 0.00f, 0.0f, 1.00f }, // C
+                { 0.00f, 0.0f, 0.00f }, // LFE
+                { -1.00f, 0.0f, 0.00f }, // Ls
+                { 1.00f, 0.0f, 0.00f }, // Rs
+                { -0.50f, 0.0f, -0.86f }, // Lrs/BL
+                { 0.50f, 0.0f, -0.86f }, // Rrs/BR
+                { -0.50f, 1.0f, 0.86f }, // Ltf
+                { 0.50f, 1.0f, 0.86f }, // Rtf
+                { -0.50f, 1.0f, -0.86f }, // Ltr
+                { 0.50f, 1.0f, -0.86f } // Rtr
+        };
+        if (channelIndex >= 0 && channelIndex < positions.length) {
+            return positions[channelIndex];
+        }
+        return positions[2];
     }
 
     private void updateFrameBudget() {

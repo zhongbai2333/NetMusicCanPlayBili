@@ -7,6 +7,7 @@ import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 
+import java.util.List;
 import java.util.function.Consumer;
 
 /**
@@ -82,10 +83,12 @@ public abstract class BlackGoldScreen extends Screen {
     @Override
     public void extractRenderState(GuiGraphicsExtractor g, int mx, int my, float pt) {
         int bx = boxX(), by = boxY();
+        List<BreakoutImpact> impacts = collectSliderBreakoutImpacts(bx, by);
         drawBox(g, bx, by);
         drawHeader(g, bx, by, mx, my);
         drawContent(g, bx, by, mx, my);
         renderWidgets(g, mx, my, pt);
+        drawBreakoutBorderGaps(g, impacts);
         drawSliderOverlays(g);
     }
 
@@ -176,6 +179,18 @@ public abstract class BlackGoldScreen extends Screen {
         return w;
     }
 
+    /** 便捷创建黑金风格的滑块重置按钮。 */
+    protected void addResetButton(int x, int y, float defaultValue, ConfigSlider slider) {
+        addRenderableWidget(new BlackGoldButton(x, y, 14, SLIDER_H,
+                Component.literal("↺"),
+                btn -> {
+                    slider.setFromValue(defaultValue);
+                    if (slider.linkedBox != null) {
+                        slider.linkedBox.setValue(ConfigSlider.fmt(defaultValue));
+                    }
+                }, GOLD));
+    }
+
     /** 绘制所有 ConfigSlider 的轨道和手柄（黑金风格） */
     protected void drawSliderOverlays(GuiGraphicsExtractor g) {
         for (var child : children()) {
@@ -198,5 +213,64 @@ public abstract class BlackGoldScreen extends Screen {
         int hc = s.isHoveredOrFocused() ? GOLD : TEXT_PRIMARY;
         g.fillGradient(hx - hr, trackY - hr + 1, hx + hr, trackY + trackH + hr - 1, hc, hc);
         g.fillGradient(hx - 2, trackY - 1, hx + 2, trackY + trackH + 1, BG_BLACK, BG_BLACK);
+    }
+
+    private List<BreakoutImpact> collectSliderBreakoutImpacts(int bx, int by) {
+        java.util.ArrayList<BreakoutImpact> impacts = new java.util.ArrayList<>();
+        int h = boxH();
+        int leftEdge = bx - 2;
+        int rightEdge = bx + BOX_W + 2;
+        for (var child : children()) {
+            if (!(child instanceof ConfigSlider s)) {
+                continue;
+            }
+            double val = s.getSliderValue();
+            if (val >= 0.0D && val <= 1.0D) {
+                continue;
+            }
+
+            int pad = 4;
+            int trackL = s.getX() + pad;
+            int trackW = s.getWidth() - pad * 2;
+            int hx = trackL + (int) (val * trackW);
+            int hr = s.isHoveredOrFocused() ? 5 : 4;
+            boolean hitsLeftEdge = val < 0.0D && hx - hr <= leftEdge;
+            boolean hitsRightEdge = val > 1.0D && hx + hr >= rightEdge;
+            if (!hitsLeftEdge && !hitsRightEdge) {
+                continue;
+            }
+
+            int y = s.getY() + s.getHeight() / 2;
+            if (y < by || y > by + h) {
+                continue;
+            }
+
+            if (hitsRightEdge) {
+                impacts.add(new BreakoutImpact(false, rightEdge, y));
+            } else {
+                impacts.add(new BreakoutImpact(true, leftEdge, y));
+            }
+        }
+        return impacts;
+    }
+
+    private void drawBreakoutBorderGaps(GuiGraphicsExtractor g, List<BreakoutImpact> impacts) {
+        for (BreakoutImpact impact : impacts) {
+            drawBreakoutBorderGap(g, impact.leftSide(), impact.edgeX(), impact.centerY());
+        }
+    }
+
+    private void drawBreakoutBorderGap(GuiGraphicsExtractor g, boolean leftSide, int edgeX, int centerY) {
+        int holeTop = centerY - 5;
+        int holeBottom = centerY + 6;
+        int gapW = 2;
+        if (leftSide) {
+            g.fillGradient(edgeX, holeTop, edgeX + gapW, holeBottom, BG_BLACK, BG_BLACK);
+        } else {
+            g.fillGradient(edgeX - gapW, holeTop, edgeX, holeBottom, BG_BLACK, BG_BLACK);
+        }
+    }
+
+    private record BreakoutImpact(boolean leftSide, int edgeX, int centerY) {
     }
 }

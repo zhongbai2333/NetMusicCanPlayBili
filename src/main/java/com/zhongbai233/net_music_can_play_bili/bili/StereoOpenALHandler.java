@@ -20,6 +20,10 @@ public class StereoOpenALHandler {
     private static final int QUEUE_CAPACITY = 512;
     private static final int PREBUFFER_BLOCKS = 96;
     private static final int MAX_BLOCKS_PER_TICK = 64;
+    private static final long AUDIO_CATCH_UP_START_TICKS = Long.getLong(
+            "bili.audio.sync.catch_up_start_ticks", 8L);
+    private static final long AUDIO_CATCH_UP_FULL_TICKS = Long.getLong(
+            "bili.audio.sync.catch_up_full_ticks", 28L);
     private static final float[][] BED_POSITIONS = {
             { -0.5f, 0, 0.866f }, { 0.5f, 0, 0.866f },
     };
@@ -166,20 +170,17 @@ public class StereoOpenALHandler {
         }
 
         updateFrameBudget();
-        int allowed = isAheadOfTarget(targetRelativeTicks) ? 0 : Math.min((int) frameBudget, MAX_BLOCKS_PER_TICK);
+        if (hardFlushIfAhead(targetRelativeTicks)) {
+            frameBudget = Math.min(frameBudget, 1.0D);
+        }
+        int allowed = isAheadOfTarget(targetRelativeTicks) ? 0 : allowedBlocksForTarget(targetRelativeTicks);
         int fed = 0;
         float[][] block;
         while (fed < allowed && (block = pcmQueue.poll()) != null) {
             updateAudioLevel(block);
             spatialAudio.updateBedBlock(block);
             fed++;
-            // 拆分声道转发：每个 relay 只拿到它选的声道数据
-            for (SpeakerAudioRelay relay : relays) {
-                int ch = relay.getChannelIndex();
-                if (ch >= 0 && ch < block.length) {
-                    relay.feedChannel(block[ch]);
-                }
-            }
+            feedRelays(block);
         }
         totalSamplesFed += (long) fed * SAMPLES_PER_BLOCK;
         frameBudget = Math.max(0.0, frameBudget - fed);
@@ -218,8 +219,102 @@ public class StereoOpenALHandler {
         if (targetRelativeTicks == Long.MAX_VALUE || !started) {
             return false;
         }
-        long positionTicks = getPositionTicks();
-        return positionTicks >= 0L && positionTicks > targetRelativeTicks;
+        long fedTicks = getFedPositionTicks();
+        if (fedTicks >= 0L && fedTicks > targetRelativeTicks) {
+            return true;
+        }
+        long audibleTicks = getPositionTicks();
+        return audibleTicks >= 0L && audibleTicks > targetRelativeTicks;
+    }
+
+    private boolean hardFlushIfAhead(long targetRelativeTicks) {
+        if (targetRelativeTicks == Long.MAX_VALUE || !started || spatialAudio == null) {
+            return false;
+        }
+        long toleranceTicks = Long.getLong("bili.audio.timeline.flush_ahead_ticks", 12L);
+        long fedTicks = getFedPositionTicks();
+        long audibleTicks = getPositionTicks();
+        if ((fedTicks >= 0L && fedTicks - targetRelativeTicks > toleranceTicks)
+                || (audibleTicks >= 0L && audibleTicks - targetRelativeTicks > toleranceTicks)) {
+            long consumedSamples = spatialAudio.flushQueuedAudio();
+            totalSamplesFed = Math.max(0L, consumedSamples);
+            for (SpeakerAudioRelay relay : relays) {
+                relay.flushQueuedAudio();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 拆分声道转发；开启“融合未分配声道”的音响会额外接收当前普通音频中
+     * 没有被其它音响领取的声道。已被任意音响选择的声道绝不再混入其它 relay，
+     * 避免 L/R 双音响都开融合时互相串台。
+     */
+    private void feedRelays(float[][] block) {
+        if (relays.isEmpty() || block == null || block.length == 0) {
+            return;
+        }
+        for (SpeakerAudioRelay relay : relays) {
+            int ch = relay.getChannelIndex();
+            if (ch < 0 || ch >= block.length) {
+                continue;
+            }
+            if (!relay.isAutoMixJoc()) {
+                relay.feedChannel(block[ch]);
+                continue;
+            }
+            float[] mixed = block[ch].clone();
+            for (int sourceChannel = 0; sourceChannel < block.length; sourceChannel++) {
+                if (sourceChannel == ch || isChannelClaimedByAnyRelay(sourceChannel)) {
+                    continue;
+                }
+                mixInto(mixed, block[sourceChannel], stereoMixGain(block.length));
+            }
+            relay.feedMono(mixed);
+        }
+    }
+
+    private boolean isChannelClaimedByAnyRelay(int channelIndex) {
+        for (SpeakerAudioRelay relay : relays) {
+            if (relay.getChannelIndex() == channelIndex) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static float stereoMixGain(int channelCount) {
+        return channelCount <= 2 ? 0.65f : 0.55f;
+    }
+
+    private static void mixInto(float[] target, float[] source, float gain) {
+        if (target == null || source == null || gain <= 0.0f) {
+            return;
+        }
+        int n = Math.min(target.length, source.length);
+        for (int i = 0; i < n; i++) {
+            target[i] = softClip(target[i] + source[i] * gain);
+        }
+    }
+
+    private int allowedBlocksForTarget(long targetRelativeTicks) {
+        int base = Math.min((int) frameBudget, MAX_BLOCKS_PER_TICK);
+        if (targetRelativeTicks == Long.MAX_VALUE || !started) {
+            return base;
+        }
+        long positionTicks = getFedPositionTicks();
+        if (positionTicks < 0L) {
+            return base;
+        }
+        long behindTicks = targetRelativeTicks - positionTicks;
+        if (behindTicks <= AUDIO_CATCH_UP_START_TICKS) {
+            return base;
+        }
+        long fullTicks = Math.max(AUDIO_CATCH_UP_START_TICKS + 1L, AUDIO_CATCH_UP_FULL_TICKS);
+        double ratio = Math.min(1.0D, behindTicks / (double) fullTicks);
+        int extra = (int) Math.round((MAX_BLOCKS_PER_TICK - base) * ratio);
+        return Math.max(base, Math.min(MAX_BLOCKS_PER_TICK, base + extra));
     }
 
     /** 所有音响 relay 是否都已度过初始静音期，正在输出真实 PCM */
@@ -315,6 +410,7 @@ public class StereoOpenALHandler {
     }
 
     public void cleanup() {
+        hardStopOutput();
         closed = true;
         pcmQueue.clear();
         pendingBlock = new float[2][SAMPLES_PER_BLOCK];
@@ -333,6 +429,23 @@ public class StereoOpenALHandler {
         LOGGER.debug("StereoOpenALHandler closed ({} blocks)", frameCount);
     }
 
+    public void hardStopOutput() {
+        started = false;
+        frameBudget = 0.0D;
+        lastFrameFeedNanos = 0L;
+        totalSamplesFed = 0L;
+        pcmQueue.clear();
+        pendingBlock = new float[2][SAMPLES_PER_BLOCK];
+        pendingSamples = 0;
+        OpenALSpatialAudio sa = spatialAudio;
+        if (sa != null) {
+            sa.hardStopOutput();
+        }
+        for (SpeakerAudioRelay relay : relays) {
+            relay.hardStopOutput();
+        }
+    }
+
     public boolean hasStarted() {
         return started;
     }
@@ -344,19 +457,38 @@ public class StereoOpenALHandler {
      * @return 播放位置（tick），未开始播放时返回 -1
      */
     public long getPositionTicks() {
+        long millis = getPositionMillis();
+        return millis >= 0L ? millis * 20L / 1000L : -1L;
+    }
+
+    public long getPositionMillis() {
         if (!started) {
             return -1L;
         }
         OpenALSpatialAudio sa = spatialAudio;
         long consumed = sa != null ? sa.getConsumedSamples() : totalSamplesFed;
-        return consumed * 20L / sampleRate;
+        return Math.round(consumed * 1000.0D / Math.max(1, sampleRate));
     }
 
     public long getFedPositionTicks() {
+        long millis = getFedPositionMillis();
+        return millis >= 0L ? millis * 20L / 1000L : -1L;
+    }
+
+    public long getFedPositionMillis() {
         if (!started) {
             return -1L;
         }
-        return Math.max(0L, totalSamplesFed) * 20L / sampleRate;
+        return Math.round(Math.max(0L, totalSamplesFed) * 1000.0D / Math.max(1, sampleRate));
+    }
+
+    public long getOutputDelayMillis() {
+        if (!started) {
+            return 0L;
+        }
+        OpenALSpatialAudio sa = spatialAudio;
+        long delaySamples = sa != null ? sa.getOutputDelaySamples() : 0L;
+        return delaySamples > 0L ? Math.round(delaySamples * 1000.0D / Math.max(1, sampleRate)) : 0L;
     }
 
     public List<String> describeState() {

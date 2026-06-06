@@ -27,7 +27,7 @@ public class VideoProjectorScreen extends BlackGoldScreen {
 
     @Override
     protected int boxH() {
-        return 292;
+        return 318;
     }
 
     @Override
@@ -65,13 +65,22 @@ public class VideoProjectorScreen extends BlackGoldScreen {
         addResetButton(resetX, rowY, 1.8f, heightS);
         rowY += 26;
 
-        ConfigSlider distS = addConfigSlider(sliderX, rowY, -5.0f, 5.0f,
-                be != null ? be.getProjectionDistance() : 0.0f,
+        ConfigSlider distXS = addConfigSlider(sliderX, rowY, -5.0f, 5.0f,
+                be != null ? be.getProjectionDistanceX() : 0.0f,
                 v -> {
                     if (be != null)
-                        be.setProjectionDistance(v);
+                        be.setProjectionDistanceX(v);
                 });
-        addResetButton(resetX, rowY, 0f, distS);
+        addResetButton(resetX, rowY, 0f, distXS);
+        rowY += 26;
+
+        ConfigSlider distZS = addConfigSlider(sliderX, rowY, -5.0f, 5.0f,
+                be != null ? be.getProjectionDistanceZ() : 0.0f,
+                v -> {
+                    if (be != null)
+                        be.setProjectionDistanceZ(v);
+                });
+        addResetButton(resetX, rowY, 0f, distZS);
         rowY += 26;
 
         ConfigSlider scaleS = addConfigSlider(sliderX, rowY, 0.25f, 3.0f,
@@ -95,17 +104,6 @@ public class VideoProjectorScreen extends BlackGoldScreen {
                 });
     }
 
-    private void addResetButton(int x, int y, float defaultValue, ConfigSlider slider) {
-        addRenderableWidget(new BlackGoldButton(x, y, 14, SLIDER_H,
-                Component.literal("↺"),
-                btn -> {
-                    slider.setFromValue(defaultValue);
-                    if (slider.linkedBox != null) {
-                        slider.linkedBox.setValue(ConfigSlider.fmt(defaultValue));
-                    }
-                }, GOLD));
-    }
-
     @Override
     protected void onSave() {
         VideoProjectorBlockEntity be = getProjectorBE();
@@ -119,7 +117,8 @@ public class VideoProjectorScreen extends BlackGoldScreen {
             minecraft.getConnection().send(new VideoProjectorConfigPacket(
                     blockPos,
                     be.getProjectionYaw(), be.getProjectionPitch(), be.getProjectionScale(),
-                    be.getProjectionHeight(), be.getProjectionDistance(), be.getPreferredQuality()));
+                    be.getProjectionHeight(), be.getProjectionDistanceX(), be.getProjectionDistanceZ(),
+                    be.getPreferredQuality()));
         }
     }
 
@@ -172,7 +171,7 @@ public class VideoProjectorScreen extends BlackGoldScreen {
 
     private void drawLabels(GuiGraphicsExtractor g, int bx, int by) {
         int lx = bx + PAD, ry = by + HEADER_H + 58;
-        String[] labels = { "水平朝向", "俯仰角度", "投影高度", "投影距离", "画面大小", "请求画质" };
+        String[] labels = { "水平朝向", "俯仰角度", "投影高度", "投影X轴", "投影Z轴", "画面大小", "请求画质" };
         for (String lb : labels) {
             g.centeredText(font, Component.literal(lb), lx + 27, ry, TEXT_SECONDARY);
             ry += 26;
