@@ -116,11 +116,12 @@ public final class ModernTurntablePlaybackDiagnostics {
             return;
         }
         LOGGER.warn(
-                "播放管线秒级漂移: session={} local={} server={} pacing={} video={} videoQueued={} audio={} audioFed={} driftVideo={} driftAudio={} driftLocalServer={}",
+                "播放管线秒级漂移: session={} local={} server={} pacing={} video={} videoQueued={} audio={} audioFed={} driftVideo={} driftAudio={} driftAudioFed={} driftLocalServer={}",
                 sessionId, formatMillis(localMillis), formatMillis(serverMillis), formatMillis(pacingMillis),
                 formatMillis(videoMillis), formatMillis(videoQueuedMillis), formatMillis(audioMillis),
                 formatMillis(audioFedMillis), formatDelta(videoMillis, localMillis),
                 formatDelta(audioMillis, localMillis),
+                formatDelta(audioFedMillis, localMillis),
                 formatDelta(localMillis, serverMillis));
     }
 

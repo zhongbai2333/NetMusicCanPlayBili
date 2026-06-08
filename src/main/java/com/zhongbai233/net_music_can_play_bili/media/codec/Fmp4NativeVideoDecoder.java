@@ -171,7 +171,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             return null;
         }
         try {
-            return Arrays.copyOf(frame.rgba(), frame.rgba().length);
+            return Arrays.copyOf(frame.data(), frame.data().length);
         } finally {
             frame.close();
         }
@@ -768,7 +768,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
 
     private DecodedFrame getNextRgbaFrame() {
         if (!REUSE_OUTPUT_BUFFERS) {
-            return DecodedFrame.wrap(decoder.getVideoFrame());
+            return DecodedFrame.wrap(decoder.getVideoFrame(), DecodedFrame.Format.RGBA);
         }
         byte[] buffer = reusableBuffers.poll();
         byte[] output = buffer != null ? buffer : new byte[Math.max(1, targetWidth) * Math.max(1, targetHeight) * 4];
@@ -776,11 +776,11 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             reusableBuffers.offer(output);
             return null;
         }
-        return new DecodedFrame(output, () -> reusableBuffers.offer(output));
+        return new DecodedFrame(output, DecodedFrame.Format.RGBA, () -> reusableBuffers.offer(output));
     }
 
     private DecodedFrame getNextYuv420Frame() {
-        return DecodedFrame.wrap(decoder.getVideoFrameYuv420());
+        return DecodedFrame.wrap(decoder.getVideoFrameYuv420(), DecodedFrame.Format.YUV420P);
     }
 
     private void drainFramesNoOutput() {
@@ -790,7 +790,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             }
             while (!closed.get()) {
                 try {
-                    if (frames.offer(DecodedFrame.wrap(DECODE_ONLY_FRAME), 250L, TimeUnit.MILLISECONDS)) {
+                    if (frames.offer(DecodedFrame.wrap(DECODE_ONLY_FRAME, DecodedFrame.Format.RGBA), 250L,
+                            TimeUnit.MILLISECONDS)) {
                         break;
                     }
                 } catch (InterruptedException e) {
@@ -1036,27 +1037,49 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     }
 
     public static final class DecodedFrame implements AutoCloseable {
-        private final byte[] rgba;
+        public enum Format {
+            RGBA,
+            YUV420P
+        }
+
+        private final byte[] data;
+        private final Format format;
         private final Runnable release;
         private final long ptsNanos;
         private boolean closed;
 
-        private DecodedFrame(byte[] rgba, Runnable release) {
-            this(rgba, release, -1L);
+        private DecodedFrame(byte[] data, Format format, Runnable release) {
+            this(data, format, release, -1L);
         }
 
-        private DecodedFrame(byte[] rgba, Runnable release, long ptsNanos) {
-            this.rgba = rgba;
+        private DecodedFrame(byte[] data, Format format, Runnable release, long ptsNanos) {
+            this.data = data;
+            this.format = format != null ? format : Format.RGBA;
             this.release = release;
             this.ptsNanos = ptsNanos;
         }
 
         static DecodedFrame wrap(byte[] rgba) {
-            return rgba != null ? new DecodedFrame(rgba, null) : null;
+            return wrap(rgba, Format.RGBA);
+        }
+
+        static DecodedFrame wrap(byte[] data, Format format) {
+            return data != null ? new DecodedFrame(data, format, null) : null;
+        }
+
+        public byte[] data() {
+            return data;
+        }
+
+        public Format format() {
+            return format;
         }
 
         public byte[] rgba() {
-            return rgba;
+            if (format != Format.RGBA) {
+                throw new IllegalStateException("decoded frame is " + format + ", not RGBA");
+            }
+            return data;
         }
 
         public long ptsNanos() {
@@ -1064,7 +1087,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
 
         private DecodedFrame withPtsNanos(long ptsNanos) {
-            return new DecodedFrame(rgba, release, ptsNanos);
+            return new DecodedFrame(data, format, release, ptsNanos);
         }
 
         @Override

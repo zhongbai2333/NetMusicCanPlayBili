@@ -1,7 +1,11 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer;
 
 import com.mojang.blaze3d.platform.NativeImage;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.MeshData;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
@@ -11,7 +15,7 @@ import com.zhongbai233.net_music_can_play_bili.client.VideoFeatureFlags;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.Identifier;
@@ -22,7 +26,9 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
+import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.client.event.SubmitCustomGeometryEvent;
+import org.joml.Matrix4fStack;
 import org.joml.Vector3fc;
 import org.slf4j.Logger;
 
@@ -44,7 +50,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * B站视频投影的客户端渲染管线
  *
  * <p>
- * 该类负责管理视频解码会话，将解码后的 RGBA 帧上传为 {@link DynamicTexture}，
+ * 该类负责管理视频解码会话，将解码后的 RGBA/YUV 帧上传为动态纹理，
  * 并在 {@link SubmitCustomGeometryEvent} 中把纹理提交为世界空间 billboard。正式播放时，
  * billboard 会锚定到视频投影仪的配置位置，并根据投影仪生命周期、播放会话、视距与视角进行裁剪
  * </p>
@@ -54,14 +60,24 @@ public final class VideoBillboardPreview {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final Identifier TEXTURE_ID = Identifier.fromNamespaceAndPath(
             NetMusicCanPlayBili.MODID, "dynamic/bili_video_preview");
+    private static final Identifier YUV_TEXTURE_Y_ID = Identifier.fromNamespaceAndPath(
+            NetMusicCanPlayBili.MODID, "dynamic/bili_video_preview_y");
+    private static final Identifier YUV_TEXTURE_U_ID = Identifier.fromNamespaceAndPath(
+            NetMusicCanPlayBili.MODID, "dynamic/bili_video_preview_u");
+    private static final Identifier YUV_TEXTURE_V_ID = Identifier.fromNamespaceAndPath(
+            NetMusicCanPlayBili.MODID, "dynamic/bili_video_preview_v");
     private static final Identifier PACKED_BENCH_TEXTURE_ID = Identifier.fromNamespaceAndPath(
             NetMusicCanPlayBili.MODID, "dynamic/bili_video_packed_bench");
     private static final int FULL_BRIGHT = 0x00F000F0;
-    private static final int MIN_ADAPTIVE_WIDTH = VideoFeatureFlags.advancedInt("bili.video.adaptive.min_width", 640);
-    private static final long ADAPTIVE_FRAME_BUDGET_NS = VideoFeatureFlags
+    static final int MIN_ADAPTIVE_WIDTH = VideoFeatureFlags.advancedInt("bili.video.adaptive.min_width", 640);
+    static final long ADAPTIVE_FRAME_BUDGET_NS = VideoFeatureFlags
             .advancedLong("bili.video.adaptive.frame_budget_ms", 12L) * 1_000_000L;
-    private static final int ADAPTIVE_BAD_FRAME_THRESHOLD = VideoFeatureFlags
+    static final int ADAPTIVE_BAD_FRAME_THRESHOLD = VideoFeatureFlags
             .advancedInt("bili.video.adaptive.bad_frames", 45);
+    private static final boolean PROTECT_GAME_FPS = VideoFeatureFlags
+            .advancedBoolean("bili.video.protect_game_fps", true);
+    private static final int PROTECTED_4K_FPS = VideoFeatureFlags.advancedInt("bili.video.protect.4k_fps", 3);
+    private static final int PROTECTED_8K_FPS = VideoFeatureFlags.advancedInt("bili.video.protect.8k_fps", 1);
     static final int MAX_CATCH_UP_DROPS_PER_TICK = VideoFeatureFlags.advancedInt(
             "bili.video.sync.max_drop_frames", 12);
     private static final double DISTANCE = 3.0D;
@@ -69,6 +85,14 @@ public final class VideoBillboardPreview {
     private static final boolean CPU_BARS = Boolean.getBoolean("bili.video.cpu_bars");
     private static final boolean WORLD_ANCHORED = Boolean.parseBoolean(
             System.getProperty("bili.video.world_anchor", "true"));
+    private static final String YUV_IMMEDIATE_STAGE = System.getProperty(
+            "bili.video.yuv.immediate_stage", "after_level").trim().toLowerCase(java.util.Locale.ROOT);
+    private static final String YUV_IMMEDIATE_COORDS = System.getProperty(
+            "bili.video.yuv.immediate_coords", "camera_relative").trim().toLowerCase(java.util.Locale.ROOT);
+    private static final String YUV_IMMEDIATE_POSE = System.getProperty(
+            "bili.video.yuv.immediate_pose", "identity").trim().toLowerCase(java.util.Locale.ROOT);
+    private static final boolean YUV_DEBUG_LOG = Boolean.getBoolean(
+            "bili.video.yuv.debug_log");
     private static final double WORLD_ANCHOR_DISTANCE = Double.parseDouble(
             System.getProperty("bili.video.world_anchor.distance", "6.0"));
     static final double AUDIO_SYNC_RANGE_SQR = Math.pow(Double.parseDouble(
@@ -77,10 +101,22 @@ public final class VideoBillboardPreview {
             System.getProperty("bili.video.render.view_dot_threshold", "0.12"));
     private static final double MAX_RENDER_DISTANCE_SQR = Math.pow(Double.parseDouble(
             System.getProperty("bili.video.max_render_distance", "64.0")), 2.0);
+    static final String RENDER_BACKEND = System.getProperty("bili.video.render.backend", "yuv420")
+            .trim().toLowerCase(java.util.Locale.ROOT);
+    static final boolean YUV420_DECODE_BACKEND = RENDER_BACKEND.equals("yuv")
+            || RENDER_BACKEND.equals("yuv420")
+            || RENDER_BACKEND.equals("yuv420_cpu");
+    static final boolean YUV420_SHADER_BACKEND = RENDER_BACKEND.equals("yuv")
+            || RENDER_BACKEND.equals("yuv420")
+            || RENDER_BACKEND.equals("yuv420_shader");
+    private static final boolean YUV420_UPLOAD_PLANES = Boolean.parseBoolean(
+            System.getProperty("bili.video.yuv.upload_planes", "true"));
 
     private static final Map<String, VideoPlaybackInstance> INSTANCES = new ConcurrentHashMap<>();
 
     private static final AtomicBoolean started = new AtomicBoolean(false);
+    private static final AtomicBoolean loggedIrisYuvRenderType = new AtomicBoolean(false);
+    private static final AtomicBoolean loggedYuvImmediateStage = new AtomicBoolean(false);
     private static final AtomicLong decodeGeneration = new AtomicLong();
     private static volatile boolean running;
     private static volatile int width;
@@ -90,12 +126,15 @@ public final class VideoBillboardPreview {
     private static volatile long activeStartNanoTime;
     private static volatile boolean hasFrame;
     private static DynamicTexture texture;
+    private static Yuv420pTextureSet yuvTextureSet;
     private static DynamicTexture packedBenchTexture;
     private static volatile boolean anchorInitialized;
     private static volatile double anchorX;
     private static volatile double anchorY;
     private static volatile double anchorZ;
     private static volatile float anchorYawDeg;
+    private static volatile boolean firstImmediateQuadLogged;
+    private static volatile boolean loggedProjectorYuvImmediate;
     private static volatile Thread decodeThread;
     private static volatile AutoCloseable activeDecoder;
     private static volatile String activeSessionId = "";
@@ -103,6 +142,7 @@ public final class VideoBillboardPreview {
     private static final Set<BlockPos> activeProjectorPositions = new CopyOnWriteArraySet<>();
     private static volatile boolean activeRequiresProjector;
     private static volatile PlaybackRequest activeRequest;
+    private static volatile boolean firstPreviewSubmitLogged;
 
     private VideoBillboardPreview() {
     }
@@ -118,14 +158,20 @@ public final class VideoBillboardPreview {
     public static void start(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             boolean preferNative, String decoderOverride) {
         startInternal(videoUrl, targetWidth, targetHeight, fps, codecId, preferNative, decoderOverride, "", 0L, 0L,
-                null);
+                null, true);
+    }
+
+    public static void startBenchPreview(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
+            boolean preferNative, String decoderOverride) {
+        startInternal(videoUrl, targetWidth, targetHeight, fps, codecId, preferNative, decoderOverride, "", 0L, 0L,
+                null, false);
     }
 
     public static void startPreviewAt(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             String sessionId, long startOffsetMillis, long totalMillis, boolean preferNative, String decoderOverride) {
         startInternal(videoUrl, targetWidth, targetHeight, fps, codecId, preferNative, decoderOverride,
                 sessionId == null ? "" : sessionId, Math.max(0L, startOffsetMillis), Math.max(0L, totalMillis),
-                null);
+                null, true);
     }
 
     public static void startSynced(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
@@ -164,7 +210,7 @@ public final class VideoBillboardPreview {
             return;
         }
         startInternal(videoUrl, targetWidth, targetHeight, fps, codecId, preferNative, decoderOverride, sessionId,
-                startOffsetMillis, totalMillis, anchorPositions);
+                startOffsetMillis, totalMillis, anchorPositions, true);
     }
 
     private static void startOrUpdateInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
@@ -193,7 +239,7 @@ public final class VideoBillboardPreview {
 
     private static void startInternal(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             boolean preferNative, String decoderOverride, String sessionId, long startOffsetMillis,
-            long totalMillis, Collection<BlockPos> anchorPositions) {
+            long totalMillis, Collection<BlockPos> anchorPositions, boolean catchUpDropsEnabled) {
         if (videoUrl == null || videoUrl.isBlank()) {
             return;
         }
@@ -217,14 +263,19 @@ public final class VideoBillboardPreview {
         hasFrame = false;
         width = Math.max(1, targetWidth);
         height = Math.max(1, targetHeight);
-        activeFps = Math.max(1, fps);
+        int protectedFps = protectedUploadFps(targetWidth, targetHeight, fps);
+        if (protectedFps < Math.max(1, fps)) {
+            LOGGER.warn("视频分辨率过高，限制上传/显示帧率以保护游戏 FPS: {}x{} @ {}fps -> {}fps。可用 -Dbili.video.protect_game_fps=false 关闭",
+                    targetWidth, targetHeight, Math.max(1, fps), protectedFps);
+        }
+        activeFps = protectedFps;
         activeStartOffsetMillis = normalizedOffset;
         activeStartNanoTime = System.nanoTime();
         activeSessionId = normalizedSession;
         replaceActiveProjectors(anchorPositions);
         activeProjectorPos = activeProjectorPositions.stream().findFirst().orElse(null);
         activeRequiresProjector = !normalizedSession.isBlank() && !activeProjectorPositions.isEmpty();
-        activeRequest = new PlaybackRequest(videoUrl, targetWidth, targetHeight, fps, codecId, preferNative,
+        activeRequest = new PlaybackRequest(videoUrl, targetWidth, targetHeight, protectedFps, codecId, preferNative,
                 decoderOverride, normalizedSession, startOffsetMillis, totalMillis, activeProjectorPositions);
         long generation = decodeGeneration.incrementAndGet();
         if (activeProjectorPos != null) {
@@ -237,12 +288,34 @@ public final class VideoBillboardPreview {
             anchorInitialized = false;
         }
 
-        Thread thread = new Thread(() -> decodeLoop(videoUrl, targetWidth, targetHeight, fps, codecId, preferNative,
-                decoderOverride, startOffsetMillis, totalMillis, generation),
+        Thread thread = new Thread(
+                () -> decodeLoop(videoUrl, targetWidth, targetHeight, protectedFps, codecId, preferNative,
+                        decoderOverride, startOffsetMillis, totalMillis, generation, catchUpDropsEnabled),
                 "bili-video-billboard-preview");
         thread.setDaemon(true);
         decodeThread = thread;
         thread.start();
+        LOGGER.info("视频 billboard 预览已启动: {}x{} @ {}fps, renderBackend={}, decodeFormat={}, catchUpDrops={}", width,
+                height,
+                activeFps, RENDER_BACKEND, YUV420_DECODE_BACKEND
+                        ? (isCustomYuvShaderAvailable() ? "YUV420P→RGB(shader)" : "YUV420P→RGBA(cpu/iris-fallback)")
+                        : "RGBA",
+                catchUpDropsEnabled);
+    }
+
+    private static int protectedUploadFps(int frameWidth, int frameHeight, int requestedFps) {
+        int fps = Math.max(1, requestedFps);
+        if (!PROTECT_GAME_FPS) {
+            return fps;
+        }
+        long pixels = (long) Math.max(1, frameWidth) * Math.max(1, frameHeight);
+        if (pixels >= 7000L * 4000L) {
+            return Math.min(fps, Math.max(1, PROTECTED_8K_FPS));
+        }
+        if (pixels >= 3000L * 1600L) {
+            return Math.min(fps, Math.max(1, PROTECTED_4K_FPS));
+        }
+        return fps;
     }
 
     public static void startTestPattern(int targetWidth, int targetHeight, int fps) {
@@ -503,7 +576,8 @@ public final class VideoBillboardPreview {
     }
 
     private static void decodeLoop(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
-            boolean preferNative, String decoderOverride, long startOffsetMillis, long totalMillis, long generation) {
+            boolean preferNative, String decoderOverride, long startOffsetMillis, long totalMillis, long generation,
+            boolean catchUpDropsEnabled) {
         if (CPU_BARS) {
             decodeCpuBarsLoop(targetWidth, targetHeight, fps);
             return;
@@ -523,7 +597,10 @@ public final class VideoBillboardPreview {
                 if (activeRequiresProjector && !isActiveProjectorValid()) {
                     break;
                 }
-                byte[] frame = nextFrame(decoder);
+                DecodedFrame frame;
+                try (DecodedFrame decoded = nextDecodedFrame(decoder)) {
+                    frame = decoded != null ? decoded.copyDetached() : null;
+                }
                 if (frame == null) {
                     break;
                 }
@@ -531,15 +608,18 @@ public final class VideoBillboardPreview {
 
                 int dropped = 0;
                 long nowNs = System.nanoTime();
-                while (running && generation == decodeGeneration.get()
+                while (catchUpDropsEnabled && running && generation == decodeGeneration.get()
                         && nowNs - expectedFrameTimeNs(frameIndex, frameIntervalNs) > frameIntervalNs * 2L
                         && dropped < MAX_CATCH_UP_DROPS_PER_TICK) {
-                    byte[] catchUpFrame = nextFrame(decoder);
-                    if (catchUpFrame == null) {
-                        frame = null;
-                        break;
+                    try (DecodedFrame catchUpDecoded = nextDecodedFrame(decoder)) {
+                        if (catchUpDecoded == null) {
+                            frame.close();
+                            frame = null;
+                            break;
+                        }
+                        frame.close();
+                        frame = catchUpDecoded.copyDetached();
                     }
-                    frame = catchUpFrame;
                     frameIndex++;
                     dropped++;
                     nowNs = System.nanoTime();
@@ -562,10 +642,15 @@ public final class VideoBillboardPreview {
                         break;
                     }
                 }
-                long uploadNs = uploadFrameSync(frame, targetWidth, targetHeight, generation);
-                if (uploadNs < 0L) {
-                    LOGGER.warn("视频 billboard 预览上传失败或客户端世界已退出");
-                    break;
+                long uploadNs;
+                try {
+                    uploadNs = uploadFrameSync(frame, targetWidth, targetHeight, generation);
+                    if (uploadNs < 0L) {
+                        LOGGER.warn("视频 billboard 预览上传失败或客户端世界已退出");
+                        break;
+                    }
+                } finally {
+                    frame.close();
                 }
                 if (uploadNs > ADAPTIVE_FRAME_BUDGET_NS) {
                     consecutiveBadFrames++;
@@ -659,7 +744,8 @@ public final class VideoBillboardPreview {
             for (String hwaccel : VideoFeatureFlags.requestedHwaccelCandidates()) {
                 try {
                     return new Fmp4NativeVideoDecoder(videoUrl, codecId, targetWidth, targetHeight,
-                            Integer.MAX_VALUE, true, false, hwaccel, startOffsetMillis, totalMillis, fps);
+                            Integer.MAX_VALUE, true, YUV420_DECODE_BACKEND, hwaccel, startOffsetMillis, totalMillis,
+                            fps);
                 } catch (IOException e) {
                     last = e;
                     LOGGER.warn("Native 视频解码器启动失败 hwaccel={}，尝试下一个候选: {}", hwaccel, e.toString());
@@ -683,7 +769,7 @@ public final class VideoBillboardPreview {
         Minecraft.getInstance().execute(() -> {
             stopForReplace();
             startInternal(req.videoUrl(), nextWidth, nextHeight, req.fps(), req.codecId(), req.preferNative(),
-                    req.decoderOverride(), req.sessionId(), elapsed, req.totalMillis(), req.anchorPositions());
+                    req.decoderOverride(), req.sessionId(), elapsed, req.totalMillis(), req.anchorPositions(), true);
         });
         return true;
     }
@@ -707,16 +793,23 @@ public final class VideoBillboardPreview {
     }
 
     static final class DecodedFrame implements AutoCloseable {
-        private final byte[] rgba;
+        private final Fmp4NativeVideoDecoder.DecodedFrame.Format format;
+        private final byte[] data;
         private final AutoCloseable delegate;
         private final long ptsNanos;
 
         private DecodedFrame(byte[] rgba, AutoCloseable delegate) {
-            this(rgba, delegate, -1L);
+            this(Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, rgba, delegate, -1L);
         }
 
         private DecodedFrame(byte[] rgba, AutoCloseable delegate, long ptsNanos) {
-            this.rgba = rgba;
+            this(Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, rgba, delegate, ptsNanos);
+        }
+
+        private DecodedFrame(Fmp4NativeVideoDecoder.DecodedFrame.Format format, byte[] data, AutoCloseable delegate,
+                long ptsNanos) {
+            this.format = format != null ? format : Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA;
+            this.data = data;
             this.delegate = delegate;
             this.ptsNanos = ptsNanos;
         }
@@ -726,15 +819,30 @@ public final class VideoBillboardPreview {
         }
 
         static DecodedFrame wrap(Fmp4NativeVideoDecoder.DecodedFrame frame) {
-            return frame != null ? new DecodedFrame(frame.rgba(), frame, frame.ptsNanos()) : null;
+            return frame != null ? new DecodedFrame(frame.format(), frame.data(), frame, frame.ptsNanos()) : null;
+        }
+
+        Fmp4NativeVideoDecoder.DecodedFrame.Format format() {
+            return format;
+        }
+
+        byte[] data() {
+            return data;
         }
 
         byte[] rgba() {
-            return rgba;
+            if (format != Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA) {
+                throw new IllegalStateException("decoded frame is " + format + ", not RGBA");
+            }
+            return data;
         }
 
         long ptsNanos() {
             return ptsNanos;
+        }
+
+        DecodedFrame copyDetached() {
+            return new DecodedFrame(format, data != null ? data.clone() : null, null, ptsNanos);
         }
 
         @Override
@@ -824,15 +932,27 @@ public final class VideoBillboardPreview {
     }
 
     private static void decodeCpuBarsLoop(int targetWidth, int targetHeight, int fps) {
-        int frameSize = targetWidth * targetHeight * 4;
+        int evenWidth = Math.max(2, targetWidth & ~1);
+        int evenHeight = Math.max(2, targetHeight & ~1);
+        int frameSize = YUV420_SHADER_BACKEND ? evenWidth * evenHeight * 3 / 2 : targetWidth * targetHeight * 4;
         long frameDelayMs = fps > 0 ? Math.max(1L, 1000L / fps) : 50L;
         long frameIndex = 0L;
-        LOGGER.info("视频 billboard 使用 CPU 纯色彩条诊断模式: {}x{} @ {}fps", targetWidth, targetHeight, fps);
+        LOGGER.info("视频 billboard 使用 CPU 纯色彩条诊断模式: {}x{} @ {}fps, yuvShaderBackend={}",
+                YUV420_SHADER_BACKEND ? evenWidth : targetWidth,
+                YUV420_SHADER_BACKEND ? evenHeight : targetHeight,
+                fps, YUV420_SHADER_BACKEND);
         try {
             while (running) {
                 byte[] frame = new byte[frameSize];
-                fillCpuBars(frame, targetWidth, targetHeight, frameIndex++);
-                Minecraft.getInstance().execute(() -> uploadFrame(frame, targetWidth, targetHeight));
+                long currentFrameIndex = frameIndex++;
+                if (YUV420_SHADER_BACKEND) {
+                    fillCpuBarsYuv420p(frame, evenWidth, evenHeight, currentFrameIndex);
+                    Minecraft.getInstance()
+                            .execute(() -> uploadYuv420FrameOnRenderThreadForBench(frame, evenWidth, evenHeight));
+                } else {
+                    fillCpuBars(frame, targetWidth, targetHeight, currentFrameIndex);
+                    Minecraft.getInstance().execute(() -> uploadFrame(frame, targetWidth, targetHeight));
+                }
                 try {
                     Thread.sleep(frameDelayMs);
                 } catch (InterruptedException e) {
@@ -846,68 +966,109 @@ public final class VideoBillboardPreview {
         }
     }
 
+    private static void fillCpuBarsYuv420p(byte[] frame, int frameWidth, int frameHeight, long frameIndex) {
+        int ySize = frameWidth * frameHeight;
+        int uvWidth = frameWidth / 2;
+        int uvHeight = frameHeight / 2;
+        int uBase = ySize;
+        int vBase = ySize + uvWidth * uvHeight;
+        int phase = (int) (frameIndex % Math.max(1, frameWidth));
+        for (int y = 0; y < frameHeight; y++) {
+            for (int x = 0; x < frameWidth; x++) {
+                int[] rgb = cpuBarRgb(x, frameWidth, phase);
+                int[] yuv = rgbToLimitedBt709(rgb[0], rgb[1], rgb[2]);
+                frame[y * frameWidth + x] = (byte) yuv[0];
+            }
+        }
+        for (int y = 0; y < uvHeight; y++) {
+            for (int x = 0; x < uvWidth; x++) {
+                int sx = Math.min(frameWidth - 1, x * 2);
+                int[] rgb = cpuBarRgb(sx, frameWidth, phase);
+                int[] yuv = rgbToLimitedBt709(rgb[0], rgb[1], rgb[2]);
+                int i = y * uvWidth + x;
+                frame[uBase + i] = (byte) yuv[1];
+                frame[vBase + i] = (byte) yuv[2];
+            }
+        }
+    }
+
     private static void fillCpuBars(byte[] frame, int frameWidth, int frameHeight, long frameIndex) {
         int phase = (int) (frameIndex % Math.max(1, frameWidth));
         for (int y = 0; y < frameHeight; y++) {
             for (int x = 0; x < frameWidth; x++) {
-                int bar = (x * 8) / Math.max(1, frameWidth);
-                int r;
-                int g;
-                int b;
-                switch (bar) {
-                    case 0 -> {
-                        r = 255;
-                        g = 0;
-                        b = 0;
-                    }
-                    case 1 -> {
-                        r = 0;
-                        g = 255;
-                        b = 0;
-                    }
-                    case 2 -> {
-                        r = 0;
-                        g = 0;
-                        b = 255;
-                    }
-                    case 3 -> {
-                        r = 255;
-                        g = 255;
-                        b = 0;
-                    }
-                    case 4 -> {
-                        r = 0;
-                        g = 255;
-                        b = 255;
-                    }
-                    case 5 -> {
-                        r = 255;
-                        g = 0;
-                        b = 255;
-                    }
-                    case 6 -> {
-                        r = 255;
-                        g = 255;
-                        b = 255;
-                    }
-                    default -> {
-                        r = 32;
-                        g = 32;
-                        b = 32;
-                    }
-                }
-                if (Math.abs(((x + phase) % frameWidth) - frameWidth / 2) < 6) {
-                    r = 255;
-                    g = 255;
-                    b = 255;
-                }
+                int[] rgb = cpuBarRgb(x, frameWidth, phase);
                 int i = (y * frameWidth + x) * 4;
-                frame[i] = (byte) r;
-                frame[i + 1] = (byte) g;
-                frame[i + 2] = (byte) b;
+                frame[i] = (byte) rgb[0];
+                frame[i + 1] = (byte) rgb[1];
+                frame[i + 2] = (byte) rgb[2];
                 frame[i + 3] = (byte) 255;
             }
         }
+    }
+
+    private static int[] cpuBarRgb(int x, int frameWidth, int phase) {
+        int r;
+        int g;
+        int b;
+        switch ((x * 8) / Math.max(1, frameWidth)) {
+            case 0 -> {
+                r = 255;
+                g = 0;
+                b = 0;
+            }
+            case 1 -> {
+                r = 0;
+                g = 255;
+                b = 0;
+            }
+            case 2 -> {
+                r = 0;
+                g = 0;
+                b = 255;
+            }
+            case 3 -> {
+                r = 255;
+                g = 255;
+                b = 0;
+            }
+            case 4 -> {
+                r = 0;
+                g = 255;
+                b = 255;
+            }
+            case 5 -> {
+                r = 255;
+                g = 0;
+                b = 255;
+            }
+            case 6 -> {
+                r = 255;
+                g = 255;
+                b = 255;
+            }
+            default -> {
+                r = 32;
+                g = 32;
+                b = 32;
+            }
+        }
+        if (Math.abs(((x + phase) % frameWidth) - frameWidth / 2) < 6) {
+            r = 255;
+            g = 255;
+            b = 255;
+        }
+        return new int[] { r, g, b };
+    }
+
+    private static int[] rgbToLimitedBt709(int r, int g, int b) {
+        int y = Math.round(16.0F + (65.481F * r + 128.553F * g + 24.966F * b) / 255.0F);
+        int u = Math.round(128.0F + (-37.797F * r - 74.203F * g + 112.0F * b) / 255.0F);
+        int v = Math.round(128.0F + (112.0F * r - 93.786F * g - 18.214F * b) / 255.0F);
+        return new int[] { clampByte(y), clampByte(u), clampByte(v) };
+    }
+
+    private static int clampByte(int value) {
+        return value < 0 ? 0 : value > 255 ? 255 : value;
     }
 
     private static void readRawVideoLoop(InputStream stdout, int targetWidth, int targetHeight, int fps)
@@ -960,7 +1121,7 @@ public final class VideoBillboardPreview {
         uploadFrameOnRenderThread(rgba, frameWidth, frameHeight);
     }
 
-    private static long uploadFrameSync(byte[] rgba, int frameWidth, int frameHeight, long generation) {
+    private static long uploadFrameSync(DecodedFrame frame, int frameWidth, int frameHeight, long generation) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level == null || generation != decodeGeneration.get() || !running || !isActiveProjectorValid()) {
             return -1L;
@@ -972,7 +1133,7 @@ public final class VideoBillboardPreview {
                 return;
             }
             long startNs = System.nanoTime();
-            boolean ok = uploadFrameOnRenderThread(rgba, frameWidth, frameHeight);
+            boolean ok = uploadDecodedFrameOnRenderThread(frame, frameWidth, frameHeight);
             future.complete(ok ? System.nanoTime() - startNs : -1L);
         });
         try {
@@ -984,6 +1145,15 @@ public final class VideoBillboardPreview {
             LOGGER.error("视频渲染上传帧失败", e);
             return -1L;
         }
+    }
+
+    private static boolean uploadDecodedFrameOnRenderThread(DecodedFrame frame, int frameWidth, int frameHeight) {
+        if (isCustomYuvShaderAvailable() && frame != null
+                && frame.format() == Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P) {
+            return uploadYuvFrameOnRenderThread(frame, frameWidth, frameHeight);
+        }
+        return uploadFrameOnRenderThread(Yuv420pConverter.toUploadRgba(frame, frameWidth, frameHeight), frameWidth,
+                frameHeight);
     }
 
     public static long uploadFrameSyncForBench(byte[] rgba, int frameWidth, int frameHeight) {
@@ -1028,6 +1198,57 @@ public final class VideoBillboardPreview {
             LOGGER.error("视频渲染 bench packed 上传失败", e);
             return -1L;
         }
+    }
+
+    public static long uploadYuv420FrameSyncForBench(byte[] yuv420p, int frameWidth, int frameHeight) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null) {
+            return -1L;
+        }
+        CompletableFuture<Long> future = new CompletableFuture<>();
+        minecraft.execute(() -> {
+            long startNs = System.nanoTime();
+            boolean ok = uploadYuv420FrameOnRenderThreadForBench(yuv420p, frameWidth, frameHeight);
+            future.complete(ok ? System.nanoTime() - startNs : -1L);
+        });
+        try {
+            return future.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return -1L;
+        } catch (ExecutionException e) {
+            LOGGER.error("视频渲染 bench YUV420P 三平面上传失败", e);
+            return -1L;
+        }
+    }
+
+    private static boolean uploadYuv420FrameOnRenderThreadForBench(byte[] yuv420p, int frameWidth, int frameHeight) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null) {
+            return false;
+        }
+        if (!YUV420_UPLOAD_PLANES) {
+            LOGGER.warn("YUV420P bench 诊断：bili.video.yuv.upload_planes=false，跳过 RED8 三平面纹理创建，临时 CPU 转 RGBA 上传");
+            return uploadFrameOnRenderThread(Yuv420pConverter.yuv420pToRgba(yuv420p, frameWidth, frameHeight),
+                    frameWidth, frameHeight);
+        }
+        if (!isCustomYuvShaderAvailable()) {
+            return uploadFrameOnRenderThread(Yuv420pConverter.yuv420pToRgba(yuv420p, frameWidth, frameHeight),
+                    frameWidth, frameHeight);
+        }
+        // real_bench 是“真实播放链路压测”，不是纯上传微基准；复用 preview 的 YUV 纹理集，
+        // 这样 SubmitCustomGeometry 能把正在压测的帧真正画到世界里。独立 bench 纹理仅保留给未来纯上传对照。
+        ensureYuvTextureSet();
+        boolean ok = yuvTextureSet.upload(yuv420p, frameWidth, frameHeight);
+        if (!ok) {
+            LOGGER.warn("视频 YUV420P bench 帧大小不足: bytes={}, expected={}",
+                    yuv420p != null ? yuv420p.length : 0, frameWidth * frameHeight * 3 / 2);
+            return false;
+        }
+        width = frameWidth;
+        height = frameHeight;
+        hasFrame = true;
+        return true;
     }
 
     private static boolean uploadPackedBytesOnRenderThread(byte[] packedRgbaBytes, int textureWidth,
@@ -1075,6 +1296,35 @@ public final class VideoBillboardPreview {
         return true;
     }
 
+    private static boolean uploadYuvFrameOnRenderThread(DecodedFrame frame, int frameWidth, int frameHeight) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null) {
+            return false;
+        }
+        if (!YUV420_UPLOAD_PLANES) {
+            LOGGER.warn("YUV420P preview 诊断：bili.video.yuv.upload_planes=false，跳过 RED8 三平面纹理创建，临时 CPU 转 RGBA 上传");
+            return uploadFrameOnRenderThread(Yuv420pConverter.toUploadRgba(frame, frameWidth, frameHeight), frameWidth,
+                    frameHeight);
+        }
+        ensureYuvTextureSet();
+        if (!yuvTextureSet.upload(frame, frameWidth, frameHeight)) {
+            LOGGER.warn("YUV420P 视频帧大小不足或格式错误: format={}, bytes={}", frame != null ? frame.format() : null,
+                    frame != null && frame.data() != null ? frame.data().length : 0);
+            return false;
+        }
+        width = frameWidth;
+        height = frameHeight;
+        hasFrame = true;
+        return true;
+    }
+
+    private static void ensureYuvTextureSet() {
+        if (yuvTextureSet == null) {
+            yuvTextureSet = new Yuv420pTextureSet(YUV_TEXTURE_Y_ID, YUV_TEXTURE_U_ID, YUV_TEXTURE_V_ID,
+                    "bili_video_billboard_preview_yuv");
+        }
+    }
+
     private static void ensureTexture(int frameWidth, int frameHeight) {
         if (texture != null) {
             NativeImage image = texture.getPixels();
@@ -1113,6 +1363,10 @@ public final class VideoBillboardPreview {
             Minecraft.getInstance().getTextureManager().release(TEXTURE_ID);
             texture.close();
             texture = null;
+        }
+        if (yuvTextureSet != null) {
+            yuvTextureSet.close();
+            yuvTextureSet = null;
         }
         releasePackedBenchTexture();
     }
@@ -1160,7 +1414,21 @@ public final class VideoBillboardPreview {
                 return !instance.isRunning() && !instance.hasFrame();
             });
         }
-        if (!hasFrame || texture == null || width <= 0 || height <= 0) {
+        boolean renderYuvFrame = shouldRenderYuvFrame();
+        if (!hasFrame || (!renderYuvFrame && texture == null) || width <= 0 || height <= 0) {
+            return;
+        }
+
+        // Iris shaderpacks capture SubmitCustomGeometry as entity/custom geometry. Once
+        // we bypass Iris' shaderpack program for the YUV pipeline, that capture path
+        // can
+        // still write depth/layer state while the color contribution lands in the wrong
+        // target, producing an invisible rectangle that blocks clouds/fog. Draw YUV
+        // later
+        // via RenderLevelStageEvent as an immediate RenderType draw when shaderpacks
+        // are
+        // active; keep RGBA on the normal submit path.
+        if (renderYuvFrame && shouldDrawYuvImmediateWithIris()) {
             return;
         }
 
@@ -1172,7 +1440,11 @@ public final class VideoBillboardPreview {
                 return;
             }
             for (VideoProjectorBlockEntity projector : projectors) {
-                submitProjectorGeometry(event, minecraft, camera, projector);
+                if (renderYuvFrame) {
+                    submitProjectorYuvGeometry(event, minecraft, camera, projector, yuvTextureSet);
+                } else {
+                    submitProjectorGeometry(event, minecraft, camera, projector);
+                }
             }
             return;
         }
@@ -1272,15 +1544,317 @@ public final class VideoBillboardPreview {
         }
 
         PoseStack poseStack = new PoseStack();
+        logFirstPreviewSubmit(renderYuvFrame, width, height, camera, anchorX, anchorY, anchorZ,
+                renderYuvFrame ? "preview-yuv" : "preview-rgba");
         event.getSubmitNodeCollector().submitCustomGeometry(
                 poseStack,
-                RenderTypes.entityCutout(TEXTURE_ID),
+                renderYuvFrame
+                        ? yuvRenderTypeForCurrentIrisProgram(yuvTextureSet)
+                        : YuvVideoRenderTypes.videoRgbaEntity(TEXTURE_ID),
                 (pose, buffer) -> {
                     emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
                             false);
                     emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
                             true);
                 });
+    }
+
+    @SubscribeEvent
+    public static void onRenderLevelAfterTranslucentBlocks(RenderLevelStageEvent.AfterTranslucentBlocks event) {
+        if (!"after_translucent_blocks".equals(YUV_IMMEDIATE_STAGE)) {
+            return;
+        }
+        renderInstanceProjectorYuvImmediate(event, "instance-projector-yuv-immediate-after-translucent-blocks");
+        renderProjectorYuvImmediate(event, "projector-yuv-immediate-after-translucent-blocks");
+        renderPreviewYuvImmediate(event, "preview-yuv-immediate-after-translucent-blocks");
+    }
+
+    @SubscribeEvent
+    public static void onRenderLevelAfterLevel(RenderLevelStageEvent.AfterLevel event) {
+        if (!"after_level".equals(YUV_IMMEDIATE_STAGE)) {
+            return;
+        }
+        renderInstanceProjectorYuvImmediate(event, "instance-projector-yuv-immediate-after-level");
+        renderProjectorYuvImmediate(event, "projector-yuv-immediate-after-level");
+        renderPreviewYuvImmediate(event, "preview-yuv-immediate-after-level");
+    }
+
+    private static void renderInstanceProjectorYuvImmediate(RenderLevelStageEvent event, String route) {
+        if (!shouldDrawYuvImmediateWithIris() || INSTANCES.isEmpty()) {
+            return;
+        }
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null || minecraft.player == null) {
+            return;
+        }
+        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+            instance.renderYuvImmediate(event, route);
+        }
+    }
+
+    private static void renderPreviewYuvImmediate(RenderLevelStageEvent event, String route) {
+        if (loggedYuvImmediateStage.compareAndSet(false, true)) {
+            LOGGER.warn("Iris/YUV: 当前非投影预览 immediate 绘制阶段为 '{}'，坐标模式为 '{}'，pose='{}'，route={}",
+                    YUV_IMMEDIATE_STAGE, YUV_IMMEDIATE_COORDS, YUV_IMMEDIATE_POSE, route);
+        }
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null || minecraft.player == null || activeRequiresProjector) {
+            return;
+        }
+        if (!hasFrame || !shouldRenderYuvFrame() || yuvTextureSet == null || width <= 0 || height <= 0) {
+            return;
+        }
+
+        Camera camera = minecraft.gameRenderer.getMainCamera();
+        boolean cameraRelative = "camera_relative".equals(YUV_IMMEDIATE_COORDS)
+                || "camera-relative".equals(YUV_IMMEDIATE_COORDS)
+                || "relative".equals(YUV_IMMEDIATE_COORDS);
+        PreviewQuad quad = computePreviewQuad(minecraft, camera, null, width, height, cameraRelative, true);
+        if (quad == null) {
+            return;
+        }
+
+        RenderType renderType = yuvRenderTypeForCurrentIrisProgram(yuvTextureSet);
+        BufferBuilder builder = Tesselator.getInstance().begin(renderType.mode(), renderType.format());
+        PoseStack poseStack = "identity".equals(YUV_IMMEDIATE_POSE) ? new PoseStack() : event.getPoseStack();
+        PoseStack.Pose pose = poseStack.last();
+        emitQuad(builder, pose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),
+                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), false);
+        emitQuad(builder, pose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),
+                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), true);
+        MeshData mesh = builder.build();
+        if (mesh == null) {
+            return;
+        }
+
+        logFirstPreviewSubmit(true, width, height, camera, anchorX, anchorY, anchorZ,
+                route);
+        if (YUV_DEBUG_LOG) {
+            logFirstImmediateQuad(quad, camera, cameraRelative, true);
+        }
+        drawWithEventModelView(renderType, mesh, event);
+    }
+
+    static boolean shouldDrawYuvImmediateWithIris() {
+        return IrisShaderpackCompat.shouldApplyIrisYuvCompatibility();
+    }
+
+    private static void renderProjectorYuvImmediate(RenderLevelStageEvent event, String route) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null || minecraft.player == null || !activeRequiresProjector) {
+            return;
+        }
+        if (!hasFrame || !shouldRenderYuvFrame() || yuvTextureSet == null || width <= 0 || height <= 0) {
+            return;
+        }
+        if (!shouldDrawYuvImmediateWithIris()) {
+            return;
+        }
+
+        Camera camera = minecraft.gameRenderer.getMainCamera();
+        List<VideoProjectorBlockEntity> projectors = activeVideoProjectors(minecraft);
+        if (projectors.isEmpty()) {
+            stop();
+            return;
+        }
+        boolean cameraRelative = "camera_relative".equals(YUV_IMMEDIATE_COORDS)
+                || "camera-relative".equals(YUV_IMMEDIATE_COORDS)
+                || "relative".equals(YUV_IMMEDIATE_COORDS);
+        if (!loggedProjectorYuvImmediate) {
+            loggedProjectorYuvImmediate = true;
+            LOGGER.warn("Iris/YUV: shaderpack 下投影仪 YUV 改用 immediate 绘制阶段 '{}'，坐标模式 '{}'，route={}",
+                    YUV_IMMEDIATE_STAGE, YUV_IMMEDIATE_COORDS, route);
+        }
+
+        for (VideoProjectorBlockEntity projector : projectors) {
+            drawProjectorYuvImmediate(event, minecraft, camera, projector, yuvTextureSet, route, cameraRelative);
+        }
+    }
+
+    static boolean drawProjectorYuvImmediate(RenderLevelStageEvent event, Minecraft minecraft, Camera camera,
+            VideoProjectorBlockEntity projector, Yuv420pTextureSet textures, String route) {
+        boolean cameraRelative = "camera_relative".equals(YUV_IMMEDIATE_COORDS)
+                || "camera-relative".equals(YUV_IMMEDIATE_COORDS)
+                || "relative".equals(YUV_IMMEDIATE_COORDS);
+        return drawProjectorYuvImmediate(event, minecraft, camera, projector, textures, route, cameraRelative);
+    }
+
+    private static boolean drawProjectorYuvImmediate(RenderLevelStageEvent event, Minecraft minecraft, Camera camera,
+            VideoProjectorBlockEntity projector, Yuv420pTextureSet textures, String route, boolean cameraRelative) {
+        if (projector == null || textures == null || textures.width() <= 0 || textures.height() <= 0) {
+            return false;
+        }
+        PreviewQuad quad = computePreviewQuad(minecraft, camera, projector,
+                textures.width(), textures.height(), cameraRelative, true);
+        if (quad == null) {
+            return false;
+        }
+        RenderType renderType = yuvRenderTypeForCurrentIrisProgram(textures);
+        BufferBuilder builder = Tesselator.getInstance().begin(renderType.mode(), renderType.format());
+        PoseStack poseStack = "identity".equals(YUV_IMMEDIATE_POSE) ? new PoseStack() : event.getPoseStack();
+        PoseStack.Pose pose = poseStack.last();
+        emitQuad(builder, pose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),
+                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), false);
+        emitQuad(builder, pose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),
+                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), true);
+        MeshData mesh = builder.build();
+        if (mesh == null) {
+            return false;
+        }
+        logFirstPreviewSubmit(true, textures.width(), textures.height(), camera,
+                projector.getBlockPos().getX() + 0.5D + projector.getProjectionDistanceX(),
+                projector.getBlockPos().getY() + projector.getProjectionHeight(),
+                projector.getBlockPos().getZ() + 0.5D + projector.getProjectionDistanceZ(), route);
+        drawWithEventModelView(renderType, mesh, event);
+        return true;
+    }
+
+    private static void drawWithEventModelView(RenderType renderType, MeshData mesh, RenderLevelStageEvent event) {
+        Matrix4fStack modelViewStack = RenderSystem.getModelViewStack();
+        modelViewStack.pushMatrix();
+        try {
+            // RenderType.draw() ignores the PoseStack used to build vertices and uploads
+            // RenderSystem's current
+            // model-view matrix as DynamicTransforms. RenderLevelStageEvent exposes the
+            // world pass model-view; set it
+            // explicitly here so camera-relative vertices stay fixed in world space under
+            // Iris/Sodium AfterLevel draws.
+            modelViewStack.set(event.getModelViewMatrix());
+            renderType.draw(mesh);
+        } finally {
+            modelViewStack.popMatrix();
+        }
+    }
+
+    private static void logFirstImmediateQuad(PreviewQuad quad, Camera camera, boolean cameraRelative,
+            boolean forceWorldAnchored) {
+        if (firstImmediateQuadLogged) {
+            return;
+        }
+        firstImmediateQuadLogged = true;
+        Vec3 cameraPos = camera.position();
+        LOGGER.debug(
+                "Iris/YUV immediate quad: cameraRelative={}, forceWorldAnchored={}, pose='{}', anchor=({}, {}, {}), "
+                        + "anchorYaw={}, camera=({}, {}, {}), p0=({}, {}, {}), p1=({}, {}, {}), p2=({}, {}, {}), p3=({}, {}, {})",
+                cameraRelative, forceWorldAnchored, YUV_IMMEDIATE_POSE,
+                fmt(anchorX), fmt(anchorY), fmt(anchorZ), fmt(anchorYawDeg),
+                fmt(cameraPos.x), fmt(cameraPos.y), fmt(cameraPos.z),
+                fmt(quad.p0x()), fmt(quad.p0y()), fmt(quad.p0z()),
+                fmt(quad.p1x()), fmt(quad.p1y()), fmt(quad.p1z()),
+                fmt(quad.p2x()), fmt(quad.p2y()), fmt(quad.p2z()),
+                fmt(quad.p3x()), fmt(quad.p3y()), fmt(quad.p3z()));
+    }
+
+    private static String fmt(double value) {
+        return String.format(java.util.Locale.ROOT, "%.2f", value);
+    }
+
+    private static PreviewQuad computePreviewQuad(Minecraft minecraft, Camera camera,
+            VideoProjectorBlockEntity projector,
+            int textureWidth, int textureHeight, boolean cameraRelative, boolean forceWorldAnchored) {
+        float scale = projector != null ? Math.abs(projector.getProjectionScale()) : 1.0F;
+        float aspect = textureWidth / (float) textureHeight;
+        float halfHeight = HEIGHT * scale * 0.5F;
+        float halfWidth = halfHeight * aspect;
+
+        final float p0x;
+        final float p0y;
+        final float p0z;
+        final float p1x;
+        final float p1y;
+        final float p1z;
+        final float p2x;
+        final float p2y;
+        final float p2z;
+        final float p3x;
+        final float p3y;
+        final float p3z;
+
+        if (forceWorldAnchored || WORLD_ANCHORED || activeRequiresProjector) {
+            ensureWorldAnchor(minecraft, camera, projector);
+            Vec3 cameraPos = camera.position();
+            double dx = anchorX - cameraPos.x;
+            double dy = anchorY - cameraPos.y;
+            double dz = anchorZ - cameraPos.z;
+            if (dx * dx + dy * dy + dz * dz > MAX_RENDER_DISTANCE_SQR) {
+                return null;
+            }
+
+            double yawRad = Math.toRadians(anchorYawDeg);
+            double pitchRad = Math.toRadians(projector != null ? projector.getProjectionPitch() : 0.0F);
+            float rightX = (float) Math.cos(yawRad);
+            float rightZ = (float) Math.sin(yawRad);
+            float forwardX = (float) -Math.sin(yawRad);
+            float forwardZ = (float) Math.cos(yawRad);
+            float upX = (float) (forwardX * Math.sin(pitchRad));
+            float upY = (float) Math.cos(pitchRad);
+            float upZ = (float) (forwardZ * Math.sin(pitchRad));
+
+            float cx = cameraRelative ? (float) (anchorX - cameraPos.x) : (float) anchorX;
+            float cy = cameraRelative ? (float) (anchorY - cameraPos.y) : (float) anchorY;
+            float cz = cameraRelative ? (float) (anchorZ - cameraPos.z) : (float) anchorZ;
+            float rx = rightX * halfWidth;
+            float rz = rightZ * halfWidth;
+            float ux = upX * halfHeight;
+            float uy = upY * halfHeight;
+            float uz = upZ * halfHeight;
+
+            p0x = cx - rx + ux;
+            p0y = cy + uy;
+            p0z = cz - rz + uz;
+            p1x = cx - rx - ux;
+            p1y = cy - uy;
+            p1z = cz - rz - uz;
+            p2x = cx + rx - ux;
+            p2y = cy - uy;
+            p2z = cz + rz - uz;
+            p3x = cx + rx + ux;
+            p3y = cy + uy;
+            p3z = cz + rz + uz;
+        } else {
+            Vector3fc forward = camera.forwardVector();
+            Vector3fc left = camera.leftVector();
+            Vector3fc up = camera.upVector();
+
+            float cx = (float) (forward.x() * DISTANCE);
+            float cy = (float) (forward.y() * DISTANCE);
+            float cz = (float) (forward.z() * DISTANCE);
+            float lx = left.x() * halfWidth;
+            float ly = left.y() * halfWidth;
+            float lz = left.z() * halfWidth;
+            float ux = up.x() * halfHeight;
+            float uy = up.y() * halfHeight;
+            float uz = up.z() * halfHeight;
+
+            p0x = cx + lx + ux;
+            p0y = cy + ly + uy;
+            p0z = cz + lz + uz;
+            p1x = cx + lx - ux;
+            p1y = cy + ly - uy;
+            p1z = cz + lz - uz;
+            p2x = cx - lx - ux;
+            p2y = cy - ly - uy;
+            p2z = cz - lz - uz;
+            p3x = cx - lx + ux;
+            p3y = cy - ly + uy;
+            p3z = cz - lz + uz;
+        }
+
+        return new PreviewQuad(p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z);
+    }
+
+    private record PreviewQuad(float p0x, float p0y, float p0z, float p1x, float p1y, float p1z,
+            float p2x, float p2y, float p2z, float p3x, float p3y, float p3z) {
+    }
+
+    private static boolean shouldRenderYuvFrame() {
+        // 正常播放由 render.backend 选择 shader；real_bench 的 yuv420 上传会直接写入 yuvTextureSet，
+        // 此时即使全局 backend 仍是 rgba，也应该把压测帧提交出来，否则日志在跑但世界里没有画面。
+        return yuvTextureSet != null && isCustomYuvShaderAvailable() && (YUV420_SHADER_BACKEND || texture == null);
+    }
+
+    public static boolean isCustomYuvShaderAvailable() {
+        return YUV420_SHADER_BACKEND && !IrisShaderpackCompat.shouldDisableCustomYuvShader();
     }
 
     private static void submitProjectorGeometry(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera,
@@ -1340,15 +1914,130 @@ public final class VideoBillboardPreview {
         final float p3z = cz + rz + uz;
 
         PoseStack poseStack = new PoseStack();
+        logFirstPreviewSubmit(false, textureWidth, textureHeight, camera, anchorX, anchorY, anchorZ,
+                "projector-rgba");
         event.getSubmitNodeCollector().submitCustomGeometry(
                 poseStack,
-                RenderTypes.entityCutout(renderTextureId),
+                YuvVideoRenderTypes.videoRgbaEntity(renderTextureId),
                 (pose, buffer) -> {
                     emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
                             false);
                     emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
                             true);
                 });
+    }
+
+    static void submitProjectorYuvGeometry(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera,
+            VideoProjectorBlockEntity projector, Yuv420pTextureSet textures) {
+        submitProjectorGeometry(event, minecraft, camera, projector,
+                yuvRenderTypeForCurrentIrisProgram(textures),
+                textures.width(), textures.height());
+    }
+
+    private static net.minecraft.client.renderer.rendertype.RenderType yuvRenderTypeForCurrentIrisProgram(
+            Yuv420pTextureSet textures) {
+        if (IrisShaderpackCompat.shouldForceSafeProbeRenderType()
+                || IrisShaderpackCompat.shouldUseSingleSamplerProbe()
+                || IrisShaderpackCompat.isTexturedProbeProgram()) {
+            if (loggedIrisYuvRenderType.compareAndSet(false, true)) {
+                LOGGER.info(
+                        "Iris/YUV: 首个视频 YUV draw 使用 TEXTURED probe RenderType，绑定 Sampler0/1/2=Y plane，占位规避 shaderpack sampler 校验；非真彩 YUV");
+            }
+            return YuvVideoRenderTypes.yOnlyTexturedProbeEntity(textures.yId());
+        }
+        if (loggedIrisYuvRenderType.compareAndSet(false, true)) {
+            LOGGER.info("Iris/YUV: 首个视频 YUV draw 使用三平面 RenderType，Sampler0/1/2=Y/U/V");
+        }
+        return YuvVideoRenderTypes.yuv420pEntity(textures.yId(), textures.uId(), textures.vId());
+    }
+
+    private static void submitProjectorGeometry(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera,
+            VideoProjectorBlockEntity projector, net.minecraft.client.renderer.rendertype.RenderType renderType,
+            int textureWidth, int textureHeight) {
+        float scale = Math.abs(projector.getProjectionScale());
+        float aspect = textureWidth / (float) textureHeight;
+        float halfHeight = HEIGHT * scale * 0.5F;
+        float halfWidth = halfHeight * aspect;
+
+        ensureWorldAnchor(minecraft, camera, projector);
+        Vec3 cameraPos = camera.position();
+        double dx = anchorX - cameraPos.x;
+        double dy = anchorY - cameraPos.y;
+        double dz = anchorZ - cameraPos.z;
+        if (dx * dx + dy * dy + dz * dz > MAX_RENDER_DISTANCE_SQR) {
+            return;
+        }
+        if (!isScreenInView(camera, anchorX, anchorY, anchorZ)) {
+            return;
+        }
+
+        double yawRad = Math.toRadians(anchorYawDeg);
+        double pitchRad = Math.toRadians(projector.getProjectionPitch());
+        float rightX = (float) Math.cos(yawRad);
+        float rightZ = (float) Math.sin(yawRad);
+        float forwardX = (float) -Math.sin(yawRad);
+        float forwardZ = (float) Math.cos(yawRad);
+        float upX = (float) (forwardX * Math.sin(pitchRad));
+        float upY = (float) Math.cos(pitchRad);
+        float upZ = (float) (forwardZ * Math.sin(pitchRad));
+
+        float cx = (float) (anchorX - cameraPos.x);
+        float cy = (float) (anchorY - cameraPos.y);
+        float cz = (float) (anchorZ - cameraPos.z);
+        float rx = rightX * halfWidth;
+        float rz = rightZ * halfWidth;
+        float ux = upX * halfHeight;
+        float uy = upY * halfHeight;
+        float uz = upZ * halfHeight;
+
+        final float p0x = cx - rx + ux;
+        final float p0y = cy + uy;
+        final float p0z = cz - rz + uz;
+        final float p1x = cx - rx - ux;
+        final float p1y = cy - uy;
+        final float p1z = cz - rz - uz;
+        final float p2x = cx + rx - ux;
+        final float p2y = cy - uy;
+        final float p2z = cz + rz - uz;
+        final float p3x = cx + rx + ux;
+        final float p3y = cy + uy;
+        final float p3z = cz + rz + uz;
+
+        PoseStack poseStack = new PoseStack();
+        logFirstPreviewSubmit(true, textureWidth, textureHeight, camera, anchorX, anchorY, anchorZ,
+                "projector-yuv");
+        event.getSubmitNodeCollector().submitCustomGeometry(
+                poseStack,
+                renderType,
+                (pose, buffer) -> {
+                    emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
+                            false);
+                    emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
+                            true);
+                });
+    }
+
+    private static void logFirstPreviewSubmit(boolean yuv, int textureWidth, int textureHeight, Camera camera,
+            double centerX, double centerY, double centerZ, String route) {
+        if (firstPreviewSubmitLogged) {
+            return;
+        }
+        firstPreviewSubmitLogged = true;
+        Vec3 cameraPos = camera.position();
+        double dx = centerX - cameraPos.x;
+        double dy = centerY - cameraPos.y;
+        double dz = centerZ - cameraPos.z;
+        LOGGER.debug("视频 quad 已提交: route={}, yuv={}, size={}x{}, distance={}, "
+                + "anchor=({}, {}, {}), camera=({}, {}, {}), shaderAvailable={}, yuvTextureSet={}", route, yuv,
+                textureWidth, textureHeight,
+                String.format(java.util.Locale.ROOT, "%.2f", Math.sqrt(dx * dx + dy * dy + dz * dz)),
+                String.format(java.util.Locale.ROOT, "%.2f", centerX),
+                String.format(java.util.Locale.ROOT, "%.2f", centerY),
+                String.format(java.util.Locale.ROOT, "%.2f", centerZ),
+                String.format(java.util.Locale.ROOT, "%.2f", cameraPos.x),
+                String.format(java.util.Locale.ROOT, "%.2f", cameraPos.y),
+                String.format(java.util.Locale.ROOT, "%.2f", cameraPos.z),
+                isCustomYuvShaderAvailable(), yuvTextureSet != null);
     }
 
     private static void ensureWorldAnchor(Minecraft minecraft, Camera camera, VideoProjectorBlockEntity projector) {
@@ -1387,7 +2076,7 @@ public final class VideoBillboardPreview {
         // 屏幕横向轴由 yaw 推导，投影面朝向玩家当前视线方向。
         anchorYawDeg = player.getYRot();
         anchorInitialized = true;
-        LOGGER.info("视频投影测试面已锚定到世界坐标: ({}, {}, {}), yaw={}",
+        LOGGER.debug("视频投影测试面已锚定到世界坐标: ({}, {}, {}), yaw={}",
                 String.format(java.util.Locale.ROOT, "%.2f", anchorX),
                 String.format(java.util.Locale.ROOT, "%.2f", anchorY),
                 String.format(java.util.Locale.ROOT, "%.2f", anchorZ),

@@ -29,3 +29,6 @@ hs_err_pid*
 
 # Common working directory
 run
+
+# Iris/Sodium-only reproduction sandbox
+iris-only-dev/

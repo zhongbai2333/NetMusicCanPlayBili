@@ -78,7 +78,7 @@ public final class VideoRenderStressBench {
                 TARGET_FPS, java.util.Arrays.toString(UPLOAD_FPS_STEPS), FRAMES_PER_STAGE,
                 UPLOAD_MODE, STOP_AVG_UPLOAD_MS, STOP_MAX_UPLOAD_MS);
         LOGGER.info("  路线: CPU 测试帧 → NativeImage 写入 → DynamicTexture.upload → SubmitCustomGeometry");
-        LOGGER.info("  模式: rgba=真实 RGBA 全帧上传；yuv420=按 NV12/YUV420 字节量打包上传，用于估算 YUV+shader 方案收益");
+        LOGGER.info("  模式: rgba=真实 RGBA 全帧上传；yuv420=真实 YUV420P 三平面 RED8 上传，用于验证 YUV+shader 方案收益");
         LOGGER.info("══════════════════════════════════════════");
 
         try {
@@ -221,14 +221,69 @@ public final class VideoRenderStressBench {
         }
     }
 
-    private static void fillPackedBenchBytes(byte[] frame, int frameIndex) {
-        int phase = frameIndex * 13;
-        for (int i = 0; i < frame.length; i += 4) {
-            int v = (i / 4 + phase) & 0xFF;
-            frame[i] = (byte) v;
-            frame[i + 1] = (byte) (v * 31);
-            frame[i + 2] = (byte) (255 - v);
-            frame[i + 3] = (byte) 255;
+    private static void fillYuv420BenchFrame(byte[] frame, int width, int height, int frameIndex) {
+        int ySize = width * height;
+        int uvWidth = width / 2;
+        int uvHeight = height / 2;
+        int uOffset = ySize;
+        int vOffset = ySize + uvWidth * uvHeight;
+        int phase = frameIndex * 8;
+
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int bar = ((x + phase) * 8 / Math.max(1, width)) & 7;
+                frame[y * width + x] = (byte) switch (bar) {
+                    case 0 -> 82;
+                    case 1 -> 145;
+                    case 2 -> 41;
+                    case 3 -> 210;
+                    case 4 -> 170;
+                    case 5 -> 107;
+                    case 6 -> 235;
+                    default -> 32 + (y * 192 / Math.max(1, height - 1));
+                };
+            }
+        }
+
+        for (int y = 0; y < uvHeight; y++) {
+            for (int x = 0; x < uvWidth; x++) {
+                int bar = ((x * 2 + phase) * 8 / Math.max(1, width)) & 7;
+                int i = y * uvWidth + x;
+                int u;
+                int v;
+                switch (bar) {
+                    case 0 -> {
+                        u = 90;
+                        v = 240;
+                    }
+                    case 1 -> {
+                        u = 54;
+                        v = 34;
+                    }
+                    case 2 -> {
+                        u = 240;
+                        v = 110;
+                    }
+                    case 3 -> {
+                        u = 16;
+                        v = 146;
+                    }
+                    case 4 -> {
+                        u = 166;
+                        v = 16;
+                    }
+                    case 5 -> {
+                        u = 202;
+                        v = 222;
+                    }
+                    default -> {
+                        u = 128;
+                        v = 128;
+                    }
+                }
+                frame[uOffset + i] = (byte) u;
+                frame[vOffset + i] = (byte) v;
+            }
         }
     }
 
@@ -307,22 +362,17 @@ public final class VideoRenderStressBench {
         YUV420("yuv420") {
             @Override
             UploadShape uploadShape(int displayWidth, int displayHeight) {
-                int yuvBytes = displayWidth * displayHeight * 3 / 2;
-                int pixels = (yuvBytes + 3) / 4;
-                int textureWidth = displayWidth;
-                int textureHeight = Math.max(1, (pixels + textureWidth - 1) / textureWidth);
-                int packedBytes = textureWidth * textureHeight * 4;
-                return new UploadShape(textureWidth, textureHeight, packedBytes);
+                return new UploadShape(displayWidth, displayHeight, displayWidth * displayHeight * 3 / 2);
             }
 
             @Override
             void fillFrame(byte[] frame, UploadShape shape, int frameIndex) {
-                fillPackedBenchBytes(frame, frameIndex);
+                fillYuv420BenchFrame(frame, shape.textureWidth(), shape.textureHeight(), frameIndex);
             }
 
             @Override
             long upload(byte[] frame, UploadShape shape) {
-                return VideoBillboardPreview.uploadPackedBytesSyncForBench(frame, shape.textureWidth(),
+                return VideoBillboardPreview.uploadYuv420FrameSyncForBench(frame, shape.textureWidth(),
                         shape.textureHeight());
             }
         };

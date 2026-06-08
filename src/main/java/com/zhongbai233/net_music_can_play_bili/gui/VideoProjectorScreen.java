@@ -16,7 +16,7 @@ import java.util.List;
 public class VideoProjectorScreen extends BlackGoldScreen {
     private static final int[] QUALITY_VALUES = { 127, 120, 116, 112, 80, 64, 32, 16 };
     private static final List<String> QUALITY_LABELS = List.of(
-            "画质：尝试最高", "尝试 4K", "尝试 1080P60", "尝试 1080P+",
+            "尝试 8K", "尝试 4K", "尝试 1080P60", "尝试 1080P+",
             "尝试 1080P", "尝试 720P", "尝试 480P", "尝试 360P");
 
     private CycleWidget qualityBtn;
@@ -176,7 +176,7 @@ public class VideoProjectorScreen extends BlackGoldScreen {
             g.centeredText(font, Component.literal(lb), lx + 27, ry, TEXT_SECONDARY);
             ry += 26;
         }
-        g.centeredText(font, Component.literal("实际清晰度受登录/大会员限制，会自动降到可用最高"),
+        g.centeredText(font, Component.literal("实际清晰度受权限限制；HDR/杜比视界不是分辨率阶梯"),
                 bx + BOX_W / 2, by + boxH() - 28, TEXT_DIM);
     }
 

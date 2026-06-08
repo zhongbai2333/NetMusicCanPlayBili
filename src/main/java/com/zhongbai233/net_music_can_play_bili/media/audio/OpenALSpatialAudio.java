@@ -339,6 +339,20 @@ public class OpenALSpatialAudio {
     }
 
     /**
+     * 清空待播放输出队列，并把媒体播放头推进到指定位置。
+     *
+     * <p>
+     * 用于音频输出端已经堆积了明显过期的 buffer 时，丢弃旧声音并让后续同步诊断以新的媒体位置为基准。
+     * </p>
+     */
+    public long flushQueuedAudio(long mediaPositionSamples) {
+        long consumedSamples = flushQueuedAudio();
+        long baselineSamples = Math.max(consumedSamples, Math.max(0L, mediaPositionSamples));
+        mediaConsumedBuffers = baselineSamples / SAMPLES_PER_BUFFER;
+        return mediaConsumedBuffers * (long) SAMPLES_PER_BUFFER;
+    }
+
+    /**
      * 立即停止所有 OpenAL source 并丢弃待播放队列，用于同一唱片机切换到新播放 session 时
      * 先把旧音频从实际输出端硬切掉，再异步释放 native 资源。
      */

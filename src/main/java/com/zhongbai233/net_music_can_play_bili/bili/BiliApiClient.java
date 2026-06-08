@@ -31,8 +31,10 @@ public final class BiliApiClient {
     private static final Pattern STORED_SELECTION_RE = Pattern.compile(
             "^((?:[Bb][Vv][0-9A-Za-z]{10}|av\\d+))(?:\\|p=(\\d+))?$",
             Pattern.CASE_INSENSITIVE);
-    // Dolby EC-3 优先 → FLAC → AAC 兜底；Dolby 不可用时自动跳过
-    private static final int[] QUALITY_ORDER = { 30250, 30251, 30280, 30232, 30216 };
+    private static final int[] STANDARD_AUDIO_ORDER = { 30280, 30232, 30216 };
+    private static final int[] LOSSLESS_AUDIO_ORDER = { 30251, 30280, 30232, 30216 };
+    private static final int[] DOLBY_AUDIO_ORDER = { 30250, 30280, 30232, 30216 };
+    private static final int[] BEST_AUDIO_ORDER = { 30250, 30251, 30280, 30232, 30216 };
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
@@ -140,6 +142,10 @@ public final class BiliApiClient {
 
         public String displaySize() {
             return width > 0 && height > 0 ? width + "x" + height : "unknown";
+        }
+
+        public String qualityLabel() {
+            return BiliApiClient.qualityLabel(quality);
         }
     }
 
@@ -341,8 +347,15 @@ public final class BiliApiClient {
             }
         }
 
-        // Hi-Res FLAC
-        if (dash.has("flac") && !dash.get("flac").isJsonNull()) {
+        String audioPreference = System.getProperty("bili.audio.preference", "standard")
+                .trim().toLowerCase(java.util.Locale.ROOT);
+        boolean allowFlac = audioPreference.equals("flac")
+                || audioPreference.equals("lossless")
+                || audioPreference.equals("hires")
+                || audioPreference.equals("best");
+
+        // Hi-Res FLAC 是独立的无损音频轨，不属于普通 AAC 清晰度；默认不抢占标准音频。
+        if (allowFlac && dash.has("flac") && !dash.get("flac").isJsonNull()) {
             JsonObject flac = dash.getAsJsonObject("flac");
             if (flac.has("audio") && !flac.get("audio").isJsonNull()) {
                 JsonObject a = flac.getAsJsonObject("audio");
@@ -359,7 +372,8 @@ public final class BiliApiClient {
         // B站 API 本身只返回当前用户可用的音质，无需额外 HEAD 验证
         int selectedQuality = -1;
         String selectedUrl = null;
-        for (int qid : QUALITY_ORDER) {
+        int[] qualityOrder = audioQualityOrder(audioPreference, allowDolby);
+        for (int qid : qualityOrder) {
             String baseUrl = streams.get(qid);
             if (baseUrl != null && !baseUrl.isEmpty()) {
                 selectedQuality = qid;
@@ -373,10 +387,20 @@ public final class BiliApiClient {
             selectedUrl = streams.get(selectedQuality);
         }
         LOGGER.debug(
-                "B站音频流选择摘要: id={} cid={} allowDolby={} dolbyConfig={} nativeDolby={} dashDolby={} qualities={} selected={} host={}",
-                id.asInputText(), cid, allowDolby, BiliConfig.dolbyEnabled, nativeDolbyAvailable, dashHasDolby,
-                streams.keySet(), selectedQuality, hostOf(selectedUrl));
+                "B站音频流选择摘要: id={} cid={} preference={} allowDolby={} dolbyConfig={} nativeDolby={} dashDolby={} qualities={} selected={}({}) host={}",
+                id.asInputText(), cid, audioPreference, allowDolby, BiliConfig.dolbyEnabled, nativeDolbyAvailable,
+                dashHasDolby, streams.keySet(), selectedQuality, audioQualityLabel(selectedQuality),
+                hostOf(selectedUrl));
         return selectedUrl;
+    }
+
+    private static int[] audioQualityOrder(String preference, boolean allowDolby) {
+        return switch (preference) {
+            case "best" -> allowDolby ? BEST_AUDIO_ORDER : LOSSLESS_AUDIO_ORDER;
+            case "dolby", "atmos", "eac3" -> allowDolby ? DOLBY_AUDIO_ORDER : STANDARD_AUDIO_ORDER;
+            case "flac", "lossless", "hires" -> LOSSLESS_AUDIO_ORDER;
+            default -> STANDARD_AUDIO_ORDER;
+        };
     }
 
     private static void registerAudioSegmentBase(String baseUrl, JsonObject stream) {
@@ -460,32 +484,40 @@ public final class BiliApiClient {
                     initRange[0], initRange[1], indexRange[0], indexRange[1]));
         }
 
-        VideoStream selected = bestBy(streams, preferredQuality, 7, false);
+        boolean requestedSpecial = isSpecialVideoQuality(preferredQuality);
+        List<VideoStream> selectableStreams = requestedSpecial ? streams
+                : streams.stream().filter(stream -> !isSpecialVideoQuality(stream.quality())).toList();
+        if (selectableStreams.isEmpty()) {
+            selectableStreams = streams;
+        }
+
+        VideoStream selected = bestBy(selectableStreams, preferredQuality, 7, false);
         String reason = "exact-h264";
         if (selected == null) {
-            selected = bestBy(streams, preferredQuality, 0, false);
+            selected = bestBy(selectableStreams, preferredQuality, 0, false);
             reason = "exact-any-codec";
         }
         if (selected == null) {
-            selected = bestBy(streams, preferredQuality, 7, true);
+            selected = bestBy(selectableStreams, preferredQuality, 7, true);
             reason = "fallback-h264-at-or-below-ceiling";
         }
         if (selected == null) {
-            selected = bestBy(streams, preferredQuality, 0, true);
+            selected = bestBy(selectableStreams, preferredQuality, 0, true);
             reason = "fallback-any-at-or-below-ceiling";
         }
         if (selected == null) {
             // preferredQuality 是投影仪期望的最高画质上限，不是必须达到的画质。
             // 如果 B 站返回的流全都高于这个上限，宁可选最低可用流，也不要突破用户配置的上限。
-            selected = streams.stream()
-                    .min((a, b) -> Integer.compare(a.quality(), b.quality()))
+            selected = selectableStreams.stream()
+                    .min((a, b) -> Integer.compare(videoQualityRank(a.quality()), videoQualityRank(b.quality())))
                     .orElseThrow(() -> new RuntimeException("该视频没有可用 DASH 视频流"));
             reason = "fallback-lowest-available-above-ceiling";
         }
         LOGGER.debug(
                 "B站视频流选择摘要: id={} cid={} qualityCeiling={} available={} selected={} codec={} size={}x{} fps={} reason={} host={}",
-                id.asInputText(), cid, preferredQuality,
-                streams.stream().map(stream -> stream.quality()).distinct().toList(), selected.quality(),
+                id.asInputText(), cid, qualityLabel(preferredQuality),
+                streams.stream().map(stream -> qualityLabel(stream.quality())).distinct().toList(),
+                qualityLabel(selected.quality()),
                 selected.codecId(), selected.width(), selected.height(), selected.frameRate(), reason,
                 hostOf(selected.baseUrl()));
         if (selected.hasSegmentBase()) {
@@ -518,11 +550,64 @@ public final class BiliApiClient {
     }
 
     private static VideoStream bestBy(List<VideoStream> streams, int preferredQuality, int codecId, boolean atOrBelow) {
+        int preferredRank = videoQualityRank(preferredQuality);
         return streams.stream()
                 .filter(s -> codecId == 0 || s.codecId() == codecId)
-                .filter(s -> atOrBelow ? s.quality() <= preferredQuality : s.quality() == preferredQuality)
-                .max((a, b) -> Integer.compare(a.quality(), b.quality()))
+                .filter(s -> atOrBelow ? videoQualityRank(s.quality()) <= preferredRank
+                        : s.quality() == preferredQuality)
+                .max((a, b) -> Integer.compare(videoQualityRank(a.quality()), videoQualityRank(b.quality())))
                 .orElse(null);
+    }
+
+    public static boolean isSpecialVideoQuality(int quality) {
+        return quality == 100 || quality == 125 || quality == 126 || quality == 129;
+    }
+
+    public static String qualityLabel(int quality) {
+        return "q" + quality + "(" + switch (quality) {
+            case 6 -> "240P 极速";
+            case 16 -> "360P";
+            case 32 -> "480P";
+            case 64 -> "720P";
+            case 74 -> "720P60";
+            case 80 -> "1080P";
+            case 100 -> "智能修复/特性";
+            case 112 -> "1080P+";
+            case 116 -> "1080P60";
+            case 120 -> "4K";
+            case 125 -> "HDR 真彩色/特性";
+            case 126 -> "杜比视界/特性";
+            case 127 -> "8K";
+            case 129 -> "HDR Vivid/特性";
+            default -> "unknown";
+        } + ")";
+    }
+
+    public static String audioQualityLabel(int quality) {
+        return switch (quality) {
+            case 30216 -> "64K AAC";
+            case 30232 -> "132K AAC";
+            case 30280 -> "192K AAC";
+            case 30250 -> "Dolby Atmos/EC-3";
+            case 30251 -> "Hi-Res/FLAC";
+            default -> "unknown";
+        };
+    }
+
+    private static int videoQualityRank(int quality) {
+        return switch (quality) {
+            case 6 -> 10;
+            case 16 -> 20;
+            case 32 -> 30;
+            case 64 -> 40;
+            case 74 -> 45;
+            case 80 -> 50;
+            case 112 -> 60;
+            case 116 -> 65;
+            case 120 -> 70;
+            case 127 -> 80;
+            default -> isSpecialVideoQuality(quality) ? -1 : quality;
+        };
     }
 
     // 获取字幕并转为 NetEase 歌词 JSON 格式

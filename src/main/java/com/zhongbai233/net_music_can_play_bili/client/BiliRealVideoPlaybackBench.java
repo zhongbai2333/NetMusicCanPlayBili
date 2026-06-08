@@ -23,7 +23,7 @@ public final class BiliRealVideoPlaybackBench {
     private static final boolean BENCH_FEATURES_ENABLED = VideoFeatureFlags.benchFeaturesEnabled();
     private static final boolean ENABLED = VideoFeatureFlags.advancedBoolean("bili.video.real_bench", false);
     private static final String VIDEO_ID = VideoFeatureFlags.advancedString("bili.video.real_bench.bv",
-            VideoFeatureFlags.advancedString("bili.video.bench", "BV1qM4y1w716"));
+            "BV1qM4y1w716");
     private static final int MAX_OUTPUT_FPS = VideoFeatureFlags.advancedInt("bili.video.real_bench.max_fps", 30);
     private static final int MIN_1080P_FPS = VideoFeatureFlags.advancedInt("bili.video.real_bench.min_1080p_fps", 8);
     private static final int CAP_1080P_FPS = VideoFeatureFlags.advancedInt("bili.video.real_bench.cap_1080p_fps", 10);
@@ -32,7 +32,7 @@ public final class BiliRealVideoPlaybackBench {
     private static final int FRAMES_PER_STAGE = VideoFeatureFlags.advancedInt("bili.video.real_bench.frames", 120);
     private static final int WARMUP_FRAMES = VideoFeatureFlags.advancedInt("bili.video.real_bench.warmup_frames", 10);
     private static final int[] QUALITY_STEPS = parseIntSteps(
-            VideoFeatureFlags.advancedString("bili.video.real_bench.qualities", "16,32,64,80,120,125,126,127"));
+            VideoFeatureFlags.advancedString("bili.video.real_bench.qualities", "16,32,64,80,112,116,120,127"));
     private static final boolean REALTIME_PLAYBACK = Boolean.parseBoolean(
             VideoFeatureFlags.advancedString("bili.video.real_bench.realtime", "true"));
     private static final boolean DECODE_ONLY = Boolean.parseBoolean(
@@ -63,9 +63,6 @@ public final class BiliRealVideoPlaybackBench {
     }
 
     public static boolean tryStart() {
-        if (Boolean.getBoolean("bili.playback.auto_bench")) {
-            return false;
-        }
         if (!BENCH_FEATURES_ENABLED) {
             return false;
         }
@@ -95,7 +92,9 @@ public final class BiliRealVideoPlaybackBench {
                 REALTIME_PLAYBACK, DECODE_ONLY, DECODE_NO_OUTPUT, ADAPTIVE_FPS_CAP, STOP_ON_THRESHOLD,
                 PREVIEW_PREFER_DEMO, PREFER_NATIVE);
         LOGGER.info("  outputFormat={}", OUTPUT_FORMAT);
-        LOGGER.info("  路线: B站 DASH → {} → fast NativeImage copy → DynamicTexture.upload → SubmitCustomGeometry",
+        LOGGER.info("  画质阶梯说明: 125=HDR、126=杜比视界、129=HDR Vivid，属于特性格式；默认压测只跑分辨率/fps阶梯 {}",
+                Arrays.stream(QUALITY_STEPS).mapToObj(BiliApiClient::qualityLabel).toList());
+        LOGGER.info("  路线: B站 DASH → {} → GPU texture upload → SubmitCustomGeometry",
                 "native FFmpeg JNI " + outputFormatLabel());
         LOGGER.info("══════════════════════════════════════════");
 
@@ -144,8 +143,7 @@ public final class BiliRealVideoPlaybackBench {
 
         StageResult previewResult = PREVIEW_PREFER_DEMO && demoResult != null ? demoResult
                 : highestPlayableResult != null ? highestPlayableResult
-                        : lastUsableResult != null ? lastUsableResult
-                                : demoResult;
+                        : lastUsableNonDemoResult(lastUsableResult, demoResult);
         if (!DECODE_ONLY && START_PREVIEW_AFTER_BENCH && previewResult != null) {
             BiliApiClient.VideoStream stream = previewResult.stream();
             int previewFps = previewResult.outputFps();
@@ -154,7 +152,7 @@ public final class BiliRealVideoPlaybackBench {
                     playbackMode(stream));
             Minecraft.getInstance().execute(() -> {
                 VideoBillboardPreview.stop();
-                VideoBillboardPreview.start(
+                VideoBillboardPreview.startBenchPreview(
                         stream.baseUrl(), Math.max(1, stream.width()), Math.max(1, stream.height()), previewFps,
                         stream.codecId(), PREFER_NATIVE, decoderOverrideFor(stream));
             });
@@ -171,8 +169,9 @@ public final class BiliRealVideoPlaybackBench {
             long startMs = System.currentTimeMillis();
             stream = BiliApiClient.getBestVideoStream(vid, cid, quality);
             LOGGER.info(
-                    "─────────────── Real Stage q{} → actual q{} {} {} {} sourceFps={} outputFps={} mode={} route={} ───────────────",
-                    quality, stream.quality(), stream.displaySize(), stream.codecName(), stream.codecs(),
+                    "─────────────── Real Stage {} → actual {} {} {} {} sourceFps={} outputFps={} mode={} route={} ───────────────",
+                    BiliApiClient.qualityLabel(quality), BiliApiClient.qualityLabel(stream.quality()),
+                    stream.displaySize(), stream.codecName(), stream.codecs(),
                     stream.frameRate(), outputFpsFor(stream), playbackMode(stream),
                     routeDescription(stream));
             LOGGER.info("  DASH URL 获取完成: urlPrefix={}, 耗时={}ms",
@@ -211,10 +210,15 @@ public final class BiliRealVideoPlaybackBench {
 
                 long uploadNs = 0L;
                 if (!DECODE_ONLY) {
-                    uploadNs = isYuv420OutputFrame(frame, targetWidth, targetHeight)
-                            ? VideoBillboardPreview.uploadPackedBytesSyncForBench(frame, targetWidth,
-                                    packedYuvTextureHeight(targetWidth, targetHeight))
-                            : VideoBillboardPreview.uploadFrameSyncForBench(frame, targetWidth, targetHeight);
+                    if (isYuv420OutputFrame(frame, targetWidth, targetHeight)) {
+                        uploadNs = isPackedYuvUploadMode()
+                                ? VideoBillboardPreview.uploadPackedBytesSyncForBench(frame, targetWidth,
+                                        packedYuvTextureHeight(targetWidth, targetHeight))
+                                : VideoBillboardPreview.uploadYuv420FrameSyncForBench(frame, targetWidth,
+                                        targetHeight);
+                    } else {
+                        uploadNs = VideoBillboardPreview.uploadFrameSyncForBench(frame, targetWidth, targetHeight);
+                    }
                     if (uploadNs < 0L) {
                         LOGGER.warn("  Real Stage q{} 提前结束：客户端世界已退出或上传失败", quality);
                         break;
@@ -279,8 +283,9 @@ public final class BiliRealVideoPlaybackBench {
         double rgbaMiBPerFrame = stream.width() * stream.height() * 4.0 / (1024.0 * 1024.0);
         double relativeToRgba = mibPerFrame / Math.max(0.001, rgbaMiBPerFrame) * 100.0;
         LOGGER.info(
-                "  Real Stage q{} 结果: actualQ={}, {}, {}, {}, outputFormat={}, {}MiB/frame ({}% of RGBA), frames={}, measured={}, warmup={}",
-                result.requestedQuality(), stream.quality(), stream.displaySize(), stream.codecName(),
+                "  Real Stage {} 结果: actual={}, {}, {}, {}, outputFormat={}, {}MiB/frame ({}% of RGBA), frames={}, measured={}, warmup={}",
+                BiliApiClient.qualityLabel(result.requestedQuality()), BiliApiClient.qualityLabel(stream.quality()),
+                stream.displaySize(), stream.codecName(),
                 stream.frameRate(), outputFormatLabel(), String.format(Locale.ROOT, "%.2f", mibPerFrame),
                 String.format(Locale.ROOT, "%.1f", relativeToRgba), result.frames(),
                 result.measuredFrames(), result.warmupFrames());
@@ -315,11 +320,25 @@ public final class BiliRealVideoPlaybackBench {
     }
 
     private static boolean isYuv420OutputRequested() {
-        return OUTPUT_FORMAT.equals("yuv") || OUTPUT_FORMAT.equals("yuv420") || OUTPUT_FORMAT.equals("nv12");
+        return OUTPUT_FORMAT.equals("yuv")
+                || OUTPUT_FORMAT.equals("yuv420")
+                || OUTPUT_FORMAT.equals("yuv420_shader")
+                || OUTPUT_FORMAT.equals("yuv420_packed")
+                || OUTPUT_FORMAT.equals("packed_yuv420");
+    }
+
+    private static boolean isPackedYuvUploadMode() {
+        return OUTPUT_FORMAT.equals("yuv420_packed") || OUTPUT_FORMAT.equals("packed_yuv420");
     }
 
     private static String outputFormatLabel() {
-        return isYuv420OutputRequested() ? "YUV420" : "RGBA";
+        if (!isYuv420OutputRequested()) {
+            return "RGBA";
+        }
+        if (!isPackedYuvUploadMode() && !VideoBillboardPreview.isCustomYuvShaderAvailable()) {
+            return "YUV420P→RGBA(cpu/iris-fallback)";
+        }
+        return isPackedYuvUploadMode() ? "YUV420P packed-upload" : "YUV420P planes(shader upload)";
     }
 
     private static boolean isYuv420OutputFrame(byte[] frame, int width, int height) {
@@ -358,13 +377,13 @@ public final class BiliRealVideoPlaybackBench {
 
     private static int adaptiveFpsCapFor(BiliApiClient.VideoStream stream) {
         long pixels = (long) Math.max(1, stream.width()) * Math.max(1, stream.height());
-        if (stream.quality() >= 127 || pixels >= 7000L * 4000L) {
+        if (pixels >= 7000L * 4000L) {
             return Math.max(1, CAP_8K_FPS);
         }
-        if (stream.quality() >= 120 || pixels >= 3000L * 1600L) {
+        if (pixels >= 3000L * 1600L) {
             return Math.max(1, CAP_4K_FPS);
         }
-        if (stream.quality() >= 80 || pixels >= 1800L * 1000L) {
+        if (pixels >= 1800L * 1000L) {
             return Math.max(1, CAP_1080P_FPS);
         }
         return Math.max(1, MAX_OUTPUT_FPS);
@@ -388,15 +407,24 @@ public final class BiliRealVideoPlaybackBench {
                 && result.actualLoopFps() >= Math.min(result.outputFps() * 0.75, result.outputFps() - 1.0);
     }
 
+    private static StageResult lastUsableNonDemoResult(StageResult lastUsableResult, StageResult demoResult) {
+        if (lastUsableResult != null && !isMuscleDemoResult(lastUsableResult)) {
+            return lastUsableResult;
+        }
+        LOGGER.warn("  Bench 后预览跳过 4K/8K muscle demo，避免高分辨率上传拖慢游戏 FPS。"
+                + "如需强行预览，请设置 -Dbili.video.real_bench.preview.prefer_demo=true");
+        return null;
+    }
+
     private static boolean isMuscleDemoResult(StageResult result) {
         BiliApiClient.VideoStream stream = result.stream();
         long pixels = (long) Math.max(1, stream.width()) * Math.max(1, stream.height());
-        return stream.quality() >= 120 || pixels >= 3000L * 1600L;
+        return pixels >= 3000L * 1600L;
     }
 
     private static boolean isAtLeast1080p(BiliApiClient.VideoStream stream) {
         long pixels = (long) Math.max(1, stream.width()) * Math.max(1, stream.height());
-        return stream.quality() >= 80 || pixels >= 1800L * 1000L;
+        return pixels >= 1800L * 1000L;
     }
 
     private static boolean shouldStopAfter(StageResult result) {
@@ -411,10 +439,10 @@ public final class BiliRealVideoPlaybackBench {
 
     private static String playbackMode(BiliApiClient.VideoStream stream) {
         long pixels = (long) Math.max(1, stream.width()) * Math.max(1, stream.height());
-        if (stream.quality() >= 127 || pixels >= 7000L * 4000L) {
+        if (pixels >= 7000L * 4000L) {
             return "8K muscle demo";
         }
-        if (stream.quality() >= 120 || pixels >= 3000L * 1600L) {
+        if (pixels >= 3000L * 1600L) {
             return "4K+ muscle demo";
         }
         if (isAtLeast1080p(stream)) {

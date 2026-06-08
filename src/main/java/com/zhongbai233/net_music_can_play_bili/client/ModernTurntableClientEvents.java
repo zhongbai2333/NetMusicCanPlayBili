@@ -4,6 +4,7 @@ import com.zhongbai233.net_music_can_play_bili.client.renderer.LyricProjectorRen
 import com.zhongbai233.net_music_can_play_bili.client.renderer.ModernTurntableRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.SpeakerRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.VideoProjectorRenderer;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.YuvVideoRenderTypes;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
@@ -14,6 +15,7 @@ public final class ModernTurntableClientEvents {
 
     public static void register(IEventBus modEventBus) {
         modEventBus.addListener(ModernTurntableClientEvents::registerRenderers);
+        modEventBus.addListener(YuvVideoRenderTypes::registerPipelines);
     }
 
     private static void registerRenderers(EntityRenderersEvent.RegisterRenderers event) {

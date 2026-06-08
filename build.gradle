@@ -39,49 +39,66 @@ neoForge {
         client {
             client()
 
+            def prop = { name, defaultValue -> providers.gradleProperty(name).orElse(defaultValue).get() }
+            def jvmProp = { key, value -> jvmArgument "-D${key}=${value}" }
+
             // Limit GameTest discovery to this mod namespace when running the development client.
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
-            // 正式播放默认走自动策略；高级视频参数仅在显式启用诊断开关时生效
-            jvmArgument '-Dbili.video.advanced_features=false'
-            jvmArgument '-Dbili.video.enable_bench_features=false'
-            // 播放端到端延迟 Bench：采样视频队列→上传→提交、音频入队→OpenAL→实际消费，不参与同步决策
-            jvmArgument '-Dbili.playback.bench=false'
-            jvmArgument '-Dbili.playback.bench.interval_ms=3000'
-            // 自动多轮视频播放 Bench：进存档后用 BV17q9EBEE9w P2 多起点重复测试前方屏幕并输出汇总报告
-            jvmArgument '-Dbili.playback.auto_bench=false'
-            jvmArgument '-Dbili.playback.auto_bench.bv=BV17q9EBEE9w'
-            jvmArgument '-Dbili.playback.auto_bench.page=2'
-            jvmArgument '-Dbili.playback.auto_bench.quality=116'
-            jvmArgument '-Dbili.playback.auto_bench.rounds=3'
-            jvmArgument '-Dbili.playback.auto_bench.sample_ms=15000'
-            jvmArgument '-Dbili.playback.auto_bench.gap_ms=1500'
-            jvmArgument '-Dbili.playback.auto_bench.starts_ms=2262919,2313499,5317200'
-            // bench 时主输出和音响 relay 同时出声，方便确认完整音频管线确实可听
-            jvmArgument '-Dbili.audio.relay.mute_main_when_started=false'
-            // 以下参数保留给视频链路诊断使用，默认不会影响正式播放行为
-            jvmArgument '-Dbili.video.real_bench=false'
-            jvmArgument '-Dbili.video.real_bench.bv=BV1qM4y1w716'
-            jvmArgument '-Dbili.video.real_bench.frames=120'
-            jvmArgument '-Dbili.video.real_bench.warmup_frames=10'
-            jvmArgument '-Dbili.video.real_bench.stop_on_threshold=false'
-            jvmArgument '-Dbili.video.real_bench.decode_only=false'
-            jvmArgument '-Dbili.video.real_bench.decode_no_output=false'
-            jvmArgument '-Dbili.video.real_bench.output_format=rgba'
-            jvmArgument '-Dbili.video.real_bench.preview=false'
-            jvmArgument '-Dbili.video.real_bench.realtime=false'
-            jvmArgument '-Dbili.video.real_bench.max_fps=30'
-            jvmArgument '-Dbili.video.real_bench.qualities=16,32,64,80,120,125,126,127'
+            // 正式播放默认走 YUV；Bench 均默认关闭，按需用 -P... 显式打开。
+            jvmProp 'bili.video.advanced_features', prop('biliAdvancedVideoFeatures', 'true')
+            jvmProp 'bili.video.enable_bench_features', prop('biliBenchFeatures', 'true')
+            jvmProp 'bili.video.render.backend', prop('biliVideoRenderBackend', 'yuv420')
+
+            // 默认播放器优先使用已验证的三平面 YUV；需要排查时可通过 Gradle 属性回退或改 Iris 映射。
+            jvmProp 'bili.video.iris.force_yuv_shader', prop('biliIrisForceYuvShader', 'true')
+            jvmProp 'bili.video.iris.allow_three_plane', prop('biliIrisAllowThreePlane', 'true')
+            jvmProp 'bili.video.iris.program', prop('biliIrisYuvProgram', 'ENTITIES_TRANSLUCENT')
+            jvmProp 'bili.video.iris.yuv_bypass', prop('biliIrisYuvBypass', 'true')
+            jvmArgument '-Dbili.video.yuv.upload_planes=true'
+            jvmProp 'bili.video.yuv.no_depth_write', prop('biliYuvNoDepthWrite', 'false')
+            jvmProp 'bili.video.yuv.immediate_stage', prop('biliYuvImmediateStage', 'after_level')
+            jvmProp 'bili.video.yuv.immediate_coords', prop('biliYuvImmediateCoords', 'camera_relative')
+            jvmProp 'bili.video.yuv.immediate_pose', prop('biliYuvImmediatePose', 'identity')
+            jvmProp 'bili.video.yuv.visibility_probe', prop('biliYuvVisibilityProbe', 'false')
+            jvmProp 'bili.video.yuv.debug_log', prop('biliYuvDebugLog', 'false')
+            def irisShaderKey = providers.gradleProperty('biliIrisShaderKey')
+            if (irisShaderKey.isPresent()) {
+                jvmProp 'bili.video.iris.shader_key', irisShaderKey.get()
+            }
+            def yuvShaderDebug = providers.gradleProperty('biliYuvShaderDebug')
+            if (yuvShaderDebug.isPresent()) {
+                jvmProp 'bili.video.yuv.shader_debug', yuvShaderDebug.get()
+            }
+
+            // 延迟测试 Bench：低频采样视频队列/上传/提交与 OpenAL 消费，不参与同步决策。
+            jvmProp 'bili.playback.bench', prop('biliPlaybackLatencyBench', 'false')
+            jvmProp 'bili.playback.bench.interval_ms', prop('biliPlaybackLatencyIntervalMs', '3000')
+
+            // B站真实压力 Bench：按画质阶梯获取真实 DASH，测解码 + 上传 + 可选预览。
+            jvmProp 'bili.video.real_bench', prop('biliRealBench', 'false')
+            jvmProp 'bili.video.real_bench.bv', prop('biliBenchVideo', 'BV1qM4y1w716')
+            jvmProp 'bili.video.real_bench.frames', prop('biliRealBenchFrames', '12')
+            jvmProp 'bili.video.real_bench.warmup_frames', prop('biliRealBenchWarmupFrames', '2')
+            jvmProp 'bili.video.real_bench.output_format', prop('biliRealBenchOutputFormat', 'yuv420')
+            jvmProp 'bili.video.real_bench.preview', prop('biliRealBenchPreview', 'false')
+            jvmProp 'bili.video.real_bench.realtime', prop('biliRealBenchRealtime', 'false')
+            jvmProp 'bili.video.real_bench.max_fps', prop('biliRealBenchMaxFps', '30')
+            jvmProp 'bili.video.real_bench.qualities', prop('biliRealBenchQualities', '16')
+
+            // FFmpeg/native 解码默认参数；真实压力 Bench 和普通播放共用。
             jvmArgument '-Dbili.video.native.hwaccel=d3d11va'
             jvmArgument '-Dbili.video.ffmpeg.hwaccel=cuda'
             jvmArgument '-Dbili.video.ffmpeg.decoder=h264_cuvid'
             jvmArgument '-Dbili.video.ffmpeg.verbose=true'
-            // 旧版单项解码诊断入口；留空表示不启用
-            jvmArgument '-Dbili.video.bench='
-            // 动态纹理通道诊断：true=跳过 FFmpeg，直接生成 CPU 彩条验证渲染/上传链路
-            jvmArgument '-Dbili.video.cpu_bars=false'
-            // 离线渲染/上传诊断：不走网络/FFmpeg，逐档验证 480p→8K 动态纹理上传压力
-            jvmArgument '-Dbili.video.render_bench=false'
-            jvmArgument '-Dbili.video.render_bench.upload_mode=rgba,yuv420'
+
+            // CPU 彩条测试：跳过网络/FFmpeg，只验证渲染、上传、YUV shader 路径。
+            jvmProp 'bili.video.cpu_bars', prop('biliCpuBars', 'false')
+
+            // 多分辨率彩条压力 Bench：不走网络/FFmpeg，逐档验证 480p→8K 上传压力。
+            jvmProp 'bili.video.render_bench', prop('biliRenderBench', 'false')
+            jvmProp 'bili.video.render_bench.upload_mode', prop('biliRenderBenchUploadMode', 'rgba,yuv420')
+            jvmProp 'bili.video.render_bench.frames', prop('biliRenderBenchFrames', '120')
+            jvmProp 'bili.video.render_bench.upload_fps_steps', prop('biliRenderBenchUploadFpsSteps', '30,24,15')
         }
 
         server {
@@ -130,6 +147,10 @@ sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 dependencies {
     compileOnly "maven.modrinth:net-music:mCrjhdSq"
+    def localIrisJars = fileTree(dir: 'run/mods', include: 'iris-neoforge-*.jar')
+    if (!localIrisJars.isEmpty()) {
+        compileOnly localIrisJars
+    }
 }
 
 // Expand mod metadata templates from Gradle properties.

@@ -24,6 +24,10 @@ public class StereoOpenALHandler {
             "bili.audio.sync.catch_up_start_ticks", 8L);
     private static final long AUDIO_CATCH_UP_FULL_TICKS = Long.getLong(
             "bili.audio.sync.catch_up_full_ticks", 28L);
+    private static final long OUTPUT_LAG_FLUSH_TICKS = Long.getLong(
+            "bili.audio.timeline.flush_output_lag_ticks", 40L);
+    private static final long OUTPUT_LAG_FED_NEAR_TARGET_TICKS = Long.getLong(
+            "bili.audio.timeline.output_lag_fed_near_target_ticks", 8L);
     private static final float[][] BED_POSITIONS = {
             { -0.5f, 0, 0.866f }, { 0.5f, 0, 0.866f },
     };
@@ -173,6 +177,9 @@ public class StereoOpenALHandler {
         if (hardFlushIfAhead(targetRelativeTicks)) {
             frameBudget = Math.min(frameBudget, 1.0D);
         }
+        if (hardFlushIfOutputLagging(targetRelativeTicks)) {
+            frameBudget = Math.min(frameBudget, 1.0D);
+        }
         int allowed = isAheadOfTarget(targetRelativeTicks) ? 0 : allowedBlocksForTarget(targetRelativeTicks);
         int fed = 0;
         float[][] block;
@@ -244,6 +251,37 @@ public class StereoOpenALHandler {
             return true;
         }
         return false;
+    }
+
+    private boolean hardFlushIfOutputLagging(long targetRelativeTicks) {
+        if (targetRelativeTicks == Long.MAX_VALUE || !started || spatialAudio == null) {
+            return false;
+        }
+        long lagThreshold = Math.max(0L, OUTPUT_LAG_FLUSH_TICKS);
+        if (lagThreshold <= 0L) {
+            return false;
+        }
+        long audibleTicks = getPositionTicks();
+        long fedTicks = getFedPositionTicks();
+        if (audibleTicks < 0L || fedTicks < 0L) {
+            return false;
+        }
+        long audibleLag = targetRelativeTicks - audibleTicks;
+        long fedDistance = targetRelativeTicks - fedTicks;
+        if (audibleLag <= lagThreshold
+                || fedDistance > Math.max(0L, OUTPUT_LAG_FED_NEAR_TARGET_TICKS)) {
+            return false;
+        }
+        long targetSamples = Math.max(0L, targetRelativeTicks) * samplesPerTick();
+        spatialAudio.flushQueuedAudio(targetSamples);
+        totalSamplesFed = targetSamples;
+        for (SpeakerAudioRelay relay : relays) {
+            relay.flushQueuedAudio();
+        }
+        LOGGER.warn(
+                "Stereo OpenAL 输出队列落后过多，已丢弃待播放缓冲以追赶: audible={}ticks target={}ticks fed={}ticks lag={}ticks",
+                audibleTicks, targetRelativeTicks, fedTicks, audibleLag);
+        return true;
     }
 
     /**
@@ -402,6 +440,10 @@ public class StereoOpenALHandler {
         lastFrameFeedNanos = now;
         double blocksPerSecond = sampleRate / (double) SAMPLES_PER_BLOCK; // 187.5@48k, 375@96k
         frameBudget = Math.min(MAX_BLOCKS_PER_TICK, frameBudget + elapsed * blocksPerSecond);
+    }
+
+    private long samplesPerTick() {
+        return Math.max(1, sampleRate) / 20L;
     }
 
     /** 设置实际音频采样率（如 96000 for Hi-Res FLAC），必须在初始化前调用 */

@@ -11,6 +11,7 @@ import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.client.event.SubmitCustomGeometryEvent;
 import org.slf4j.Logger;
 
@@ -38,8 +39,8 @@ final class VideoPlaybackInstance {
     private static final long SLOWDOWN_WINDOW_MILLIS = Long.getLong("bili.video.pipeline.slowdown_window_ms", 2_500L);
 
     private final String videoUrl;
-    private final int targetWidth;
-    private final int targetHeight;
+    private int targetWidth;
+    private int targetHeight;
     private final int fps;
     private final int codecId;
     private final String sessionId;
@@ -50,6 +51,9 @@ final class VideoPlaybackInstance {
     private final Identifier firstTextureId;
     private final Identifier secondTextureId;
     private final Identifier loadingTextureId;
+    private final Identifier yTextureId;
+    private final Identifier uTextureId;
+    private final Identifier vTextureId;
     private final BlockPos turntablePos;
     private final VideoFrameQueue frameQueue = new VideoFrameQueue(
             Integer.getInteger("bili.video.pipeline.queue_capacity", 3));
@@ -63,15 +67,19 @@ final class VideoPlaybackInstance {
     private volatile DynamicTexture frontTexture;
     private volatile DynamicTexture backTexture;
     private volatile DynamicTexture loadingTexture;
+    private volatile Yuv420pTextureSet yuvTextureSet;
     private volatile Identifier frontTextureId;
     private volatile Identifier backTextureId;
     private volatile boolean firstFrameLogged;
     private volatile boolean firstSubmitLogged;
+    private volatile boolean firstYuvImmediateLogged;
     private volatile long firstDecodedNanoTime;
     private volatile boolean startupBufferReady;
     private volatile long lastUploadPumpNanoTime;
     private volatile long decoderStartOffsetMillis;
     private volatile long lastUploadedPtsNanos = -1L;
+    private volatile long adaptiveRestartOffsetMillis = -1L;
+    private int consecutiveBadUploads;
 
     VideoPlaybackInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             String sessionId, long startOffsetMillis, long totalMillis, Collection<BlockPos> projectorPositions,
@@ -94,9 +102,22 @@ final class VideoPlaybackInstance {
                 "dynamic/bili_video_preview_" + textureSuffix + "_b");
         this.loadingTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
                 "dynamic/bili_video_preview_" + textureSuffix + "_loading");
+        this.yTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
+                "dynamic/bili_video_preview_" + textureSuffix + "_y");
+        this.uTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
+                "dynamic/bili_video_preview_" + textureSuffix + "_u");
+        this.vTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
+                "dynamic/bili_video_preview_" + textureSuffix + "_v");
         this.frontTextureId = firstTextureId;
         this.backTextureId = secondTextureId;
         replaceProjectors(projectorPositions);
+        LOGGER.info("视频会话创建: session={}, {}x{} @ {}fps, renderBackend={}, decodeFormat={}", sessionId,
+                this.targetWidth, this.targetHeight, this.fps, VideoBillboardPreview.RENDER_BACKEND,
+                VideoBillboardPreview.YUV420_DECODE_BACKEND
+                        ? (VideoBillboardPreview.isCustomYuvShaderAvailable()
+                                ? "YUV420P→RGB(shader)"
+                                : "YUV420P→RGBA(cpu/iris-fallback)")
+                        : "RGBA");
     }
 
     void start() {
@@ -104,11 +125,14 @@ final class VideoPlaybackInstance {
         hasFrame = false;
         firstFrameLogged = false;
         firstSubmitLogged = false;
+        firstYuvImmediateLogged = false;
         firstDecodedNanoTime = 0L;
         startupBufferReady = false;
         lastUploadPumpNanoTime = System.nanoTime();
         decoderStartOffsetMillis = startOffsetMillis;
         lastUploadedPtsNanos = -1L;
+        adaptiveRestartOffsetMillis = -1L;
+        consecutiveBadUploads = 0;
         frameQueue.clear();
         startNanoTime = System.nanoTime();
         long gen = generation.incrementAndGet();
@@ -123,6 +147,7 @@ final class VideoPlaybackInstance {
         long frameIndex = 0L;
         long effectiveStartOffsetMillis = effectiveDecoderStartOffsetMillis();
         decoderStartOffsetMillis = effectiveStartOffsetMillis;
+        adaptiveRestartOffsetMillis = -1L;
         try (AutoCloseable dec = VideoBillboardPreview.openDecoder(videoUrl, targetWidth, targetHeight, fps, codecId,
                 preferNative, decoderOverride, effectiveStartOffsetMillis, totalMillis)) {
             decoder = dec;
@@ -164,13 +189,15 @@ final class VideoPlaybackInstance {
                 warnIfUploadPumpStalled();
             }
         } catch (Exception e) {
-            if (!running && isInterruptedWait(e)) {
+            if (gen != generation.get() || (!running && isInterruptedWait(e))) {
                 return;
             }
             LOGGER.error("视频会话解码失败: session={}", sessionId, e);
         } finally {
-            running = false;
-            decoder = null;
+            if (gen == generation.get()) {
+                running = false;
+                decoder = null;
+            }
         }
     }
 
@@ -250,15 +277,19 @@ final class VideoPlaybackInstance {
     }
 
     private long syncedPlaybackNanos() {
-        long baseOffsetMillis = Math.max(startOffsetMillis, decoderStartOffsetMillis);
+        long restartOffset = adaptiveRestartOffsetMillis;
+        long requestedOffsetMillis = restartOffset >= 0L ? restartOffset : startOffsetMillis;
+        long baseOffsetMillis = Math.max(requestedOffsetMillis, decoderStartOffsetMillis);
         long synced = ModernTurntableTimeline.relativeNanos(turntablePos,
                 baseOffsetMillis + AUDIO_OUTPUT_LATENCY_COMPENSATION_MILLIS);
         return synced;
     }
 
     private long effectiveDecoderStartOffsetMillis() {
+        long restartOffset = adaptiveRestartOffsetMillis;
+        long requestedOffsetMillis = restartOffset >= 0L ? restartOffset : startOffsetMillis;
         long synced = ModernTurntableTimeline.mediaMillis(turntablePos);
-        long offset = synced >= 0L ? Math.max(startOffsetMillis, synced) : startOffsetMillis;
+        long offset = synced >= 0L ? Math.max(requestedOffsetMillis, synced) : requestedOffsetMillis;
         return totalMillis > 0L ? Math.min(totalMillis, offset) : offset;
     }
 
@@ -285,13 +316,107 @@ final class VideoPlaybackInstance {
                 frame = chase;
             }
         }
+        boolean uploaded = false;
+        long uploadNs = 0L;
         try {
-            if (uploadOnRenderThread(frame.rgba())) {
+            long uploadStartNs = System.nanoTime();
+            uploaded = uploadDecodedFrameOnRenderThread(frame.frame());
+            uploadNs = System.nanoTime() - uploadStartNs;
+            if (uploaded) {
                 lastUploadedPtsNanos = frame.ptsNanos();
             }
         } finally {
             frame.close();
         }
+        if (uploaded) {
+            recordAdaptiveUploadCost(uploadNs);
+        }
+    }
+
+    private void recordAdaptiveUploadCost(long uploadNs) {
+        if (uploadNs > VideoBillboardPreview.ADAPTIVE_FRAME_BUDGET_NS) {
+            consecutiveBadUploads++;
+            if (consecutiveBadUploads >= VideoBillboardPreview.ADAPTIVE_BAD_FRAME_THRESHOLD) {
+                requestAdaptiveDownscale();
+            }
+        } else {
+            consecutiveBadUploads = Math.max(0, consecutiveBadUploads - 2);
+        }
+    }
+
+    private synchronized boolean requestAdaptiveDownscale() {
+        int currentWidth = targetWidth;
+        int currentHeight = targetHeight;
+        if (currentWidth <= VideoBillboardPreview.MIN_ADAPTIVE_WIDTH) {
+            return false;
+        }
+        int nextWidth = Math.max(VideoBillboardPreview.MIN_ADAPTIVE_WIDTH, Math.round(currentWidth * 0.75F));
+        int nextHeight = Math.max(1, Math.round(currentHeight * (nextWidth / (float) currentWidth)));
+        if (nextWidth >= currentWidth || nextHeight >= currentHeight) {
+            return false;
+        }
+
+        long restartOffsetMillis = currentRestartOffsetMillis();
+        LOGGER.warn("视频会话上传持续超预算，优先保证游戏流畅: session={}, {}x{} -> {}x{}，offset={}ms",
+                sessionId, currentWidth, currentHeight, nextWidth, nextHeight, restartOffsetMillis);
+        restartDecoder(nextWidth, nextHeight, restartOffsetMillis);
+        return true;
+    }
+
+    private long currentRestartOffsetMillis() {
+        long displayed = mediaMillis();
+        if (displayed >= 0L) {
+            return totalMillis > 0L ? Math.min(totalMillis, displayed) : displayed;
+        }
+        long synced = ModernTurntableTimeline.mediaMillis(turntablePos);
+        if (synced >= 0L) {
+            return totalMillis > 0L ? Math.min(totalMillis, synced) : synced;
+        }
+        long base = Math.max(startOffsetMillis, decoderStartOffsetMillis);
+        long elapsed = Math.max(0L, playbackNanos() / 1_000_000L);
+        long value = Math.max(0L, base + elapsed);
+        return totalMillis > 0L ? Math.min(totalMillis, value) : value;
+    }
+
+    private void restartDecoder(int nextWidth, int nextHeight, long restartOffsetMillis) {
+        long gen = generation.incrementAndGet();
+        AutoCloseable oldDecoder = decoder;
+        decoder = null;
+        if (oldDecoder != null) {
+            Thread closer = new Thread(() -> {
+                try {
+                    oldDecoder.close();
+                } catch (Exception ignored) {
+                }
+            }, "bili-video-adaptive-close-" + sessionId);
+            closer.setDaemon(true);
+            closer.start();
+        }
+        Thread oldThread = decodeThread;
+        if (oldThread != null) {
+            oldThread.interrupt();
+        }
+
+        frameQueue.clear();
+        releaseTexture();
+        targetWidth = nextWidth;
+        targetHeight = nextHeight;
+        hasFrame = false;
+        firstFrameLogged = false;
+        firstDecodedNanoTime = 0L;
+        startupBufferReady = false;
+        startNanoTime = System.nanoTime();
+        lastUploadPumpNanoTime = System.nanoTime();
+        decoderStartOffsetMillis = Math.max(0L, restartOffsetMillis);
+        adaptiveRestartOffsetMillis = decoderStartOffsetMillis;
+        lastUploadedPtsNanos = -1L;
+        consecutiveBadUploads = 0;
+        running = true;
+
+        Thread thread = new Thread(() -> decode(gen), "bili-video-" + sessionId + "-adaptive");
+        thread.setDaemon(true);
+        decodeThread = thread;
+        thread.start();
     }
 
     private boolean shouldWaitForStartupBuffer() {
@@ -327,8 +452,63 @@ final class VideoPlaybackInstance {
         VideoFrameUploader.uploadRgba(image, rgba, targetWidth, targetHeight);
         backTexture.upload();
         swapTextures();
+        releaseYuvTextures();
         hasFrame = true;
         return true;
+    }
+
+    private boolean uploadDecodedFrameOnRenderThread(VideoBillboardPreview.DecodedFrame frame) {
+        if (VideoBillboardPreview.isCustomYuvShaderAvailable()
+                && frame.format() == com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P) {
+            return uploadYuvOnRenderThread(frame);
+        }
+        return uploadOnRenderThread(Yuv420pConverter.toUploadRgba(frame, targetWidth, targetHeight));
+    }
+
+    private boolean uploadYuvOnRenderThread(VideoBillboardPreview.DecodedFrame frame) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null) {
+            return false;
+        }
+        ensureYuvTextureSet();
+        if (!yuvTextureSet.upload(frame, targetWidth, targetHeight)) {
+            return false;
+        }
+        releaseRgbaTextures();
+        hasFrame = true;
+        return true;
+    }
+
+    private void ensureYuvTextureSet() {
+        if (yuvTextureSet == null) {
+            yuvTextureSet = new Yuv420pTextureSet(yTextureId, uTextureId, vTextureId,
+                    "bili_video_" + sessionId + "_yuv");
+        }
+    }
+
+    private void releaseRgbaTextures() {
+        if (frontTexture != null) {
+            Minecraft.getInstance().getTextureManager().release(frontTextureId);
+            frontTexture.close();
+            frontTexture = null;
+        }
+        if (backTexture != null && !backTextureId.equals(frontTextureId)) {
+            Minecraft.getInstance().getTextureManager().release(backTextureId);
+            backTexture.close();
+            backTexture = null;
+        } else if (backTexture != null) {
+            backTexture.close();
+            backTexture = null;
+        }
+        frontTextureId = firstTextureId;
+        backTextureId = secondTextureId;
+    }
+
+    private void releaseYuvTextures() {
+        if (yuvTextureSet != null) {
+            yuvTextureSet.close();
+            yuvTextureSet = null;
+        }
     }
 
     private void ensureTexture() {
@@ -374,14 +554,46 @@ final class VideoPlaybackInstance {
             if (hasFrame && frontTexture != null) {
                 VideoBillboardPreview.submitProjectorGeometry(event, minecraft, camera, projector, frontTextureId,
                         targetWidth, targetHeight);
+            } else if (hasFrame && yuvTextureSet != null && VideoBillboardPreview.isCustomYuvShaderAvailable()
+                    && !VideoBillboardPreview.shouldDrawYuvImmediateWithIris()) {
+                VideoBillboardPreview.submitProjectorYuvGeometry(event, minecraft, camera, projector, yuvTextureSet);
             } else if (Boolean.parseBoolean(System.getProperty("bili.video.pipeline.loading_placeholder", "true"))) {
                 ensureLoadingTexture();
-                updateLoadingTexture();
+                updateLoadingTexture(shouldShowIrisTranslucencyWarning());
                 VideoBillboardPreview.submitProjectorGeometry(event, minecraft, camera, projector, loadingTextureId,
                         LoadingTexture.WIDTH, LoadingTexture.HEIGHT);
             }
         }
         projectorPositions.removeAll(stale);
+    }
+
+    void renderYuvImmediate(RenderLevelStageEvent event, String route) {
+        if (!hasFrame || yuvTextureSet == null || !VideoBillboardPreview.isCustomYuvShaderAvailable()
+                || !VideoBillboardPreview.shouldDrawYuvImmediateWithIris()) {
+            return;
+        }
+        pumpUploadOnRenderThread();
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null || minecraft.player == null) {
+            return;
+        }
+        Camera camera = minecraft.gameRenderer.getMainCamera();
+        List<BlockPos> stale = new ArrayList<>();
+        boolean drew = false;
+        for (BlockPos pos : projectorPositions) {
+            if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
+                stale.add(pos);
+                continue;
+            }
+            drew |= VideoBillboardPreview.drawProjectorYuvImmediate(event, minecraft, camera, projector, yuvTextureSet,
+                    route);
+        }
+        projectorPositions.removeAll(stale);
+        if (drew && !firstYuvImmediateLogged) {
+            firstYuvImmediateLogged = true;
+            LOGGER.warn("Iris/YUV: session={} 的投影仪 YUV 使用实例纹理 immediate 绘制，route={}, texture={}x{}",
+                    sessionId, route, yuvTextureSet.width(), yuvTextureSet.height());
+        }
     }
 
     private void ensureLoadingTexture() {
@@ -398,10 +610,10 @@ final class VideoPlaybackInstance {
         loadingTexture = new DynamicTexture("bili_video_" + sessionId + "_loading", LoadingTexture.WIDTH,
                 LoadingTexture.HEIGHT, false);
         Minecraft.getInstance().getTextureManager().register(loadingTextureId, loadingTexture);
-        updateLoadingTexture();
+        updateLoadingTexture(shouldShowIrisTranslucencyWarning());
     }
 
-    private void updateLoadingTexture() {
+    private void updateLoadingTexture(boolean irisTranslucencyWarning) {
         if (loadingTexture == null) {
             return;
         }
@@ -409,8 +621,13 @@ final class VideoPlaybackInstance {
         if (image == null || image.isClosed()) {
             return;
         }
-        LoadingTexture.draw(image, System.nanoTime() - startNanoTime, frameQueue.size(), frameQueue.capacity());
+        LoadingTexture.draw(image, System.nanoTime() - startNanoTime, frameQueue.size(), frameQueue.capacity(),
+                irisTranslucencyWarning);
         loadingTexture.upload();
+    }
+
+    private boolean shouldShowIrisTranslucencyWarning() {
+        return hasFrame && yuvTextureSet != null && VideoBillboardPreview.shouldDrawYuvImmediateWithIris();
     }
 
     boolean isWithinAudioRange(Minecraft minecraft) {
@@ -581,26 +798,13 @@ final class VideoPlaybackInstance {
     }
 
     private void releaseTexture() {
-        if (frontTexture != null) {
-            Minecraft.getInstance().getTextureManager().release(frontTextureId);
-            frontTexture.close();
-            frontTexture = null;
-        }
-        if (backTexture != null && !backTextureId.equals(frontTextureId)) {
-            Minecraft.getInstance().getTextureManager().release(backTextureId);
-            backTexture.close();
-            backTexture = null;
-        } else if (backTexture != null) {
-            backTexture.close();
-            backTexture = null;
-        }
+        releaseRgbaTextures();
+        releaseYuvTextures();
         if (loadingTexture != null) {
             Minecraft.getInstance().getTextureManager().release(loadingTextureId);
             loadingTexture.close();
             loadingTexture = null;
         }
-        frontTextureId = firstTextureId;
-        backTextureId = secondTextureId;
     }
 
     private static final class LoadingTexture {
@@ -616,15 +820,22 @@ final class VideoPlaybackInstance {
         private LoadingTexture() {
         }
 
-        static void draw(NativeImage image, long elapsedNs, int queuedFrames, int capacity) {
+        static void draw(NativeImage image, long elapsedNs, int queuedFrames, int capacity,
+                boolean irisTranslucencyWarning) {
             fill(image, 0, 0, WIDTH, HEIGHT, BG);
             fill(image, 18, 18, WIDTH - 36, HEIGHT - 36, PANEL);
             rect(image, 18, 18, WIDTH - 36, HEIGHT - 36, GOLD_DIM);
 
             int phase = (int) ((elapsedNs / 300_000_000L) % 4L);
-            drawCenteredText(image, "LOADING" + dots(phase), 62, TEXT);
-            drawCenteredText(image, "DECODING", 84, 0xFFB8C1CC);
-            drawCenteredText(image, "PLEASE WAIT", 100, 0xFF8F9BA8);
+            if (irisTranslucencyWarning) {
+                drawCenteredText(image, "VIDEO ACTIVE", 54, TEXT);
+                drawCenteredText(image, "TRANSLUCENT", 78, GOLD);
+                drawCenteredText(image, "MAY HIDE VIDEO", 102, 0xFFB8C1CC);
+            } else {
+                drawCenteredText(image, "LOADING" + dots(phase), 62, TEXT);
+                drawCenteredText(image, "DECODING", 84, 0xFFB8C1CC);
+                drawCenteredText(image, "PLEASE WAIT", 100, 0xFF8F9BA8);
+            }
 
             int barX = 58;
             int barY = 126;
@@ -710,6 +921,7 @@ final class VideoPlaybackInstance {
                 case 'D' -> new int[] { 0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110 };
                 case 'E' -> new int[] { 0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111 };
                 case 'G' -> new int[] { 0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110 };
+                case 'H' -> new int[] { 0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001 };
                 case 'I' -> new int[] { 0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111 };
                 case 'K' -> new int[] { 0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001 };
                 case 'L' -> new int[] { 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111 };
@@ -720,8 +932,10 @@ final class VideoPlaybackInstance {
                 case 'R' -> new int[] { 0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001 };
                 case 'S' -> new int[] { 0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110 };
                 case 'T' -> new int[] { 0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100 };
+                case 'U' -> new int[] { 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110 };
                 case 'V' -> new int[] { 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100 };
                 case 'W' -> new int[] { 0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001 };
+                case 'Y' -> new int[] { 0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100 };
                 case '.' -> new int[] { 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100 };
                 default -> new int[] { 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000 };
             };
@@ -729,10 +943,6 @@ final class VideoPlaybackInstance {
     }
 
     private record DecodedVideoFrame(long frameIndex, long ptsNanos, VideoBillboardPreview.DecodedFrame frame) {
-        byte[] rgba() {
-            return frame.rgba();
-        }
-
         void close() {
             frame.close();
         }

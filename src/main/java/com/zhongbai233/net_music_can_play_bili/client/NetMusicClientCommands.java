@@ -43,13 +43,7 @@ public final class NetMusicClientCommands {
                                                 IntegerArgumentType.getInteger(ctx, "delayMs"),
                                                 StringArgumentType.getString(ctx, "note"))))
                                 .executes(ctx -> perceivedBench(ctx,
-                                        IntegerArgumentType.getInteger(ctx, "delayMs"), ""))))
-                .then(literal("perceptual")
-                        .then(literal("trigger")
-                                .then(argument("label", StringArgumentType.greedyString())
-                                        .executes(ctx -> triggerPerceptualBench(ctx,
-                                                StringArgumentType.getString(ctx, "label"))))
-                                .executes(ctx -> triggerPerceptualBench(ctx, "manual"))));
+                                        IntegerArgumentType.getInteger(ctx, "delayMs"), ""))));
 
         LiteralArgumentBuilder<CommandSourceStack> dolby = literal("dolby")
                 .then(literal("joc")
@@ -122,7 +116,7 @@ public final class NetMusicClientCommands {
         PlaybackLatencyBench.logNow();
         feedback(Component.literal(PlaybackLatencyBench.enabled()
                 ? "播放延迟Bench已开启，详细数据已输出到日志"
-                : "播放延迟Bench未开启；启动参数加 -Dbili.playback.bench=true"));
+                : "播放延迟Bench未开启；runClient 加 -PbiliPlaybackLatencyBench=true"));
         return 1;
     }
 
@@ -144,9 +138,4 @@ public final class NetMusicClientCommands {
         return 1;
     }
 
-    private static int triggerPerceptualBench(CommandContext<CommandSourceStack> ctx, String label) {
-        PerceptualBenchTrigger.trigger(label);
-        feedback(Component.literal("感知Bench触发文件: " + PerceptualBenchTrigger.triggerPath().toAbsolutePath()));
-        return 1;
-    }
 }
