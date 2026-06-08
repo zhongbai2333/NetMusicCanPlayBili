@@ -3,6 +3,8 @@ package com.zhongbai233.net_music_can_play_bili.media.codec;
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
 
+import java.nio.ByteBuffer;
+
 /**
  * H.264/HEVC 视频原生解码器。
  *
@@ -231,6 +233,77 @@ public class VideoNativeDecoder implements AutoCloseable {
             }
         }
         return yuv;
+    }
+
+    /**
+     * 获取一帧解码后的 NV12 图像（Y + interleaved UV）。
+     */
+    public synchronized byte[] getVideoFrameNv12() {
+        if (!open || handle == 0) {
+            return null;
+        }
+        byte[] nv12;
+        try {
+            nv12 = VideoJni.getVideoFrameNv12(handle);
+        } catch (UnsatisfiedLinkError oldNative) {
+            LOGGER.warn("VideoNativeDecoder: 当前 native 缺少 getVideoFrameNv12，回退 YUV420P", oldNative);
+            return getVideoFrameYuv420();
+        }
+        if (nv12 != null) {
+            totalFrames++;
+            if (totalFrames == 1) {
+                long dims = VideoJni.getDimensions(handle);
+                originalWidth = (int) (dims >> 32);
+                originalHeight = (int) dims;
+            }
+        }
+        return nv12;
+    }
+
+    /**
+     * 获取一帧 NV12 并写入 direct ByteBuffer，避免 native 为每帧创建 Java byte[]。
+     *
+     * <p>
+     * 若当前 native 还没有 direct-buffer 符号，则回退到旧 byte[] API 并复制进 direct buffer，保证开发期兼容。
+     * </p>
+     */
+    public synchronized boolean getVideoFrameNv12Into(ByteBuffer output) {
+        if (!open || handle == 0 || output == null) {
+            return false;
+        }
+        if (!output.isDirect()) {
+            throw new IllegalArgumentException("NV12 output buffer must be a direct ByteBuffer");
+        }
+        output.clear();
+        try {
+            int status = VideoJni.getVideoFrameNv12IntoDirect(handle, output);
+            if (status <= 0) {
+                return false;
+            }
+            int byteLength = Math.max(1, getOutputWidth()) * Math.max(1, getOutputHeight()) * 3 / 2;
+            output.position(0);
+            output.limit(Math.min(output.capacity(), byteLength));
+            totalFrames++;
+            if (totalFrames == 1) {
+                long dims = VideoJni.getDimensions(handle);
+                originalWidth = (int) (dims >> 32);
+                originalHeight = (int) dims;
+            }
+            return true;
+        } catch (UnsatisfiedLinkError oldNative) {
+            byte[] nv12 = getVideoFrameNv12();
+            if (nv12 == null) {
+                return false;
+            }
+            if (output.capacity() < nv12.length) {
+                throw new IllegalArgumentException(
+                        "NV12 direct output buffer too small: " + output.capacity() + " < " + nv12.length);
+            }
+            output.clear();
+            output.put(nv12);
+            output.flip();
+            return true;
+        }
     }
 
     /**

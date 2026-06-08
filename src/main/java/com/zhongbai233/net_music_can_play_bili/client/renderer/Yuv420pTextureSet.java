@@ -7,7 +7,7 @@ import net.minecraft.resources.Identifier;
 /**
  * 三张已注册的 RED8 纹理，用于承载一帧 packed YUV420P/I420 数据。
  */
-final class Yuv420pTextureSet implements AutoCloseable {
+final class Yuv420pTextureSet implements VideoYuvTextureSet {
     private final Identifier yId;
     private final Identifier uId;
     private final Identifier vId;
@@ -25,27 +25,31 @@ final class Yuv420pTextureSet implements AutoCloseable {
         this.labelPrefix = labelPrefix;
     }
 
-    Identifier yId() {
+    public Identifier yId() {
         return yId;
     }
 
-    Identifier uId() {
+    public Identifier uId() {
         return uId;
     }
 
-    Identifier vId() {
+    public Identifier vId() {
         return vId;
     }
 
-    int width() {
+    public int width() {
         return width;
     }
 
-    int height() {
+    public int height() {
         return height;
     }
 
-    boolean upload(VideoBillboardPreview.DecodedFrame frame, int width, int height) {
+    public Fmp4NativeVideoDecoder.DecodedFrame.Format format() {
+        return Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P;
+    }
+
+    public boolean upload(VideoBillboardPreview.DecodedFrame frame, int width, int height) {
         if (frame == null || frame.format() != Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P) {
             return false;
         }
@@ -78,12 +82,17 @@ final class Yuv420pTextureSet implements AutoCloseable {
         close();
         this.width = width;
         this.height = height;
-        yTexture = new Yuv420pPlaneTexture(labelPrefix + "_y", width, height);
-        uTexture = new Yuv420pPlaneTexture(labelPrefix + "_u", chromaWidth, chromaHeight);
-        vTexture = new Yuv420pPlaneTexture(labelPrefix + "_v", chromaWidth, chromaHeight);
-        Minecraft.getInstance().getTextureManager().register(yId, yTexture);
-        Minecraft.getInstance().getTextureManager().register(uId, uTexture);
-        Minecraft.getInstance().getTextureManager().register(vId, vTexture);
+        try {
+            yTexture = new Yuv420pPlaneTexture(labelPrefix + "_y", width, height);
+            uTexture = new Yuv420pPlaneTexture(labelPrefix + "_u", chromaWidth, chromaHeight);
+            vTexture = new Yuv420pPlaneTexture(labelPrefix + "_v", chromaWidth, chromaHeight);
+            Minecraft.getInstance().getTextureManager().register(yId, yTexture);
+            Minecraft.getInstance().getTextureManager().register(uId, uTexture);
+            Minecraft.getInstance().getTextureManager().register(vId, vTexture);
+        } catch (RuntimeException | LinkageError e) {
+            close();
+            throw e;
+        }
     }
 
     @Override

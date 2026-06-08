@@ -56,7 +56,7 @@ public final class BiliRealVideoPlaybackBench {
     private static final String NATIVE_HWACCEL = VideoFeatureFlags.advancedString("bili.video.native.hwaccel", "auto")
             .trim();
     private static final String OUTPUT_FORMAT = VideoFeatureFlags
-            .advancedString("bili.video.real_bench.output_format", "rgba")
+            .advancedString("bili.video.real_bench.output_format", "nv12")
             .trim().toLowerCase(Locale.ROOT);
 
     private BiliRealVideoPlaybackBench() {
@@ -186,11 +186,19 @@ public final class BiliRealVideoPlaybackBench {
         int targetHeight = Math.max(1, stream.height());
         int outputFps = outputFpsFor(stream);
         long totalDecodeNs = 0L;
+        long totalQueueWaitNs = 0L;
+        long totalNativeGetNs = 0L;
+        long totalDecodeOtherNs = 0L;
         long totalUploadNs = 0L;
         long totalLoopNs = 0L;
         long maxDecodeNs = 0L;
+        long maxQueueWaitNs = 0L;
+        long maxNativeGetNs = 0L;
+        long maxDecodeOtherNs = 0L;
         long maxUploadNs = 0L;
         long totalMeasuredFrameBytes = 0L;
+        int directFrames = 0;
+        int heapFrames = 0;
         int frames = 0;
         int measuredFrames = 0;
         long frameIntervalNs = outputFps > 0 ? 1_000_000_000L / outputFps : 0L;
@@ -201,7 +209,7 @@ public final class BiliRealVideoPlaybackBench {
             for (int i = 0; i < FRAMES_PER_STAGE; i++) {
                 long frameStartNs = System.nanoTime();
                 long decodeStartNs = System.nanoTime();
-                byte[] frame = nextFrame(decoder);
+                Fmp4NativeVideoDecoder.DecodedFrame frame = nextDecodedFrame(decoder);
                 long decodeNs = System.nanoTime() - decodeStartNs;
                 if (frame == null) {
                     LOGGER.warn("  Real Stage q{} 提前结束：ffmpeg 输出 EOF，frames={}", quality, frames);
@@ -209,43 +217,61 @@ public final class BiliRealVideoPlaybackBench {
                 }
 
                 long uploadNs = 0L;
-                if (!DECODE_ONLY) {
-                    if (isYuv420OutputFrame(frame, targetWidth, targetHeight)) {
-                        uploadNs = isPackedYuvUploadMode()
-                                ? VideoBillboardPreview.uploadPackedBytesSyncForBench(frame, targetWidth,
-                                        packedYuvTextureHeight(targetWidth, targetHeight))
-                                : VideoBillboardPreview.uploadYuv420FrameSyncForBench(frame, targetWidth,
-                                        targetHeight);
-                    } else {
-                        uploadNs = VideoBillboardPreview.uploadFrameSyncForBench(frame, targetWidth, targetHeight);
+                try {
+                    if (!DECODE_ONLY) {
+                        uploadNs = VideoBillboardPreview.uploadDecodedFrameSyncForBench(frame, targetWidth,
+                                targetHeight);
+                        if (uploadNs < 0L) {
+                            LOGGER.warn("  Real Stage q{} 提前结束：客户端世界已退出或上传失败", quality);
+                            break;
+                        }
                     }
-                    if (uploadNs < 0L) {
-                        LOGGER.warn("  Real Stage q{} 提前结束：客户端世界已退出或上传失败", quality);
-                        break;
+
+                    frames++;
+
+                    if (REALTIME_PLAYBACK && !DECODE_ONLY) {
+                        sleepUntilNextFrame(frameStartNs, frameIntervalNs);
                     }
-                }
 
-                frames++;
-
-                if (REALTIME_PLAYBACK && !DECODE_ONLY) {
-                    sleepUntilNextFrame(frameStartNs, frameIntervalNs);
-                }
-
-                long loopNs = System.nanoTime() - frameStartNs;
-                if (frames > warmupFrames) {
-                    totalDecodeNs += decodeNs;
-                    totalUploadNs += uploadNs;
-                    totalLoopNs += loopNs;
-                    maxDecodeNs = Math.max(maxDecodeNs, decodeNs);
-                    maxUploadNs = Math.max(maxUploadNs, uploadNs);
-                    totalMeasuredFrameBytes += frame.length;
-                    measuredFrames++;
+                    long loopNs = System.nanoTime() - frameStartNs;
+                    if (frames > warmupFrames) {
+                        long queueWaitNs = Math.max(0L, frame.queueWaitNanos());
+                        long nativeGetNs = Math.max(0L, frame.nativeGetNanos());
+                        long decodeOtherNs = Math.max(0L, decodeNs - queueWaitNs - nativeGetNs);
+                        totalDecodeNs += decodeNs;
+                        totalQueueWaitNs += queueWaitNs;
+                        totalNativeGetNs += nativeGetNs;
+                        totalDecodeOtherNs += decodeOtherNs;
+                        totalUploadNs += uploadNs;
+                        totalLoopNs += loopNs;
+                        maxDecodeNs = Math.max(maxDecodeNs, decodeNs);
+                        maxQueueWaitNs = Math.max(maxQueueWaitNs, queueWaitNs);
+                        maxNativeGetNs = Math.max(maxNativeGetNs, nativeGetNs);
+                        maxDecodeOtherNs = Math.max(maxDecodeOtherNs, decodeOtherNs);
+                        maxUploadNs = Math.max(maxUploadNs, uploadNs);
+                        if (frame.buffer() != null) {
+                            directFrames++;
+                        } else {
+                            heapFrames++;
+                        }
+                        int decodedFrameBytes = frame.byteLength();
+                        totalMeasuredFrameBytes += !DECODE_ONLY
+                                ? estimatedUploadBytes(decodedFrameBytes, targetWidth, targetHeight)
+                                : decodedFrameBytes;
+                        measuredFrames++;
+                    }
+                } finally {
+                    frame.close();
                 }
 
                 if ((i + 1) % Math.max(1, FRAMES_PER_STAGE / 4) == 0) {
-                    LOGGER.info("  Real Stage q{} 进度: frames={}/{}, measured={}, avgDecode={}ms, avgUpload={}ms",
+                    LOGGER.info(
+                            "  Real Stage q{} 进度: frames={}/{}, measured={}, avgDecode={}ms(queue={}ms,native={}ms,other={}ms), avgUpload={}ms",
                             quality, i + 1, FRAMES_PER_STAGE, measuredFrames,
                             formatMs(totalDecodeNs / 1_000_000.0 / Math.max(1, measuredFrames)),
+                            formatMs(totalQueueWaitNs / 1_000_000.0 / Math.max(1, measuredFrames)),
+                            formatMs(totalNativeGetNs / 1_000_000.0 / Math.max(1, measuredFrames)),
+                            formatMs(totalDecodeOtherNs / 1_000_000.0 / Math.max(1, measuredFrames)),
                             formatMs(totalUploadNs / 1_000_000.0 / Math.max(1, measuredFrames)));
                 }
             }
@@ -255,7 +281,9 @@ public final class BiliRealVideoPlaybackBench {
 
         long totalStageNs = System.nanoTime() - stageStartNs;
         return new StageResult(quality, stream, outputFps, frames, measuredFrames, warmupFrames, totalDecodeNs,
-                totalUploadNs, totalLoopNs, maxDecodeNs, maxUploadNs, totalMeasuredFrameBytes, totalStageNs);
+                totalQueueWaitNs, totalNativeGetNs, totalDecodeOtherNs, totalUploadNs, totalLoopNs, maxDecodeNs,
+                maxQueueWaitNs, maxNativeGetNs, maxDecodeOtherNs, maxUploadNs, totalMeasuredFrameBytes,
+                totalStageNs, directFrames, heapFrames);
     }
 
     private static AutoCloseable openDecoder(BiliApiClient.VideoStream stream, int targetWidth, int targetHeight,
@@ -263,12 +291,13 @@ public final class BiliRealVideoPlaybackBench {
         LOGGER.info("  使用 native FFmpeg JNI 解码链路: codecId={}, {}x{}, frames={}",
                 stream.codecId(), targetWidth, targetHeight, FRAMES_PER_STAGE);
         return new Fmp4NativeVideoDecoder(stream.baseUrl(), stream.codecId(), targetWidth, targetHeight,
-                FRAMES_PER_STAGE, !(DECODE_ONLY && DECODE_NO_OUTPUT), isYuv420OutputRequested());
+                FRAMES_PER_STAGE, !(DECODE_ONLY && DECODE_NO_OUTPUT), outputFormat(), NATIVE_HWACCEL, 0L, 0L,
+                outputFps);
     }
 
-    private static byte[] nextFrame(AutoCloseable decoder) throws Exception {
+    private static Fmp4NativeVideoDecoder.DecodedFrame nextDecodedFrame(AutoCloseable decoder) throws Exception {
         if (decoder instanceof Fmp4NativeVideoDecoder nativeDecoder) {
-            return nativeDecoder.getNextFrame();
+            return nativeDecoder.getNextDecodedFrame();
         }
         throw new IllegalStateException("unsupported video decoder: " + decoder.getClass().getName());
     }
@@ -283,7 +312,7 @@ public final class BiliRealVideoPlaybackBench {
         double rgbaMiBPerFrame = stream.width() * stream.height() * 4.0 / (1024.0 * 1024.0);
         double relativeToRgba = mibPerFrame / Math.max(0.001, rgbaMiBPerFrame) * 100.0;
         LOGGER.info(
-                "  Real Stage {} 结果: actual={}, {}, {}, {}, outputFormat={}, {}MiB/frame ({}% of RGBA), frames={}, measured={}, warmup={}",
+                "  Real Stage {} 结果: actual={}, {}, {}, {}, outputFormat={}, upload={}MiB/frame ({}% of RGBA), frames={}, measured={}, warmup={}",
                 BiliApiClient.qualityLabel(result.requestedQuality()), BiliApiClient.qualityLabel(stream.quality()),
                 stream.displaySize(), stream.codecName(),
                 stream.frameRate(), outputFormatLabel(), String.format(Locale.ROOT, "%.2f", mibPerFrame),
@@ -297,6 +326,12 @@ public final class BiliRealVideoPlaybackBench {
                 String.format(Locale.ROOT, "%.1f", result.actualLoopFps()),
                 String.format(Locale.ROOT, "%.1f", result.uploadBandwidthMiBps()),
                 String.format(Locale.ROOT, "%.1f", result.wallLoopFps()));
+        LOGGER.info(
+                "    decodeBreakdown avg: queueWait={}ms, nativeGetFrame={}ms, other={}ms; max: queueWait={}ms, nativeGetFrame={}ms, other={}ms; frameStorage=direct:{}, heap:{}",
+                formatMs(result.avgQueueWaitMs()), formatMs(result.avgNativeGetMs()),
+                formatMs(result.avgDecodeOtherMs()), formatMs(result.maxQueueWaitMs()),
+                formatMs(result.maxNativeGetMs()), formatMs(result.maxDecodeOtherMs()), result.directFrames(),
+                result.heapFrames());
     }
 
     private static int[] parseIntSteps(String raw) {
@@ -327,13 +362,36 @@ public final class BiliRealVideoPlaybackBench {
                 || OUTPUT_FORMAT.equals("packed_yuv420");
     }
 
+    private static boolean isNv12OutputRequested() {
+        return OUTPUT_FORMAT.equals("nv12") || OUTPUT_FORMAT.equals("nv12_shader");
+    }
+
+    private static boolean isYuvOutputRequested() {
+        return isNv12OutputRequested() || isYuv420OutputRequested();
+    }
+
+    private static Fmp4NativeVideoDecoder.OutputFormat outputFormat() {
+        if (isNv12OutputRequested()) {
+            return Fmp4NativeVideoDecoder.OutputFormat.NV12;
+        }
+        if (isYuv420OutputRequested()) {
+            return Fmp4NativeVideoDecoder.OutputFormat.YUV420P;
+        }
+        return Fmp4NativeVideoDecoder.OutputFormat.RGBA;
+    }
+
     private static boolean isPackedYuvUploadMode() {
         return OUTPUT_FORMAT.equals("yuv420_packed") || OUTPUT_FORMAT.equals("packed_yuv420");
     }
 
     private static String outputFormatLabel() {
-        if (!isYuv420OutputRequested()) {
+        if (!isYuvOutputRequested()) {
             return "RGBA";
+        }
+        if (isNv12OutputRequested()) {
+            return VideoBillboardPreview.isCustomYuvShaderAvailable()
+                    ? "NV12 planes(shader upload, UV=" + (isNv12UvRg8Enabled() ? "RG8" : "RGBA8") + ")"
+                    : "NV12→RGBA(cpu/iris-fallback)";
         }
         if (!isPackedYuvUploadMode() && !VideoBillboardPreview.isCustomYuvShaderAvailable()) {
             return "YUV420P→RGBA(cpu/iris-fallback)";
@@ -341,14 +399,19 @@ public final class BiliRealVideoPlaybackBench {
         return isPackedYuvUploadMode() ? "YUV420P packed-upload" : "YUV420P planes(shader upload)";
     }
 
-    private static boolean isYuv420OutputFrame(byte[] frame, int width, int height) {
-        return isYuv420OutputRequested() && frame.length == width * height * 3 / 2;
+    private static long estimatedUploadBytes(int decodedFrameBytes, int width, int height) {
+        long pixels = (long) Math.max(1, width) * Math.max(1, height);
+        if (isNv12OutputRequested()) {
+            if (!VideoBillboardPreview.isCustomYuvShaderAvailable()) {
+                return pixels * 4L;
+            }
+            return isNv12UvRg8Enabled() ? pixels * 3L / 2L : pixels * 2L;
+        }
+        return decodedFrameBytes;
     }
 
-    private static int packedYuvTextureHeight(int width, int height) {
-        int yuvBytes = width * height * 3 / 2;
-        int pixels = (yuvBytes + 3) / 4;
-        return Math.max(1, (pixels + width - 1) / width);
+    private static boolean isNv12UvRg8Enabled() {
+        return Boolean.parseBoolean(System.getProperty("bili.video.nv12.uv_rg8", "true"));
     }
 
     private static int outputFpsFor(BiliApiClient.VideoStream stream) {
@@ -491,10 +554,24 @@ public final class BiliRealVideoPlaybackBench {
     }
 
     private record StageResult(int requestedQuality, BiliApiClient.VideoStream stream, int outputFps, int frames,
-            int measuredFrames, int warmupFrames, long totalDecodeNs, long totalUploadNs, long totalLoopNs,
-            long maxDecodeNs, long maxUploadNs, long totalMeasuredFrameBytes, long totalStageNs) {
+            int measuredFrames, int warmupFrames, long totalDecodeNs, long totalQueueWaitNs, long totalNativeGetNs,
+            long totalDecodeOtherNs, long totalUploadNs, long totalLoopNs, long maxDecodeNs, long maxQueueWaitNs,
+            long maxNativeGetNs, long maxDecodeOtherNs, long maxUploadNs, long totalMeasuredFrameBytes,
+            long totalStageNs, int directFrames, int heapFrames) {
         double avgDecodeMs() {
             return measuredFrames <= 0 ? 0.0 : totalDecodeNs / 1_000_000.0 / measuredFrames;
+        }
+
+        double avgQueueWaitMs() {
+            return measuredFrames <= 0 ? 0.0 : totalQueueWaitNs / 1_000_000.0 / measuredFrames;
+        }
+
+        double avgNativeGetMs() {
+            return measuredFrames <= 0 ? 0.0 : totalNativeGetNs / 1_000_000.0 / measuredFrames;
+        }
+
+        double avgDecodeOtherMs() {
+            return measuredFrames <= 0 ? 0.0 : totalDecodeOtherNs / 1_000_000.0 / measuredFrames;
         }
 
         double avgUploadMs() {
@@ -503,6 +580,18 @@ public final class BiliRealVideoPlaybackBench {
 
         double maxDecodeMs() {
             return maxDecodeNs / 1_000_000.0;
+        }
+
+        double maxQueueWaitMs() {
+            return maxQueueWaitNs / 1_000_000.0;
+        }
+
+        double maxNativeGetMs() {
+            return maxNativeGetNs / 1_000_000.0;
+        }
+
+        double maxDecodeOtherMs() {
+            return maxDecodeOtherNs / 1_000_000.0;
         }
 
         double maxUploadMs() {

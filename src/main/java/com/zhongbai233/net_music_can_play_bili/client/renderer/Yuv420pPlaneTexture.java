@@ -18,6 +18,7 @@ final class Yuv420pPlaneTexture extends AbstractTexture {
     private int width;
     private int height;
     private ByteBuffer uploadBuffer;
+    private Nv12PboUploader pboUploader;
 
     Yuv420pPlaneTexture(String label, int width, int height) {
         this.label = label;
@@ -35,9 +36,14 @@ final class Yuv420pPlaneTexture extends AbstractTexture {
         this.texture = RenderSystem.getDevice().createTexture(label,
                 GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_TEXTURE_BINDING,
                 TextureFormat.RED8, this.width, this.height, 1, 1);
-        this.sampler = RenderSystem.getSamplerCache().getRepeat(FilterMode.LINEAR);
-        this.textureView = RenderSystem.getDevice().createTextureView(this.texture);
-        this.uploadBuffer = MemoryUtil.memAlloc(this.width * this.height);
+        try {
+            this.sampler = RenderSystem.getSamplerCache().getRepeat(FilterMode.LINEAR);
+            this.textureView = RenderSystem.getDevice().createTextureView(this.texture);
+            this.uploadBuffer = MemoryUtil.memAlloc(this.width * this.height);
+        } catch (RuntimeException | LinkageError e) {
+            close();
+            throw e;
+        }
     }
 
     void upload(byte[] yuv420p, int offset) {
@@ -59,8 +65,32 @@ final class Yuv420pPlaneTexture extends AbstractTexture {
                 0, 0, 0, 0, width, height);
     }
 
+    boolean uploadPbo(byte[] data, int offset) {
+        if (texture == null || texture.isClosed()) {
+            recreate(width, height);
+        }
+        if (pboUploader == null) {
+            pboUploader = new Nv12PboUploader(label + "_pbo");
+        }
+        return pboUploader.uploadRed8(texture, data, offset, width, height);
+    }
+
+    boolean uploadPbo(ByteBuffer data, int offset) {
+        if (texture == null || texture.isClosed()) {
+            recreate(width, height);
+        }
+        if (pboUploader == null) {
+            pboUploader = new Nv12PboUploader(label + "_pbo");
+        }
+        return pboUploader.uploadRed8(texture, data, offset, width, height);
+    }
+
     @Override
     public void close() {
+        if (pboUploader != null) {
+            pboUploader.close();
+            pboUploader = null;
+        }
         if (uploadBuffer != null) {
             MemoryUtil.memFree(uploadBuffer);
             uploadBuffer = null;

@@ -25,7 +25,7 @@ public final class VideoRenderStressBench {
             VideoFeatureFlags.advancedString("bili.video.render_bench.upload_fps_steps", "30,24,15"));
     private static final int FRAMES_PER_STAGE = VideoFeatureFlags.advancedInt("bili.video.render_bench.frames", 120);
     private static final String UPLOAD_MODE = VideoFeatureFlags
-            .advancedString("bili.video.render_bench.upload_mode", "rgba,yuv420")
+            .advancedString("bili.video.render_bench.upload_mode", "nv12")
             .trim().toLowerCase(Locale.ROOT);
     private static final double STOP_AVG_UPLOAD_MS = Double.parseDouble(
             VideoFeatureFlags.advancedString("bili.video.render_bench.stop_avg_upload_ms", "45"));
@@ -77,8 +77,8 @@ public final class VideoRenderStressBench {
                 "  gameLoopFps={}, uploadFpsSteps={}, frames/stage={}, uploadMode={}, stopAvgUpload={}ms, stopMaxUpload={}ms",
                 TARGET_FPS, java.util.Arrays.toString(UPLOAD_FPS_STEPS), FRAMES_PER_STAGE,
                 UPLOAD_MODE, STOP_AVG_UPLOAD_MS, STOP_MAX_UPLOAD_MS);
-        LOGGER.info("  路线: CPU 测试帧 → NativeImage 写入 → DynamicTexture.upload → SubmitCustomGeometry");
-        LOGGER.info("  模式: rgba=真实 RGBA 全帧上传；yuv420=真实 YUV420P 三平面 RED8 上传，用于验证 YUV+shader 方案收益");
+        LOGGER.info("  路线: CPU 测试帧 → GPU texture upload → SubmitCustomGeometry");
+        LOGGER.info("  模式: rgba=真实 RGBA 全帧上传；yuv420=YUV420P 三平面 RED8；nv12=NV12 双平面上传（默认走 PBO）");
         LOGGER.info("══════════════════════════════════════════");
 
         try {
@@ -287,6 +287,70 @@ public final class VideoRenderStressBench {
         }
     }
 
+    private static void fillNv12BenchFrame(byte[] frame, int width, int height, int frameIndex) {
+        int ySize = width * height;
+        int uvWidth = width / 2;
+        int uvHeight = height / 2;
+        int phase = frameIndex * 8;
+
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int bar = ((x + phase) * 8 / Math.max(1, width)) & 7;
+                frame[y * width + x] = (byte) switch (bar) {
+                    case 0 -> 82;
+                    case 1 -> 145;
+                    case 2 -> 41;
+                    case 3 -> 210;
+                    case 4 -> 170;
+                    case 5 -> 107;
+                    case 6 -> 235;
+                    default -> 32 + (y * 192 / Math.max(1, height - 1));
+                };
+            }
+        }
+
+        int dst = ySize;
+        for (int y = 0; y < uvHeight; y++) {
+            for (int x = 0; x < uvWidth; x++) {
+                int bar = ((x * 2 + phase) * 8 / Math.max(1, width)) & 7;
+                int u;
+                int v;
+                switch (bar) {
+                    case 0 -> {
+                        u = 90;
+                        v = 240;
+                    }
+                    case 1 -> {
+                        u = 54;
+                        v = 34;
+                    }
+                    case 2 -> {
+                        u = 240;
+                        v = 110;
+                    }
+                    case 3 -> {
+                        u = 16;
+                        v = 146;
+                    }
+                    case 4 -> {
+                        u = 166;
+                        v = 16;
+                    }
+                    case 5 -> {
+                        u = 202;
+                        v = 222;
+                    }
+                    default -> {
+                        u = 128;
+                        v = 128;
+                    }
+                }
+                frame[dst++] = (byte) u;
+                frame[dst++] = (byte) v;
+            }
+        }
+    }
+
     private static void logResult(Stage stage, int uploadFps, UploadKind kind, StageResult result) {
         if (result.uploads() <= 0) {
             LOGGER.warn("  Stage {} 无有效帧", stage.name());
@@ -375,6 +439,25 @@ public final class VideoRenderStressBench {
                 return VideoBillboardPreview.uploadYuv420FrameSyncForBench(frame, shape.textureWidth(),
                         shape.textureHeight());
             }
+        },
+        NV12("nv12") {
+            @Override
+            UploadShape uploadShape(int displayWidth, int displayHeight) {
+                int pixels = displayWidth * displayHeight;
+                int uploadBytes = isNv12UvRg8Enabled() ? pixels * 3 / 2 : pixels * 2;
+                return new UploadShape(displayWidth, displayHeight, uploadBytes);
+            }
+
+            @Override
+            void fillFrame(byte[] frame, UploadShape shape, int frameIndex) {
+                fillNv12BenchFrame(frame, shape.textureWidth(), shape.textureHeight(), frameIndex);
+            }
+
+            @Override
+            long upload(byte[] frame, UploadShape shape) {
+                return VideoBillboardPreview.uploadNv12FrameSyncForBench(frame, shape.textureWidth(),
+                        shape.textureHeight());
+            }
         };
 
         private final String displayName;
@@ -395,14 +478,31 @@ public final class VideoRenderStressBench {
 
         static UploadKind[] enabledKinds(String raw) {
             boolean rgba = raw.contains("rgba") || raw.equals("all");
-            boolean yuv = raw.contains("yuv") || raw.contains("nv12") || raw.equals("all");
-            if (rgba && yuv) {
+            boolean yuv420 = raw.contains("yuv420") || raw.equals("yuv") || raw.equals("all");
+            boolean nv12 = raw.contains("nv12") || raw.equals("all");
+            if (rgba && yuv420 && nv12) {
+                return new UploadKind[] { RGBA, YUV420, NV12 };
+            }
+            if (rgba && yuv420) {
                 return new UploadKind[] { RGBA, YUV420 };
             }
-            if (yuv) {
+            if (rgba && nv12) {
+                return new UploadKind[] { RGBA, NV12 };
+            }
+            if (yuv420 && nv12) {
+                return new UploadKind[] { YUV420, NV12 };
+            }
+            if (yuv420) {
                 return new UploadKind[] { YUV420 };
             }
+            if (nv12) {
+                return new UploadKind[] { NV12 };
+            }
             return new UploadKind[] { RGBA };
+        }
+
+        private static boolean isNv12UvRg8Enabled() {
+            return Boolean.parseBoolean(System.getProperty("bili.video.nv12.uv_rg8", "true"));
         }
     }
 

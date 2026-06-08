@@ -25,7 +25,7 @@ public abstract class GlDeviceYuvShaderSkipMixin {
         throw new AssertionError();
     }
 
-    @Inject(method = "getOrCompilePipeline", at = @At("HEAD"), cancellable = true)
+    @Inject(method = "getOrCompilePipeline", at = @At("HEAD"), cancellable = true, require = 0)
     private void net_music_can_play_bili$bypassIrisProgramOverride(RenderPipeline pipeline,
             CallbackInfoReturnable<GlRenderPipeline> cir) {
         if (!IrisYuvShaderOverrideGuard.isYuvPipeline(pipeline)) {
@@ -36,7 +36,7 @@ public abstract class GlDeviceYuvShaderSkipMixin {
                 key -> this.compilePipeline(key, this.defaultShaderSource)));
     }
 
-    @Inject(method = "precompilePipeline(Lcom/mojang/blaze3d/pipeline/RenderPipeline;Lcom/mojang/blaze3d/shaders/ShaderSource;)Lcom/mojang/blaze3d/opengl/GlRenderPipeline;", at = @At("HEAD"), cancellable = true)
+    @Inject(method = "precompilePipeline(Lcom/mojang/blaze3d/pipeline/RenderPipeline;Lcom/mojang/blaze3d/shaders/ShaderSource;)Lcom/mojang/blaze3d/opengl/GlRenderPipeline;", at = @At("HEAD"), cancellable = true, require = 0)
     private void net_music_can_play_bili$bypassIrisProgramOverrideDuringPrecompile(RenderPipeline pipeline,
             ShaderSource shaderSource, CallbackInfoReturnable<GlRenderPipeline> cir) {
         if (!IrisYuvShaderOverrideGuard.isYuvPipeline(pipeline)) {

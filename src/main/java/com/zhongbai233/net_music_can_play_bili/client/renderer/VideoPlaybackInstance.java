@@ -69,7 +69,7 @@ final class VideoPlaybackInstance {
     private volatile DynamicTexture frontTexture;
     private volatile DynamicTexture backTexture;
     private volatile DynamicTexture loadingTexture;
-    private volatile Yuv420pTextureSet yuvTextureSet;
+    private volatile VideoYuvTextureSet yuvTextureSet;
     private volatile Identifier frontTextureId;
     private volatile Identifier backTextureId;
     private volatile boolean firstFrameLogged;
@@ -115,10 +115,10 @@ final class VideoPlaybackInstance {
         replaceProjectors(projectorPositions);
         LOGGER.info("视频会话创建: session={}, {}x{} @ {}fps, renderBackend={}, decodeFormat={}", sessionId,
                 this.targetWidth, this.targetHeight, this.fps, VideoBillboardPreview.RENDER_BACKEND,
-                VideoBillboardPreview.YUV420_DECODE_BACKEND
+                VideoBillboardPreview.YUV_DECODE_BACKEND
                         ? (VideoBillboardPreview.isCustomYuvShaderAvailable()
-                                ? "YUV420P→RGB(shader)"
-                                : "YUV420P→RGBA(cpu/iris-fallback)")
+                                ? VideoBillboardPreview.yuvDecodeFormat().name() + "→RGB(shader)"
+                                : VideoBillboardPreview.yuvDecodeFormat().name() + "→RGBA(cpu/iris-fallback)")
                         : "RGBA");
     }
 
@@ -461,7 +461,7 @@ final class VideoPlaybackInstance {
 
     private boolean uploadDecodedFrameOnRenderThread(VideoBillboardPreview.DecodedFrame frame) {
         if (VideoBillboardPreview.isCustomYuvShaderAvailable()
-                && frame.format() == com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P) {
+                && isYuvFrameFormat(frame.format())) {
             return uploadYuvOnRenderThread(frame);
         }
         return uploadOnRenderThread(Yuv420pConverter.toUploadRgba(frame, targetWidth, targetHeight));
@@ -472,7 +472,7 @@ final class VideoPlaybackInstance {
         if (minecraft.level == null) {
             return false;
         }
-        ensureYuvTextureSet();
+        ensureYuvTextureSet(frame.format());
         if (!yuvTextureSet.upload(frame, targetWidth, targetHeight)) {
             return false;
         }
@@ -481,11 +481,30 @@ final class VideoPlaybackInstance {
         return true;
     }
 
-    private void ensureYuvTextureSet() {
-        if (yuvTextureSet == null) {
-            yuvTextureSet = new Yuv420pTextureSet(yTextureId, uTextureId, vTextureId,
-                    "bili_video_" + sessionId + "_yuv");
+    private void ensureYuvTextureSet(
+            com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format format) {
+        com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format normalized = format == com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P
+                ? com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P
+                : com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.NV12;
+        if (yuvTextureSet != null && yuvTextureSet.format() == normalized) {
+            return;
         }
+        if (yuvTextureSet != null) {
+            yuvTextureSet.close();
+        }
+        if (normalized == com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P) {
+            yuvTextureSet = new Yuv420pTextureSet(yTextureId, uTextureId, vTextureId,
+                    "bili_video_" + sessionId + "_yuv420p");
+        } else {
+            yuvTextureSet = new Nv12TextureSet(yTextureId, uTextureId, yTextureId,
+                    "bili_video_" + sessionId + "_nv12");
+        }
+    }
+
+    private static boolean isYuvFrameFormat(
+            com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format format) {
+        return format == com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P
+                || format == com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.NV12;
     }
 
     private void releaseRgbaTextures() {

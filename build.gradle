@@ -44,12 +44,12 @@ neoForge {
 
             // Limit GameTest discovery to this mod namespace when running the development client.
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
-            // 正式播放默认走 YUV；Bench 均默认关闭，按需用 -P... 显式打开。
+            // 正式播放默认走 NV12 direct-buffer + PBO + shader；Bench 均默认关闭，按需用 -P... 显式打开。
             jvmProp 'bili.video.advanced_features', prop('biliAdvancedVideoFeatures', 'true')
-            jvmProp 'bili.video.enable_bench_features', prop('biliBenchFeatures', 'true')
-            jvmProp 'bili.video.render.backend', prop('biliVideoRenderBackend', 'yuv420')
+            jvmProp 'bili.video.enable_bench_features', prop('biliBenchFeatures', 'false')
+            jvmProp 'bili.video.render.backend', prop('biliVideoRenderBackend', 'nv12')
 
-            // 默认播放器优先使用已验证的三平面 YUV；需要排查时可通过 Gradle 属性回退或改 Iris 映射。
+            // 默认播放器优先使用已验证的 NV12 双平面路径；需要排查时可通过 -PbiliVideoRenderBackend=rgba/yuv420 回退。
             jvmProp 'bili.video.iris.force_yuv_shader', prop('biliIrisForceYuvShader', 'true')
             jvmProp 'bili.video.iris.allow_three_plane', prop('biliIrisAllowThreePlane', 'true')
             jvmProp 'bili.video.iris.program', prop('biliIrisYuvProgram', 'ENTITIES_TRANSLUCENT')
@@ -79,24 +79,21 @@ neoForge {
             jvmProp 'bili.video.real_bench.bv', prop('biliBenchVideo', 'BV1qM4y1w716')
             jvmProp 'bili.video.real_bench.frames', prop('biliRealBenchFrames', '12')
             jvmProp 'bili.video.real_bench.warmup_frames', prop('biliRealBenchWarmupFrames', '2')
-            jvmProp 'bili.video.real_bench.output_format', prop('biliRealBenchOutputFormat', 'yuv420')
+            jvmProp 'bili.video.real_bench.output_format', prop('biliRealBenchOutputFormat', 'nv12')
             jvmProp 'bili.video.real_bench.preview', prop('biliRealBenchPreview', 'false')
             jvmProp 'bili.video.real_bench.realtime', prop('biliRealBenchRealtime', 'false')
             jvmProp 'bili.video.real_bench.max_fps', prop('biliRealBenchMaxFps', '30')
             jvmProp 'bili.video.real_bench.qualities', prop('biliRealBenchQualities', '16')
 
-            // FFmpeg/native 解码默认参数；真实压力 Bench 和普通播放共用。
-            jvmArgument '-Dbili.video.native.hwaccel=d3d11va'
-            jvmArgument '-Dbili.video.ffmpeg.hwaccel=cuda'
-            jvmArgument '-Dbili.video.ffmpeg.decoder=h264_cuvid'
-            jvmArgument '-Dbili.video.ffmpeg.verbose=true'
+            // FFmpeg/native 解码默认参数；普通播放走平台 auto，必要时可用 -PbiliNativeHwaccel=d3d11va/vaapi/none 覆盖。
+            jvmProp 'bili.video.native.hwaccel', prop('biliNativeHwaccel', 'auto')
 
             // CPU 彩条测试：跳过网络/FFmpeg，只验证渲染、上传、YUV shader 路径。
             jvmProp 'bili.video.cpu_bars', prop('biliCpuBars', 'false')
 
             // 多分辨率彩条压力 Bench：不走网络/FFmpeg，逐档验证 480p→8K 上传压力。
             jvmProp 'bili.video.render_bench', prop('biliRenderBench', 'false')
-            jvmProp 'bili.video.render_bench.upload_mode', prop('biliRenderBenchUploadMode', 'rgba,yuv420')
+            jvmProp 'bili.video.render_bench.upload_mode', prop('biliRenderBenchUploadMode', 'nv12')
             jvmProp 'bili.video.render_bench.frames', prop('biliRenderBenchFrames', '120')
             jvmProp 'bili.video.render_bench.upload_fps_steps', prop('biliRenderBenchUploadFpsSteps', '30,24,15')
         }

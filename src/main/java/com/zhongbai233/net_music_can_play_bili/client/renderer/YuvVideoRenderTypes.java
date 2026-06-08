@@ -18,7 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 
 /**
- * GPU 端 YUV420P 转 RGB 的 render pipeline 与 RenderType 工厂。
+ * GPU 端 YUV/NV12 转 RGB 的 render pipeline 与 RenderType 工厂。
  */
 public final class YuvVideoRenderTypes {
     private static final Logger LOGGER = LogUtils.getLogger();
@@ -26,8 +26,12 @@ public final class YuvVideoRenderTypes {
             "pipeline/yuv420p_entity");
     private static final Identifier TEXTURED_PROBE_PIPELINE_ID = Identifier.fromNamespaceAndPath(
             NetMusicCanPlayBili.MODID, "pipeline/yuv420p_textured_probe_entity");
+    private static final Identifier NV12_PIPELINE_ID = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
+            "pipeline/nv12_entity");
     private static final Identifier FRAGMENT_SHADER = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
             "core/yuv420p_entity");
+    private static final Identifier NV12_FRAGMENT_SHADER = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
+            "core/nv12_entity");
     private static final Identifier TEXTURED_PROBE_FRAGMENT_SHADER = Identifier.fromNamespaceAndPath(
             NetMusicCanPlayBili.MODID, "core/yuv420p_textured_probe_entity");
     private static final String YUV_SHADER_DEBUG = System.getProperty("bili.video.yuv.shader_debug", "")
@@ -35,6 +39,7 @@ public final class YuvVideoRenderTypes {
     private static final boolean YUV_NO_DEPTH_WRITE = Boolean.getBoolean("bili.video.yuv.no_depth_write");
 
     static final RenderPipeline YUV420P_ENTITY = buildYuv420pEntityPipeline();
+    static final RenderPipeline NV12_ENTITY = buildYuvEntityPipeline(NV12_PIPELINE_ID, NV12_FRAGMENT_SHADER);
 
     static final RenderPipeline YUV420P_TEXTURED_PROBE_ENTITY = RenderPipeline.builder(
             RenderPipelines.ENTITY_EMISSIVE_SNIPPET)
@@ -54,10 +59,12 @@ public final class YuvVideoRenderTypes {
                     YUV_SHADER_DEBUG);
         }
         if (IrisShaderpackCompat.shouldRegisterThreePlaneYuvPipeline()) {
-            // Iris 在 pipeline 注册时会立刻尝试自动分类；先显式分配，避免它先把我们的三平面 YUV
+            // Iris 在 pipeline 注册时会立刻尝试自动分类；先显式分配，避免它先把我们的 YUV/NV12
             // pipeline 粗略匹配成其他 entity pass 后再接管错误的 shader 程序。
             IrisShaderpackCompat.assignYuvPipelineIfRequested(YUV420P_ENTITY);
             event.registerPipeline(YUV420P_ENTITY);
+            IrisShaderpackCompat.assignYuvPipelineIfRequested(NV12_ENTITY);
+            event.registerPipeline(NV12_ENTITY);
         }
         // 单采样兼容降级路径：仅在用户显式禁用三平面 Iris YUV 时注册，避免部分
         // shaderpack 对 Sampler1/2 的校验导致主渲染 pass 失败。
@@ -67,9 +74,13 @@ public final class YuvVideoRenderTypes {
     }
 
     private static RenderPipeline buildYuv420pEntityPipeline() {
+        return buildYuvEntityPipeline(PIPELINE_ID, FRAGMENT_SHADER);
+    }
+
+    private static RenderPipeline buildYuvEntityPipeline(Identifier pipelineId, Identifier fragmentShader) {
         RenderPipeline.Builder builder = RenderPipeline.builder(RenderPipelines.ENTITY_SNIPPET)
-                .withLocation(PIPELINE_ID)
-                .withFragmentShader(FRAGMENT_SHADER)
+                .withLocation(pipelineId)
+                .withFragmentShader(fragmentShader)
                 .withShaderDefine("NO_OVERLAY")
                 .withShaderDefine("ALPHA_CUTOUT", 0.1F)
                 .withShaderDefine("PER_FACE_LIGHTING")
@@ -111,6 +122,18 @@ public final class YuvVideoRenderTypes {
                         .withTexture("Sampler0", yTexture)
                         .withTexture("Sampler1", uTexture)
                         .withTexture("Sampler2", vTexture)
+                        .createRenderSetup());
+    }
+
+    static RenderType nv12Entity(Identifier yTexture, Identifier uvTexture, Identifier placeholderTexture) {
+        IrisShaderpackCompat.prepareYuvPipelineForCurrentShaderpackState(NV12_ENTITY,
+                YUV420P_TEXTURED_PROBE_ENTITY);
+        return RenderType.create(
+                "bili_nv12_entity",
+                RenderSetup.builder(NV12_ENTITY)
+                        .withTexture("Sampler0", yTexture)
+                        .withTexture("Sampler1", uvTexture)
+                        .withTexture("Sampler2", placeholderTexture)
                         .createRenderSetup());
     }
 

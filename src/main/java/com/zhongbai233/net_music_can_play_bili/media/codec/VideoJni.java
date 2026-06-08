@@ -68,6 +68,20 @@ final class VideoJni {
     static native byte[] getVideoFrameYuv420(long handle);
 
     /**
+     * 获取一帧解码后的 NV12 图像。
+     *
+     * @return packed Y + interleaved UV byte[] (width*height*3/2)，无帧时返回 null
+     */
+    static native byte[] getVideoFrameNv12(long handle);
+
+    /**
+     * 获取一帧 NV12 并写入调用方提供的 direct ByteBuffer。
+     *
+     * @return 1=写入一帧，0=暂时无帧/EOF，-1=失败或缓冲区不足
+     */
+    static native int getVideoFrameNv12IntoDirect(long handle, java.nio.ByteBuffer output);
+
+    /**
      * 接收并丢弃一帧解码结果，不执行硬件帧回读、sws_scale 或 Java byte[] 拷贝。
      *
      * @return 1=收到并丢弃一帧，0=暂时无帧/EOF，-1=失败

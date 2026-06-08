@@ -9,9 +9,9 @@ import org.slf4j.Logger;
  * 可选 Iris 集成辅助工具。
  *
  * <p>
- * YUV420P 路径需要使用本模组自己的 fragment shader 和三个 RED8 平面采样器。启用 Iris
+ * YUV/NV12 路径需要使用本模组自己的 fragment shader 和多平面采样器。启用 Iris
  * shaderpack 后，仅靠公开的 pipeline 分类并不够：shaderpack 仍可能替换最终使用的程序。
- * 因此渲染器为本模组自己的 YUV pipeline 保留了一个作用域很窄的旁路，并把三平面 YUV
+ * 因此渲染器为本模组自己的 YUV pipeline 保留了一个作用域很窄的旁路，并把 NV12/YUV420P
  * 视为正常路径。仍可通过 {@code -Dbili.video.iris.disable_yuv_shader=true} 启用 CPU RGBA 回退。
  * </p>
  */
@@ -169,7 +169,7 @@ final class IrisShaderpackCompat {
                 } else {
                     yuvPipelineAssigned = true;
                 }
-                LOGGER.info("已将视频 {} pipeline 分配给 {}。可用 -D{} 或 -D{} 覆盖 Iris 映射；三平面 YUV 开关 -D{}",
+                LOGGER.info("已将视频 {} pipeline 分配给 {}。可用 -D{} 或 -D{} 覆盖 Iris 映射；多平面 YUV 开关 -D{}",
                         texturedProbe ? "TEXTURED 单采样可见性探针" : "YUV",
                         !configuredYuvShaderKeyName().isBlank() && !texturedProbe
                                 ? "ShaderKey." + configuredYuvShaderKeyName()

@@ -23,6 +23,9 @@ final class Yuv420pConverter {
             return frame.rgba();
         }
         if (frame.format() != Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P) {
+            if (frame.format() == Fmp4NativeVideoDecoder.DecodedFrame.Format.NV12) {
+                return nv12ToRgba(frame.data(), width, height);
+            }
             throw new IllegalArgumentException("unsupported video frame format: " + frame.format());
         }
         return yuv420pToRgba(frame.data(), width, height);
@@ -33,6 +36,9 @@ final class Yuv420pConverter {
             return frame.rgba();
         }
         if (frame.format() != Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P) {
+            if (frame.format() == Fmp4NativeVideoDecoder.DecodedFrame.Format.NV12) {
+                return nv12ToRgba(frame.data(), width, height);
+            }
             throw new IllegalArgumentException("unsupported video frame format: " + frame.format());
         }
         return yuv420pToRgba(frame.data(), width, height);
@@ -62,6 +68,37 @@ final class Yuv420pConverter {
                 int yy = yuv[yRow + x] & 0xFF;
                 int uu = yuv[uBase + uvRow + x / 2] & 0xFF;
                 int vv = yuv[vBase + uvRow + x / 2] & 0xFF;
+                int[] rgb = convert(yy, uu, vv);
+                rgba[out++] = (byte) rgb[0];
+                rgba[out++] = (byte) rgb[1];
+                rgba[out++] = (byte) rgb[2];
+                rgba[out++] = (byte) 255;
+            }
+        }
+        return rgba;
+    }
+
+    static byte[] nv12ToRgba(byte[] nv12, int width, int height) {
+        if ((width & 1) != 0 || (height & 1) != 0) {
+            throw new IllegalArgumentException("NV12 requires even dimensions: " + width + "x" + height);
+        }
+        int ySize = width * height;
+        int required = ySize + ySize / 2;
+        if (nv12.length < required) {
+            throw new IllegalArgumentException("NV12 frame too small: " + nv12.length + " < " + required);
+        }
+
+        byte[] rgba = new byte[ySize * 4];
+        int uvBase = ySize;
+        int out = 0;
+        for (int y = 0; y < height; y++) {
+            int yRow = y * width;
+            int uvRow = (y / 2) * width;
+            for (int x = 0; x < width; x++) {
+                int yy = nv12[yRow + x] & 0xFF;
+                int uv = uvBase + uvRow + (x & ~1);
+                int uu = nv12[uv] & 0xFF;
+                int vv = nv12[uv + 1] & 0xFF;
                 int[] rgb = convert(yy, uu, vv);
                 rgba[out++] = (byte) rgb[0];
                 rgba[out++] = (byte) rgb[1];

@@ -61,6 +61,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private static final byte[] DECODE_ONLY_FRAME = new byte[0];
     private static final boolean REUSE_OUTPUT_BUFFERS = Boolean.parseBoolean(
             System.getProperty("bili.video.native.reuse_output_buffers", "true"));
+    private static final boolean DIRECT_NV12_BUFFERS = Boolean.parseBoolean(
+            System.getProperty("bili.video.native.direct_nv12_buffers", "true"));
     private static final long SEGMENT_BASE_TTL_MILLIS = TimeUnit.MINUTES.toMillis(30);
     private static final int MAX_SEGMENT_BASE_ENTRIES = Integer.getInteger(
             "bili.video.segment_base_cache.max_entries", 512);
@@ -72,12 +74,13 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private final int targetHeight;
     private final int maxFrames;
     private final boolean outputFrames;
-    private final boolean outputYuv420;
+    private final OutputFormat outputFormat;
     private final long startOffsetMillis;
     private final long totalMillis;
     private final int fps;
     private final BlockingQueue<DecodedFrame> frames = new ArrayBlockingQueue<>(MAX_PENDING_FRAMES);
     private final BlockingQueue<byte[]> reusableBuffers = new ArrayBlockingQueue<>(MAX_PENDING_FRAMES);
+    private final BlockingQueue<ByteBuffer> reusableNv12Buffers = new ArrayBlockingQueue<>(MAX_PENDING_FRAMES);
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean finished = new AtomicBoolean(false);
@@ -138,13 +141,21 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     public Fmp4NativeVideoDecoder(String videoUrl, int codecId, int targetWidth, int targetHeight, int maxFrames,
             boolean outputFrames, boolean outputYuv420, String requestedHwaccel, long startOffsetMillis,
             long totalMillis, int fps) throws IOException {
+        this(videoUrl, codecId, targetWidth, targetHeight, maxFrames, outputFrames,
+                outputYuv420 ? OutputFormat.NV12 : OutputFormat.RGBA, requestedHwaccel, startOffsetMillis,
+                totalMillis, fps);
+    }
+
+    public Fmp4NativeVideoDecoder(String videoUrl, int codecId, int targetWidth, int targetHeight, int maxFrames,
+            boolean outputFrames, OutputFormat outputFormat, String requestedHwaccel, long startOffsetMillis,
+            long totalMillis, int fps) throws IOException {
         this.videoUrl = URI.create(videoUrl).toURL();
         this.codecId = codecId == CODEC_HEVC ? CODEC_HEVC : CODEC_H264;
         this.targetWidth = targetWidth;
         this.targetHeight = targetHeight;
         this.maxFrames = Math.max(1, maxFrames);
         this.outputFrames = outputFrames;
-        this.outputYuv420 = outputYuv420;
+        this.outputFormat = outputFormat != null ? outputFormat : OutputFormat.RGBA;
         this.startOffsetMillis = Math.max(0L, startOffsetMillis);
         this.totalMillis = Math.max(0L, totalMillis);
         this.fps = Math.max(1, fps);
@@ -179,6 +190,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
 
     public DecodedFrame getNextDecodedFrame() throws IOException {
         ensureStarted();
+        long waitStartNs = System.nanoTime();
         while (true) {
             DecodedFrame frame;
             try {
@@ -191,7 +203,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                 throw new IOException("等待 native 视频帧时被中断", e);
             }
             if (frame != null) {
-                return frame;
+                return frame.withQueueWaitNanos(System.nanoTime() - waitStartNs);
             }
             if (finished.get()) {
                 if (failure != null) {
@@ -686,41 +698,51 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             if (drainDropFrameNoOutput()) {
                 continue;
             }
-            DecodedFrame frame = outputYuv420 ? getNextYuv420Frame() : getNextRgbaFrame();
+            long nativeStartNs = System.nanoTime();
+            DecodedFrame frame = getNextOutputFrame();
+            long nativeGetNs = System.nanoTime() - nativeStartNs;
             if (frame == null) {
                 return;
             }
-            Long fallbackPtsNanos = pendingDecodedPtsNanos.isEmpty() ? null : pendingDecodedPtsNanos.removeFirst();
-            long samplePtsNanos = decoder.lastFramePtsNanos();
-            if (samplePtsNanos < 0L && fallbackPtsNanos != null) {
-                samplePtsNanos = fallbackPtsNanos.longValue();
-            }
-            long mediaPtsNanos = samplePtsNanos >= 0L
-                    ? samplePtsNanos
-                    : timelineStartNanos + Math.round((totalFrames + 1) * 1_000_000_000.0D / fps);
-            lastDecodedMediaPtsNanos = mediaPtsNanos;
-            if (shouldDropDecodedFrame(mediaPtsNanos, samplePtsNanos >= 0L)) {
-                frame.close();
-                totalFrames++;
-                continue;
-            }
-            long relativePtsNanos = mediaPtsNanos - startOffsetMillis * 1_000_000L;
-            frame = frame.withPtsNanos(Math.max(0L, relativePtsNanos));
-            while (!closed.get()) {
-                try {
-                    if (frames.offer(frame, 250L, TimeUnit.MILLISECONDS)) {
-                        break;
+            boolean enqueued = false;
+            try {
+                frame = frame.withNativeGetNanos(nativeGetNs);
+                Long fallbackPtsNanos = pendingDecodedPtsNanos.isEmpty() ? null : pendingDecodedPtsNanos.removeFirst();
+                long samplePtsNanos = decoder.lastFramePtsNanos();
+                if (samplePtsNanos < 0L && fallbackPtsNanos != null) {
+                    samplePtsNanos = fallbackPtsNanos.longValue();
+                }
+                long mediaPtsNanos = samplePtsNanos >= 0L
+                        ? samplePtsNanos
+                        : timelineStartNanos + Math.round((totalFrames + 1) * 1_000_000_000.0D / fps);
+                lastDecodedMediaPtsNanos = mediaPtsNanos;
+                if (shouldDropDecodedFrame(mediaPtsNanos, samplePtsNanos >= 0L)) {
+                    totalFrames++;
+                    continue;
+                }
+                long relativePtsNanos = mediaPtsNanos - startOffsetMillis * 1_000_000L;
+                frame = frame.withPtsNanos(Math.max(0L, relativePtsNanos));
+                while (!closed.get()) {
+                    try {
+                        if (frames.offer(frame, 250L, TimeUnit.MILLISECONDS)) {
+                            enqueued = true;
+                            break;
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        closed.set(true);
+                        return;
                     }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    closed.set(true);
+                }
+                if (closed.get()) {
                     return;
                 }
+                totalFrames++;
+            } finally {
+                if (!enqueued) {
+                    frame.close();
+                }
             }
-            if (closed.get()) {
-                return;
-            }
-            totalFrames++;
         }
     }
 
@@ -781,6 +803,32 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
 
     private DecodedFrame getNextYuv420Frame() {
         return DecodedFrame.wrap(decoder.getVideoFrameYuv420(), DecodedFrame.Format.YUV420P);
+    }
+
+    private DecodedFrame getNextNv12Frame() {
+        if (DIRECT_NV12_BUFFERS) {
+            int byteCount = Math.max(1, targetWidth) * Math.max(1, targetHeight) * 3 / 2;
+            ByteBuffer buffer = reusableNv12Buffers.poll();
+            if (buffer == null || buffer.capacity() < byteCount) {
+                buffer = ByteBuffer.allocateDirect(byteCount).order(ByteOrder.nativeOrder());
+            }
+            ByteBuffer output = buffer;
+            if (!decoder.getVideoFrameNv12Into(output)) {
+                reusableNv12Buffers.offer(output);
+                return null;
+            }
+            return new DecodedFrame(output, byteCount, DecodedFrame.Format.NV12,
+                    () -> reusableNv12Buffers.offer(output));
+        }
+        return DecodedFrame.wrap(decoder.getVideoFrameNv12(), DecodedFrame.Format.NV12);
+    }
+
+    private DecodedFrame getNextOutputFrame() {
+        return switch (outputFormat) {
+            case NV12 -> getNextNv12Frame();
+            case YUV420P -> getNextYuv420Frame();
+            case RGBA -> getNextRgbaFrame();
+        };
     }
 
     private void drainFramesNoOutput() {
@@ -1025,6 +1073,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         while ((frame = frames.poll()) != null) {
             frame.close();
         }
+        reusableBuffers.clear();
+        reusableNv12Buffers.clear();
     }
 
     private void closeDecoderOnce() {
@@ -1036,27 +1086,52 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private record DecoderConfig(int nalLengthSize, byte[] annexBConfig) {
     }
 
+    public enum OutputFormat {
+        RGBA,
+        YUV420P,
+        NV12
+    }
+
     public static final class DecodedFrame implements AutoCloseable {
         public enum Format {
             RGBA,
-            YUV420P
+            YUV420P,
+            NV12
         }
 
         private final byte[] data;
+        private final ByteBuffer buffer;
+        private final int byteLength;
         private final Format format;
         private final Runnable release;
         private final long ptsNanos;
+        private final long nativeGetNanos;
+        private final long queueWaitNanos;
         private boolean closed;
+        private boolean releaseTransferred;
 
         private DecodedFrame(byte[] data, Format format, Runnable release) {
-            this(data, format, release, -1L);
+            this(data, null, data != null ? data.length : 0, format, release, -1L, -1L, -1L);
         }
 
         private DecodedFrame(byte[] data, Format format, Runnable release, long ptsNanos) {
+            this(data, null, data != null ? data.length : 0, format, release, ptsNanos, -1L, -1L);
+        }
+
+        private DecodedFrame(ByteBuffer buffer, int byteLength, Format format, Runnable release) {
+            this(null, buffer, byteLength, format, release, -1L, -1L, -1L);
+        }
+
+        private DecodedFrame(byte[] data, ByteBuffer buffer, int byteLength, Format format, Runnable release,
+                long ptsNanos, long nativeGetNanos, long queueWaitNanos) {
             this.data = data;
+            this.buffer = buffer;
+            this.byteLength = Math.max(0, byteLength);
             this.format = format != null ? format : Format.RGBA;
             this.release = release;
             this.ptsNanos = ptsNanos;
+            this.nativeGetNanos = nativeGetNanos;
+            this.queueWaitNanos = queueWaitNanos;
         }
 
         static DecodedFrame wrap(byte[] rgba) {
@@ -1068,7 +1143,34 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
 
         public byte[] data() {
+            if (data == null && buffer != null) {
+                ByteBuffer src = bufferSlice();
+                byte[] copy = new byte[src.remaining()];
+                src.get(copy);
+                return copy;
+            }
             return data;
+        }
+
+        public ByteBuffer buffer() {
+            return bufferSlice();
+        }
+
+        public int byteLength() {
+            if (byteLength > 0) {
+                return byteLength;
+            }
+            return data != null ? data.length : 0;
+        }
+
+        private ByteBuffer bufferSlice() {
+            if (buffer == null) {
+                return null;
+            }
+            ByteBuffer duplicate = buffer.duplicate();
+            duplicate.position(0);
+            duplicate.limit(Math.min(buffer.capacity(), byteLength()));
+            return duplicate.slice().order(buffer.order());
         }
 
         public Format format() {
@@ -1086,15 +1188,42 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             return ptsNanos;
         }
 
+        public long nativeGetNanos() {
+            return nativeGetNanos;
+        }
+
+        public long queueWaitNanos() {
+            return queueWaitNanos;
+        }
+
         private DecodedFrame withPtsNanos(long ptsNanos) {
-            return new DecodedFrame(data, format, release, ptsNanos);
+            return new DecodedFrame(data, buffer, byteLength, format, transferRelease(), ptsNanos, nativeGetNanos,
+                    queueWaitNanos);
+        }
+
+        private DecodedFrame withNativeGetNanos(long nativeGetNanos) {
+            return new DecodedFrame(data, buffer, byteLength, format, transferRelease(), ptsNanos, nativeGetNanos,
+                    queueWaitNanos);
+        }
+
+        private DecodedFrame withQueueWaitNanos(long queueWaitNanos) {
+            return new DecodedFrame(data, buffer, byteLength, format, transferRelease(), ptsNanos, nativeGetNanos,
+                    queueWaitNanos);
+        }
+
+        private Runnable transferRelease() {
+            if (releaseTransferred) {
+                return null;
+            }
+            releaseTransferred = true;
+            return release;
         }
 
         @Override
         public void close() {
             if (!closed) {
                 closed = true;
-                if (release != null) {
+                if (release != null && !releaseTransferred) {
                     release.run();
                 }
             }
