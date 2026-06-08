@@ -37,6 +37,8 @@ final class VideoPlaybackInstance {
             "bili.video.pipeline.audio_latency_compensation_ms", 0L);
     private static final long CHASE_WINDOW_MILLIS = Long.getLong("bili.video.pipeline.chase_window_ms", 10_000L);
     private static final long SLOWDOWN_WINDOW_MILLIS = Long.getLong("bili.video.pipeline.slowdown_window_ms", 2_500L);
+    private static final double IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET = Double.parseDouble(
+            System.getProperty("bili.video.pipeline.iris_warning_placeholder_view_depth_offset", "0.01"));
 
     private final String videoUrl;
     private int targetWidth;
@@ -559,9 +561,16 @@ final class VideoPlaybackInstance {
                 VideoBillboardPreview.submitProjectorYuvGeometry(event, minecraft, camera, projector, yuvTextureSet);
             } else if (Boolean.parseBoolean(System.getProperty("bili.video.pipeline.loading_placeholder", "true"))) {
                 ensureLoadingTexture();
-                updateLoadingTexture(shouldShowIrisTranslucencyWarning());
-                VideoBillboardPreview.submitProjectorGeometry(event, minecraft, camera, projector, loadingTextureId,
-                        LoadingTexture.WIDTH, LoadingTexture.HEIGHT);
+                boolean irisWarning = shouldShowIrisTranslucencyWarning();
+                updateLoadingTexture(irisWarning);
+                if (irisWarning && IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET > 0.0D) {
+                    VideoBillboardPreview.submitProjectorViewDepthOffsetGeometry(event, minecraft, camera, projector,
+                            loadingTextureId, LoadingTexture.WIDTH, LoadingTexture.HEIGHT,
+                            IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET);
+                } else {
+                    VideoBillboardPreview.submitProjectorGeometry(event, minecraft, camera, projector,
+                            loadingTextureId, LoadingTexture.WIDTH, LoadingTexture.HEIGHT);
+                }
             }
         }
         projectorPositions.removeAll(stale);

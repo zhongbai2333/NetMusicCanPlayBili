@@ -23,7 +23,7 @@ final class IrisShaderpackCompat {
     private static final String ENABLE_YUV_SHADERPACK_BYPASS = "bili.video.iris.yuv_bypass";
     private static final String IRIS_YUV_PROGRAM = "bili.video.iris.program";
     private static final String IRIS_YUV_SHADER_KEY = "bili.video.iris.shader_key";
-    private static final String DEFAULT_IRIS_YUV_PROGRAM = "ENTITIES";
+    private static final String DEFAULT_IRIS_YUV_PROGRAM = "ENTITIES_TRANSLUCENT";
 
     private static volatile boolean initialized;
     private static volatile boolean available;

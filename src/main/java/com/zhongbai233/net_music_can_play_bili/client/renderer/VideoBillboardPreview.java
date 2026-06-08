@@ -1864,6 +1864,20 @@ public final class VideoBillboardPreview {
 
     static void submitProjectorGeometry(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera,
             VideoProjectorBlockEntity projector, Identifier renderTextureId, int textureWidth, int textureHeight) {
+        submitProjectorGeometry(event, minecraft, camera, projector, renderTextureId, textureWidth, textureHeight,
+                0.0D);
+    }
+
+    static void submitProjectorViewDepthOffsetGeometry(SubmitCustomGeometryEvent event, Minecraft minecraft,
+            Camera camera, VideoProjectorBlockEntity projector, Identifier renderTextureId, int textureWidth,
+            int textureHeight, double viewDepthOffset) {
+        submitProjectorGeometry(event, minecraft, camera, projector, renderTextureId, textureWidth, textureHeight,
+                Math.max(0.0D, viewDepthOffset));
+    }
+
+    private static void submitProjectorGeometry(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera,
+            VideoProjectorBlockEntity projector, Identifier renderTextureId, int textureWidth, int textureHeight,
+            double viewDepthOffset) {
         float scale = Math.abs(projector.getProjectionScale());
         float aspect = textureWidth / (float) textureHeight;
         float halfHeight = HEIGHT * scale * 0.5F;
@@ -1891,9 +1905,11 @@ public final class VideoBillboardPreview {
         float upY = (float) Math.cos(pitchRad);
         float upZ = (float) (forwardZ * Math.sin(pitchRad));
 
-        float cx = (float) (anchorX - cameraPos.x);
-        float cy = (float) (anchorY - cameraPos.y);
-        float cz = (float) (anchorZ - cameraPos.z);
+        double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        double depthOffsetScale = viewDepthOffset > 0.0D && distance > 1.0e-4D ? viewDepthOffset / distance : 0.0D;
+        float cx = (float) (anchorX - cameraPos.x + dx * depthOffsetScale);
+        float cy = (float) (anchorY - cameraPos.y + dy * depthOffsetScale);
+        float cz = (float) (anchorZ - cameraPos.z + dz * depthOffsetScale);
         float rx = rightX * halfWidth;
         float rz = rightZ * halfWidth;
         float ux = upX * halfHeight;
