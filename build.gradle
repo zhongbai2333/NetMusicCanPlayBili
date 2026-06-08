@@ -147,10 +147,7 @@ sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 dependencies {
     compileOnly "maven.modrinth:net-music:mCrjhdSq"
-    def localIrisJars = fileTree(dir: 'run/mods', include: 'iris-neoforge-*.jar')
-    if (!localIrisJars.isEmpty()) {
-        compileOnly localIrisJars
-    }
+    compileOnly "maven.modrinth:iris:YEGDGnJM"
 }
 
 // Expand mod metadata templates from Gradle properties.
