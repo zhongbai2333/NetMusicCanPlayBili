@@ -6,15 +6,30 @@ import org.slf4j.Logger;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class ChunkPrefetchInputStream extends InputStream {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int COPY_BUFFER_SIZE = 256 * 1024;
+    private static final int COPY_BUFFER_SIZE = Integer.getInteger(
+        "bili.media.prefetch.copy_buffer_bytes", 256 * 1024);
 
-    public static final int DEFAULT_CHUNK_SIZE = 4 * 1024 * 1024;
-    public static final int DEFAULT_LOW_WATER = 8 * 1024 * 1024;
-    public static final int DEFAULT_HIGH_WATER = 32 * 1024 * 1024;
+    public static final int DEFAULT_CHUNK_SIZE = Integer.getInteger(
+        "bili.media.prefetch.chunk_bytes", 4 * 1024 * 1024);
+    public static final int DEFAULT_LOW_WATER = Integer.getInteger(
+        "bili.media.prefetch.low_water_bytes", 8 * 1024 * 1024);
+    public static final int DEFAULT_HIGH_WATER = Integer.getInteger(
+        "bili.media.prefetch.high_water_bytes", 32 * 1024 * 1024);
+    private static final long STARTUP_PREBUFFER_BYTES = Math.max(0L, Long.getLong(
+        "bili.media.prefetch.startup_bytes", 6L * 1024L * 1024L));
+    private static final long SEEK_STARTUP_PREBUFFER_BYTES = Math.max(0L, Long.getLong(
+        "bili.media.prefetch.seek_startup_bytes", 2L * 1024L * 1024L));
+    private static final long STARTUP_PREBUFFER_MAX_WAIT_MILLIS = Math.max(0L, Long.getLong(
+        "bili.media.prefetch.startup_max_wait_ms", 8_000L));
+    private static final int PER_HOST_ATTEMPTS = Math.max(1, Integer.getInteger(
+        "bili.media.prefetch.per_host_attempts", 2));
+    private static final long RETRY_BACKOFF_MILLIS = Math.max(0L, Long.getLong(
+        "bili.media.prefetch.retry_backoff_ms", 350L));
 
     private final URL url;
     private final HttpRangeClient client;
@@ -28,6 +43,7 @@ public final class ChunkPrefetchInputStream extends InputStream {
 
     private volatile boolean closed;
     private volatile long readPosition;
+    private volatile boolean startupPrebufferDone;
     private volatile Mode mode = Mode.UNKNOWN;
     private volatile long totalLength = -1L;
     private final long startByteOffset;
@@ -92,6 +108,11 @@ public final class ChunkPrefetchInputStream extends InputStream {
             return -1;
         }
 
+        awaitStartupPrebufferIfNeeded();
+        if (closed) {
+            return -1;
+        }
+
         int n = spool.read(readPosition, b, off, len);
         if (n > 0) {
             readPosition += n;
@@ -107,6 +128,27 @@ public final class ChunkPrefetchInputStream extends InputStream {
         closeActiveBody();
         downloader.interrupt();
         spool.close();
+    }
+
+    private void awaitStartupPrebufferIfNeeded() throws IOException {
+        if (startupPrebufferDone || readPosition > 0L) {
+            return;
+        }
+        startupPrebufferDone = true;
+        long target = startByteOffset > 0L ? SEEK_STARTUP_PREBUFFER_BYTES : STARTUP_PREBUFFER_BYTES;
+        if (target <= 0L) {
+            return;
+        }
+        long before = System.currentTimeMillis();
+        long cached = spool.waitUntilCached(target, STARTUP_PREBUFFER_MAX_WAIT_MILLIS);
+        long waited = System.currentTimeMillis() - before;
+        if (cached > 0L) {
+            LOGGER.debug("HTTP startup prebuffer ready: cached={} target={} waited={}ms offset={} host={}",
+                    cached, target, waited, startByteOffset, safeHost(url));
+            return;
+        }
+        LOGGER.debug("HTTP startup prebuffer empty after wait: target={} waited={}ms offset={} host={}",
+                target, waited, startByteOffset, safeHost(url));
     }
 
     private void downloadLoop() {
@@ -141,49 +183,133 @@ public final class ChunkPrefetchInputStream extends InputStream {
             }
 
             long end = safeRangeEnd(nextStart);
-            try (HttpRangeClient.CdnResponse response = client.getRange(url, nextStart, end)) {
-                int status = response.statusCode();
-                if (status == 416) {
-                    mode = mode == Mode.UNKNOWN ? Mode.RANGE : mode;
-                    return;
+            nextStart = downloadChunkWithCdnFallback(nextStart, end);
+        }
+    }
+
+    private long downloadChunkWithCdnFallback(long nextStart, long end) throws IOException {
+        List<URL> candidates = CdnUrlFallbacks.candidates(url);
+        IOException lastError = null;
+        for (int i = 0; i < candidates.size(); i++) {
+            URL candidate = candidates.get(i);
+            for (int attempt = 1; attempt <= PER_HOST_ATTEMPTS; attempt++) {
+                try {
+                    return downloadChunk(candidate, nextStart, end);
+                } catch (EmptyCdnResponseException e) {
+                    lastError = e;
+                    if (attempt < PER_HOST_ATTEMPTS) {
+                        LOGGER.warn("CDN returned empty audio chunk, retrying same host {} attempt={}/{} range={}-{}: {}",
+                                safeHost(candidate), attempt + 1, PER_HOST_ATTEMPTS, nextStart, end, e.getMessage());
+                        backoffBeforeRetry();
+                        continue;
+                    }
+                    if (i + 1 < candidates.size()) {
+                        LOGGER.warn("CDN returned empty audio chunk, retrying alternate host {} -> {} range={}-{}: {}",
+                                safeHost(candidate), safeHost(candidates.get(i + 1)), nextStart, end, e.getMessage());
+                    }
+                } catch (IOException e) {
+                    lastError = e;
+                    if (attempt < PER_HOST_ATTEMPTS) {
+                        LOGGER.warn("CDN audio chunk failed, retrying same host {} attempt={}/{} range={}-{}: {}",
+                                safeHost(candidate), attempt + 1, PER_HOST_ATTEMPTS, nextStart, end, e.getMessage());
+                        backoffBeforeRetry();
+                        continue;
+                    }
+                    if (i + 1 < candidates.size()) {
+                        LOGGER.warn("CDN audio chunk failed, retrying alternate host {} -> {} range={}-{}: {}",
+                                safeHost(candidate), safeHost(candidates.get(i + 1)), nextStart, end, e.getMessage());
+                    }
                 }
-                if (status == 206) {
-                    if (mode != Mode.RANGE) {
-                        mode = Mode.RANGE;
-                    }
-                    if (response.totalLength() > 0) {
-                        totalLength = response.totalLength();
-                    }
-                    long requestedStart = nextStart;
-                    long requestedLength = end - requestedStart + 1;
-                    long received = copyResponse(response.body(), response.contentLength(), requestedLength);
-                    LOGGER.trace("HTTP chunk received: range={}-{} received={} cached={}",
-                            nextStart, end, received, spool.cachedLength());
-                    nextStart += received;
-                    if (received == 0) {
-                        return;
-                    }
-                    if (totalLength > 0 && nextStart >= totalLength) {
-                        return;
-                    }
-                    long expectedLength = response.contentLength() > 0 ? response.contentLength() : requestedLength;
-                    if (received < expectedLength) {
-                        if (totalLength > 0 && nextStart < totalLength) {
-                            throw new IOException("CDN range chunk ended early at " + nextStart + " of " + totalLength);
-                        }
-                        return;
-                    }
-                    continue;
-                }
-                if (status == 200 && nextStart == 0L) {
-                    mode = Mode.SEQUENTIAL;
-                    totalLength = response.contentLength();
-                    LOGGER.debug("HTTP prefetch mode: sequential GET, contentLength={}", totalLength);
-                    copyResponse(response.body(), -1L, Long.MAX_VALUE);
-                    return;
-                }
-                throw new IOException("HTTP " + status + " from CDN range request");
+                break;
             }
+        }
+        throw lastError != null ? lastError : new IOException("no CDN URL candidates available");
+    }
+
+    private static void backoffBeforeRetry() throws IOException {
+        if (RETRY_BACKOFF_MILLIS <= 0L) {
+            return;
+        }
+        try {
+            Thread.sleep(RETRY_BACKOFF_MILLIS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("prefetch retry interrupted", e);
+        }
+    }
+
+    private long downloadChunk(URL requestUrl, long nextStart, long end) throws IOException {
+        long started = System.currentTimeMillis();
+        boolean outcomeRecorded = false;
+        try (HttpRangeClient.CdnResponse response = client.getRange(requestUrl, nextStart, end)) {
+            int status = response.statusCode();
+            if (status == 416) {
+                mode = mode == Mode.UNKNOWN ? Mode.RANGE : mode;
+                spool.complete();
+                return nextStart;
+            }
+            if (status == 206) {
+                if (mode != Mode.RANGE) {
+                    mode = Mode.RANGE;
+                }
+                if (response.totalLength() > 0) {
+                    totalLength = response.totalLength();
+                }
+                long requestedLength = end - nextStart + 1;
+                long received = copyResponse(response.body(), response.contentLength(), requestedLength);
+                LOGGER.trace("HTTP chunk received: range={}-{} received={} cached={} host={}",
+                        nextStart, end, received, spool.cachedLength(), safeHost(requestUrl));
+                if (received == 0) {
+                    CdnHealthTracker.recordFailure(requestUrl, CdnHealthTracker.FailureKind.EMPTY);
+                    outcomeRecorded = true;
+                    throw new EmptyCdnResponseException("0 bytes for range " + nextStart + "-" + end
+                            + " host=" + safeHost(requestUrl));
+                }
+                long newNextStart = nextStart + received;
+                CdnHealthTracker.recordSuccess(requestUrl, System.currentTimeMillis() - started, received);
+                outcomeRecorded = true;
+                if (totalLength > 0 && newNextStart >= totalLength) {
+                    spool.complete();
+                    return newNextStart;
+                }
+                long expectedLength = response.contentLength() > 0 ? response.contentLength() : requestedLength;
+                if (received < expectedLength) {
+                    if (totalLength > 0 && newNextStart < totalLength) {
+                        CdnHealthTracker.recordFailure(requestUrl, CdnHealthTracker.FailureKind.SHORT_READ);
+                        outcomeRecorded = true;
+                        throw new IOException("CDN range chunk ended early at " + newNextStart + " of " + totalLength);
+                    }
+                    spool.complete();
+                }
+                return newNextStart;
+            }
+            if (status == 200 && nextStart == 0L) {
+                mode = Mode.SEQUENTIAL;
+                totalLength = response.contentLength();
+                LOGGER.debug("HTTP prefetch mode: sequential GET, contentLength={} host={}", totalLength,
+                        safeHost(requestUrl));
+                long received = copyResponse(response.body(), -1L, Long.MAX_VALUE);
+                if (received == 0L) {
+                    CdnHealthTracker.recordFailure(requestUrl, CdnHealthTracker.FailureKind.EMPTY);
+                    outcomeRecorded = true;
+                    throw new EmptyCdnResponseException("0 bytes for sequential GET host=" + safeHost(requestUrl));
+                }
+                CdnHealthTracker.recordSuccess(requestUrl, System.currentTimeMillis() - started, received);
+                outcomeRecorded = true;
+                spool.complete();
+                return received;
+            }
+            if (status == 403 || status == 404 || status == 408 || status == 425 || status == 429 || status >= 500) {
+                CdnHealthTracker.recordFailure(requestUrl, CdnHealthTracker.FailureKind.HTTP_RETRYABLE);
+                outcomeRecorded = true;
+            }
+            throw new IOException("HTTP " + status + " from CDN range request host=" + safeHost(requestUrl)
+                    + " range=" + nextStart + "-" + end + " offset=" + startByteOffset);
+        } catch (IOException e) {
+            if (!outcomeRecorded) {
+                CdnHealthTracker.recordFailure(requestUrl, CdnHealthTracker.FailureKind.IO);
+            }
+            throw e;
         }
     }
 
@@ -208,6 +334,17 @@ public final class ChunkPrefetchInputStream extends InputStream {
             throw new IOException("CDN response ended early: expected " + contentLength + ", got " + copied);
         }
         return copied;
+    }
+
+    public static final class EmptyCdnResponseException extends IOException {
+        public EmptyCdnResponseException(String message) {
+            super(message);
+        }
+    }
+
+    private static String safeHost(URL url) {
+        String host = url != null ? url.getHost() : null;
+        return host == null || host.isBlank() ? "unknown" : host;
     }
 
     private long safeRangeEnd(long start) {
@@ -258,7 +395,10 @@ public final class ChunkPrefetchInputStream extends InputStream {
                 mode = Mode.SEQUENTIAL;
                 totalLength = response.contentLength();
                 LOGGER.debug("HTTP prefetch mode: full GET, contentLength={}", totalLength);
-                copyResponse(response.body(), response.contentLength(), Long.MAX_VALUE);
+                long received = copyResponse(response.body(), response.contentLength(), Long.MAX_VALUE);
+                if (received == 0L) {
+                    throw new EmptyCdnResponseException("0 bytes for full GET host=" + safeHost(url));
+                }
                 return true;
             }
             return false;

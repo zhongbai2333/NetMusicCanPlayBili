@@ -3,7 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.mixin;
 import com.mojang.blaze3d.opengl.GlRenderPipeline;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.shaders.ShaderSource;
-import com.zhongbai233.net_music_can_play_bili.client.renderer.IrisYuvShaderOverrideGuard;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisYuvShaderOverrideGuard;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -28,7 +28,7 @@ public abstract class GlDeviceYuvShaderSkipMixin {
     @Inject(method = "getOrCompilePipeline", at = @At("HEAD"), cancellable = true, require = 0)
     private void net_music_can_play_bili$bypassIrisProgramOverride(RenderPipeline pipeline,
             CallbackInfoReturnable<GlRenderPipeline> cir) {
-        if (!IrisYuvShaderOverrideGuard.isYuvPipeline(pipeline)) {
+        if (!IrisYuvShaderOverrideGuard.isShaderpackBypassPipeline(pipeline)) {
             return;
         }
         IrisYuvShaderOverrideGuard.logBypassedShaderpackPipelineOnce();
@@ -39,7 +39,7 @@ public abstract class GlDeviceYuvShaderSkipMixin {
     @Inject(method = "precompilePipeline(Lcom/mojang/blaze3d/pipeline/RenderPipeline;Lcom/mojang/blaze3d/shaders/ShaderSource;)Lcom/mojang/blaze3d/opengl/GlRenderPipeline;", at = @At("HEAD"), cancellable = true, require = 0)
     private void net_music_can_play_bili$bypassIrisProgramOverrideDuringPrecompile(RenderPipeline pipeline,
             ShaderSource shaderSource, CallbackInfoReturnable<GlRenderPipeline> cir) {
-        if (!IrisYuvShaderOverrideGuard.isYuvPipeline(pipeline)) {
+        if (!IrisYuvShaderOverrideGuard.isShaderpackBypassPipeline(pipeline)) {
             return;
         }
         ShaderSource effectiveShaderSource = shaderSource != null ? shaderSource : this.defaultShaderSource;

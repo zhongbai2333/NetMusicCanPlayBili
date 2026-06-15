@@ -284,15 +284,15 @@ public class ModernTurntableScreen extends BlackGoldScreen {
         var t = turntable();
         if (t == null)
             return;
-        sendAction(t.isPlaying()
+        send(t.isPlaying()
                 ? ModernTurntableControlPacket.Action.PAUSE
-                : ModernTurntableControlPacket.Action.START);
+                : ModernTurntableControlPacket.Action.START, currentSliderMillis());
     }
 
     // ==================== 网络 ====================
 
     private void sendAction(ModernTurntableControlPacket.Action action) {
-        send(action, currentElapsedMillis());
+        send(action, currentSliderMillis());
     }
 
     private void send(ModernTurntableControlPacket.Action action, long targetMillis) {
@@ -315,6 +315,14 @@ public class ModernTurntableScreen extends BlackGoldScreen {
         if (Minecraft.getInstance().level == null || t == null)
             return 0L;
         return t.getPlaybackElapsedMillis(Minecraft.getInstance().level.getGameTime());
+    }
+
+    private long currentSliderMillis() {
+        var t = turntable();
+        if (t == null || t.getDurationSeconds() <= 0 || progressSlider == null) {
+            return currentElapsedMillis();
+        }
+        return Math.round(progressSlider.getSliderValue() * t.getDurationSeconds() * 1000.0D);
     }
 
     // ==================== 格式 ====================

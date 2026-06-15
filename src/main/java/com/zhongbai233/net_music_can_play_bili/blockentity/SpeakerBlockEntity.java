@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.blockentity;
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
 import com.zhongbai233.net_music_can_play_bili.bili.SpeakerAudioRelay;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -14,6 +15,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
+import net.minecraft.server.level.ServerLevel;
 
 import javax.annotation.Nullable;
 
@@ -61,11 +63,15 @@ public class SpeakerBlockEntity extends BlockEntity {
         this.linkedTurntablePos = turntablePos.immutable();
         setChanged();
         if (level != null && !level.isClientSide()) {
+            AudioLinkIndex.registerSpeaker((ServerLevel) level, worldPosition, linkedTurntablePos);
             level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
         }
     }
 
     public void unlink() {
+        if (level instanceof ServerLevel serverLevel) {
+            AudioLinkIndex.unregisterSpeaker(serverLevel, worldPosition);
+        }
         this.linkedTurntablePos = null;
         setChanged();
         if (level != null && !level.isClientSide()) {
@@ -143,7 +149,9 @@ public class SpeakerBlockEntity extends BlockEntity {
     @Override
     public void onLoad() {
         super.onLoad();
-        if (level != null && level.isClientSide()) {
+        if (level instanceof ServerLevel serverLevel) {
+            AudioLinkIndex.registerSpeaker(serverLevel, worldPosition, linkedTurntablePos);
+        } else if (level != null && level.isClientSide()) {
             syncAudioOverride();
         }
     }
@@ -151,6 +159,9 @@ public class SpeakerBlockEntity extends BlockEntity {
     @Override
     public void setRemoved() {
         super.setRemoved();
+        if (level instanceof ServerLevel serverLevel) {
+            AudioLinkIndex.unregisterSpeaker(serverLevel, worldPosition);
+        }
         // 客户端和服务端均需清理 relay 和链接状态，防止长时间运行服务器内存泄漏
         DolbyAudioRegistry.clearMachineOverrideForSpeaker(worldPosition);
     }

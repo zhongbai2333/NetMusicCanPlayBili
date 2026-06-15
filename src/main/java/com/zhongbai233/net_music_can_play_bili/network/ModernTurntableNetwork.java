@@ -25,5 +25,41 @@ public final class ModernTurntableNetwork {
                 VideoProjectorConfigPacket.TYPE,
                 VideoProjectorConfigPacket.STREAM_CODEC,
                 VideoProjectorConfigPacket::handle);
+        registrar.playToServer(
+                MP4StatePacket.TYPE,
+                MP4StatePacket.STREAM_CODEC,
+                MP4StatePacket::handle);
+        registrar.playToServer(
+                MP4QueueSelectionPacket.TYPE,
+                MP4QueueSelectionPacket.STREAM_CODEC,
+                MP4QueueSelectionPacket::handle);
+        registrar.playToServer(
+                MP4PlaybackControlPacket.TYPE,
+                MP4PlaybackControlPacket.STREAM_CODEC,
+                MP4PlaybackControlPacket::handle);
+        registrar.playToServer(
+                MP4EnsureDeviceIdPacket.TYPE,
+                MP4EnsureDeviceIdPacket.STREAM_CODEC,
+                MP4EnsureDeviceIdPacket::handle);
+        registrar.playToClient(
+                MP4DeviceIdPacket.TYPE,
+                MP4DeviceIdPacket.STREAM_CODEC,
+                MP4DeviceIdPacket::handle);
+        registrar.playToClient(
+                MP4OpenStatePacket.TYPE,
+                MP4OpenStatePacket.STREAM_CODEC,
+                MP4OpenStatePacket::handle);
+        registrar.playToClient(
+                MP4DeviceStateMirrorPacket.TYPE,
+                MP4DeviceStateMirrorPacket.STREAM_CODEC,
+                MP4DeviceStateMirrorPacket::handle);
+        registrar.playToClient(
+                MP4PlaybackSyncPacket.TYPE,
+                MP4PlaybackSyncPacket.STREAM_CODEC,
+                MP4PlaybackSyncPacket::handle);
+        registrar.playToClient(
+                MP4PlaybackVolumePacket.TYPE,
+                MP4PlaybackVolumePacket.STREAM_CODEC,
+                MP4PlaybackVolumePacket::handle);
     }
 }

@@ -9,6 +9,7 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.block.ModernTurntableBlock;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.server.PlaybackAuditManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.network.chat.Component;
@@ -46,6 +47,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     private static final String STARTED_TIME_TAG = "StartedGameTime";
     private static final String ELAPSED_SECONDS_TAG = "ElapsedSeconds";
     private static final String ELAPSED_TICKS_TAG = "ElapsedTicks";
+    private static final String OWNER_TAG = "PlaybackOwner";
     private static final int SYNC_RANGE = 96;
     private static final int SYNC_INTERVAL_TICKS = 20;
 
@@ -63,6 +65,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     private int seekGeneration;
     private long lastFullSyncGameTime;
     private boolean needsResolveOnLoad;
+    private UUID playbackOwnerId;
     private transient LyricRecord clientLyricRecord;
     private transient String clientLyricSessionId = "";
     private transient int clientLyricTick = -1;
@@ -171,6 +174,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         if (serverLevel.getGameTime() % SYNC_INTERVAL_TICKS == 0) {
             turntable.syncNearbyPlayers(serverLevel, remaining);
         }
+        turntable.recordAudit(serverLevel);
     }
 
     private void resolveAndResume(ServerLevel serverLevel) {
@@ -334,6 +338,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         }
 
         ItemMusicCD.SongInfo original = songInfo.clone();
+        playbackOwnerId = triggerPlayer.getUUID();
         MusicPlayResolverManager.resolve(original.clone())
                 .thenAcceptAsync(resolved -> applyResolvedPlayback(serverLevel, original, resolved),
                         serverLevel.getServer())
@@ -386,6 +391,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         savedElapsedTicks = 0L;
         seekGeneration = 0;
         syncedPlayers.clear();
+        playbackOwnerId = null;
     }
 
     public void replayFromBeginning(ServerPlayer player) {
@@ -413,6 +419,10 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     }
 
     public void resumePlayback(ServerPlayer player) {
+        resumePlayback(player, -1L);
+    }
+
+    public void resumePlayback(ServerPlayer player, long targetMillis) {
         if (!(level instanceof ServerLevel serverLevel) || playing) {
             return;
         }
@@ -420,7 +430,10 @@ public class ModernTurntableBlockEntity extends BlockEntity {
             startFromDisc(player);
             return;
         }
-        long elapsedTicks = saveElapsedTicks(storedElapsedTicks());
+        playbackOwnerId = player.getUUID();
+        long elapsedTicks = targetMillis >= 0L
+                ? saveElapsedTicks(Math.round(Math.max(0L, targetMillis) / 50.0D))
+                : saveElapsedTicks(storedElapsedTicks());
         if (isStoredBiliSelection(rawUrl)) {
             playing = false;
             syncedPlayers.clear();
@@ -515,6 +528,12 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         syncedPlayers.retainAll(nearby);
     }
 
+    private void recordAudit(ServerLevel serverLevel) {
+        PlaybackAuditManager.recordModernTurntable(serverLevel, worldPosition, songName,
+                rawUrl.isBlank() ? playUrl : rawUrl, durationSeconds,
+                getPlaybackElapsedMillis(serverLevel.getGameTime()), playbackOwnerId);
+    }
+
     private String playbackSessionId() {
         return Long.toString(worldPosition.asLong()) + "-" + Long.toString(startedGameTime)
                 + (seekGeneration > 0 ? "-" + seekGeneration : "");
@@ -559,6 +578,9 @@ public class ModernTurntableBlockEntity extends BlockEntity {
                 : saveElapsedTicks(storedElapsedTicks());
         output.putInt(ELAPSED_SECONDS_TAG, (int) (elapsedTicks / 20L));
         output.putLong(ELAPSED_TICKS_TAG, elapsedTicks);
+        if (playbackOwnerId != null) {
+            output.putString(OWNER_TAG, playbackOwnerId.toString());
+        }
     }
 
     @Override
@@ -573,6 +595,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         startedGameTime = input.getLongOr(STARTED_TIME_TAG, 0L);
         savedElapsedSeconds = input.getIntOr(ELAPSED_SECONDS_TAG, 0);
         savedElapsedTicks = input.getLongOr(ELAPSED_TICKS_TAG, (long) savedElapsedSeconds * 20L);
+        playbackOwnerId = parseUuid(input.getStringOr(OWNER_TAG, ""));
         saveElapsedTicks(savedElapsedTicks);
         syncedPlayers.clear();
         needsResolveOnLoad = playing && durationSeconds > 0 && savedElapsedTicks < (long) durationSeconds * 20L;
@@ -601,6 +624,17 @@ public class ModernTurntableBlockEntity extends BlockEntity {
             }
             BlockState state = getBlockState();
             level.sendBlockUpdated(worldPosition, state, state, 3);
+        }
+    }
+
+    private static UUID parseUuid(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException ignored) {
+            return null;
         }
     }
 }

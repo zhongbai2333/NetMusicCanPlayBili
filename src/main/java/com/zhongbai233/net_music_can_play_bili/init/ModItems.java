@@ -1,11 +1,25 @@
 package com.zhongbai233.net_music_can_play_bili.init;
 
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
+import com.zhongbai233.net_music_can_play_bili.link.HeadphoneAbility;
+import com.zhongbai233.net_music_can_play_bili.item.InvisibleHeadphonesItem;
+import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.enchantment.EnchantmentInstance;
+import net.minecraft.world.item.enchantment.EnchantmentHelper;
+import net.minecraft.resources.Identifier;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.EquipmentSlotGroup;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.item.component.ItemAttributeModifiers;
+import net.minecraft.world.item.equipment.Equippable;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
@@ -27,6 +41,37 @@ public final class ModItems {
     public static final DeferredItem<BlockItem> SPEAKER = ITEMS.registerSimpleBlockItem("speaker",
             ModBlocks.SPEAKER);
 
+    public static final DeferredItem<MP4Item> MP4 = ITEMS.registerItem("mp4",
+            MP4Item::new,
+            Item.Properties::new);
+
+    public static final DeferredItem<InvisibleHeadphonesItem> INVISIBLE_HEADPHONES = ITEMS.registerItem(
+            "invisible_headphones",
+            InvisibleHeadphonesItem::new,
+            ModItems::headphoneItemProperties);
+
+    public static final DeferredItem<InvisibleHeadphonesItem> CAT_HEADPHONES = ITEMS.registerItem(
+            "cat_headphones",
+            InvisibleHeadphonesItem::new,
+            ModItems::headphoneItemProperties);
+
+    private static Item.Properties headphoneItemProperties(Item.Properties properties) {
+        return properties.attributes(headphoneAttributeModifiers())
+                .component(DataComponents.EQUIPPABLE, Equippable.builder(EquipmentSlot.HEAD)
+                        .setEquipSound(SoundEvents.ARMOR_EQUIP_GENERIC)
+                        .setSwappable(false)
+                        .build());
+    }
+
+    private static ItemAttributeModifiers headphoneAttributeModifiers() {
+        return ItemAttributeModifiers.builder()
+                .add(ModAttributes.HEADPHONES,
+                        new AttributeModifier(Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
+                                "headphones"), 1.0D, AttributeModifier.Operation.ADD_VALUE),
+                        EquipmentSlotGroup.HEAD)
+                .build();
+    }
+
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> MAIN_TAB = TABS.register(
             "main",
             () -> CreativeModeTab.builder()
@@ -37,6 +82,13 @@ public final class ModItems {
                         output.accept(LYRIC_PROJECTOR.get());
                         output.accept(VIDEO_PROJECTOR.get());
                         output.accept(SPEAKER.get());
+                        output.accept(MP4.get());
+                        output.accept(INVISIBLE_HEADPHONES.get());
+                        output.accept(CAT_HEADPHONES.get());
+                        parameters.holders().lookupOrThrow(Registries.ENCHANTMENT)
+                                .get(HeadphoneAbility.HEADPHONES_KEY)
+                                .ifPresent(enchantment -> output.accept(EnchantmentHelper.createBook(
+                                        new EnchantmentInstance(enchantment, 1))));
                     })
                     .build());
 

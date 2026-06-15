@@ -1,6 +1,12 @@
 package com.zhongbai233.net_music_can_play_bili.media.audio;
 
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.bridge.LibraryBridge;
+import com.zhongbai233.net_music_can_play_bili.bridge.SoundEngineBridge;
+import com.zhongbai233.net_music_can_play_bili.bridge.SoundManagerBridge;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.sounds.SoundEngine;
+import net.minecraft.client.sounds.SoundManager;
 import net.neoforged.fml.ModList;
 import org.slf4j.Logger;
 
@@ -41,10 +47,7 @@ public class OpenALSpatialAudio {
     private static final ThreadLocal<Long> CAPABILITIES_CONTEXT = ThreadLocal.withInitial(() -> 0L);
     private static volatile boolean hrtfAttempted;
 
-    /**
-     * Minecraft OpenAL context/device 缓存。只在首次访问时通过反射获取一次，
-     * 之后所有线程直接读缓存，零反射开销。
-     */
+    /** Minecraft OpenAL context/device 缓存。 */
     private static volatile OpenAlHandles CACHED_HANDLES;
     private static final Object CACHE_LOCK = new Object();
 
@@ -786,34 +789,34 @@ public class OpenALSpatialAudio {
         }
     }
 
-    /** 反射解析失败时只警告一次，避免刷屏 */
-    private static volatile boolean reflectionWarningLogged;
+    /** OpenAL 句柄解析失败时只警告一次，避免刷屏 */
+    private static volatile boolean handleWarningLogged;
 
     private static OpenAlHandles resolveMinecraftOpenAlHandles() {
         try {
-            Class<?> minecraftClass = Class.forName("net.minecraft.client.Minecraft");
-            Object minecraft = minecraftClass.getMethod("getInstance").invoke(null);
+            Minecraft minecraft = Minecraft.getInstance();
             if (minecraft == null) {
                 return OpenAlHandles.EMPTY;
             }
-            Object soundManager = minecraftClass.getMethod("getSoundManager").invoke(minecraft);
+            SoundManager soundManager = minecraft.getSoundManager();
             if (soundManager == null) {
                 return OpenAlHandles.EMPTY;
             }
-            Object soundEngine = readField(soundManager, "soundEngine");
+            SoundEngine soundEngine = ((SoundManagerBridge) soundManager).net_music_can_play_bili$soundEngine();
             if (soundEngine == null) {
                 return OpenAlHandles.EMPTY;
             }
-            Object loaded = readField(soundEngine, "loaded");
-            if (loaded instanceof Boolean isLoaded && !isLoaded) {
+            SoundEngineBridge soundEngineBridge = (SoundEngineBridge) soundEngine;
+            if (!soundEngineBridge.net_music_can_play_bili$loaded()) {
                 return OpenAlHandles.EMPTY;
             }
-            Object library = readField(soundEngine, "library");
+            var library = soundEngineBridge.net_music_can_play_bili$library();
             if (library == null) {
                 return OpenAlHandles.EMPTY;
             }
-            long context = readLongField(library, "context");
-            long device = readLongField(library, "currentDevice");
+            LibraryBridge libraryBridge = (LibraryBridge) library;
+            long context = libraryBridge.net_music_can_play_bili$context();
+            long device = libraryBridge.net_music_can_play_bili$currentDevice();
             if (context == 0L) {
                 return OpenAlHandles.EMPTY;
             }
@@ -821,11 +824,11 @@ public class OpenALSpatialAudio {
                     Long.toHexString(context), Long.toHexString(device));
             return new OpenAlHandles(context, device);
         } catch (Throwable t) {
-            if (!reflectionWarningLogged) {
-                reflectionWarningLogged = true;
+            if (!handleWarningLogged) {
+                handleWarningLogged = true;
                 LOGGER.warn(
-                        "[NetMusicCanPlayBili] Dolby 空间音频不可用：无法通过反射获取 Minecraft SoundEngine 的 OpenAL 句柄。"
-                                + "这通常是因为当前 Minecraft/NeoForge 版本与模组不兼容（SoundEngine 内部字段名已变更）。"
+                    "[NetMusicCanPlayBili] Dolby 空间音频不可用：无法获取 Minecraft SoundEngine 的 OpenAL 句柄。"
+                        + "这通常是因为当前 Minecraft/NeoForge 版本与模组不兼容（SoundEngine/Library 内部字段名已变更）。"
                                 + "音频将自动降级为 FLAC/AAC 立体声。"
                                 + "具体异常: {}",
                         t.toString());
@@ -834,28 +837,6 @@ public class OpenALSpatialAudio {
             }
             return OpenAlHandles.EMPTY;
         }
-    }
-
-    private static Object readField(Object target, String name) throws ReflectiveOperationException {
-        if (target == null) {
-            return null;
-        }
-        Class<?> type = target.getClass();
-        while (type != null) {
-            try {
-                var field = type.getDeclaredField(name);
-                field.setAccessible(true);
-                return field.get(target);
-            } catch (NoSuchFieldException ignored) {
-                type = type.getSuperclass();
-            }
-        }
-        return null;
-    }
-
-    private static long readLongField(Object target, String name) throws ReflectiveOperationException {
-        Object value = readField(target, name);
-        return value instanceof Number number ? number.longValue() : 0L;
     }
 
     private static synchronized void ensureHrtfEnabled() {

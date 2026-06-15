@@ -49,6 +49,11 @@ public final class DolbyClientTickHandler {
             }
         }
 
+        com.zhongbai233.net_music_can_play_bili.client.MP4AutoResumeClient.tick();
+        com.zhongbai233.net_music_can_play_bili.client.MP4Client.tickHeldDeviceIdPrefetch();
+        com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient.tickHotbarVideoFrames();
+        com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient.stopDevicesOutsideHotbar();
+
         if (!DolbyAudioRegistry.isActive()) {
             return;
         }
@@ -92,11 +97,18 @@ public final class DolbyClientTickHandler {
     }
 
     private static void cleanupClientPlayback() {
-        com.zhongbai233.net_music_can_play_bili.client.renderer.VideoBillboardPreview.stop();
+        com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview.stop();
         com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient.clear();
         com.zhongbai233.net_music_can_play_bili.client.sync.ModernTurntableTimeline.clear();
         com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry.clear();
+        com.zhongbai233.net_music_can_play_bili.client.audio.SyncedStreamRecoveryRegistry.clear();
+        com.zhongbai233.net_music_can_play_bili.media.stream.CdnHealthTracker.clear();
         com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker.stopAllSounds();
+        com.zhongbai233.net_music_can_play_bili.client.MP4Client.clearCachedStates();
+        com.zhongbai233.net_music_can_play_bili.client.MP4ClientPlayback.clearAll();
+        com.zhongbai233.net_music_can_play_bili.client.MP4FocusState.resetAll();
+        com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer.releaseAll();
+        com.zhongbai233.net_music_can_play_bili.client.MP4AutoResumeClient.reset();
         HttpAudioStreamHandler.closeModernStreams();
         DolbyAudioRegistry.cleanup();
         lastTrackedLevel = null;

@@ -42,6 +42,7 @@ public class DolbyAudioHandler {
     private final BlockingQueue<ProcessedFrame> processedQueue = new LinkedBlockingQueue<>(PROCESSED_QUEUE_CAPACITY);
     private final Eac3JocDecoder jocDecoder = new Eac3JocDecoder();
     private final float[] forwardToMachine = new float[3];
+    private final SpatialFrontSmoother frontSmoother = new SpatialFrontSmoother();
     private final Thread worker;
     private volatile boolean closed;
     private boolean playbackStarted;
@@ -59,7 +60,7 @@ public class DolbyAudioHandler {
     private volatile float[] lastJocObjectRms = new float[0];
     private volatile float[] lastJocObjectPeak = new float[0];
     private volatile float userVolume = 1.0f;
-    private volatile int channelMask; // 0 = full mix, else bitmask of enabled channels
+    private volatile int channelMask; // 0 = 全混音，否则为已启用声道的位掩码
     private volatile boolean forceStaticJoc;
     private volatile float lastAudioLevel;
     private volatile long lastAudioLevelNanos;
@@ -104,10 +105,15 @@ public class DolbyAudioHandler {
     }
 
     public void tick(float[] machinePos, float[] listenerPos) {
-        tick(machinePos, listenerPos, Long.MAX_VALUE);
+        tick(machinePos, listenerPos, Long.MAX_VALUE, false);
     }
 
     public void tick(float[] machinePos, float[] listenerPos, long targetRelativeTicks) {
+        tick(machinePos, listenerPos, targetRelativeTicks, false);
+    }
+
+    public void tick(float[] machinePos, float[] listenerPos, long targetRelativeTicks,
+            boolean followLocalPlayerFront) {
         if (closed)
             return;
         if (net.minecraft.client.Minecraft.getInstance().isPaused())
@@ -158,7 +164,7 @@ public class DolbyAudioHandler {
                 return;
             }
             spatialAudio.pumpQueuedAudio();
-            updateSpatialState(machinePos, listenerPos);
+            updateSpatialState(machinePos, listenerPos, followLocalPlayerFront);
         }
         // 驱动所有音响 relay（relay 使用自身存储的音响位置，不传 machinePos）
         for (SpeakerAudioRelay relay : relays) {
@@ -830,14 +836,14 @@ public class DolbyAudioHandler {
         return new PcmStats(min, max, peak, rms, g);
     }
 
-    private void updateSpatialState(float[] mp, float[] lp) {
+    private void updateSpatialState(float[] mp, float[] lp, boolean followLocalPlayerFront) {
         if (closed || !initialized)
             return;
         OpenALSpatialAudio sa = spatialAudio;
         if (sa == null || bedPositions == null)
             return;
         float yaw = (float) Math.atan2(mp[0] - lp[0], mp[2] - lp[2]);
-        float[] forward = forwardToMachine(mp, lp);
+        float[] forward = frontSmoother.update(forwardToMachine(mp, lp), followLocalPlayerFront);
         if (!didFirstPositionDiag) {
             didFirstPositionDiag = true;
             int ci = centerChannelIndex(numBedChannels);
@@ -860,11 +866,11 @@ public class DolbyAudioHandler {
     /** 根据声道掩码计算单个声道增益：全声道 = gv，被静音 = 0 */
     private float channelGain(int channelIndex, float baseGain) {
         if (channelMask == 0)
-            return baseGain; // full mix
+            return baseGain; // 未知声道，直接透传
         // 7.1.4 声道索引 → 位映射
         int bit = channelBitForIndex(channelIndex);
         if (bit < 0)
-            return baseGain; // unknown channel, pass through
+            return baseGain; // 未知声道，直接透传
         return (channelMask & bit) != 0 ? baseGain : 0f;
     }
 
@@ -884,7 +890,7 @@ public class DolbyAudioHandler {
             case 9 -> 0x200; // Rtf
             case 10 -> 0x400; // Ltr
             case 11 -> 0x800; // Rtr
-            default -> -1; // JOC objects or unknown
+            default -> -1; // JOC 对象或未知声道
         };
     }
 
@@ -1035,8 +1041,7 @@ public class DolbyAudioHandler {
     }
 
     private static float[][] compute7_1Positions() {
-        // FFmpeg 7.1 planar order used by the JOC path: FL, FR, FC, LFE, BL, BR, SL,
-        // SR.
+        // JOC 路径使用的 FFmpeg 7.1 planar 声道顺序：FL、FR、FC、LFE、BL、BR、SL、SR。
         float[][] p = new float[8][3];
         double[] a = {
                 -Math.PI / 6,

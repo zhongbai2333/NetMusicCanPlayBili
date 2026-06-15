@@ -1,6 +1,9 @@
 package com.zhongbai233.net_music_can_play_bili.media.stream;
 
+import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliWbiSigner;
+import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
+import org.slf4j.Logger;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -9,11 +12,15 @@ import java.net.URL;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
 public final class HttpRangeClient {
+    private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_REDIRECTS = 5;
+        private static final long REQUEST_TIMEOUT_SECONDS = Math.max(5L, Long.getLong(
+            "bili.media.http.request_timeout_seconds", 30L));
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
@@ -29,17 +36,49 @@ public final class HttpRangeClient {
     }
 
     private CdnResponse send(URL url, Long start, Long endInclusive) throws IOException {
-        return send(url, start, endInclusive, 0);
+        List<URL> candidates = CdnUrlFallbacks.candidates(url);
+        IOException lastError = null;
+        for (int i = 0; i < candidates.size(); i++) {
+            URL candidate = candidates.get(i);
+            try {
+                long started = System.currentTimeMillis();
+                CdnResponse response = send(candidate, start, endInclusive, 0);
+                if (isRetryableStatus(response.statusCode()) && i + 1 < candidates.size()) {
+                    CdnHealthTracker.recordFailure(candidate, CdnHealthTracker.FailureKind.HTTP_RETRYABLE);
+                    response.close();
+                    LOGGER.warn("CDN range request returned HTTP {}, retrying alternate host {} -> {} range={}-{}",
+                            response.statusCode(), safeHost(candidate), safeHost(candidates.get(i + 1)),
+                            start != null ? start : 0L, endInclusive != null ? endInclusive : -1L);
+                    continue;
+                }
+                if (response.statusCode() == 200 || response.statusCode() == 206) {
+                    CdnHealthTracker.recordSuccess(candidate, System.currentTimeMillis() - started,
+                            Math.max(0L, response.contentLength()));
+                }
+                return response;
+            } catch (IOException e) {
+                lastError = e;
+                CdnHealthTracker.recordFailure(candidate, CdnHealthTracker.FailureKind.IO);
+                if (i + 1 >= candidates.size()) {
+                    break;
+                }
+                LOGGER.warn("CDN range request failed on host {}, retrying alternate host {} range={}-{}: {}",
+                        safeHost(candidate), safeHost(candidates.get(i + 1)),
+                        start != null ? start : 0L, endInclusive != null ? endInclusive : -1L, e.getMessage());
+            }
+        }
+        throw lastError != null ? lastError : new IOException("no CDN URL candidates available");
     }
 
     private CdnResponse send(URL url, Long start, Long endInclusive, int redirects) throws IOException {
-        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url.toString()))
+        URL requestUrl = PlaybackSync.strip(url);
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(requestUrl.toString()))
                 .header("User-Agent", USER_AGENT)
-                .header("Referer", refererFor(url))
-                .header("Origin", originFor(url))
+            .header("Referer", refererFor(requestUrl))
+            .header("Origin", originFor(requestUrl))
                 .header("Accept", "*/*")
                 .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-                .timeout(Duration.ofSeconds(20))
+                .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS))
                 .GET();
         if (start != null && endInclusive != null) {
             builder.header("Range", "bytes=" + start + "-" + endInclusive);
@@ -62,7 +101,7 @@ public final class HttpRangeClient {
             if (redirects >= MAX_REDIRECTS) {
                 throw new IOException("too many HTTP redirects");
             }
-            URL redirected = URI.create(url.toString()).resolve(location.get()).toURL();
+            URL redirected = URI.create(requestUrl.toString()).resolve(location.get()).toURL();
             return send(redirected, start, endInclusive, redirects + 1);
         }
 
@@ -81,6 +120,11 @@ public final class HttpRangeClient {
     private static boolean isRedirect(int statusCode) {
         return statusCode == 301 || statusCode == 302 || statusCode == 303
                 || statusCode == 307 || statusCode == 308;
+    }
+
+    private static boolean isRetryableStatus(int statusCode) {
+        return statusCode == 403 || statusCode == 404 || statusCode == 408 || statusCode == 425
+                || statusCode == 429 || statusCode >= 500;
     }
 
     private static String refererFor(URL url) {

@@ -157,7 +157,7 @@ public class VideoProjectorBlockEntity extends BlockEntity {
         super.setRemoved();
         if (level != null && level.isClientSide()) {
             com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry.unlink(worldPosition);
-            com.zhongbai233.net_music_can_play_bili.client.renderer.VideoBillboardPreview
+            com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview
                     .stopIfProjector(worldPosition);
         }
     }

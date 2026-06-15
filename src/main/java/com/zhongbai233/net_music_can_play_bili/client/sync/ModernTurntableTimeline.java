@@ -25,14 +25,9 @@ public final class ModernTurntableTimeline {
             "bili.turntable.timeline.audio_anchor_max_lag_ms", 2_000L);
     private static final long AUDIO_ANCHOR_MAX_LEAD_MILLIS = Long.getLong(
             "bili.turntable.timeline.audio_anchor_max_lead_ms", 500L);
-    private static final long HARD_SYNC_THRESHOLD_MILLIS = Long.getLong(
-            "bili.turntable.timeline.hard_sync_ms", 1_500L);
-    private static final long MAX_SMOOTH_CORRECTION_MILLIS = Long.getLong(
-            "bili.turntable.timeline.max_smooth_correction_ms", 80L);
-    private static final double SMOOTH_CORRECTION_RATIO = parseSmoothCorrectionRatio();
     private static final long CLOCK_PRUNE_INTERVAL_NANOS = Math.max(1_000L,
             Long.getLong("bili.turntable.timeline.clock_prune_interval_ms", 30_000L)) * 1_000_000L;
-    private static final ConcurrentHashMap<BlockPos, LocalClock> CLOCKS = new ConcurrentHashMap<>();
+        private static final ConcurrentHashMap<BlockPos, MediaTimelineClock> CLOCKS = new ConcurrentHashMap<>();
     private static volatile long lastClockPruneNanos;
 
     private ModernTurntableTimeline() {
@@ -95,14 +90,14 @@ public final class ModernTurntableTimeline {
         final long timelineTotalMillis = totalMillis;
         String sessionId = sync.hasSession() ? sync.sessionId() : "";
         BlockPos key = turntablePos.immutable();
-        LocalClock clock = CLOCKS.compute(key, (ignored, existing) -> {
+        MediaTimelineClock clock = CLOCKS.compute(key, (ignored, existing) -> {
             if (existing == null || !existing.isForSession(sessionId)) {
-                return LocalClock.start(sessionId, serverMillis, timelineTotalMillis);
+                return MediaTimelineClock.start(sessionId, serverMillis, timelineTotalMillis);
             }
             existing.observeServer(serverMillis, timelineTotalMillis);
             return existing;
         });
-        long pacingMillis = clock != null ? clock.localMillis() : serverMillis;
+        long pacingMillis = clock != null ? clock.pacingMillis() : serverMillis;
         long localMillis = audioAnchoredMillis(key, pacingMillis, timelineTotalMillis);
         localMillis = clamp(localMillis, timelineTotalMillis);
         pacingMillis = clamp(pacingMillis, timelineTotalMillis);
@@ -178,22 +173,7 @@ public final class ModernTurntableTimeline {
     }
 
     private static long clamp(long millis, long totalMillis) {
-        long value = Math.max(0L, millis);
-        long total = Math.max(0L, totalMillis);
-        return total > 0L ? Math.min(total, value) : value;
-    }
-
-    private static double parseSmoothCorrectionRatio() {
-        String raw = System.getProperty("bili.turntable.timeline.smooth_correction_ratio", "0.12");
-        try {
-            double parsed = Double.parseDouble(raw);
-            if (!Double.isFinite(parsed)) {
-                return 0.12D;
-            }
-            return Math.max(0.0D, Math.min(1.0D, parsed));
-        } catch (NumberFormatException ignored) {
-            return 0.12D;
-        }
+        return MediaTimelineClock.clamp(millis, totalMillis);
     }
 
     private static void pruneStaleClocksIfNeeded() {
@@ -214,87 +194,6 @@ public final class ModernTurntableTimeline {
                     || !entry.getValue().isForSession(turntable.getPlaybackSyncMetadata(
                             minecraft.level.getGameTime()).sessionId());
         });
-    }
-
-    private static final class LocalClock {
-        private final String sessionId;
-        private long anchorNanos;
-        private long anchorMillis;
-        private long totalMillis;
-        private long lastLocalMillis;
-        private long pauseStartedNanos;
-
-        private LocalClock(String sessionId, long anchorMillis, long totalMillis) {
-            this.sessionId = sessionId != null ? sessionId : "";
-            this.anchorNanos = System.nanoTime();
-            this.anchorMillis = clamp(anchorMillis, totalMillis);
-            this.totalMillis = Math.max(0L, totalMillis);
-            this.lastLocalMillis = this.anchorMillis;
-        }
-
-        static LocalClock start(String sessionId, long serverMillis, long totalMillis) {
-            return new LocalClock(sessionId, serverMillis, totalMillis);
-        }
-
-        boolean isForSession(String candidate) {
-            String normalized = candidate != null ? candidate : "";
-            return sessionId.equals(normalized);
-        }
-
-        synchronized void observeServer(long serverMillis, long newTotalMillis) {
-            totalMillis = Math.max(0L, newTotalMillis);
-            if (updatePausedState()) {
-                return;
-            }
-            long local = localMillisUnlocked();
-            long drift = serverMillis - local;
-            if (Math.abs(drift) >= Math.max(0L, HARD_SYNC_THRESHOLD_MILLIS)) {
-                anchorNanos = System.nanoTime();
-                anchorMillis = clamp(serverMillis, totalMillis);
-                lastLocalMillis = anchorMillis;
-                return;
-            }
-            long correction = Math.round(drift * SMOOTH_CORRECTION_RATIO);
-            long maxCorrection = Math.max(0L, MAX_SMOOTH_CORRECTION_MILLIS);
-            if (maxCorrection > 0L) {
-                correction = Math.max(-maxCorrection, Math.min(maxCorrection, correction));
-            }
-            if (correction != 0L) {
-                anchorMillis = clamp(anchorMillis + correction, totalMillis);
-            }
-        }
-
-        synchronized long localMillis() {
-            updatePausedState();
-            long value = localMillisUnlocked();
-            if (value < lastLocalMillis && lastLocalMillis - value < HARD_SYNC_THRESHOLD_MILLIS) {
-                value = lastLocalMillis;
-            }
-            lastLocalMillis = value;
-            return value;
-        }
-
-        private long localMillisUnlocked() {
-            long elapsedMillis = Math.max(0L, (System.nanoTime() - anchorNanos) / 1_000_000L);
-            return clamp(anchorMillis + elapsedMillis, totalMillis);
-        }
-
-        private boolean updatePausedState() {
-            Minecraft minecraft = Minecraft.getInstance();
-            boolean paused = minecraft != null && minecraft.isPaused();
-            long now = System.nanoTime();
-            if (paused) {
-                if (pauseStartedNanos == 0L) {
-                    pauseStartedNanos = now;
-                }
-                return true;
-            }
-            if (pauseStartedNanos != 0L) {
-                anchorNanos += Math.max(0L, now - pauseStartedNanos);
-                pauseStartedNanos = 0L;
-            }
-            return false;
-        }
     }
 
     public record TimelineSnapshot(String sessionId, long localMillis, long serverMillis, long pacingMillis,

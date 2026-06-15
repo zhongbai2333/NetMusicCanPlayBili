@@ -45,7 +45,7 @@ neoForge {
             // Limit GameTest discovery to this mod namespace when running the development client.
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
             // 正式播放默认走 NV12 direct-buffer + PBO + shader；Bench 均默认关闭，按需用 -P... 显式打开。
-            jvmProp 'bili.video.advanced_features', prop('biliAdvancedVideoFeatures', 'true')
+            jvmProp 'bili.video.advanced_features', prop('biliAdvancedVideoFeatures', 'false')
             jvmProp 'bili.video.enable_bench_features', prop('biliBenchFeatures', 'false')
             jvmProp 'bili.video.render.backend', prop('biliVideoRenderBackend', 'nv12')
 
@@ -96,6 +96,9 @@ neoForge {
             jvmProp 'bili.video.render_bench.upload_mode', prop('biliRenderBenchUploadMode', 'nv12')
             jvmProp 'bili.video.render_bench.frames', prop('biliRenderBenchFrames', '120')
             jvmProp 'bili.video.render_bench.upload_fps_steps', prop('biliRenderBenchUploadFpsSteps', '30,24,15')
+
+            // MP4 手持 GUI 输入校准：开发调试用，默认关闭；启用后显示校准贴图并采集九点映射。
+            jvmProp 'netmusic.mp4.calibration', prop('netmusicMp4Calibration', 'false')
         }
 
         server {

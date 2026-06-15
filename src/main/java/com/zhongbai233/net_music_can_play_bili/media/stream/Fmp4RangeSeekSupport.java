@@ -10,7 +10,7 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * Shared fMP4 range-seek helpers for audio and video DASH streams.
+ * 音频和视频 DASH 流共用的 fMP4 范围跳转辅助工具。
  */
 public final class Fmp4RangeSeekSupport {
     private Fmp4RangeSeekSupport() {

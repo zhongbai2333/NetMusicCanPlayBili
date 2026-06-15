@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
+import com.zhongbai233.net_music_can_play_bili.media.stream.CdnUrlFallbacks;
 import org.slf4j.Logger;
 
 import java.net.URI;
@@ -15,8 +16,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -312,7 +315,7 @@ public final class BiliApiClient {
 
         JsonObject dash = body.getAsJsonObject("data").getAsJsonObject("dash");
 
-        Map<Integer, String> streams = new HashMap<>();
+        Map<Integer, List<String>> streams = new HashMap<>();
 
         // 标准 DASH
         JsonArray audioArr = dash.has("audio") && !dash.get("audio").isJsonNull()
@@ -321,9 +324,7 @@ public final class BiliApiClient {
         if (audioArr != null) {
             for (JsonElement e : audioArr) {
                 JsonObject a = e.getAsJsonObject();
-                String baseUrl = a.get("baseUrl").getAsString();
-                streams.put(a.get("id").getAsInt(), baseUrl);
-                registerAudioSegmentBase(baseUrl, a);
+                addAudioStreamCandidates(streams, a);
             }
         }
 
@@ -340,9 +341,7 @@ public final class BiliApiClient {
                 JsonArray dolbyArr = dolby.getAsJsonArray("audio");
                 for (JsonElement e : dolbyArr) {
                     JsonObject a = e.getAsJsonObject();
-                    String baseUrl = a.get("baseUrl").getAsString();
-                    streams.put(a.get("id").getAsInt(), baseUrl);
-                    registerAudioSegmentBase(baseUrl, a);
+                    addAudioStreamCandidates(streams, a);
                 }
             }
         }
@@ -359,9 +358,7 @@ public final class BiliApiClient {
             JsonObject flac = dash.getAsJsonObject("flac");
             if (flac.has("audio") && !flac.get("audio").isJsonNull()) {
                 JsonObject a = flac.getAsJsonObject("audio");
-                String baseUrl = a.get("baseUrl").getAsString();
-                streams.put(a.get("id").getAsInt(), baseUrl);
-                registerAudioSegmentBase(baseUrl, a);
+                addAudioStreamCandidates(streams, a);
             }
         }
 
@@ -369,29 +366,79 @@ public final class BiliApiClient {
             throw new RuntimeException("该视频没有可用的 DASH 音频流");
         }
 
-        // B站 API 本身只返回当前用户可用的音质，无需额外 HEAD 验证
         int selectedQuality = -1;
         String selectedUrl = null;
+        List<String> selectedCandidates = List.of();
         int[] qualityOrder = audioQualityOrder(audioPreference, allowDolby);
         for (int qid : qualityOrder) {
-            String baseUrl = streams.get(qid);
-            if (baseUrl != null && !baseUrl.isEmpty()) {
+            List<String> candidates = streams.get(qid);
+            if (candidates != null && !candidates.isEmpty()) {
                 selectedQuality = qid;
-                selectedUrl = baseUrl;
+                selectedCandidates = candidates;
+                selectedUrl = candidates.get(0);
                 break;
             }
         }
 
         if (selectedUrl == null) {
             selectedQuality = streams.keySet().iterator().next();
-            selectedUrl = streams.get(selectedQuality);
+            selectedCandidates = streams.get(selectedQuality);
+            selectedUrl = selectedCandidates.get(0);
         }
         LOGGER.debug(
-                "B站音频流选择摘要: id={} cid={} preference={} allowDolby={} dolbyConfig={} nativeDolby={} dashDolby={} qualities={} selected={}({}) host={}",
+                "B站音频流选择摘要: id={} cid={} preference={} allowDolby={} dolbyConfig={} nativeDolby={} dashDolby={} qualities={} selected={}({}) candidateCount={} host={}",
                 id.asInputText(), cid, audioPreference, allowDolby, BiliConfig.dolbyEnabled, nativeDolbyAvailable,
                 dashHasDolby, streams.keySet(), selectedQuality, audioQualityLabel(selectedQuality),
-                hostOf(selectedUrl));
+                selectedCandidates.size(), hostOf(selectedUrl));
+        CdnUrlFallbacks.registerAlternates(selectedCandidates);
         return selectedUrl;
+    }
+
+    private static void addAudioStreamCandidates(Map<Integer, List<String>> streams, JsonObject stream) {
+        if (stream == null || !stream.has("id") || stream.get("id").isJsonNull()) {
+            return;
+        }
+        List<String> urls = extractStreamUrls(stream);
+        if (urls.isEmpty()) {
+            return;
+        }
+        for (String url : urls) {
+            registerAudioSegmentBase(url, stream);
+        }
+        streams.computeIfAbsent(stream.get("id").getAsInt(), ignored -> new ArrayList<>()).addAll(urls);
+    }
+
+    private static List<String> extractStreamUrls(JsonObject stream) {
+        Set<String> urls = new LinkedHashSet<>();
+        addUrlField(urls, stream, "baseUrl");
+        addUrlField(urls, stream, "base_url");
+        addUrlField(urls, stream, "backupUrl");
+        addUrlField(urls, stream, "backup_url");
+        return new ArrayList<>(urls);
+    }
+
+    private static void addUrlField(Set<String> urls, JsonObject object, String field) {
+        if (object == null || !object.has(field) || object.get(field).isJsonNull()) {
+            return;
+        }
+        JsonElement value = object.get(field);
+        if (value.isJsonArray()) {
+            for (JsonElement element : value.getAsJsonArray()) {
+                addUrlValue(urls, element);
+            }
+        } else {
+            addUrlValue(urls, value);
+        }
+    }
+
+    private static void addUrlValue(Set<String> urls, JsonElement value) {
+        if (value == null || value.isJsonNull()) {
+            return;
+        }
+        String url = value.getAsString();
+        if (url != null && !url.isBlank()) {
+            urls.add(url);
+        }
     }
 
     private static int[] audioQualityOrder(String preference, boolean allowDolby) {

@@ -5,8 +5,7 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.fml.loading.FMLEnvironment;
 
 /**
- * Client-only entry points guarded behind a physical-side check for common code
- * callers.
+ * 仅客户端入口；供通用代码调用时由物理端检查保护。
  */
 public final class ModernTurntableClientHooks {
     private ModernTurntableClientHooks() {

@@ -35,6 +35,7 @@ public class StereoOpenALHandler {
 
     private final BlockingQueue<float[][]> pcmQueue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
     private final float[] forwardToMachine = new float[3];
+    private final SpatialFrontSmoother frontSmoother = new SpatialFrontSmoother();
     private final Thread worker;
     private volatile boolean closed;
     private volatile boolean started;
@@ -151,11 +152,17 @@ public class StereoOpenALHandler {
 
     /** 每次客户端位置同步调用：推进 OpenAL 播放 + 更新空间位置 */
     public void tick(float[] machinePos, float[] listenerPos) {
-        tick(machinePos, listenerPos, Long.MAX_VALUE);
+        tick(machinePos, listenerPos, Long.MAX_VALUE, false);
     }
 
     /** 每次客户端位置同步调用：推进 OpenAL 播放 + 更新空间位置 */
     public void tick(float[] machinePos, float[] listenerPos, long targetRelativeTicks) {
+        tick(machinePos, listenerPos, targetRelativeTicks, false);
+    }
+
+    /** 每次客户端位置同步调用：推进 OpenAL 播放 + 更新空间位置 */
+    public void tick(float[] machinePos, float[] listenerPos, long targetRelativeTicks,
+            boolean followLocalPlayerFront) {
         if (closed || !initialized)
             return;
         if (net.minecraft.client.Minecraft.getInstance().isPaused())
@@ -206,7 +213,8 @@ public class StereoOpenALHandler {
                 forwardToMachine[0] = machinePos[0] - listenerPos[0];
                 forwardToMachine[1] = 0f;
                 forwardToMachine[2] = machinePos[2] - listenerPos[2];
-                spatialAudio.updatePositions(BED_POSITIONS, EMPTY_OBJECT_POSITIONS, listenerPos, forwardToMachine);
+                spatialAudio.updatePositions(BED_POSITIONS, EMPTY_OBJECT_POSITIONS, listenerPos,
+                        frontSmoother.update(forwardToMachine, followLocalPlayerFront));
                 float distance = distance(listenerPos, machinePos);
                 float gain = gainForDistance(distance);
                 lastDistance = distance;
@@ -611,17 +619,17 @@ public class StereoOpenALHandler {
                 int idx = (s * sourceChannels + ch) * bytesPerSample;
                 int val;
                 if (bytesPerSample == 3) {
-                    // 24-bit PCM
+                    // 24 位 PCM。
                     int b0 = pcmBytes[idx] & 0xFF;
                     int b1 = pcmBytes[idx + 1] & 0xFF;
                     int b2 = pcmBytes[idx + 2] & 0xFF;
                     val = bigEndian ? ((b0 << 16) | (b1 << 8) | b2) : ((b2 << 16) | (b1 << 8) | b0);
                     int sign = bigEndian ? b0 : b2;
                     if ((sign & 0x80) != 0)
-                        val |= 0xFF000000; // sign-extend
+                        val |= 0xFF000000; // 符号扩展
                     planar[ch][s] = val / 8388608f;
                 } else {
-                    // 32-bit PCM
+                    // 32 位 PCM。
                     int b0 = pcmBytes[idx] & 0xFF;
                     int b1 = pcmBytes[idx + 1] & 0xFF;
                     int b2 = pcmBytes[idx + 2] & 0xFF;

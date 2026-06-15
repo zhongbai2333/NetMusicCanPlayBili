@@ -6,15 +6,19 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliAudioResolver;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliClientAudioHandlers;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliConfig;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableClientEvents;
+import com.zhongbai233.net_music_can_play_bili.init.ModAttributes;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
 import com.zhongbai233.net_music_can_play_bili.init.ModItems;
 import com.zhongbai233.net_music_can_play_bili.network.ModernTurntableNetwork;
 import com.zhongbai233.net_music_can_play_bili.media.stream.TempFileByteSpool;
+import com.zhongbai233.net_music_can_play_bili.server.NetMusicBiliServerCommands;
+import com.zhongbai233.net_music_can_play_bili.server.PlaybackAuditManager;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
 import net.neoforged.fml.config.ModConfig;
@@ -27,12 +31,15 @@ public class NetMusicCanPlayBili {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     public NetMusicCanPlayBili(IEventBus modEventBus, ModContainer modContainer) {
+        ModAttributes.ATTRIBUTES.register(modEventBus);
         ModBlocks.BLOCKS.register(modEventBus);
         ModBlockEntities.BLOCK_ENTITY_TYPES.register(modEventBus);
         ModItems.ITEMS.register(modEventBus);
         ModItems.TABS.register(modEventBus);
         modEventBus.addListener(ModernTurntableNetwork::register);
         modEventBus.addListener(RegisterCapabilitiesEvent.class, this::registerCapabilities);
+        NeoForge.EVENT_BUS.addListener(NetMusicBiliServerCommands::onRegisterCommands);
+        NeoForge.EVENT_BUS.addListener(PlaybackAuditManager::onServerTick);
 
         modEventBus.addListener(Config::onLoad);
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);

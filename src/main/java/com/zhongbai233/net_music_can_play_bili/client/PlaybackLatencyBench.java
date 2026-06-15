@@ -12,15 +12,19 @@ import java.util.concurrent.atomic.AtomicLong;
  * 端到端播放延迟 bench
  *
  * <p>
- * 默认关闭。用 {@code -Dbili.playback.bench=true} 打开后，只做低频采样日志，不参与同步决策。
+ * 默认关闭。需同时启用 {@code -Dbili.video.advanced_features=true}
+ * 与 {@code -Dbili.video.enable_bench_features=true}，再用 {@code -Dbili.playback.bench=true}
+ * 打开后，才会做低频采样日志；不参与同步决策。
  * </p>
  */
 public final class PlaybackLatencyBench {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final boolean ENABLED = Boolean.getBoolean("bili.playback.bench");
-    private static final boolean PASSIVE_SUMMARY_LOGS = Boolean.getBoolean("bili.playback.bench.passive_log");
+    private static final boolean ENABLED = VideoFeatureFlags.benchFeaturesEnabled()
+            && VideoFeatureFlags.advancedBoolean("bili.playback.bench", false);
+    private static final boolean PASSIVE_SUMMARY_LOGS = VideoFeatureFlags.benchFeaturesEnabled()
+            && VideoFeatureFlags.advancedBoolean("bili.playback.bench.passive_log", false);
     private static final long LOG_INTERVAL_NANOS = Math.max(250L,
-            Long.getLong("bili.playback.bench.interval_ms", 3_000L)) * 1_000_000L;
+            VideoFeatureFlags.advancedLong("bili.playback.bench.interval_ms", 3_000L)) * 1_000_000L;
 
     private static final Map<String, VideoProbe> VIDEO = new ConcurrentHashMap<>();
     private static final Map<Integer, AudioProbe> AUDIO = new ConcurrentHashMap<>();

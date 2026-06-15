@@ -7,8 +7,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Lightweight client-side snapshot of the last NetMusic/Bili playback.
- * Used by commands so routine playback does not need to spam the log.
+ * 最近一次 NetMusic/B 站播放的轻量级客户端快照。
+ * 供命令查询使用，避免常规播放持续刷日志。
  */
 public final class BiliPlaybackDiagnostics {
     private static volatile Snapshot current = Snapshot.empty();

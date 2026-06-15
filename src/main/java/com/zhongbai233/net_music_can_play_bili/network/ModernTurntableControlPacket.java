@@ -68,7 +68,7 @@ public record ModernTurntableControlPacket(BlockPos pos, Action action, long tar
         switch (payload.action()) {
             case REPLAY -> turntable.replayFromBeginning(player);
             case PAUSE -> turntable.pausePlayback(level);
-            case START -> turntable.resumePlayback(player);
+            case START -> turntable.resumePlayback(player, payload.targetMillis());
             case SEEK -> turntable.seekTo(level, payload.targetMillis());
         }
     }

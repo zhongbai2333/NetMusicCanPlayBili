@@ -6,14 +6,20 @@
   "mixins": [
   ],
   "client": [
+    "AbstractContainerScreenMixin",
     "BigMegaphoneScreenMixin",
     "BigMegaphoneStartMessageMixin",
     "ButtonAccessor",
     "CDBurnerMenuScreenMixin",
+    "ClientTooltipComponentMixin",
     "ComputerMenuScreenMixin",
     "GlDeviceYuvShaderSkipMixin",
+    "ItemInHandRendererMixin",
+    "LibraryAccessor",
     "MusicToClientMessageClientMixin",
-    "ScreenAccessor"
+    "ScreenAccessor",
+    "SoundEngineAccessor",
+    "SoundManagerAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -30,7 +30,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Java fMP4/DASH demux + FFmpeg JNI video decoder.
+ * Java fMP4/DASH 解复用 + FFmpeg JNI 视频解码器。
  */
 public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private static final Logger LOGGER = LogUtils.getLogger();

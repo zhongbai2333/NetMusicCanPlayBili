@@ -2,7 +2,7 @@
 
 #moj_import <minecraft:dynamictransforms.glsl>
 
-// NV12: Sampler0=Y plane, Sampler1=UV plane（临时 RGBA8 承载，读取 .rg），Sampler2=占位。
+// NV12：Sampler0=Y 平面，Sampler1=UV 平面（临时 RGBA8 承载，读取 .rg），Sampler2=占位。
 uniform sampler2D Sampler0;
 uniform sampler2D Sampler1;
 uniform sampler2D Sampler2;

@@ -12,6 +12,7 @@ import javax.sound.sampled.AudioSystem;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.UUID;
 
 public final class FlacOpenALPipeline extends AbstractAudioPipeline {
     private static final int PIPE_BUFFER_SIZE = 4 * 1024 * 1024;
@@ -46,13 +47,19 @@ public final class FlacOpenALPipeline extends AbstractAudioPipeline {
     public FlacOpenALPipeline(byte[] dfLa, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds,
             float timelineStartOffsetSeconds, String sessionId)
             throws IOException {
+        this(dfLa, ownerClosed, sourcePos, startOffsetSeconds, timelineStartOffsetSeconds, sessionId, null);
+        }
+
+        public FlacOpenALPipeline(byte[] dfLa, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds,
+            float timelineStartOffsetSeconds, String sessionId, UUID ownerId)
+            throws IOException {
         super("fMP4", "flac", null, true);
         this.format = FlacStreamSupport.audioFormat(dfLa);
         this.ownerClosed = ownerClosed;
         this.stereo = new StereoOpenALHandler();
         this.startOffsetSeconds = Math.max(0f, startOffsetSeconds);
         this.stereo.setSampleRate((int) format.getSampleRate());
-        DolbyAudioRegistry.registerStereo(stereo, sourcePos, timelineStartOffsetSeconds, sessionId);
+        DolbyAudioRegistry.registerStereo(stereo, sourcePos, timelineStartOffsetSeconds, sessionId, ownerId);
         FlacStreamSupport.writeNativeHeader(compressedPipe, dfLa);
     }
 

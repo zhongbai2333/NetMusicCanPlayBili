@@ -20,7 +20,7 @@ import java.nio.file.Path;
  */
 public final class TempFileByteSpool implements Closeable {
     private static final long READ_WAIT_TIMEOUT_MILLIS = Long.getLong(
-            "bili.media.spool.read_wait_timeout_ms", 15_000L);
+            "bili.media.spool.read_wait_timeout_ms", 30_000L);
 
     private final Path path;
     private final RandomAccessFile readFile;
@@ -90,6 +90,31 @@ public final class TempFileByteSpool implements Closeable {
     }
 
     public synchronized long cachedLength() {
+        return cachedLength;
+    }
+
+    public synchronized long waitUntilCached(long targetLength, long timeoutMillis) throws IOException {
+        long target = Math.max(0L, targetLength);
+        long deadline = timeoutMillis > 0L ? System.currentTimeMillis() + timeoutMillis : 0L;
+        while (!closed && failure == null && !complete && cachedLength < target) {
+            try {
+                if (timeoutMillis <= 0L) {
+                    wait();
+                } else {
+                    long remaining = deadline - System.currentTimeMillis();
+                    if (remaining <= 0L) {
+                        break;
+                    }
+                    wait(remaining);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("interrupted while waiting for prebuffer", e);
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
         return cachedLength;
     }
 

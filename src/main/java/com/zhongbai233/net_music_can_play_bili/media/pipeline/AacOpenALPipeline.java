@@ -8,6 +8,7 @@ import javax.sound.sampled.AudioFormat;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.UUID;
 
 public final class AacOpenALPipeline extends AbstractAudioPipeline {
     private final AacFrameDecoder decoder;
@@ -34,12 +35,17 @@ public final class AacOpenALPipeline extends AbstractAudioPipeline {
 
     public AacOpenALPipeline(byte[] asc, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds,
             float timelineStartOffsetSeconds, String sessionId) {
+        this(asc, ownerClosed, sourcePos, startOffsetSeconds, timelineStartOffsetSeconds, sessionId, null);
+    }
+
+    public AacOpenALPipeline(byte[] asc, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds,
+            float timelineStartOffsetSeconds, String sessionId, UUID ownerId) {
         super("fMP4", "aac", null, true);
         this.decoder = new AacFrameDecoder(asc, ownerClosed::get);
         this.stereo = new StereoOpenALHandler();
         this.stereo.setSampleRate((int) decoder.format().getSampleRate());
         this.skipBytesRemaining = skipBytes(decoder.format(), startOffsetSeconds);
-        DolbyAudioRegistry.registerStereo(stereo, sourcePos, timelineStartOffsetSeconds, sessionId);
+        DolbyAudioRegistry.registerStereo(stereo, sourcePos, timelineStartOffsetSeconds, sessionId, ownerId);
     }
 
     @Override

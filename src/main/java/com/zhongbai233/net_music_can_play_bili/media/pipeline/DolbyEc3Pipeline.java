@@ -9,6 +9,7 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.UUID;
 
 public final class DolbyEc3Pipeline extends AbstractAudioPipeline {
     private static final int STREAM_BUFFER_SIZE = 256 * 1024;
@@ -44,11 +45,16 @@ public final class DolbyEc3Pipeline extends AbstractAudioPipeline {
 
     public DolbyEc3Pipeline(String container, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds,
             float timelineStartOffsetSeconds, String sessionId) {
+        this(container, ownerClosed, sourcePos, startOffsetSeconds, timelineStartOffsetSeconds, sessionId, null);
+    }
+
+    public DolbyEc3Pipeline(String container, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds,
+            float timelineStartOffsetSeconds, String sessionId, UUID ownerId) {
         super(container, "ec-3", "Dolby Atmos", true);
         this.ownerClosed = ownerClosed;
         this.dolby = new DolbyAudioHandler();
         this.skipFramesRemaining = skipFrames(startOffsetSeconds);
-        DolbyAudioRegistry.register(dolby, sourcePos, timelineStartOffsetSeconds, sessionId);
+        DolbyAudioRegistry.register(dolby, sourcePos, timelineStartOffsetSeconds, sessionId, ownerId);
     }
 
     @Override

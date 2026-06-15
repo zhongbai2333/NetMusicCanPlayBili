@@ -23,7 +23,7 @@ public final class BiliWbiSigner {
             46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
             27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
             37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4,
-            22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 52, 44, 34,
+            22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
     };
 
     public static final HttpClient HTTP = HttpClient.newBuilder()
@@ -102,9 +102,9 @@ public final class BiliWbiSigner {
         for (Map.Entry<String, String> e : sorted.entrySet()) {
             if (qs.length() > 0)
                 qs.append('&');
-            qs.append(URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8));
+            qs.append(encodeComponent(e.getKey()));
             qs.append('=');
-            qs.append(URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8));
+            qs.append(encodeComponent(filterWbiValue(e.getValue())));
         }
         qs.append(key);
 
@@ -117,11 +117,19 @@ public final class BiliWbiSigner {
         for (Map.Entry<String, String> e : signedParams.entrySet()) {
             if (sb.length() > 0)
                 sb.append('&');
-            sb.append(URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8));
+            sb.append(encodeComponent(e.getKey()));
             sb.append('=');
-            sb.append(URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8));
+            sb.append(encodeComponent(e.getValue()));
         }
         return sb.toString();
+    }
+
+    private static String encodeComponent(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    private static String filterWbiValue(String value) {
+        return value == null ? "" : value.replaceAll("[!'()*]", "");
     }
 
     static String md5(String input) throws Exception {

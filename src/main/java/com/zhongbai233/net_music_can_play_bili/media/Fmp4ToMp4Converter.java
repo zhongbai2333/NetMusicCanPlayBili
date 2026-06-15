@@ -165,7 +165,7 @@ public final class Fmp4ToMp4Converter {
                 break;
             if (blockType == 0 && blockLen >= 18) {
                 // STREAMINFO：跳过 min/max blocksize(4B)、min/max framesize(6B)
-                // byte 10-12：sample_rate(20bit) + num_channels(3bit) + bps(5bit)
+                // 第 10-12 字节：sample_rate（20 位）+ num_channels（3 位）+ bps（5 位）
                 int b10 = dfLa[pos + 10] & 0xFF;
                 int b11 = dfLa[pos + 11] & 0xFF;
                 int b12 = dfLa[pos + 12] & 0xFF;
@@ -248,7 +248,7 @@ public final class Fmp4ToMp4Converter {
         return new SampleTable(sizes, ptsNanos);
     }
 
-    /** AAC ASC（AudioSpecificConfig）→ AudioFormat */
+    /** 将 AAC ASC（AudioSpecificConfig）转换为 AudioFormat。 */
     private static AudioFormat ascToAudioFormat(byte[] asc) {
         if (asc == null || asc.length < 2)
             return null;

@@ -3,7 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.client;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
-import com.zhongbai233.net_music_can_play_bili.client.renderer.VideoBillboardPreview;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import net.minecraft.client.Minecraft;
 import org.slf4j.Logger;
 
