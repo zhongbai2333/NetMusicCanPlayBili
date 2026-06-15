@@ -6,6 +6,7 @@ import com.mojang.math.Axis;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.client.MP4Client;
 import com.zhongbai233.net_music_can_play_bili.client.MP4FocusState;
+import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.YuvVideoRenderTypes;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
@@ -240,17 +241,18 @@ public final class MP4ItemScreenRenderer {
 
     private static void submitNv12VideoLayer(PoseStack poseStack, SubmitNodeCollector collector, UUID deviceId,
             float bx0, float by0, float bx1, float by1, float b0z, float b1z, float b2z, float b3z) {
-                if (deviceId == null) {
-                        return;
-                }
+        if (deviceId == null) {
+            return;
+        }
         if (!MP4FocusState.visualLandscape(1.0F) || !MP4FocusState.videoEnabled() || !MP4FocusState.playing()) {
             return;
         }
-                boolean useRgbaFallback = IrisShaderpackCompat.isShaderPackInUse();
-                MP4RgbaVideoLayer rgbaLayer = MP4RgbaVideoLayer.forDevice(deviceId);
-                boolean rgba = useRgbaFallback && rgbaLayer.uploadLatest(deviceId);
-                MP4Nv12VideoLayer layer = MP4Nv12VideoLayer.forDevice(deviceId);
-                if (!rgba && (!layer.uploadLatest(deviceId) || layer.textureSet() == null)) {
+        MP4HandheldVideoClient.markVisible(deviceId);
+        boolean useRgbaFallback = IrisShaderpackCompat.isShaderPackInUse();
+        MP4RgbaVideoLayer rgbaLayer = MP4RgbaVideoLayer.forDevice(deviceId);
+        boolean rgba = useRgbaFallback && rgbaLayer.uploadLatest(deviceId);
+        MP4Nv12VideoLayer layer = MP4Nv12VideoLayer.forDevice(deviceId);
+        if (!rgba && (!layer.uploadLatest(deviceId) || layer.textureSet() == null)) {
             return;
         }
         float inset = 10.0F - VIDEO_LAYER_OVERSCAN_PIXELS;

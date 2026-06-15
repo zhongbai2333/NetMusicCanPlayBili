@@ -55,6 +55,12 @@ public final class MP4HandheldVideoClient {
     private static final long EARLY_TOLERANCE_NANOS = Long.getLong("netmusic.mp4.video.early_tolerance_ms", 24L)
             * 1_000_000L;
     private static final int FRAME_QUEUE_CAPACITY = Integer.getInteger("netmusic.mp4.video.queue_capacity", 4);
+    private static final boolean OFFSCREEN_PAUSE_DECODE = Boolean.parseBoolean(
+            System.getProperty("netmusic.mp4.video.offscreen.pause_decode", "true"));
+    private static final long OFFSCREEN_GRACE_NANOS = Long.getLong("netmusic.mp4.video.offscreen.grace_ms", 500L)
+            * 1_000_000L;
+    private static final long OFFSCREEN_RESUME_RESTART_LAG_NANOS = Long.getLong(
+            "netmusic.mp4.video.offscreen.resume_restart_lag_ms", 1_500L) * 1_000_000L;
     private static final ExecutorService EXECUTOR = Executors.newCachedThreadPool(new Mp4VideoThreadFactory());
     private static final Map<UUID, DeviceVideoState> STATES = new ConcurrentHashMap<>();
     private static final AtomicBoolean highResolutionWarningShown = new AtomicBoolean(false);
@@ -104,6 +110,20 @@ public final class MP4HandheldVideoClient {
         state.sourceHeight = 0;
         resolveAndStart(deviceId, state, playback, key);
         return false;
+    }
+
+    public static void markVisible(UUID deviceId) {
+        if (deviceId == null) {
+            return;
+        }
+        DeviceVideoState state = state(deviceId);
+        long nowNs = System.nanoTime();
+        long offscreenSince = state.offscreenSinceNanoTime;
+        state.lastVisibleNanoTime = nowNs;
+        state.offscreenSinceNanoTime = 0L;
+        if (offscreenSince > 0L) {
+            maybeRestartVisibleSession(deviceId, state, nowNs - offscreenSince);
+        }
     }
 
     public static VideoFrame latestFrame(UUID deviceId) {
@@ -345,6 +365,9 @@ public final class MP4HandheldVideoClient {
             long displayedFrames = 0L;
             boolean firstFrameAccepted = false;
             while (!session.closed.get() && session.key.equals(state.activeKey)) {
+                if (!waitWhileOffscreen(deviceId, state, session)) {
+                    return;
+                }
                 Fmp4NativeVideoDecoder.DecodedFrame decoded = decoder.getNextDecodedFrame();
                 if (decoded == null) {
                     state.endedKey = session.key;
@@ -377,6 +400,92 @@ public final class MP4HandheldVideoClient {
                 state.statusText = "视频播放中";
             }
         }
+    }
+
+    private static boolean waitWhileOffscreen(UUID deviceId, DeviceVideoState state, VideoSession session) {
+        if (!OFFSCREEN_PAUSE_DECODE || !isOffscreenPauseActive(state)) {
+            return !session.closed.get() && session.key.equals(state.activeKey);
+        }
+        long pauseStartNs = System.nanoTime();
+        while (!session.closed.get() && session.key.equals(state.activeKey) && isOffscreenPauseActive(state)) {
+            try {
+                Thread.sleep(25L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        long pausedNs = System.nanoTime() - pauseStartNs;
+        if (pausedNs > 0L) {
+            LOGGER.debug("MP4 横屏视频离屏恢复取帧: device={}, session={}, paused={}ms", deviceId,
+                    session.key.sessionId(), pausedNs / 1_000_000L);
+        }
+        return !session.closed.get() && session.key.equals(state.activeKey);
+    }
+
+    private static boolean isOffscreenPauseActive(DeviceVideoState state) {
+        long lastVisible = state.lastVisibleNanoTime;
+        if (lastVisible <= 0L) {
+            lastVisible = state.lastVisibleNanoTime = System.nanoTime();
+            return false;
+        }
+        long nowNs = System.nanoTime();
+        boolean paused = nowNs - lastVisible > Math.max(0L, OFFSCREEN_GRACE_NANOS);
+        if (paused && state.offscreenSinceNanoTime == 0L) {
+            state.offscreenSinceNanoTime = nowNs;
+        }
+        return paused;
+    }
+
+    private static void maybeRestartVisibleSession(UUID deviceId, DeviceVideoState state, long offscreenDurationNs) {
+        VideoSession session = state.activeSession;
+        if (session == null || session.closed.get() || OFFSCREEN_RESUME_RESTART_LAG_NANOS <= 0L) {
+            return;
+        }
+        MP4ClientPlayback.LocalVideoPlayback playback = MP4ClientPlayback.localVideoPlayback(deviceId);
+        if (playback == null || !session.key.sessionId().equals(playback.sessionId())) {
+            return;
+        }
+        long visualMillis = anchoredVisualMillis(deviceId, playback);
+        long latestMillis = latestFrameMillis(state, session);
+        long lagNs = latestMillis >= 0L ? (visualMillis - latestMillis) * 1_000_000L : offscreenDurationNs;
+        if (visualMillis < 0L || lagNs < OFFSCREEN_RESUME_RESTART_LAG_NANOS) {
+            return;
+        }
+        LOGGER.debug("MP4 横屏视频离屏恢复重定位: device={}, session={}, offscreen={}ms, visual={}ms, latest={}ms",
+                deviceId, session.key.sessionId(), offscreenDurationNs / 1_000_000L, visualMillis, latestMillis);
+        stopForVisibleResync(state, "视频重新同步...");
+        update(deviceId);
+    }
+
+    private static void stopForVisibleResync(DeviceVideoState state, String reason) {
+        state.activeKey = PlaybackKey.EMPTY;
+        state.resolvingKey = PlaybackKey.EMPTY;
+        state.failedKey = PlaybackKey.EMPTY;
+        state.endedKey = PlaybackKey.EMPTY;
+        VideoSession session = state.activeSession;
+        state.activeSession = null;
+        if (session != null) {
+            session.close();
+        }
+        if (reason != null && !reason.isBlank()) {
+            state.statusText = reason;
+        }
+        clearFrameQueue(state);
+    }
+
+    private static long latestFrameMillis(DeviceVideoState state, VideoSession session) {
+        long latestPts = -1L;
+        VideoFrame latest = state.latestFrame.get();
+        if (latest != null) {
+            latestPts = Math.max(latestPts, latest.ptsNanos());
+        }
+        synchronized (state.frameQueueLock) {
+            for (VideoFrame frame : state.frameQueue) {
+                latestPts = Math.max(latestPts, frame.ptsNanos());
+            }
+        }
+        return latestPts >= 0L ? session.decoderStartOffsetMillis + latestPts / 1_000_000L : -1L;
     }
 
     private static boolean hasFrameBytes(Fmp4NativeVideoDecoder.DecodedFrame decoded, int requiredBytes) {
@@ -716,6 +825,8 @@ public final class MP4HandheldVideoClient {
         private volatile int sourceHeight;
         private volatile LyricRecord subtitleRecord;
         private volatile String currentSubtitle = "";
+        private volatile long lastVisibleNanoTime = System.nanoTime();
+        private volatile long offscreenSinceNanoTime;
     }
 
     private static final class Mp4VideoThreadFactory implements ThreadFactory {

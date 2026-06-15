@@ -21,6 +21,9 @@ import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -100,6 +103,12 @@ public final class VideoBillboardPreview {
             System.getProperty("bili.video.turntable.sync_range", "96.0")), 2.0);
     private static final double VIEW_DOT_THRESHOLD = Double.parseDouble(
             System.getProperty("bili.video.render.view_dot_threshold", "0.12"));
+    private static final boolean VIEW_OCCLUSION_CHECK = Boolean.parseBoolean(
+            System.getProperty("bili.video.render.occlusion_check", "true"));
+    private static final long VIEW_OCCLUSION_CACHE_NANOS = Long.getLong(
+            "bili.video.render.occlusion_cache_ms", 150L) * 1_000_000L;
+    private static final double VIEW_SAMPLE_EDGE_SCALE = Double.parseDouble(
+            System.getProperty("bili.video.render.visibility_sample_edge_scale", "0.86"));
     private static final double MAX_RENDER_DISTANCE_SQR = Math.pow(Double.parseDouble(
             System.getProperty("bili.video.max_render_distance", "64.0")), 2.0);
     static final String RENDER_BACKEND = System.getProperty("bili.video.render.backend", "nv12")
@@ -147,6 +156,7 @@ public final class VideoBillboardPreview {
     private static volatile String activeSessionId = "";
     private static volatile BlockPos activeProjectorPos;
     private static final Set<BlockPos> activeProjectorPositions = new CopyOnWriteArraySet<>();
+    private static final ConcurrentHashMap<BlockPos, VisibilitySample> PROJECTOR_VISIBILITY_CACHE = new ConcurrentHashMap<>();
     private static volatile boolean activeRequiresProjector;
     private static volatile PlaybackRequest activeRequest;
     private static volatile boolean firstPreviewSubmitLogged;
@@ -205,7 +215,7 @@ public final class VideoBillboardPreview {
             String sessionId, long startOffsetMillis, long totalMillis, Collection<BlockPos> anchorPositions,
             boolean preferNative, String decoderOverride) {
         startSynced(videoUrl, targetWidth, targetHeight, fps, codecId, sessionId, startOffsetMillis, totalMillis,
-            anchorPositions, (BlockPos) null, preferNative, decoderOverride);
+                anchorPositions, (BlockPos) null, preferNative, decoderOverride);
     }
 
     public static void startSynced(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
@@ -1433,7 +1443,8 @@ public final class VideoBillboardPreview {
         return true;
     }
 
-    private static boolean uploadYuvFrameData(VideoYuvTextureSet textureSet, DecodedFrame frame, int width, int height) {
+    private static boolean uploadYuvFrameData(VideoYuvTextureSet textureSet, DecodedFrame frame, int width,
+            int height) {
         if (textureSet == null || frame == null || textureSet.format() != frame.format()) {
             return false;
         }
@@ -1846,8 +1857,10 @@ public final class VideoBillboardPreview {
         Matrix4fStack modelViewStack = RenderSystem.getModelViewStack();
         modelViewStack.pushMatrix();
         try {
-            // RenderType.draw() 会忽略构建顶点时使用的 PoseStack，并把 RenderSystem 当前模型视图矩阵作为 DynamicTransforms 上传。
-            // RenderLevelStageEvent 暴露了世界 pass 的模型视图；这里显式设置它，确保相机相对顶点在 Iris/Sodium AfterLevel 绘制下仍固定在世界空间。
+            // RenderType.draw() 会忽略构建顶点时使用的 PoseStack，并把 RenderSystem 当前模型视图矩阵作为
+            // DynamicTransforms 上传。
+            // RenderLevelStageEvent 暴露了世界 pass 的模型视图；这里显式设置它，确保相机相对顶点在 Iris/Sodium
+            // AfterLevel 绘制下仍固定在世界空间。
             modelViewStack.set(event.getModelViewMatrix());
             renderType.draw(mesh);
         } finally {
@@ -2015,7 +2028,7 @@ public final class VideoBillboardPreview {
     static void submitProjectorEmissiveGeometry(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera,
             VideoProjectorBlockEntity projector, Identifier renderTextureId, int textureWidth, int textureHeight) {
         submitProjectorGeometry(event, minecraft, camera, projector, renderTextureId, textureWidth, textureHeight,
-            0.0D, YuvVideoRenderTypes.videoRgbaEntity(renderTextureId), "projector-rgba-placeholder");
+                0.0D, YuvVideoRenderTypes.videoRgbaEntity(renderTextureId), "projector-rgba-placeholder");
     }
 
     static void submitProjectorViewDepthOffsetGeometry(SubmitCustomGeometryEvent event, Minecraft minecraft,
@@ -2082,10 +2095,10 @@ public final class VideoBillboardPreview {
 
         PoseStack poseStack = new PoseStack();
         logFirstPreviewSubmit(false, textureWidth, textureHeight, camera, anchorX, anchorY, anchorZ,
-            route);
+                route);
         event.getSubmitNodeCollector().submitCustomGeometry(
                 poseStack,
-            renderType,
+                renderType,
                 (pose, buffer) -> {
                     emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
                             false);
@@ -2308,7 +2321,98 @@ public final class VideoBillboardPreview {
                 .setNormal(pose, 0.0F, 0.0F, 1.0F);
     }
 
+    static boolean isProjectorScreenRenderable(Minecraft minecraft, Camera camera,
+            VideoProjectorBlockEntity projector, double dotThreshold) {
+        if (minecraft == null || camera == null || projector == null) {
+            return false;
+        }
+        BlockPos projectorPos = projector.getBlockPos().immutable();
+        long nowNs = System.nanoTime();
+        int thresholdKey = (int) Math.round(dotThreshold * 1000.0D);
+        VisibilitySample cached = PROJECTOR_VISIBILITY_CACHE.get(projectorPos);
+        if (cached != null && cached.thresholdKey() == thresholdKey
+                && nowNs - cached.createdNanoTime() <= Math.max(0L, VIEW_OCCLUSION_CACHE_NANOS)) {
+            return cached.visible();
+        }
+        boolean visible = computeProjectorScreenRenderable(minecraft, camera, projector, dotThreshold);
+        PROJECTOR_VISIBILITY_CACHE.put(projectorPos, new VisibilitySample(nowNs, thresholdKey, visible));
+        return visible;
+    }
+
+    private static boolean computeProjectorScreenRenderable(Minecraft minecraft, Camera camera,
+            VideoProjectorBlockEntity projector, double dotThreshold) {
+        BlockPos pos = projector.getBlockPos();
+        double centerX = pos.getX() + 0.5D + projector.getProjectionDistanceX();
+        double centerY = pos.getY() + projector.getProjectionHeight();
+        double centerZ = pos.getZ() + 0.5D + projector.getProjectionDistanceZ();
+        Vec3 cameraPos = camera.position();
+        double dx = centerX - cameraPos.x;
+        double dy = centerY - cameraPos.y;
+        double dz = centerZ - cameraPos.z;
+        if (dx * dx + dy * dy + dz * dz > MAX_RENDER_DISTANCE_SQR) {
+            return false;
+        }
+        for (Vec3 sample : projectorVisibilitySamples(projector, centerX, centerY, centerZ)) {
+            if (isScreenInView(camera, sample.x, sample.y, sample.z, dotThreshold)
+                    && !isOccluded(minecraft, cameraPos, sample, pos)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<Vec3> projectorVisibilitySamples(VideoProjectorBlockEntity projector,
+            double centerX, double centerY, double centerZ) {
+        float scale = Math.abs(projector.getProjectionScale());
+        double halfHeight = HEIGHT * scale * 0.5D * VIEW_SAMPLE_EDGE_SCALE;
+        double halfWidth = halfHeight * 16.0D / 9.0D;
+        double yawRad = Math.toRadians(projector.getProjectionYaw());
+        double pitchRad = Math.toRadians(projector.getProjectionPitch());
+        double rightX = Math.cos(yawRad);
+        double rightZ = Math.sin(yawRad);
+        double forwardX = -Math.sin(yawRad);
+        double forwardZ = Math.cos(yawRad);
+        double upX = forwardX * Math.sin(pitchRad);
+        double upY = Math.cos(pitchRad);
+        double upZ = forwardZ * Math.sin(pitchRad);
+        Vec3 center = new Vec3(centerX, centerY, centerZ);
+        Vec3 right = new Vec3(rightX * halfWidth, 0.0D, rightZ * halfWidth);
+        Vec3 up = new Vec3(upX * halfHeight, upY * halfHeight, upZ * halfHeight);
+        return List.of(center,
+                center.add(right).add(up),
+                center.add(right).subtract(up),
+                center.subtract(right).add(up),
+                center.subtract(right).subtract(up));
+    }
+
+    private static boolean isOccluded(Minecraft minecraft, Vec3 cameraPos, Vec3 target, BlockPos projectorPos) {
+        if (!VIEW_OCCLUSION_CHECK || minecraft.level == null) {
+            return false;
+        }
+        BlockHitResult hit = minecraft.level.clip(new ClipContext(cameraPos, target,
+                ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, minecraft.player));
+        if (hit == null || hit.getType() == HitResult.Type.MISS) {
+            return false;
+        }
+        if (hit.getBlockPos().equals(projectorPos)) {
+            return false;
+        }
+        return hit.getLocation().distanceToSqr(cameraPos) + 1.0e-4D < target.distanceToSqr(cameraPos);
+    }
+
+    private record VisibilitySample(long createdNanoTime, int thresholdKey, boolean visible) {
+    }
+
+    static double viewDotThreshold() {
+        return VIEW_DOT_THRESHOLD;
+    }
+
     private static boolean isScreenInView(Camera camera, double centerX, double centerY, double centerZ) {
+        return isScreenInView(camera, centerX, centerY, centerZ, VIEW_DOT_THRESHOLD);
+    }
+
+    private static boolean isScreenInView(Camera camera, double centerX, double centerY, double centerZ,
+            double dotThreshold) {
         Vec3 cameraPos = camera.position();
         double dx = centerX - cameraPos.x;
         double dy = centerY - cameraPos.y;
@@ -2319,7 +2423,7 @@ public final class VideoBillboardPreview {
         }
         Vector3fc forward = camera.forwardVector();
         double dot = (dx / len) * forward.x() + (dy / len) * forward.y() + (dz / len) * forward.z();
-        return dot > VIEW_DOT_THRESHOLD;
+        return dot > dotThreshold;
     }
 
 }

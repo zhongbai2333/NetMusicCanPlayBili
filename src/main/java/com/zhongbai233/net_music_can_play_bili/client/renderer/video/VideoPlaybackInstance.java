@@ -35,6 +35,14 @@ final class VideoPlaybackInstance {
             "bili.video.pipeline.audio_latency_compensation_ms", 0L);
     private static final long CHASE_WINDOW_MILLIS = Long.getLong("bili.video.pipeline.chase_window_ms", 10_000L);
     private static final long SLOWDOWN_WINDOW_MILLIS = Long.getLong("bili.video.pipeline.slowdown_window_ms", 2_500L);
+    private static final boolean OFFSCREEN_PAUSE_DECODE = Boolean.parseBoolean(
+            System.getProperty("bili.video.offscreen.pause_decode", "true"));
+    private static final long OFFSCREEN_GRACE_NANOS = Long.getLong("bili.video.offscreen.grace_ms", 500L)
+            * 1_000_000L;
+    private static final long OFFSCREEN_RESUME_RESTART_LAG_NANOS = Long.getLong(
+            "bili.video.offscreen.resume_restart_lag_ms", 1_500L) * 1_000_000L;
+    private static final double OFFSCREEN_PREWARM_DOT_THRESHOLD = Double.parseDouble(
+            System.getProperty("bili.video.offscreen.prewarm_dot_threshold", "-0.20"));
     private static final double IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET = Double.parseDouble(
             System.getProperty("bili.video.pipeline.iris_warning_placeholder_view_depth_offset", "0.03"));
 
@@ -79,17 +87,21 @@ final class VideoPlaybackInstance {
     private volatile long decoderStartOffsetMillis;
     private volatile long lastUploadedPtsNanos = -1L;
     private volatile long adaptiveRestartOffsetMillis = -1L;
+    private volatile long lastVisibleNanoTime;
+    private volatile long offscreenSinceNanoTime;
+    private volatile boolean prewarmVisible = true;
+    private volatile boolean loggedOffscreenPause;
     private int consecutiveBadUploads;
 
     VideoPlaybackInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             String sessionId, long startOffsetMillis, long totalMillis, Collection<BlockPos> projectorPositions,
             BlockPos turntablePos, boolean preferNative, String decoderOverride) {
         this(videoUrl, targetWidth, targetHeight, fps, codecId, sessionId, startOffsetMillis, totalMillis,
-            projectorPositions, VideoPlaybackAnchor.turntable(turntablePos, sessionId, Math.max(0L, totalMillis)),
-            preferNative, decoderOverride);
-        }
+                projectorPositions, VideoPlaybackAnchor.turntable(turntablePos, sessionId, Math.max(0L, totalMillis)),
+                preferNative, decoderOverride);
+    }
 
-        VideoPlaybackInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
+    VideoPlaybackInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             String sessionId, long startOffsetMillis, long totalMillis, Collection<BlockPos> projectorPositions,
             VideoPlaybackAnchor anchor, boolean preferNative, String decoderOverride) {
         this.videoUrl = videoUrl;
@@ -140,6 +152,10 @@ final class VideoPlaybackInstance {
         decoderStartOffsetMillis = startOffsetMillis;
         lastUploadedPtsNanos = -1L;
         adaptiveRestartOffsetMillis = -1L;
+        lastVisibleNanoTime = System.nanoTime();
+        offscreenSinceNanoTime = 0L;
+        prewarmVisible = true;
+        loggedOffscreenPause = false;
         consecutiveBadUploads = 0;
         frameQueue.clear();
         startNanoTime = System.nanoTime();
@@ -164,6 +180,9 @@ final class VideoPlaybackInstance {
                     break;
                 }
                 if (projectorPositions.isEmpty()) {
+                    break;
+                }
+                if (!waitWhileOffscreen(gen)) {
                     break;
                 }
                 if (frameIndex > 0L) {
@@ -257,6 +276,40 @@ final class VideoPlaybackInstance {
         return running && gen == generation.get();
     }
 
+    private boolean waitWhileOffscreen(long gen) {
+        if (!OFFSCREEN_PAUSE_DECODE || !isOffscreenPauseActive()) {
+            return running && gen == generation.get();
+        }
+        long pauseStartNs = System.nanoTime();
+        if (!loggedOffscreenPause) {
+            loggedOffscreenPause = true;
+            LOGGER.debug("视频会话离屏暂停取帧: session={}, queue={}, media={}ms, master={}ms",
+                    sessionId, frameQueue.size(), mediaMillis(), anchor.timeline().mediaMillis());
+        }
+        while (running && gen == generation.get() && isOffscreenPauseActive()) {
+            try {
+                java.util.concurrent.TimeUnit.MILLISECONDS.sleep(25L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        long pausedNs = System.nanoTime() - pauseStartNs;
+        if (pausedNs > 0L) {
+            LOGGER.debug("视频会话离屏恢复取帧: session={}, paused={}ms, media={}ms, master={}ms",
+                    sessionId, pausedNs / 1_000_000L, mediaMillis(), anchor.timeline().mediaMillis());
+        }
+        return running && gen == generation.get();
+    }
+
+    private boolean isOffscreenPauseActive() {
+        if (prewarmVisible) {
+            return false;
+        }
+        long lastVisible = lastVisibleNanoTime;
+        return lastVisible > 0L && System.nanoTime() - lastVisible > Math.max(0L, OFFSCREEN_GRACE_NANOS);
+    }
+
     private static boolean isGamePaused() {
         Minecraft minecraft = Minecraft.getInstance();
         return minecraft != null && minecraft.isPaused();
@@ -303,6 +356,9 @@ final class VideoPlaybackInstance {
 
     void pumpUploadOnRenderThread() {
         lastUploadPumpNanoTime = System.nanoTime();
+        if (OFFSCREEN_PAUSE_DECODE && isOffscreenPauseActive()) {
+            return;
+        }
         if (!running && frameQueue.isEmpty()) {
             return;
         }
@@ -387,7 +443,16 @@ final class VideoPlaybackInstance {
     }
 
     private void restartDecoder(int nextWidth, int nextHeight, long restartOffsetMillis) {
+        restartDecoder(nextWidth, nextHeight, restartOffsetMillis, false);
+    }
+
+    private void restartDecoder(int nextWidth, int nextHeight, long restartOffsetMillis, boolean keepVisibleFrame) {
         long gen = generation.incrementAndGet();
+        boolean preserveVisibleFrame = keepVisibleFrame
+                && nextWidth == targetWidth
+                && nextHeight == targetHeight
+                && hasFrame
+                && (frontTexture != null || yuvTextureSet != null);
         AutoCloseable oldDecoder = decoder;
         decoder = null;
         if (oldDecoder != null) {
@@ -406,10 +471,12 @@ final class VideoPlaybackInstance {
         }
 
         frameQueue.clear();
-        releaseTexture();
+        if (!preserveVisibleFrame) {
+            releaseTexture();
+        }
         targetWidth = nextWidth;
         targetHeight = nextHeight;
-        hasFrame = false;
+        hasFrame = preserveVisibleFrame;
         firstFrameLogged = false;
         firstDecodedNanoTime = 0L;
         startupBufferReady = false;
@@ -417,11 +484,15 @@ final class VideoPlaybackInstance {
         lastUploadPumpNanoTime = System.nanoTime();
         decoderStartOffsetMillis = Math.max(0L, restartOffsetMillis);
         adaptiveRestartOffsetMillis = decoderStartOffsetMillis;
-        lastUploadedPtsNanos = -1L;
+        if (!preserveVisibleFrame) {
+            lastUploadedPtsNanos = -1L;
+        }
         consecutiveBadUploads = 0;
         running = true;
 
-        Thread thread = new Thread(() -> decode(gen), "bili-video-" + sessionId + "-adaptive");
+        Thread thread = new Thread(() -> decode(gen), preserveVisibleFrame
+                ? "bili-video-" + sessionId + "-resume"
+                : "bili-video-" + sessionId + "-adaptive");
         thread.setDaemon(true);
         decodeThread = thread;
         thread.start();
@@ -582,8 +653,23 @@ final class VideoPlaybackInstance {
         if (!firstSubmitLogged) {
             firstSubmitLogged = true;
         }
-        pumpUploadOnRenderThread();
         List<BlockPos> stale = new ArrayList<>();
+        boolean renderable = false;
+        boolean prewarm = false;
+        for (BlockPos pos : projectorPositions) {
+            if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
+                stale.add(pos);
+                continue;
+            }
+            boolean projectorRenderable = VideoBillboardPreview.isProjectorScreenRenderable(minecraft, camera,
+                    projector, VideoBillboardPreview.viewDotThreshold());
+            boolean projectorPrewarm = projectorRenderable || VideoBillboardPreview.isProjectorScreenRenderable(
+                    minecraft, camera, projector, OFFSCREEN_PREWARM_DOT_THRESHOLD);
+            renderable |= projectorRenderable;
+            prewarm |= projectorPrewarm;
+        }
+        markVisibility(renderable, prewarm);
+        pumpUploadOnRenderThread();
         for (BlockPos pos : projectorPositions) {
             if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
                 stale.add(pos);
@@ -612,6 +698,45 @@ final class VideoPlaybackInstance {
         projectorPositions.removeAll(stale);
     }
 
+    private void markVisibility(boolean renderable, boolean prewarm) {
+        long nowNs = System.nanoTime();
+        prewarmVisible = prewarm;
+        if (renderable || prewarm) {
+            long offscreenSince = offscreenSinceNanoTime;
+            lastVisibleNanoTime = nowNs;
+            offscreenSinceNanoTime = 0L;
+            if (offscreenSince > 0L) {
+                maybeRestartForVisibleResume(nowNs - offscreenSince);
+            }
+            loggedOffscreenPause = false;
+            return;
+        }
+        if (offscreenSinceNanoTime == 0L) {
+            offscreenSinceNanoTime = nowNs;
+        }
+    }
+
+    private void maybeRestartForVisibleResume(long offscreenDurationNs) {
+        if (!running || OFFSCREEN_RESUME_RESTART_LAG_NANOS <= 0L) {
+            return;
+        }
+        long masterMillis = anchor.timeline().mediaMillis();
+        if (masterMillis < 0L) {
+            return;
+        }
+        long queuedMillis = queuedMediaMillis();
+        long displayedMillis = mediaMillis();
+        long bestVideoMillis = Math.max(queuedMillis, displayedMillis);
+        long lagNs = bestVideoMillis >= 0L ? (masterMillis - bestVideoMillis) * 1_000_000L : offscreenDurationNs;
+        if (lagNs < OFFSCREEN_RESUME_RESTART_LAG_NANOS) {
+            return;
+        }
+        long restartOffsetMillis = totalMillis > 0L ? Math.min(totalMillis, masterMillis) : masterMillis;
+        LOGGER.debug("视频会话离屏恢复重定位: session={}, offscreen={}ms, master={}ms, video={}ms, offset={}ms",
+                sessionId, offscreenDurationNs / 1_000_000L, masterMillis, bestVideoMillis, restartOffsetMillis);
+        restartDecoder(targetWidth, targetHeight, restartOffsetMillis, true);
+    }
+
     void renderYuvImmediate(RenderLevelStageEvent event, String route) {
         if (!hasFrame || yuvTextureSet == null || !VideoBillboardPreview.isCustomYuvShaderAvailable()
                 || !VideoBillboardPreview.shouldDrawYuvImmediateWithIris()) {
@@ -625,14 +750,18 @@ final class VideoPlaybackInstance {
         Camera camera = minecraft.gameRenderer.getMainCamera();
         List<BlockPos> stale = new ArrayList<>();
         boolean drew = false;
+        boolean prewarm = false;
         for (BlockPos pos : projectorPositions) {
             if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
                 stale.add(pos);
                 continue;
             }
+            prewarm |= VideoBillboardPreview.isProjectorScreenRenderable(minecraft, camera, projector,
+                    OFFSCREEN_PREWARM_DOT_THRESHOLD);
             drew |= VideoBillboardPreview.drawProjectorYuvImmediate(event, minecraft, camera, projector, yuvTextureSet,
                     route);
         }
+        markVisibility(drew, prewarm);
         projectorPositions.removeAll(stale);
         if (drew && !firstYuvImmediateLogged) {
             firstYuvImmediateLogged = true;
