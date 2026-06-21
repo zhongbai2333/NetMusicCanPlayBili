@@ -123,7 +123,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
     }
 
     @Override
-    protected void onStreamStarting() {
+    protected void onStreamReady() {
         ModernTurntablePlaybackTracker.markStreamStarted(pos, sessionId);
     }
 

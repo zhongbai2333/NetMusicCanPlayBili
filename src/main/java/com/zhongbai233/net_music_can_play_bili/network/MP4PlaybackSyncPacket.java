@@ -1,19 +1,17 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
-import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.client.MP4ClientPlayback;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.Identifier;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 import java.util.UUID;
 
 public record MP4PlaybackSyncPacket(UUID ownerId, UUID sourceId, int sourceType, int sourceEntityId,
         double sourceX, double sourceY, double sourceZ, boolean playing, int queueIndex, String playUrl, String rawUrl,
-    String songName, int durationSeconds, int volumePerMille, String sessionId, long elapsedMillis,
-    boolean headphoneRouted)
+        String songName, int durationSeconds, int volumePerMille, String sessionId, long elapsedMillis,
+        boolean headphoneRouted)
         implements CustomPacketPayload {
     public static final int SOURCE_PLAYER = 0;
     public static final int SOURCE_ITEM = 1;
@@ -21,7 +19,7 @@ public record MP4PlaybackSyncPacket(UUID ownerId, UUID sourceId, int sourceType,
     public static final int SOURCE_CONTAINER_ENTITY = 3;
 
     public static final Type<MP4PlaybackSyncPacket> TYPE = new Type<>(
-            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID, "mp4_playback_sync"));
+            NetworkPayloadIds.id("mp4_playback_sync"));
 
     private static final StreamCodec<RegistryFriendlyByteBuf, UUID> UUID_CODEC = new StreamCodec<>() {
         @Override
@@ -87,7 +85,7 @@ public record MP4PlaybackSyncPacket(UUID ownerId, UUID sourceId, int sourceType,
     public static MP4PlaybackSyncPacket stop(UUID ownerId, UUID sourceId, int queueIndex) {
         UUID normalizedSourceId = sourceId != null ? sourceId : ownerId;
         return new MP4PlaybackSyncPacket(ownerId, normalizedSourceId, SOURCE_PLAYER, -1, 0.0D, 0.0D, 0.0D,
-            false, queueIndex, "", "", "", 0, 0, "", 0L, false);
+                false, queueIndex, "", "", "", 0, 0, "", 0L, false);
     }
 
     @Override

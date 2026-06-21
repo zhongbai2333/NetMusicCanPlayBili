@@ -1,13 +1,11 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
-import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.client.MP4Client;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
@@ -19,9 +17,9 @@ import java.util.UUID;
 
 /** 服务端权威 MP4 聚焦界面状态响应。 */
 public record MP4OpenStatePacket(InteractionHand hand, UUID deviceId, MP4StatePacket state, long updatedGameTime,
-    boolean headphoneLinked, List<ItemStack> queue) implements CustomPacketPayload {
+        boolean headphoneLinked, List<ItemStack> queue) implements CustomPacketPayload {
     public static final Type<MP4OpenStatePacket> TYPE = new Type<>(
-            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID, "mp4_open_state"));
+            NetworkPayloadIds.id("mp4_open_state"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, MP4OpenStatePacket> STREAM_CODEC = new StreamCodec<>() {
         @Override
@@ -37,7 +35,7 @@ public record MP4OpenStatePacket(InteractionHand hand, UUID deviceId, MP4StatePa
                 queue.add(ItemStack.OPTIONAL_STREAM_CODEC.decode(buffer));
             }
             return new MP4OpenStatePacket(hand, deviceId, state, updatedGameTime, headphoneLinked,
-                List.copyOf(queue));
+                    List.copyOf(queue));
         }
 
         @Override
@@ -64,7 +62,7 @@ public record MP4OpenStatePacket(InteractionHand hand, UUID deviceId, MP4StatePa
     public static MP4OpenStatePacket fromEntry(InteractionHand hand, UUID deviceId,
             MP4DeviceStateStore.DeviceEntry entry) {
         return new MP4OpenStatePacket(hand, deviceId, MP4StatePacket.fromState(entry.state(), deviceId),
-            entry.updatedGameTime(), false, entry.queue());
+                entry.updatedGameTime(), false, entry.queue());
     }
 
     public static MP4OpenStatePacket fromStack(ServerLevel level, InteractionHand hand, UUID deviceId,
@@ -79,11 +77,11 @@ public record MP4OpenStatePacket(InteractionHand hand, UUID deviceId, MP4StatePa
         }
         boolean headphoneLinked = AudioLinkIndex.hasHeadphoneLinkedToMp4(deviceId);
         return new MP4OpenStatePacket(hand, deviceId, MP4StatePacket.fromState(entry.state(), deviceId),
-            entry.updatedGameTime(), headphoneLinked, queue);
+                entry.updatedGameTime(), headphoneLinked, queue);
     }
 
     public static void handle(MP4OpenStatePacket payload, IPayloadContext context) {
         context.enqueueWork(() -> MP4Client.receiveOpenState(payload.hand(), payload.deviceId(),
-            payload.state().toState(), payload.updatedGameTime(), payload.headphoneLinked(), payload.queue()));
+                payload.state().toState(), payload.updatedGameTime(), payload.headphoneLinked(), payload.queue()));
     }
 }

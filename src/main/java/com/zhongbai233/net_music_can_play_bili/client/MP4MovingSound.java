@@ -15,6 +15,7 @@ public class MP4MovingSound extends SyncedMediaSound {
     private static final Logger LOGGER = LogUtils.getLogger();
     private final UUID sourceId;
     private final boolean headphoneRouted;
+    private final long totalMillis;
     private float mp4Volume;
     private boolean finished;
 
@@ -23,13 +24,14 @@ public class MP4MovingSound extends SyncedMediaSound {
         super(songUrl, timeSecond, lyricRecord, sessionId, startOffsetMillis);
         this.sourceId = sourceId;
         this.headphoneRouted = headphoneRouted;
+        this.totalMillis = Math.max(0L, timeSecond) * 1000L;
         this.mp4Volume = Math.max(0.0F, Math.min(1.0F, volume));
         updatePositionAndAttenuation();
         LOGGER.trace("MP4 声音实例创建: source={} session={} headphoneRouted={} volume={} gain={} attenuation={}",
-            sourceId, this.sessionId, headphoneRouted, this.mp4Volume, volume, attenuation);
+                sourceId, this.sessionId, headphoneRouted, this.mp4Volume, volume, attenuation);
         MP4ClientPlayback.registerSound(sourceId, this.sessionId, this);
         SyncedStreamRecoveryRegistry.register(this.sessionId,
-            request -> MP4ClientPlayback.retryAfterStreamFailure(sourceId, this.sessionId, request.error()));
+                request -> MP4ClientPlayback.retryAfterStreamFailure(sourceId, this.sessionId, request.error()));
     }
 
     String sessionId() {
@@ -76,13 +78,14 @@ public class MP4MovingSound extends SyncedMediaSound {
         }
         tick++;
         if (tick == 1) {
-            LOGGER.trace("MP4 声音实例首 tick: source={} session={} headphoneRouted={} volume={} attenuation={} pos=({}, {}, {})",
-                sourceId, sessionId, headphoneRouted, volume, attenuation, x, y, z);
+            LOGGER.trace(
+                    "MP4 声音实例首 tick: source={} session={} headphoneRouted={} volume={} attenuation={} pos=({}, {}, {})",
+                    sourceId, sessionId, headphoneRouted, volume, attenuation, x, y, z);
         }
         long elapsedMillis = MP4ClientPlayback.elapsedMillis(sourceId, sessionId, startOffsetMillis + tick * 50L);
         int lyricTick = (int) Math.min(Integer.MAX_VALUE,
                 Math.max(0L, Math.round(Math.max(0L, elapsedMillis) / 50.0D)));
-        if (lyricTick > tickTimes + 50) {
+        if (totalMillis > 0L && lyricTick > tickTimes + 50) {
             MP4ClientPlayback.onSoundCompleted(sourceId, sessionId);
             stopAndFinish();
             return;
@@ -105,7 +108,14 @@ public class MP4MovingSound extends SyncedMediaSound {
     @Override
     protected void onStreamStarting() {
         LOGGER.trace("MP4 声音流开始创建: source={} session={} headphoneRouted={} urlHost={}",
-            sourceId, sessionId, headphoneRouted, songUrl.getHost());
+                sourceId, sessionId, headphoneRouted, songUrl.getHost());
+    }
+
+    @Override
+    protected void onStreamReady() {
+        MP4ClientPlayback.markSoundStarted(sourceId, sessionId, startOffsetMillis, totalMillis);
+        LOGGER.trace("MP4 声音流已就绪: source={} session={} headphoneRouted={} offset={}ms urlHost={}",
+                sourceId, sessionId, headphoneRouted, startOffsetMillis, songUrl.getHost());
     }
 
     @Override
@@ -123,8 +133,8 @@ public class MP4MovingSound extends SyncedMediaSound {
         y = pos.y;
         z = pos.z;
         attenuation = (headphoneRouted || MP4ClientPlayback.isLocalPlayerSource(sourceId))
-            ? Attenuation.NONE
-            : Attenuation.LINEAR;
+                ? Attenuation.NONE
+                : Attenuation.LINEAR;
         float gain = MP4ClientPlayback.perceivedGain(mp4Volume);
         volume = gain;
     }

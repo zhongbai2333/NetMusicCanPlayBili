@@ -16,6 +16,13 @@ public final class ModAttributes {
                     .setSentiment(Attribute.Sentiment.POSITIVE)
                     .setSyncable(true));
 
+    public static final DeferredHolder<Attribute, Attribute> HOLOGRAPHIC_GLASSES = ATTRIBUTES.register(
+            "holographic_glasses",
+            () -> new RangedAttribute("attribute.name.net_music_can_play_bili.holographic_glasses", 0.0D, 0.0D,
+                    1024.0D)
+                    .setSentiment(Attribute.Sentiment.POSITIVE)
+                    .setSyncable(true));
+
     private ModAttributes() {
     }
 }

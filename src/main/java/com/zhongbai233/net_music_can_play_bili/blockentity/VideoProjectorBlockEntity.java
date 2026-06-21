@@ -1,14 +1,10 @@
 package com.zhongbai233.net_music_can_play_bili.blockentity;
 
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.HolderLookup;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.network.protocol.Packet;
-import net.minecraft.network.protocol.game.ClientGamePacketListener;
-import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
-import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
@@ -18,13 +14,12 @@ import javax.annotation.Nullable;
 /**
  * 视频投影仪方块实体
  */
-public class VideoProjectorBlockEntity extends BlockEntity {
+public class VideoProjectorBlockEntity extends SyncedBlockEntity {
     private static final String LINK_KEY = "LinkedTarget";
     private static final String PROJ_YAW = "ProjYaw";
     private static final String PROJ_PITCH = "ProjPitch";
     private static final String PROJ_SCALE = "ProjScale";
     private static final String PROJ_HEIGHT = "ProjHeight";
-    private static final String PROJ_DISTANCE = "ProjDistance";
     private static final String PROJ_DISTANCE_X = "ProjDistanceX";
     private static final String PROJ_DISTANCE_Z = "ProjDistanceZ";
     private static final String PREFERRED_QUALITY = "PreferredQuality";
@@ -46,23 +41,26 @@ public class VideoProjectorBlockEntity extends BlockEntity {
     }
 
     public void linkTo(BlockPos turntablePos) {
-        this.linkedTurntablePos = turntablePos.immutable();
-        refreshClientLinkRegistration();
-        setChanged();
-        if (level != null && !level.isClientSide()) {
-            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+        if (level instanceof ServerLevel serverLevel) {
+            AudioLinkIndex.unregisterVideoProjector(serverLevel, worldPosition);
         }
+        this.linkedTurntablePos = turntablePos.immutable();
+        if (level instanceof ServerLevel serverLevel) {
+            AudioLinkIndex.registerVideoProjector(serverLevel, worldPosition, linkedTurntablePos);
+        }
+        refreshClientLinkRegistration();
+        markDirtyAndSync();
     }
 
     public void unlink() {
         if (level != null && level.isClientSide()) {
             com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry.unlink(worldPosition);
         }
-        this.linkedTurntablePos = null;
-        setChanged();
-        if (level != null && !level.isClientSide()) {
-            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+        if (level instanceof ServerLevel serverLevel) {
+            AudioLinkIndex.unregisterVideoProjector(serverLevel, worldPosition);
         }
+        this.linkedTurntablePos = null;
+        markDirtyAndSync();
     }
 
     @Nullable
@@ -145,13 +143,6 @@ public class VideoProjectorBlockEntity extends BlockEntity {
         setChanged();
     }
 
-    public void markDirtyAndSync() {
-        setChanged();
-        if (level != null && !level.isClientSide()) {
-            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
-        }
-    }
-
     @Override
     public void setRemoved() {
         super.setRemoved();
@@ -159,6 +150,9 @@ public class VideoProjectorBlockEntity extends BlockEntity {
             com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry.unlink(worldPosition);
             com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview
                     .stopIfProjector(worldPosition);
+        }
+        if (level instanceof ServerLevel serverLevel) {
+            AudioLinkIndex.unregisterVideoProjector(serverLevel, worldPosition);
         }
     }
 
@@ -186,11 +180,13 @@ public class VideoProjectorBlockEntity extends BlockEntity {
         this.projectionPitch = input.getFloatOr(PROJ_PITCH, 0.0F);
         this.projectionScale = input.getFloatOr(PROJ_SCALE, 1.0F);
         this.projectionHeight = input.getFloatOr(PROJ_HEIGHT, 1.8F);
-        float legacyDistance = input.getFloatOr(PROJ_DISTANCE, 0.0F);
-        this.projectionDistanceX = input.getFloatOr(PROJ_DISTANCE_X, legacyDistance);
+        this.projectionDistanceX = input.getFloatOr(PROJ_DISTANCE_X, 0.0F);
         this.projectionDistanceZ = input.getFloatOr(PROJ_DISTANCE_Z, 0.0F);
         this.preferredQuality = input.getIntOr(PREFERRED_QUALITY, DEFAULT_PREFERRED_QUALITY);
         refreshClientLinkRegistration();
+        if (level instanceof ServerLevel serverLevel && linkedTurntablePos != null) {
+            AudioLinkIndex.registerVideoProjector(serverLevel, worldPosition, linkedTurntablePos);
+        }
         if (level != null && level.isClientSide() && oldPreferredQuality != preferredQuality) {
             com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient.refreshProjector(worldPosition);
         }
@@ -205,14 +201,4 @@ public class VideoProjectorBlockEntity extends BlockEntity {
         }
     }
 
-    @Override
-    public CompoundTag getUpdateTag(HolderLookup.Provider registries) {
-        return saveWithoutMetadata(registries);
-    }
-
-    @Override
-    @Nullable
-    public Packet<ClientGamePacketListener> getUpdatePacket() {
-        return ClientboundBlockEntityDataPacket.create(this);
-    }
 }

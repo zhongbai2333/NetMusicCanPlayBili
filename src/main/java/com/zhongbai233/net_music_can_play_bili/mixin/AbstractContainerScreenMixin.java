@@ -17,6 +17,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(AbstractContainerScreen.class)
 public abstract class AbstractContainerScreenMixin<T extends AbstractContainerMenu> {
     @Shadow
+    protected T menu;
+
+    @Shadow
     protected Slot hoveredSlot;
 
     @Inject(method = "mouseScrolled", at = @At("HEAD"), cancellable = true)
@@ -35,8 +38,13 @@ public abstract class AbstractContainerScreenMixin<T extends AbstractContainerMe
         }
         MP4Item.State state = MP4Client.cachedStateFor(stack);
         int selected = Math.max(0, Math.min(queueSize - 1, state.selectedQueueIndex() + (scrollY < 0.0D ? 1 : -1)));
+        int menuSlotIndex = this.menu.slots.indexOf(this.hoveredSlot);
+        if (menuSlotIndex < 0) {
+            return;
+        }
+        MP4Client.selectQueueIndexLocally(stack, selected);
         if (Minecraft.getInstance().getConnection() != null) {
-            Minecraft.getInstance().getConnection().send(new MP4QueueSelectionPacket(this.hoveredSlot.index, selected));
+            Minecraft.getInstance().getConnection().send(new MP4QueueSelectionPacket(menuSlotIndex, selected));
         }
         cir.setReturnValue(true);
     }

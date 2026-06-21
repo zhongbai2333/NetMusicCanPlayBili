@@ -1,7 +1,9 @@
 package com.zhongbai233.net_music_can_play_bili.media.stream;
 
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliRequestHeaders;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliWbiSigner;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliCdnSelector;
 import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
 import org.slf4j.Logger;
 
@@ -13,16 +15,13 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 
 public final class HttpRangeClient {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_REDIRECTS = 5;
-        private static final long REQUEST_TIMEOUT_SECONDS = Math.max(5L, Long.getLong(
+    private static final long REQUEST_TIMEOUT_SECONDS = Math.max(5L, Long.getLong(
             "bili.media.http.request_timeout_seconds", 30L));
-    private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
     public CdnResponse get(URL url) throws IOException {
         return send(url, null, null);
@@ -35,6 +34,36 @@ public final class HttpRangeClient {
         return send(url, start, endInclusive);
     }
 
+    /** 只请求指定 URL，不走等价 CDN fallback；供已自行做 CDN race 的调用方使用。 */
+    public CdnResponse getRangeDirect(URL url, long start, long endInclusive) throws IOException {
+        return getRangeDirect(url, start, endInclusive, true);
+    }
+
+    public CdnResponse getRangeDirect(URL url, long start, long endInclusive, boolean persistCdnSuccess)
+            throws IOException {
+        if (start < 0 || endInclusive < start) {
+            throw new IllegalArgumentException("invalid range: " + start + "-" + endInclusive);
+        }
+        long started = System.currentTimeMillis();
+        try {
+            CdnResponse response = send(url, start, endInclusive, 0);
+            BiliRequestHeaders.recordBiliCdnResponse(url, response.statusCode());
+            if (response.statusCode() == 200 || response.statusCode() == 206) {
+                CdnHealthTracker.recordSuccess(url, System.currentTimeMillis() - started,
+                        Math.max(0L, response.contentLength()));
+                if (persistCdnSuccess) {
+                    BiliCdnSelector.recordSuccess(url.toString());
+                }
+            } else if (isRetryableStatus(response.statusCode())) {
+                CdnHealthTracker.recordFailure(url, CdnHealthTracker.FailureKind.HTTP_RETRYABLE);
+            }
+            return response;
+        } catch (IOException e) {
+            CdnHealthTracker.recordFailure(url, CdnHealthTracker.FailureKind.IO);
+            throw e;
+        }
+    }
+
     private CdnResponse send(URL url, Long start, Long endInclusive) throws IOException {
         List<URL> candidates = CdnUrlFallbacks.candidates(url);
         IOException lastError = null;
@@ -43,17 +72,20 @@ public final class HttpRangeClient {
             try {
                 long started = System.currentTimeMillis();
                 CdnResponse response = send(candidate, start, endInclusive, 0);
+                BiliRequestHeaders.recordBiliCdnResponse(candidate, response.statusCode());
                 if (isRetryableStatus(response.statusCode()) && i + 1 < candidates.size()) {
                     CdnHealthTracker.recordFailure(candidate, CdnHealthTracker.FailureKind.HTTP_RETRYABLE);
                     response.close();
-                    LOGGER.warn("CDN range request returned HTTP {}, retrying alternate host {} -> {} range={}-{}",
+                    LOGGER.warn("CDN range request returned HTTP {}, retrying alternate host {} -> {} range={}-{}{}",
                             response.statusCode(), safeHost(candidate), safeHost(candidates.get(i + 1)),
-                            start != null ? start : 0L, endInclusive != null ? endInclusive : -1L);
+                            start != null ? start : 0L, endInclusive != null ? endInclusive : -1L,
+                            bili403Hint(response.statusCode(), candidate));
                     continue;
                 }
                 if (response.statusCode() == 200 || response.statusCode() == 206) {
                     CdnHealthTracker.recordSuccess(candidate, System.currentTimeMillis() - started,
                             Math.max(0L, response.contentLength()));
+                    BiliCdnSelector.recordSuccess(candidate.toString());
                 }
                 return response;
             } catch (IOException e) {
@@ -73,13 +105,9 @@ public final class HttpRangeClient {
     private CdnResponse send(URL url, Long start, Long endInclusive, int redirects) throws IOException {
         URL requestUrl = PlaybackSync.strip(url);
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(requestUrl.toString()))
-                .header("User-Agent", USER_AGENT)
-            .header("Referer", refererFor(requestUrl))
-            .header("Origin", originFor(requestUrl))
-                .header("Accept", "*/*")
-                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
                 .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS))
                 .GET();
+        BiliRequestHeaders.applyBiliCdnHeaders(builder, requestUrl);
         if (start != null && endInclusive != null) {
             builder.header("Range", "bytes=" + start + "-" + endInclusive);
         }
@@ -127,27 +155,15 @@ public final class HttpRangeClient {
                 || statusCode == 429 || statusCode >= 500;
     }
 
-    private static String refererFor(URL url) {
-        return isBiliHost(url) ? "https://www.bilibili.com/" : "https://" + safeHost(url) + "/";
-    }
-
-    private static String originFor(URL url) {
-        return isBiliHost(url) ? "https://www.bilibili.com" : "https://" + safeHost(url);
-    }
-
-    private static boolean isBiliHost(URL url) {
-        String host = url.getHost();
-        if (host == null) {
-            return false;
-        }
-        String lower = host.toLowerCase(Locale.ROOT);
-        return lower.contains("bilibili") || lower.contains("bilivideo")
-                || lower.contains("hdslb") || lower.contains("mcdn");
-    }
-
     private static String safeHost(URL url) {
-        String host = url.getHost();
-        return host == null || host.isBlank() ? "localhost" : host;
+        return BiliRequestHeaders.safeHost(url);
+    }
+
+    private static String bili403Hint(int statusCode, URL url) {
+        if (statusCode != 403 || !BiliRequestHeaders.isBiliHost(url)) {
+            return "";
+        }
+        return "; possible Bilibili DASH URL expiry or anti-hotlink check, refresh playurl if all CDN candidates fail";
     }
 
     private static long parseLong(Optional<String> value) {

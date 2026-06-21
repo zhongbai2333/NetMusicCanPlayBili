@@ -111,9 +111,9 @@ public final class MP4DeviceLocationIndex {
             return direct;
         }
         if (ref.type() == HolderType.PLAYER
-            || ref.type() == HolderType.BLOCK_CONTAINER
-            || ref.type() == HolderType.ITEM_ENTITY
-            || ref.type() == HolderType.CONTAINER_ENTITY) {
+                || ref.type() == HolderType.BLOCK_CONTAINER
+                || ref.type() == HolderType.ITEM_ENTITY
+                || ref.type() == HolderType.CONTAINER_ENTITY) {
             Optional<ResolvedLocation> relocated = relocateFromBlock(level, ref, deviceId, gameTime);
             if (relocated.isPresent()) {
                 return relocated;
@@ -286,7 +286,8 @@ public final class MP4DeviceLocationIndex {
 
     private static Optional<ResolvedLocation> scanContainerEntities(ServerLevel level, UUID deviceId, BlockPos origin) {
         AABB area = new AABB(origin).inflate(CONTAINER_ENTITY_SEARCH_RADIUS);
-        for (Entity entity : level.getEntitiesOfClass(Entity.class, area, candidate -> candidate instanceof Container)) {
+        for (Entity entity : level.getEntitiesOfClass(Entity.class, area,
+                candidate -> candidate instanceof Container)) {
             if (!(entity instanceof Container container)) {
                 continue;
             }
@@ -377,7 +378,8 @@ public final class MP4DeviceLocationIndex {
             }
             totalNodes++;
             if (kind.canStore()) {
-                storageNodes.add(new StorageNode(node.pos(), node.depth(), score(kind, node.depth(), node.branchDepth())));
+                storageNodes
+                        .add(new StorageNode(node.pos(), node.depth(), score(kind, node.depth(), node.branchDepth())));
             }
             if (!kind.canTransit()) {
                 continue;
@@ -403,7 +405,8 @@ public final class MP4DeviceLocationIndex {
                 for (SearchNode next : nextNodes) {
                     NodeKind nextKind = classify(level, next.pos());
                     if (nextKind.canStore() && storageNodes.size() < INDEX_MAX_STORAGE_NODES) {
-                        storageNodes.add(new StorageNode(next.pos(), next.depth(), score(nextKind, next.depth(), next.branchDepth()) - 30));
+                        storageNodes.add(new StorageNode(next.pos(), next.depth(),
+                                score(nextKind, next.depth(), next.branchDepth()) - 30));
                     }
                 }
                 if (branchPoints > INDEX_MAX_TOTAL_BRANCH_POINTS) {

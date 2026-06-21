@@ -42,10 +42,15 @@ import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -68,6 +73,10 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     private static final long FMP4_SEEK_PREROLL_BYTES = 256 * 1024L;
     private static final long ALLOWED_URL_TTL_MILLIS = TimeUnit.MINUTES.toMillis(10);
     private static final long SEGMENT_BASE_TTL_MILLIS = TimeUnit.MINUTES.toMillis(30);
+    private static final int RANGE_RACE_MAX_CANDIDATES = Math.max(1,
+            Integer.getInteger("bili.audio.range_race.max_candidates", 4));
+    private static final long RANGE_RACE_TIMEOUT_MILLIS = Math.max(250L,
+            Long.getLong("bili.audio.range_race.timeout_ms", 2_500L));
     private static final int MAX_SEGMENT_BASE_ENTRIES = Integer.getInteger(
             "bili.audio.segment_base_cache.max_entries", 512);
     private static final int[] MP3_MPEG1_LAYER1_BITRATES = { 0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384,
@@ -89,6 +98,17 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             .followRedirects(HttpClient.Redirect.NEVER)
             .connectTimeout(java.time.Duration.ofSeconds(10))
             .build();
+    private static final ExecutorService RANGE_RACE_EXECUTOR = Executors.newFixedThreadPool(
+            RANGE_RACE_MAX_CANDIDATES, new ThreadFactory() {
+                private final AtomicInteger next = new AtomicInteger(1);
+
+                @Override
+                public Thread newThread(Runnable runnable) {
+                    Thread thread = new Thread(runnable, "bili-audio-range-race-" + next.getAndIncrement());
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            });
     private static final ConcurrentHashMap<String, PlaybackContextQueue> ALLOWED_URLS = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, SegmentBaseInfo> SEGMENT_BASE_BY_URL = new ConcurrentHashMap<>();
     private static final Set<ActiveStreamControl> ACTIVE_MODERN_STREAMS = ConcurrentHashMap.newKeySet();
@@ -213,6 +233,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
      */
     private AudioInputStream handleWithPipeline(URL url, PlaybackContext playbackContext)
             throws UnsupportedAudioFileException, IOException {
+        long started = System.currentTimeMillis();
         boolean modernTurntable = playbackContext != null;
         final float startOffsetSeconds = startOffsetSeconds(playbackContext);
 
@@ -240,6 +261,9 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
 
         try {
             awaitFormat(url, closed, bodyRef, worker, formatReady);
+            LOGGER.debug("HTTP 音频格式就绪: cost={}ms session={} offset={}s host={}",
+                    System.currentTimeMillis() - started,
+                    playbackContext != null ? playbackContext.sessionId() : "", startOffsetSeconds, url.getHost());
         } catch (IOException e) {
             closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipelineRef.get(), streamControl);
             throw e;
@@ -468,6 +492,9 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 HttpResponse.BodyHandlers.ofInputStream());
         int status = response.statusCode();
         if (!isHttpRedirect(status)) {
+            if (status == 200 || status == 206) {
+                BiliCdnSelector.recordSuccess(response.uri().toString());
+            }
             return response;
         }
 
@@ -500,27 +527,9 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(requestUrl.toString()))
                 .timeout(java.time.Duration.ofSeconds(20))
                 .GET()
-                .header("Range", probe ? "bytes=0-0" : "bytes=%d-".formatted(Math.max(0L, rangeOffset)))
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-                .header("Referer", refererFor(requestUrl))
-                .header("Origin", originFor(requestUrl))
-                .header("Accept", "*/*")
-                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+                .header("Range", probe ? "bytes=0-0" : "bytes=%d-".formatted(Math.max(0L, rangeOffset)));
+        BiliRequestHeaders.applyBiliCdnHeaders(builder, requestUrl);
         return builder;
-    }
-
-    private static String refererFor(URL url) {
-        return isBiliCdnHost(url) ? "https://www.bilibili.com/" : "https://" + safeHost(url) + "/";
-    }
-
-    private static String originFor(URL url) {
-        return isBiliCdnHost(url) ? "https://www.bilibili.com" : "https://" + safeHost(url);
-    }
-
-    private static String safeHost(URL url) {
-        String host = url.getHost();
-        return host == null || host.isBlank() ? "localhost" : host;
     }
 
     private static InputStream alignMp3Frame(InputStream stream, long rangeOffset)
@@ -787,6 +796,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             float targetSeconds) {
         ChunkPrefetchInputStream lastRange = null;
         try {
+            long started = System.currentTimeMillis();
             Fmp4RangeSeekSupport.InitSegment init = readFmp4InitSegment(url);
             long contentLength = init.contentLength();
             if (contentLength <= 0L) {
@@ -795,6 +805,8 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
 
             Fmp4StreamStart sidxStart = tryOpenFmp4SidxSeek(url, playbackContext, init, targetSeconds);
             if (sidxStart != null) {
+                LOGGER.debug("音频fMP4 seek 总耗时: mode=sidx cost={}ms target={}s host={}",
+                        System.currentTimeMillis() - started, targetSeconds, url.getHost());
                 return sidxStart;
             }
 
@@ -858,9 +870,10 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                     lastRange = null;
                     InputStream combined = new SequenceInputStream(new ByteArrayInputStream(init.bytes()), tail);
                     LOGGER.info(
-                            "音频fMP4 RangeSeek: target={}s fragment={}s residual={}s timelineStart={}s byte={} totalBytes={} host={}",
+                            "音频fMP4 RangeSeek: target={}s fragment={}s residual={}s timelineStart={}s byte={} totalBytes={} cost={}ms host={}",
                             targetSeconds, candidate.fragmentSeconds(), residualSeconds,
-                            playbackContext.startOffsetSeconds(), absoluteMoofOffset, contentLength, url.getHost());
+                            playbackContext.startOffsetSeconds(), absoluteMoofOffset, contentLength,
+                            System.currentTimeMillis() - started, url.getHost());
                     return new Fmp4StreamStart(combined, residualSeconds);
                 } finally {
                     if (lastRange == range) {
@@ -940,11 +953,78 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     }
 
     private static byte[] readRangeBytes(URL url, long start, long end) throws IOException {
+        return readRange(url, start, end).bytes();
+    }
+
+    private static RangeBytes readRange(URL url, long start, long end) throws IOException {
+        List<URL> candidates = CdnUrlFallbacks.candidates(url);
+        if (!BiliCdnSelector.hasPreferredHost(candidates) && candidates.size() > 1 && RANGE_RACE_MAX_CANDIDATES > 1) {
+            RangeBytes raced = readRangeRace(candidates, start, end);
+            if (raced != null) {
+                return raced;
+            }
+        }
+        return readRangeSingle(url, start, end);
+    }
+
+    private static RangeBytes readRangeRace(List<URL> candidates, long start, long end) throws IOException {
+        int count = Math.min(RANGE_RACE_MAX_CANDIDATES, candidates.size());
+        CompletableFuture<RangeBytes> first = new CompletableFuture<>();
+        List<CompletableFuture<?>> tasks = new java.util.ArrayList<>(count);
+        AtomicInteger failures = new AtomicInteger();
+        AtomicReference<IOException> lastError = new AtomicReference<>();
+        for (int i = 0; i < count; i++) {
+            URL candidate = candidates.get(i);
+            tasks.add(CompletableFuture.runAsync(() -> {
+                if (first.isDone()) {
+                    return;
+                }
+                try {
+                    RangeBytes bytes = readRangeSingle(candidate, start, end, false);
+                    first.complete(bytes);
+                } catch (IOException e) {
+                    lastError.set(e);
+                    if (failures.incrementAndGet() >= count) {
+                        first.completeExceptionally(lastError.get());
+                    }
+                }
+            }, RANGE_RACE_EXECUTOR));
+        }
+        try {
+            RangeBytes winner = first.get(RANGE_RACE_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+            BiliCdnSelector.recordSuccess(winner.url());
+            LOGGER.debug("音频小范围 CDN 赛马完成: range={}-{} bytes={} total={} host={}",
+                    start, end, winner.bytes().length, winner.totalLength(), winner.host());
+            return winner;
+        } catch (java.util.concurrent.TimeoutException e) {
+            LOGGER.debug("音频小范围 CDN 赛马超时，回退串行读取: range={}-{} timeout={}ms candidates={}",
+                    start, end, RANGE_RACE_TIMEOUT_MILLIS, count);
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("interrupted while racing audio range", e);
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof IOException io) {
+                throw io;
+            }
+            throw new IOException("audio range race failed", cause);
+        } finally {
+            tasks.forEach(task -> task.cancel(true));
+        }
+    }
+
+    private static RangeBytes readRangeSingle(URL url, long start, long end) throws IOException {
+        return readRangeSingle(url, start, end, true);
+    }
+
+    private static RangeBytes readRangeSingle(URL url, long start, long end, boolean persistCdnSuccess)
+            throws IOException {
         HttpRangeClient client = new HttpRangeClient();
-        try (HttpRangeClient.CdnResponse response = client.getRange(url, start, end)) {
+        try (HttpRangeClient.CdnResponse response = client.getRangeDirect(url, start, end, persistCdnSuccess)) {
             int status = response.statusCode();
             if (status != 206 && status != 200) {
-                throw new IOException("HTTP " + status + " while reading fMP4 sidx");
+                throw new IOException("HTTP " + status + " while reading fMP4 range");
             }
             long maxBytes = Math.max(1L, end - start + 1L);
             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(
@@ -962,11 +1042,26 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 out.write(buffer, 0, n);
                 remaining -= n;
             }
-            return out.toByteArray();
+            long totalLength = response.totalLength() > 0L ? response.totalLength() : response.contentLength();
+            return new RangeBytes(out.toByteArray(), totalLength, url.getHost(), url.toString());
         }
     }
 
+    private record RangeBytes(byte[] bytes, long totalLength, String host, String url) {
+    }
+
     private static Fmp4RangeSeekSupport.InitSegment readFmp4InitSegment(URL url) throws IOException {
+        SegmentBaseInfo info = segmentBaseInfo(url.toString());
+        if (info != null) {
+            RangeBytes initRange = readRange(url, info.initStart(), info.initEnd());
+            Fmp4RangeSeekSupport.InitSegment init = Fmp4RangeSeekSupport.extractInitSegment(initRange.bytes(),
+                    initRange.totalLength(), (moovPayload, moov) -> moov.timescale);
+            if (init != null && init.contentLength() > 0L) {
+                return init;
+            }
+            LOGGER.debug("fMP4 audio segment_base init unusable, falling back to probe: initRange={}-{} host={}",
+                    info.initStart(), info.initEnd(), url.getHost());
+        }
         HttpRangeClient client = new HttpRangeClient();
         try (HttpRangeClient.CdnResponse response = client.getRange(url, 0L, FMP4_INIT_PROBE_BYTES - 1L)) {
             int status = response.statusCode();

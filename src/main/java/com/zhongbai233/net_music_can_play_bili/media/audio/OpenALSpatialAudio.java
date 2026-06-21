@@ -827,8 +827,8 @@ public class OpenALSpatialAudio {
             if (!handleWarningLogged) {
                 handleWarningLogged = true;
                 LOGGER.warn(
-                    "[NetMusicCanPlayBili] Dolby 空间音频不可用：无法获取 Minecraft SoundEngine 的 OpenAL 句柄。"
-                        + "这通常是因为当前 Minecraft/NeoForge 版本与模组不兼容（SoundEngine/Library 内部字段名已变更）。"
+                        "[NetMusicCanPlayBili] Dolby 空间音频不可用：无法获取 Minecraft SoundEngine 的 OpenAL 句柄。"
+                                + "这通常是因为当前 Minecraft/NeoForge 版本与模组不兼容（SoundEngine/Library 内部字段名已变更）。"
                                 + "音频将自动降级为 FLAC/AAC 立体声。"
                                 + "具体异常: {}",
                         t.toString());

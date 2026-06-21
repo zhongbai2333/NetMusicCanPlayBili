@@ -2,6 +2,9 @@ package com.zhongbai233.net_music_can_play_bili.client;
 
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.ResolvedVideoStream;
+import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
 import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
@@ -152,7 +155,7 @@ public final class ModernTurntableVideoClient {
             return;
         }
         String cleanRawUrl = PlaybackSync.strip(rawUrl);
-        BiliApiClient.VideoSelection selection = BiliApiClient.parseStoredVideoSelection(cleanRawUrl);
+        BiliApiClient.VideoSelection selection = BiliVideoStreamResolver.selectionOrNull(cleanRawUrl);
         if (selection == null) {
             return;
         }
@@ -168,11 +171,19 @@ public final class ModernTurntableVideoClient {
             LATEST_SESSION_BY_TURNTABLE.put(immutableTurntablePos, sessionId);
         }
         List<VideoProjectorBlockEntity> projectors = findLinkedVideoProjectors(turntablePos);
-        if (projectors.isEmpty()) {
+        boolean holographicConsumer = HolographicGlassesClient.handlesTurntable(turntablePos);
+        if (projectors.isEmpty() && !holographicConsumer) {
             logDecision(sessionId, "stop-no-projector", turntablePos, sync.elapsedMillis(), 0, 0, 0L,
                     "no linked video projector");
             VideoBillboardPreview.stopIfSession(sessionId);
             forgetSession(sessionId);
+            return;
+        }
+        if (!isAudioReady(turntablePos, sessionId)) {
+            VideoBillboardPreview.stopIfSession(sessionId);
+            forgetSession(sessionId);
+            logDecision(sessionId, "wait-audio-ready", turntablePos, sync.elapsedMillis(), 0, 0, 0L,
+                    "video waits until matching audio stream is ready");
             return;
         }
         List<BlockPos> projectorPositions = projectors.stream()
@@ -286,8 +297,9 @@ public final class ModernTurntableVideoClient {
         PENDING_REQUEST_BY_SESSION.put(sessionId, new PendingVideoRequest(elapsedMillis, qualityCeiling, requestId));
         logDecision(sessionId, "schedule-resolve", turntablePos, elapsedMillis, qualityCeiling,
                 projectorPositions.size(), requestId, "async B站 video stream resolve with quality ceiling");
-        CompletableFuture.runAsync(() -> startResolved(selection, turntablePos, projectorPositions, qualityCeiling,
-                sync, requestNanoTime, requestId), VIDEO_RESOLVE_EXECUTOR)
+        CompletableFuture
+                .runAsync(() -> startResolved(cleanRawUrl, selection, turntablePos, projectorPositions, qualityCeiling,
+                        sync, requestNanoTime, requestId), VIDEO_RESOLVE_EXECUTOR)
                 .orTimeout(45, TimeUnit.SECONDS)
                 .exceptionally(error -> {
                     if (isLatestRequest(sessionId, requestId)) {
@@ -319,6 +331,18 @@ public final class ModernTurntableVideoClient {
         }
         String activeSession = ACTIVE_SESSION_BY_TURNTABLE.get(turntablePos);
         return sessionId.equals(activeSession);
+    }
+
+    private static boolean isAudioReady(BlockPos turntablePos, String sessionId) {
+        if (turntablePos == null || sessionId == null || sessionId.isBlank()) {
+            return false;
+        }
+        DolbyAudioRegistry.AudioTimeline timeline = DolbyAudioRegistry.getAudioTimeline(turntablePos);
+        String audioSessionId = timeline.sessionId();
+        if (audioSessionId != null && !audioSessionId.isBlank() && !audioSessionId.equals(sessionId)) {
+            return false;
+        }
+        return timeline.audibleMillis() >= 0L || timeline.mainFedMillis() >= 0L;
     }
 
     private static void rememberActiveSession(BlockPos turntablePos, String sessionId) {
@@ -359,24 +383,22 @@ public final class ModernTurntableVideoClient {
         return activeQualityCeiling != null && activeQualityCeiling >= requestedQualityCeiling;
     }
 
-    private static void startResolved(BiliApiClient.VideoSelection selection, BlockPos turntablePos,
+    private static void startResolved(String cleanRawUrl, BiliApiClient.VideoSelection selection, BlockPos turntablePos,
             List<BlockPos> projectorPositions,
             int qualityCeiling, PlaybackSync.Metadata sync, long requestNanoTime, long requestId) {
         try {
-            BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(selection.videoId(), selection.page());
-            BiliApiClient.VideoStream stream = BiliApiClient.getBestVideoStream(selection.videoId(), info.cid(),
-                    qualityCeiling);
+            ResolvedVideoStream stream = BiliVideoStreamResolver.resolve(cleanRawUrl, qualityCeiling, DEFAULT_FPS);
             if (!isLatestRequestForTurntable(sync.sessionId(), requestId, turntablePos)) {
                 return;
             }
-            int sourceWidth = Math.max(1, stream.width());
-            int sourceHeight = Math.max(1, stream.height());
-            int fps = Math.max(1, parseFrameRate(stream.frameRate()));
+            int sourceWidth = stream.sourceWidth();
+            int sourceHeight = stream.sourceHeight();
+            int fps = stream.fps();
             long elapsedMillis = normalizedElapsedMillis(sync);
             logDecision(sync.sessionId(), "resolved-start", turntablePos, elapsedMillis, qualityCeiling,
                     projectorPositions.size(), requestId,
                     "qualityCeiling=" + qualityCeiling + " actualQuality=" + stream.quality() + " title='"
-                            + info.displayTitle() + "' size=" + sourceWidth + "x" + sourceHeight + " fps=" + fps);
+                            + stream.title() + "' size=" + sourceWidth + "x" + sourceHeight + " fps=" + fps);
             // 这里记录的是“本次请求已满足的偏好档位”，不是 B 站实际返回的 qn。
             // 例如投影仪请求 127，但当前视频最高只有 116；后续同步包仍会继续请求 127。
             // 如果把 active/pending 写成 116，就会把“允许降级到 116”误判成 quality ceiling
@@ -388,7 +410,7 @@ public final class ModernTurntableVideoClient {
                 if (!isLatestRequestForTurntable(sync.sessionId(), requestId, turntablePos)) {
                     return;
                 }
-                VideoBillboardPreview.startSynced(stream.baseUrl(), sourceWidth,
+                VideoBillboardPreview.startSynced(stream.url(), sourceWidth,
                         sourceHeight, fps, stream.codecId(), sync.sessionId(), elapsedMillis, sync.totalMillis(),
                         projectorPositions,
                         turntablePos,
@@ -430,24 +452,6 @@ public final class ModernTurntableVideoClient {
             }
         }
         return projectors;
-    }
-
-    private static int parseFrameRate(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return DEFAULT_FPS;
-        }
-        String normalized = raw.trim();
-        try {
-            if (normalized.contains("/")) {
-                String[] parts = normalized.split("/", 2);
-                double numerator = Double.parseDouble(parts[0].trim());
-                double denominator = Double.parseDouble(parts[1].trim());
-                return denominator > 0.0D ? Math.max(1, (int) Math.round(numerator / denominator)) : DEFAULT_FPS;
-            }
-            return Math.max(1, (int) Math.round(Double.parseDouble(normalized)));
-        } catch (NumberFormatException e) {
-            return DEFAULT_FPS;
-        }
     }
 
     private static void logDecision(String sessionId, String action, BlockPos turntablePos, long elapsedMillis,

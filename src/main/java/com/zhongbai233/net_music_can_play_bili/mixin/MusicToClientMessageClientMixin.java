@@ -18,6 +18,7 @@ import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntableSound
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.sounds.SoundInstance;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -59,9 +60,9 @@ public abstract class MusicToClientMessageClientMixin {
                 return;
             }
 
-            ClientMediaPreparer.PreparedMedia prepared = ClientMediaPreparer.prepare(message.rawUrl(), message.url(),
-                    message.songName(), true, GeneralConfig.ENABLE_PLAYER_LYRICS.get());
-            LyricRecord lyricRecord = prepared.lyricRecord();
+            boolean loadLyrics = GeneralConfig.ENABLE_PLAYER_LYRICS.get();
+            ClientMediaPreparer.PreparedMedia prepared = ClientMediaPreparer.prepareAudioOnly(message.rawUrl(),
+                    message.url(), message.songName(), true);
             String playUrl = prepared.playUrl();
             long elapsedMillis = Math.max(0L, sync.elapsedMillis());
             long totalMillis = Math.max(0L, sync.totalMillis());
@@ -75,30 +76,31 @@ public abstract class MusicToClientMessageClientMixin {
             ModernTurntableVideoClient.syncFromPlayback(message.rawUrl(), message.pos(), sync);
             BiliPlaybackDiagnostics.beginPlayback(message.songName(), message.rawUrl(), syncedPlayUrl);
             LOGGER.debug(
-                    "现代唱片机客户端接管播放: song='{}' session={} pos={} elapsed={}ms total={}ms biliSelection={} lyric={} audioHost={} videoSync=scheduled",
+                    "现代唱片机客户端接管播放: song='{}' session={} pos={} elapsed={}ms total={}ms biliSelection={} lyricsAsync={} audioHost={} videoSync=scheduled",
                     message.songName(), sync.sessionId(), message.pos(), elapsedMillis, totalMillis, biliSelection,
-                    lyricRecord != null ? "ready" : "none", ClientMediaPreparer.hostOf(syncedPlayUrl));
-            LyricRecord finalLyricRecord = lyricRecord;
+                    loadLyrics, ClientMediaPreparer.hostOf(syncedPlayUrl));
             long startOffsetMillis = elapsedMillis;
+            if (loadLyrics) {
+                net_music_can_play_bili$loadModernLyricsAsync(message, sync.sessionId());
+            }
             MusicPlayManager.play(syncedPlayUrl, message.songName(),
-                    url -> net_music_can_play_bili$createSound(message, url, finalLyricRecord, sync.sessionId(),
+                    url -> net_music_can_play_bili$createSound(message, url, null, sync.sessionId(),
                             startOffsetMillis, true));
             ci.cancel();
             return;
         }
 
-        ClientMediaPreparer.PreparedMedia prepared = ClientMediaPreparer.prepare(message.rawUrl(), message.url(),
-            message.songName(), modernTurntable, GeneralConfig.ENABLE_PLAYER_LYRICS.get());
-        LyricRecord lyricRecord = prepared.lyricRecord();
-        LyricRecord finalLyricRecord = lyricRecord;
+        ClientMediaPreparer.PreparedMedia prepared = ClientMediaPreparer.prepareAudioOnly(message.rawUrl(),
+                message.url(),
+                message.songName(), modernTurntable);
         String playUrl = prepared.playUrl();
 
         BiliPlaybackDiagnostics.beginPlayback(message.songName(), message.rawUrl(), playUrl);
-        LOGGER.debug("B站/NetMusic 客户端接管播放: song='{}' modern={} biliSelection={} lyric={} audioHost={}",
-                message.songName(), modernTurntable, biliSelection, lyricRecord != null ? "ready" : "none",
-            ClientMediaPreparer.hostOf(playUrl));
+        LOGGER.debug("B站/NetMusic 客户端接管播放: song='{}' modern={} biliSelection={} lyric=not-blocking audioHost={}",
+                message.songName(), modernTurntable, biliSelection,
+                ClientMediaPreparer.hostOf(playUrl));
         MusicPlayManager.play(playUrl, message.songName(),
-                url -> net_music_can_play_bili$createSound(message, url, finalLyricRecord, sync.sessionId(),
+                url -> net_music_can_play_bili$createSound(message, url, null, sync.sessionId(),
                         sync.elapsedMillis(), modernTurntable));
         ci.cancel();
     }
@@ -107,6 +109,29 @@ public abstract class MusicToClientMessageClientMixin {
     private static boolean net_music_can_play_bili$isModernTurntable(MusicToClientMessage message) {
         var level = Minecraft.getInstance().level;
         return level != null && level.getBlockEntity(message.pos()) instanceof ModernTurntableBlockEntity;
+    }
+
+    @Unique
+    private static void net_music_can_play_bili$loadModernLyricsAsync(MusicToClientMessage message, String sessionId) {
+        ClientMediaPreparer.buildLyricAsync(message.rawUrl(), message.songName()).whenComplete((record, error) -> {
+            if (error != null || record == null) {
+                if (error != null) {
+                    LOGGER.debug("现代唱片机歌词后台解析失败: song='{}' session={} reason={}", message.songName(),
+                            sessionId, error.toString());
+                }
+                return;
+            }
+            Minecraft.getInstance().execute(() -> {
+                var level = Minecraft.getInstance().level;
+                if (level == null) {
+                    return;
+                }
+                BlockEntity blockEntity = level.getBlockEntity(message.pos());
+                if (blockEntity instanceof ModernTurntableBlockEntity turntable && turntable.isPlaying()) {
+                    turntable.setClientLyricRecord(record, sessionId);
+                }
+            });
+        });
     }
 
     @Unique

@@ -10,6 +10,7 @@ import com.zhongbai233.net_music_can_play_bili.init.ModAttributes;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
 import com.zhongbai233.net_music_can_play_bili.init.ModItems;
+import com.zhongbai233.net_music_can_play_bili.init.ModMenus;
 import com.zhongbai233.net_music_can_play_bili.network.ModernTurntableNetwork;
 import com.zhongbai233.net_music_can_play_bili.media.stream.TempFileByteSpool;
 import com.zhongbai233.net_music_can_play_bili.server.NetMusicBiliServerCommands;
@@ -36,10 +37,12 @@ public class NetMusicCanPlayBili {
         ModBlockEntities.BLOCK_ENTITY_TYPES.register(modEventBus);
         ModItems.ITEMS.register(modEventBus);
         ModItems.TABS.register(modEventBus);
+        ModMenus.MENU_TYPES.register(modEventBus);
         modEventBus.addListener(ModernTurntableNetwork::register);
         modEventBus.addListener(RegisterCapabilitiesEvent.class, this::registerCapabilities);
         NeoForge.EVENT_BUS.addListener(NetMusicBiliServerCommands::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener(PlaybackAuditManager::onServerTick);
+        NeoForge.EVENT_BUS.addListener(PlaybackAuditManager::onPlayerLoggedIn);
 
         modEventBus.addListener(Config::onLoad);
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);

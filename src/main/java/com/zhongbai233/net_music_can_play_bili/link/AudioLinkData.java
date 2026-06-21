@@ -78,6 +78,42 @@ public final class AudioLinkData {
                 customData -> customData.update(tag -> tag.remove(HEADPHONE_MP4)));
     }
 
+    public static void clearHeadphoneTurntable(ItemStack stack) {
+        if (stack.isEmpty()) {
+            return;
+        }
+        stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY,
+                customData -> customData.update(tag -> {
+                    tag.remove(HEADPHONE_TURNTABLE_X);
+                    tag.remove(HEADPHONE_TURNTABLE_Y);
+                    tag.remove(HEADPHONE_TURNTABLE_Z);
+                }));
+    }
+
+    public static int clearHeadphoneLinks(ItemStack stack) {
+        if (stack.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        if (readHeadphoneTurntable(stack) != null) {
+            count++;
+        }
+        if (readHeadphoneMp4(stack) != null) {
+            count++;
+        }
+        if (count <= 0) {
+            return 0;
+        }
+        stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY,
+                customData -> customData.update(tag -> {
+                    tag.remove(HEADPHONE_TURNTABLE_X);
+                    tag.remove(HEADPHONE_TURNTABLE_Y);
+                    tag.remove(HEADPHONE_TURNTABLE_Z);
+                    tag.remove(HEADPHONE_MP4);
+                }));
+        return count;
+    }
+
     public static boolean headphoneLinkedToMp4(ItemStack stack, UUID deviceId) {
         return deviceId != null && deviceId.equals(readHeadphoneMp4(stack));
     }

@@ -59,15 +59,13 @@ public final class YuvVideoRenderTypes {
                     YUV_SHADER_DEBUG);
         }
         if (IrisShaderpackCompat.shouldRegisterThreePlaneYuvPipeline()) {
-            // Iris 在 pipeline 注册时会立刻尝试自动分类；先显式分配，避免它先把我们的 YUV/NV12
-            // pipeline 粗略匹配成其他 entity pass 后再接管错误的 shader 程序。
+            // 注册前先分配 Iris 程序，避免 YUV/NV12 被误归类到其他 entity pass。
             IrisShaderpackCompat.assignYuvPipelineIfRequested(YUV420P_ENTITY);
             event.registerPipeline(YUV420P_ENTITY);
             IrisShaderpackCompat.assignYuvPipelineIfRequested(NV12_ENTITY);
             event.registerPipeline(NV12_ENTITY);
         }
-        // 单采样兼容降级路径：仅在用户显式禁用三平面 Iris YUV 时注册，避免部分
-        // 光影包对 Sampler1/2 的校验导致主渲染阶段失败。
+        // 单采样降级路径：只在禁用三平面 Iris YUV 时注册。
         if (IrisShaderpackCompat.shouldRegisterTexturedProbePipeline()) {
             event.registerPipeline(YUV420P_TEXTURED_PROBE_ENTITY);
         }
@@ -84,8 +82,7 @@ public final class YuvVideoRenderTypes {
                 .withShaderDefine("NO_OVERLAY")
                 .withShaderDefine("ALPHA_CUTOUT", 0.1F)
                 .withShaderDefine("PER_FACE_LIGHTING")
-                // 视频四边形本身就是全亮表面。保持此 pass 不透明且写入颜色，避免 shaderpack
-                // 意外把它分类成半透明/噪声几何体。
+                // 视频面片按全亮不透明表面处理，减少光影包重分类风险。
                 .withColorTargetState(ColorTargetState.DEFAULT)
                 .withDepthStencilState(YUV_NO_DEPTH_WRITE
                         ? new DepthStencilState(CompareOp.LESS_THAN_OR_EQUAL, false)
@@ -107,15 +104,11 @@ public final class YuvVideoRenderTypes {
         return builder.build();
     }
 
-    static RenderType yuv420pEntity(Identifier yTexture, Identifier uTexture, Identifier vTexture) {
+    public static RenderType yuv420pEntity(Identifier yTexture, Identifier uTexture, Identifier vTexture) {
         IrisShaderpackCompat.prepareYuvPipelineForCurrentShaderpackState(YUV420P_ENTITY,
                 YUV420P_TEXTURED_PROBE_ENTITY);
-        // 不缓存 YUV RenderType：视频分辨率变化时会重建三张动态 RED8 纹理。Iris shaderpack
-        // 激活时，如果复用旧 RenderSetup，可能留下过期 sampler 绑定，并在下一次绘制时因
-        // "Missing sampler Sampler1" 崩溃。因此每次提交都重新创建这个很小的 RenderType 包装。
-        // sampler 名称保持为 Sampler0/1/2，而不是自定义 SamplerY/U/V：Iris shaderpack 程序分配
-        // 可能把此 pipeline 重映射到 TEXTURED/entity 系列程序，Minecraft 会按这些原版 sampler 名
-        // 校验绑定。fragment shader 分别把 Sampler0/1/2 当作 Y/U/V 使用。
+        // 不缓存 YUV RenderType：动态纹理变化时重建绑定，避免 Iris 复用过期 sampler。
+        // 采样器沿用 Sampler0/1/2，兼容 Iris 对原版 sampler 名的校验。
         return RenderType.create(
                 "bili_yuv420p_entity",
                 RenderSetup.builder(YUV420P_ENTITY)
@@ -125,7 +118,7 @@ public final class YuvVideoRenderTypes {
                         .createRenderSetup());
     }
 
-        public static RenderType nv12Entity(Identifier yTexture, Identifier uvTexture, Identifier placeholderTexture) {
+    public static RenderType nv12Entity(Identifier yTexture, Identifier uvTexture, Identifier placeholderTexture) {
         IrisShaderpackCompat.prepareYuvPipelineForCurrentShaderpackState(NV12_ENTITY,
                 YUV420P_TEXTURED_PROBE_ENTITY);
         return RenderType.create(
@@ -153,7 +146,7 @@ public final class YuvVideoRenderTypes {
                         .createRenderSetup());
     }
 
-        public static RenderType videoRgbaEntity(Identifier texture) {
+    public static RenderType videoRgbaEntity(Identifier texture) {
         return RGBA_ENTITY_CACHE.computeIfAbsent(texture, key -> {
             LOGGER.debug("创建视频 RGBA Iris 兼容 RenderType: texture={}, pipeline=ENTITY_SOLID, samplers=Sampler0/1/2",
                     key);
@@ -161,10 +154,7 @@ public final class YuvVideoRenderTypes {
                     "bili_video_rgba_entity",
                     RenderSetup.builder(RenderPipelines.ENTITY_SOLID)
                             .withTexture("Sampler0", key)
-                            // MC26 entity pipeline 会声明 Sampler1/Sampler2。Iris shaderpack 程序可能要求
-                            // 每个声明过的 sampler 都有绑定，即使只是简单的 RGBA 视频四边形也一样。
-                            // 因此绑定无害占位纹理，并刻意保持这个 RenderType 最小化（无
-                            // overlay/outline/crumbling），避免 shaderpack fallback 模式下触发额外 Iris 旁路。
+                            // 绑定占位 sampler，避免 Iris 校验 Sampler1/2 时失败。
                             .withTexture("Sampler1", key)
                             .withTexture("Sampler2", key)
                             .useLightmap()

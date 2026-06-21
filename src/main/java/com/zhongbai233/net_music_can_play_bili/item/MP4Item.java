@@ -1,15 +1,15 @@
 package com.zhongbai233.net_music_can_play_bili.item;
 
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliSongInfoSanitizer;
 import com.zhongbai233.net_music_can_play_bili.client.tooltip.MP4QueueTooltip;
 import com.zhongbai233.net_music_can_play_bili.client.MP4ClientHooks;
+import com.zhongbai233.net_music_can_play_bili.network.MP4DeviceIdentity;
 import com.zhongbai233.net_music_can_play_bili.network.MP4DeviceStateStore;
-import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackSyncManager;
 import net.minecraft.core.NonNullList;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.SlotAccess;
@@ -42,7 +42,7 @@ public class MP4Item extends Item {
     public static final int MAX_QUEUE_SIZE = 18;
 
     public MP4Item(Properties properties) {
-        super(properties);
+        super(properties.stacksTo(1));
     }
 
     @Override
@@ -51,17 +51,8 @@ public class MP4Item extends Item {
                 || (hand == InteractionHand.MAIN_HAND && player.getOffhandItem().getItem() instanceof MP4Item)) {
             return InteractionResult.PASS;
         }
-        if (player.isShiftKeyDown()) {
-            if (!level.isClientSide() && player instanceof ServerPlayer serverPlayer) {
-                UUID deviceId = getOrCreateDeviceId(player.getItemInHand(hand));
-                int count = MP4PlaybackSyncManager.unlinkAllHeadphones(serverPlayer, deviceId);
-                player.sendSystemMessage(Component.translatable(
-                        "message.net_music_can_play_bili.mp4.headphones_unlinked", count));
-            }
-            return InteractionResult.SUCCESS;
-        }
         if (!level.isClientSide()) {
-            getOrCreateDeviceId(player.getItemInHand(hand));
+            MP4DeviceIdentity.getOrCreateUnique((ServerLevel) level, (ServerPlayer) player, player.getItemInHand(hand));
         }
         if (level.isClientSide()) {
             MP4ClientHooks.openFocusScreen(hand);
@@ -256,7 +247,7 @@ public class MP4Item extends Item {
             }
             compound.read(DATA_QUEUE_STACK, ItemStack.OPTIONAL_CODEC)
                     .filter(MP4Item::isNetMusicDisc)
-                    .ifPresent(itemStack -> result.add(itemStack.copyWithCount(1)));
+                    .ifPresent(itemStack -> result.add(BiliSongInfoSanitizer.sanitizeDisc(itemStack)));
             if (result.size() >= MAX_QUEUE_SIZE) {
                 break;
             }
@@ -276,7 +267,7 @@ public class MP4Item extends Item {
         if (queue.size() >= MAX_QUEUE_SIZE) {
             return false;
         }
-        queue.add(discStack.copyWithCount(1));
+        queue.add(BiliSongInfoSanitizer.sanitizeDisc(discStack));
         writeQueue(mp4Stack, queue);
         discStack.shrink(1);
         return true;
@@ -300,7 +291,7 @@ public class MP4Item extends Item {
                 continue;
             }
             CompoundTag entry = new CompoundTag();
-            entry.store(DATA_QUEUE_STACK, ItemStack.OPTIONAL_CODEC, disc.copyWithCount(1));
+            entry.store(DATA_QUEUE_STACK, ItemStack.OPTIONAL_CODEC, BiliSongInfoSanitizer.sanitizeDisc(disc));
             listTag.add(entry);
         }
         stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY,
@@ -314,7 +305,10 @@ public class MP4Item extends Item {
                 || !(mp4Stack.getItem() instanceof MP4Item)) {
             return;
         }
-        UUID deviceId = getOrCreateDeviceId(mp4Stack);
+        UUID deviceId = MP4DeviceIdentity.getOrCreateUnique(level, serverPlayer, mp4Stack);
+        if (deviceId == null) {
+            return;
+        }
         MP4DeviceStateStore.syncQueueCopy(level, deviceId, mp4Stack);
     }
 

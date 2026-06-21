@@ -51,17 +51,14 @@ public final class BiliWbiSigner {
                 return cachedKey;
             }
 
-            HttpRequest req = HttpRequest.newBuilder()
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
                     .uri(URI.create("https://api.bilibili.com/x/web-interface/nav"))
-                    .header("User-Agent",
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-                    .header("Referer", "https://www.bilibili.com/")
-                    .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
                     .timeout(Duration.ofSeconds(10))
-                    .GET()
-                    .build();
+                    .GET();
+            BiliRequestHeaders.applyWebApiHeaders(builder);
+            HttpRequest request = builder.build();
 
-            HttpResponse<String> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            HttpResponse<String> resp = HTTP.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (resp.statusCode() != 200) {
                 throw new RuntimeException("B站 nav 接口返回 HTTP " + resp.statusCode());
             }

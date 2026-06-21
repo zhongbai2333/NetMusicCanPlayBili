@@ -4,7 +4,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 
@@ -18,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /** 音频路由链接的服务端反向索引。 */
 public final class AudioLinkIndex {
     private static final Map<ResourceKey<Level>, Map<BlockPos, Set<BlockPos>>> SPEAKERS_BY_TURNTABLE = new ConcurrentHashMap<>();
+    private static final Map<ResourceKey<Level>, Map<BlockPos, Set<BlockPos>>> VIDEO_PROJECTORS_BY_TURNTABLE = new ConcurrentHashMap<>();
     private static final Map<UUID, Set<UUID>> HEADPHONE_PLAYERS_BY_MP4 = new ConcurrentHashMap<>();
     private static final Map<UUID, UUID> MP4_BY_HEADPHONE_PLAYER = new ConcurrentHashMap<>();
     private static final Map<UUID, Set<UUID>> HEADPHONE_OWNERS_BY_MP4 = new ConcurrentHashMap<>();
@@ -62,6 +62,44 @@ public final class AudioLinkIndex {
         Map<BlockPos, Set<BlockPos>> byTurntable = SPEAKERS_BY_TURNTABLE.get(level.dimension());
         Set<BlockPos> speakers = byTurntable != null ? byTurntable.get(turntablePos) : null;
         return speakers != null && !speakers.isEmpty();
+    }
+
+    public static void registerVideoProjector(ServerLevel level, BlockPos projectorPos, BlockPos turntablePos) {
+        if (level == null || projectorPos == null || turntablePos == null) {
+            return;
+        }
+        unregisterVideoProjector(level, projectorPos);
+        VIDEO_PROJECTORS_BY_TURNTABLE
+                .computeIfAbsent(level.dimension(), ignored -> new ConcurrentHashMap<>())
+                .computeIfAbsent(turntablePos.immutable(), ignored -> ConcurrentHashMap.newKeySet())
+                .add(projectorPos.immutable());
+    }
+
+    public static void unregisterVideoProjector(ServerLevel level, BlockPos projectorPos) {
+        if (level == null || projectorPos == null) {
+            return;
+        }
+        Map<BlockPos, Set<BlockPos>> byTurntable = VIDEO_PROJECTORS_BY_TURNTABLE.get(level.dimension());
+        if (byTurntable == null) {
+            return;
+        }
+        BlockPos immutableProjectorPos = projectorPos.immutable();
+        byTurntable.entrySet().removeIf(entry -> {
+            entry.getValue().remove(immutableProjectorPos);
+            return entry.getValue().isEmpty();
+        });
+        if (byTurntable.isEmpty()) {
+            VIDEO_PROJECTORS_BY_TURNTABLE.remove(level.dimension(), byTurntable);
+        }
+    }
+
+    public static boolean hasVideoProjectorLinkedTo(ServerLevel level, BlockPos turntablePos) {
+        if (level == null || turntablePos == null) {
+            return false;
+        }
+        Map<BlockPos, Set<BlockPos>> byTurntable = VIDEO_PROJECTORS_BY_TURNTABLE.get(level.dimension());
+        Set<BlockPos> projectors = byTurntable != null ? byTurntable.get(turntablePos) : null;
+        return projectors != null && !projectors.isEmpty();
     }
 
     public static void updatePlayerHeadphones(ServerPlayer player) {
@@ -185,7 +223,7 @@ public final class AudioLinkIndex {
     }
 
     private static UUID linkedMp4(ServerPlayer player) {
-        ItemStack head = player.getItemBySlot(EquipmentSlot.HEAD);
+        ItemStack head = EquippedMediaItems.firstHeadphones(player);
         if (!HeadphoneAbility.has(head)) {
             return null;
         }
@@ -194,7 +232,7 @@ public final class AudioLinkIndex {
 
     private static Set<UUID> linkedMp4s(ServerPlayer player) {
         Set<UUID> deviceIds = new HashSet<>();
-        addLinkedMp4(deviceIds, player.getItemBySlot(EquipmentSlot.HEAD));
+        EquippedMediaItems.forEachEquipped(player, stack -> addLinkedMp4(deviceIds, stack));
         ItemStack carried = player.containerMenu != null ? player.containerMenu.getCarried() : ItemStack.EMPTY;
         addLinkedMp4(deviceIds, carried);
         var inventory = player.getInventory();

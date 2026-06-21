@@ -5,7 +5,6 @@ import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
 import java.net.URI;
 import java.net.URL;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -68,7 +67,6 @@ public final class CdnUrlFallbacks {
                 addUrl(result, url);
             }
         }
-        result.sort(Comparator.comparingDouble(CdnHealthTracker::score));
         return result.isEmpty() ? List.of(primary) : result;
     }
 

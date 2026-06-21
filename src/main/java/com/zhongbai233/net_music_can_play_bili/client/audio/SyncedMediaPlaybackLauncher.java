@@ -27,8 +27,8 @@ public final class SyncedMediaPlaybackLauncher {
     public static LaunchResult prepare(String rawUrl, String playUrl, String songName, boolean allowDolby,
             boolean enableLyrics, String sessionId, long elapsedMillis, long totalMillis, BlockPos pos,
             UUID ownerId) {
-        ClientMediaPreparer.PreparedMedia prepared = ClientMediaPreparer.prepare(rawUrl, playUrl, songName,
-                allowDolby, enableLyrics);
+        ClientMediaPreparer.PreparedMedia prepared = ClientMediaPreparer.prepareAudioOnly(rawUrl, playUrl, songName,
+                allowDolby);
         return fromPrepared(rawUrl, songName, prepared, playUrl, sessionId, elapsedMillis, totalMillis, pos, ownerId);
     }
 

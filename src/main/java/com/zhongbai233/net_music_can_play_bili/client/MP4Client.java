@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.client;
 import com.zhongbai233.net_music_can_play_bili.gui.MP4FocusScreen;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import com.zhongbai233.net_music_can_play_bili.network.MP4EnsureDeviceIdPacket;
+import com.zhongbai233.net_music_can_play_bili.network.MP4EnsureInventoryDeviceIdPacket;
 import com.zhongbai233.net_music_can_play_bili.network.MP4StatePacket;
 import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackControlPacket;
 import net.minecraft.client.Minecraft;
@@ -44,9 +45,27 @@ public final class MP4Client {
             ensureCooldownTicks--;
             return;
         }
-        boolean requested = ensureHeldDeviceId(minecraft, InteractionHand.MAIN_HAND);
+        boolean requested = ensureHotbarDeviceIds(minecraft);
         requested |= ensureHeldDeviceId(minecraft, InteractionHand.OFF_HAND);
         ensureCooldownTicks = requested ? 10 : 20;
+    }
+
+    private static boolean ensureHotbarDeviceIds(Minecraft minecraft) {
+        int hotbarSlots = Math.min(9, minecraft.player.getInventory().getContainerSize());
+        boolean requested = false;
+        for (int slot = 0; slot < hotbarSlots; slot++) {
+            ItemStack stack = minecraft.player.getInventory().getItem(slot);
+            if (!(stack.getItem() instanceof MP4Item)) {
+                continue;
+            }
+            UUID deviceId = MP4Item.readDeviceId(stack);
+            if (deviceId != null && DEVICE_STATES.containsKey(deviceId)) {
+                continue;
+            }
+            minecraft.getConnection().send(new MP4EnsureInventoryDeviceIdPacket(slot));
+            requested = true;
+        }
+        return requested;
     }
 
     private static boolean ensureHeldDeviceId(Minecraft minecraft, InteractionHand hand) {
@@ -96,6 +115,36 @@ public final class MP4Client {
         if (MP4FocusState.activeFor(hand) && focusedStateSyncRequested) {
             fastSyncTicks = 0;
         }
+    }
+
+    public static void receiveContainerDeviceId(int containerSlotIndex, UUID deviceId) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.player == null || deviceId == null || minecraft.player.containerMenu == null) {
+            return;
+        }
+        if (containerSlotIndex < 0 || containerSlotIndex >= minecraft.player.containerMenu.slots.size()) {
+            return;
+        }
+        ItemStack stack = minecraft.player.containerMenu.slots.get(containerSlotIndex).getItem();
+        if (!(stack.getItem() instanceof MP4Item)) {
+            return;
+        }
+        MP4Item.writeDeviceId(stack, deviceId);
+    }
+
+    public static void receiveInventoryDeviceId(int inventorySlot, UUID deviceId) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.player == null || deviceId == null) {
+            return;
+        }
+        if (inventorySlot < 0 || inventorySlot >= Math.min(9, minecraft.player.getInventory().getContainerSize())) {
+            return;
+        }
+        ItemStack stack = minecraft.player.getInventory().getItem(inventorySlot);
+        if (!(stack.getItem() instanceof MP4Item)) {
+            return;
+        }
+        MP4Item.writeDeviceId(stack, deviceId);
     }
 
     public static void receiveOpenState(InteractionHand hand, UUID deviceId, MP4Item.State state, long updatedGameTime,
@@ -165,6 +214,23 @@ public final class MP4Client {
         UUID deviceId = MP4Item.readDeviceId(stack);
         MP4Item.State state = deviceId != null ? DEVICE_STATES.get(deviceId) : null;
         return state != null ? state : MP4Item.State.DEFAULT;
+    }
+
+    public static void selectQueueIndexLocally(ItemStack stack, int selectedQueueIndex) {
+        UUID deviceId = MP4Item.readDeviceId(stack);
+        if (deviceId == null) {
+            return;
+        }
+        MP4Item.State old = cachedStateFor(stack);
+        int queueSize = Math.max(1, MP4Item.queueSize(stack));
+        int selected = Math.max(0, Math.min(queueSize - 1, selectedQueueIndex));
+        int progressPerMille = selected == old.selectedQueueIndex() ? old.progressPerMille() : 0;
+        DEVICE_STATES.put(deviceId, new MP4Item.State(old.playing(), old.shuffle(), old.videoEnabled(),
+                old.landscape(), old.qualityIndex(), selected, old.queueScrollOffset(), old.volumePerMille(),
+                old.repeatMode(), old.playlistOpen(), old.lyricsEnabled(), old.subtitleMode(),
+                old.subtitleAiEnabled(), progressPerMille, old.rotationHintShown()));
+        DEVICE_STATE_TIMES.putIfAbsent(deviceId, 0L);
+        DEVICE_QUEUES.putIfAbsent(deviceId, MP4Item.readQueue(stack));
     }
 
     public static List<ItemStack> cachedQueueFor(ItemStack stack) {

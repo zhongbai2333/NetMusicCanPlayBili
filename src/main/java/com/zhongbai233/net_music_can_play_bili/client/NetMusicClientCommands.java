@@ -8,6 +8,7 @@ import com.mojang.brigadier.context.CommandContext;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliConfig;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.gui.HolographicScreenConfigTestScreen;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
@@ -61,8 +62,25 @@ public final class NetMusicClientCommands {
 
         dispatcher.register(literal("netmusicbili")
                 .then(literal("status").executes(NetMusicClientCommands::showPlaybackStatus))
+                .then(literal("hologlass")
+                        .then(literal("config").executes(NetMusicClientCommands::openHolographicGlassesConfig))
+                        .then(literal("gui").executes(NetMusicClientCommands::openHolographicScreenConfigTest)))
                 .then(bench)
                 .then(dolby));
+    }
+
+    private static int openHolographicGlassesConfig(CommandContext<CommandSourceStack> ctx) {
+        Minecraft minecraft = Minecraft.getInstance();
+        minecraft.execute(() -> minecraft.setScreen(new HolographicScreenConfigTestScreen(true)));
+        feedback(Component.literal("已打开全息眼镜配置界面"));
+        return 1;
+    }
+
+    private static int openHolographicScreenConfigTest(CommandContext<CommandSourceStack> ctx) {
+        Minecraft minecraft = Minecraft.getInstance();
+        minecraft.execute(() -> minecraft.setScreen(new HolographicScreenConfigTestScreen()));
+        feedback(Component.literal("已打开全息屏幕配置测试界面"));
+        return 1;
     }
 
     private static void feedback(Component msg) {

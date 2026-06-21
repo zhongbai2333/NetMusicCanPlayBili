@@ -11,6 +11,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -18,7 +20,6 @@ import java.util.concurrent.CompletableFuture;
  */
 public final class BiliLoginManager {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 
     private String qrcodeKey;
     private String qrUrl;
@@ -43,10 +44,11 @@ public final class BiliLoginManager {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 String url = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate";
-                HttpRequest req = HttpRequest.newBuilder(URI.create(url))
-                        .header("User-Agent", UA)
+                HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
                         .timeout(Duration.ofSeconds(10))
-                        .GET().build();
+                        .GET();
+                BiliRequestHeaders.applyWebApiHeaders(builder);
+                HttpRequest req = builder.build();
                 HttpResponse<String> resp = BiliWbiSigner.HTTP.send(req,
                         HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
                 JsonObject root = JsonParser.parseString(resp.body()).getAsJsonObject();
@@ -71,10 +73,11 @@ public final class BiliLoginManager {
             try {
                 String url = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key="
                         + URLEncoder.encode(qrcodeKey, StandardCharsets.UTF_8);
-                HttpRequest req = HttpRequest.newBuilder(URI.create(url))
-                        .header("User-Agent", UA)
+                HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
                         .timeout(Duration.ofSeconds(10))
-                        .GET().build();
+                        .GET();
+                BiliRequestHeaders.applyWebApiHeaders(builder);
+                HttpRequest req = builder.build();
                 HttpResponse<String> resp = BiliWbiSigner.HTTP.send(req,
                         HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
                 JsonObject root = JsonParser.parseString(resp.body()).getAsJsonObject();
@@ -89,21 +92,28 @@ public final class BiliLoginManager {
                     case 86090:
                         return State.SCANNED;
                     case 0:
-                        // 从 Set-Cookie 中提取 SESSDATA
+                        // 从 Set-Cookie 中提取尽可能完整的 Web Cookie，SESSDATA 负责登录态，
+                        // buvid/bili_jct/DedeUserID 等字段可降低后续 Web API/CDN 风控概率。
                         var headers = resp.headers();
+                        Map<String, String> cookiePairs = new LinkedHashMap<>();
+                        String sessdata = "";
                         for (String setCookie : headers.allValues("Set-Cookie")) {
-                            if (setCookie.startsWith("SESSDATA=")) {
-                                String sessdata = setCookie.substring("SESSDATA=".length());
-                                int semicolon = sessdata.indexOf(';');
-                                if (semicolon > 0)
-                                    sessdata = sessdata.substring(0, semicolon);
-                                BiliApiClient.sessdata = sessdata;
-                                BiliConfig.save();
-                                LOGGER.info("B站登录成功, SESSDATA 已保存到本地");
-                                return State.SUCCESS;
+                            CookiePair pair = parseCookiePair(setCookie);
+                            if (pair != null) {
+                                cookiePairs.put(pair.name(), pair.value());
+                                if ("SESSDATA".equals(pair.name())) {
+                                    sessdata = pair.value();
+                                }
                             }
                         }
-                        LOGGER.warn("登录成功但未找到 SESSDATA cookie");
+                        if (!sessdata.isBlank()) {
+                            BiliApiClient.sessdata = sessdata;
+                            BiliApiClient.webCookie = buildCookieHeader(cookiePairs);
+                            BiliConfig.save();
+                            LOGGER.info("B站登录成功, 已保存 Web Cookie 字段数={}", cookiePairs.size());
+                            return State.SUCCESS;
+                        }
+                        LOGGER.warn("登录成功但未找到 SESSDATA cookie, Set-Cookie 字段数={}", cookiePairs.size());
                         return State.FAILED;
                     case 86038: // 二维码过期
                         return State.EXPIRED;
@@ -116,5 +126,34 @@ public final class BiliLoginManager {
                 return State.PENDING;
             }
         });
+    }
+
+    private static CookiePair parseCookiePair(String setCookie) {
+        if (setCookie == null || setCookie.isBlank()) {
+            return null;
+        }
+        int semicolon = setCookie.indexOf(';');
+        String pair = semicolon >= 0 ? setCookie.substring(0, semicolon) : setCookie;
+        int equals = pair.indexOf('=');
+        if (equals <= 0 || equals >= pair.length() - 1) {
+            return null;
+        }
+        String name = pair.substring(0, equals).trim();
+        String value = pair.substring(equals + 1).trim();
+        return name.isBlank() || value.isBlank() ? null : new CookiePair(name, value);
+    }
+
+    private static String buildCookieHeader(Map<String, String> cookiePairs) {
+        StringBuilder header = new StringBuilder();
+        for (Map.Entry<String, String> entry : cookiePairs.entrySet()) {
+            if (header.length() > 0) {
+                header.append("; ");
+            }
+            header.append(entry.getKey()).append('=').append(entry.getValue());
+        }
+        return header.toString();
+    }
+
+    private record CookiePair(String name, String value) {
     }
 }

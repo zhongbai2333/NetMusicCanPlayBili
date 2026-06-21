@@ -20,6 +20,10 @@ public final class BiliConfig {
     public static volatile boolean dolbyJocEnabled = true;
     public static volatile int dolbyMaxObjectSources = 64;
     public static volatile double stereoCrossfeed = 0.16;
+    /** 可手动粘贴浏览器 navigator.userAgent，用于规避 B站 CDN 对旧 UA/异常 UA 的风控。 */
+    public static volatile String userAgent = System.getProperty("bili.user_agent", "");
+    /** 诊断开关：为空 userAgent 时进程启动随机选一个桌面 UA；B站 CDN 频繁 403 后切换到下一个。 */
+    public static volatile boolean rotateUserAgent = Boolean.getBoolean("bili.rotate_user_agent");
 
     private BiliConfig() {
     }
@@ -34,6 +38,12 @@ public final class BiliConfig {
                     BiliApiClient.sessdata = sessdata;
                     LOGGER.info("已加载 B站登录状态");
                 }
+                String webCookie = root.has("webCookie") ? root.get("webCookie").getAsString() : "";
+                if (!webCookie.isBlank()) {
+                    BiliApiClient.webCookie = webCookie;
+                } else if (!sessdata.isBlank()) {
+                    BiliApiClient.webCookie = "SESSDATA=" + sessdata;
+                }
                 if (root.has("dolbyEnabled")) {
                     dolbyEnabled = root.get("dolbyEnabled").getAsBoolean();
                 }
@@ -46,6 +56,16 @@ public final class BiliConfig {
                 if (root.has("stereoCrossfeed")) {
                     stereoCrossfeed = root.get("stereoCrossfeed").getAsDouble();
                 }
+                if (root.has("userAgent")) {
+                    String configuredUserAgent = root.get("userAgent").getAsString();
+                    if (!configuredUserAgent.isBlank()) {
+                        userAgent = configuredUserAgent;
+                    }
+                }
+                if (root.has("rotateUserAgent")) {
+                    rotateUserAgent = root.get("rotateUserAgent").getAsBoolean();
+                }
+                BiliCdnSelector.load(root);
             }
         } catch (Exception e) {
             LOGGER.warn("加载 B站配置失败", e);
@@ -56,10 +76,14 @@ public final class BiliConfig {
         try {
             JsonObject root = new JsonObject();
             root.addProperty("sessdata", BiliApiClient.sessdata != null ? BiliApiClient.sessdata : "");
+            root.addProperty("webCookie", BiliApiClient.webCookie != null ? BiliApiClient.webCookie : "");
             root.addProperty("dolbyEnabled", dolbyEnabled);
             root.addProperty("dolbyJocEnabled", dolbyJocEnabled);
             root.addProperty("dolbyMaxObjectSources", dolbyMaxObjectSources());
             root.addProperty("stereoCrossfeed", stereoCrossfeed);
+            root.addProperty("userAgent", BiliConfig.userAgent != null ? BiliConfig.userAgent : "");
+            root.addProperty("rotateUserAgent", rotateUserAgent);
+            BiliCdnSelector.save(root);
             Files.createDirectories(CONFIG_FILE.getParent());
             Files.writeString(CONFIG_FILE, root.toString());
             LOGGER.info("B站登录状态已保存");

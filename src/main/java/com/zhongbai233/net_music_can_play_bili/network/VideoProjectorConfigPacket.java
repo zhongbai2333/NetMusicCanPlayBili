@@ -1,13 +1,11 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
-import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.phys.Vec3;
@@ -17,7 +15,7 @@ public record VideoProjectorConfigPacket(BlockPos pos, float yaw, float pitch, f
         float height, float distanceX, float distanceZ, int preferredQuality) implements CustomPacketPayload {
 
     public static final Type<VideoProjectorConfigPacket> TYPE = new Type<>(
-            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID, "video_projector_config"));
+            NetworkPayloadIds.id("video_projector_config"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, VideoProjectorConfigPacket> STREAM_CODEC = StreamCodec
             .composite(
@@ -41,6 +39,9 @@ public record VideoProjectorConfigPacket(BlockPos pos, float yaw, float pitch, f
 
     public static void handle(VideoProjectorConfigPacket payload, IPayloadContext context) {
         if (!(context.player() instanceof ServerPlayer player) || !(player.level() instanceof ServerLevel level)) {
+            return;
+        }
+        if (!NetworkRateLimiter.allow(player.getUUID(), "video_projector_config", 8)) {
             return;
         }
         if (player.position().distanceToSqr(Vec3.atCenterOf(payload.pos())) > 64.0D) {

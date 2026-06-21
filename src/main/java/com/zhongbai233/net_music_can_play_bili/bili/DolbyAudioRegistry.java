@@ -896,15 +896,6 @@ public class DolbyAudioRegistry {
                     float value = AudioUtils.clampGain(entry.getValue());
                     if (isScopedVolumeKey(key)) {
                         SOURCE_VOLUMES.put(key, value);
-                    } else {
-                        // 旧版 x,y,z 格式：迁移到 scoped key（当前作用域 + 默认维度）
-                        BlockPos legacy = parseLegacyPosKey(key);
-                        if (legacy != null) {
-                            String migrated = volumeKeyFor(legacy);
-                            if (migrated != null) {
-                                SOURCE_VOLUMES.put(migrated, value);
-                            }
-                        }
                     }
                 }
                 LOGGER.debug("加载已保存的唱片机音量: {} 个位置", SOURCE_VOLUMES.size());
@@ -956,21 +947,6 @@ public class DolbyAudioRegistry {
 
     private static boolean isScopedVolumeKey(String key) {
         return key != null && key.contains("|") && key.indexOf('|') != key.lastIndexOf('|');
-    }
-
-    private static BlockPos parseLegacyPosKey(String key) {
-        if (key == null) {
-            return null;
-        }
-        String[] parts = key.split(",");
-        if (parts.length != 3) {
-            return null;
-        }
-        try {
-            return new BlockPos(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), Integer.parseInt(parts[2]));
-        } catch (NumberFormatException ignored) {
-            return null;
-        }
     }
 
     private static String volumeKeyFor(BlockPos pos) {

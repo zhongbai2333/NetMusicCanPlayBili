@@ -54,7 +54,10 @@ public final class MP4DeviceHolderTracker {
         if (!(stack.getItem() instanceof MP4Item)) {
             return;
         }
-        UUID deviceId = MP4Item.getOrCreateDeviceId(stack);
+        UUID deviceId = MP4DeviceIdentity.getOrCreateUnique(level, player, stack);
+        if (deviceId == null) {
+            return;
+        }
         MP4DeviceStateStore.syncQueueCopy(level, deviceId, stack);
         MP4DeviceStateStore.DeviceEntry entry = MP4DeviceStateStore.getOrCreate(level, deviceId, stack);
         boolean headphoneLinked = AudioLinkIndex.hasHeadphoneLinkedToMp4(deviceId);

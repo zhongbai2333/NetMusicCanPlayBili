@@ -176,7 +176,7 @@ public class VideoProjectorScreen extends BlackGoldScreen {
             g.centeredText(font, Component.literal(lb), lx + 27, ry, TEXT_SECONDARY);
             ry += 26;
         }
-        g.centeredText(font, Component.literal("实际清晰度受权限限制；HDR/杜比视界不是分辨率阶梯"),
+        g.centeredText(font, Component.literal("实际清晰度会受视频源和账号权限影响"),
                 bx + BOX_W / 2, by + boxH() - 28, TEXT_DIM);
     }
 

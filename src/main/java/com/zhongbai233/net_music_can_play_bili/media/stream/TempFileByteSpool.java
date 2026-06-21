@@ -32,7 +32,6 @@ public final class TempFileByteSpool implements Closeable {
 
     public TempFileByteSpool(String prefix) throws IOException {
         this.path = Files.createTempFile(prefix, ".spool");
-        path.toFile().deleteOnExit();
         this.readFile = new RandomAccessFile(path.toFile(), "r");
         this.writeFile = new RandomAccessFile(path.toFile(), "rw");
     }

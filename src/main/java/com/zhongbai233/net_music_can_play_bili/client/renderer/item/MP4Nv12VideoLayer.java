@@ -4,6 +4,7 @@ import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.Nv12TextureSet;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoYuvTextureSet;
+import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldVideoFrame;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
 import net.minecraft.resources.Identifier;
 
@@ -42,8 +43,18 @@ final class MP4Nv12VideoLayer implements AutoCloseable {
         LAYERS.clear();
     }
 
+    static void release(UUID deviceId) {
+        if (deviceId == null) {
+            return;
+        }
+        MP4Nv12VideoLayer layer = LAYERS.remove(deviceId);
+        if (layer != null) {
+            layer.close();
+        }
+    }
+
     boolean uploadLatest(UUID deviceId) {
-        MP4HandheldVideoClient.VideoFrame frame = MP4HandheldVideoClient.latestFrame(deviceId);
+        HandheldVideoFrame frame = MP4HandheldVideoClient.latestFrame(deviceId);
         if (frame == null || frame.format() != Fmp4NativeVideoDecoder.DecodedFrame.Format.NV12) {
             return false;
         }

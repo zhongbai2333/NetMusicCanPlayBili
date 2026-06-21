@@ -147,12 +147,12 @@ public final class MP4BiliLoginOverlay {
         CompletableFuture.supplyAsync(() -> {
             try {
                 HttpRequest req = HttpRequest.newBuilder(URI.create(qrImageUrl))
-                    .header("User-Agent", "Mozilla/5.0")
-                    .timeout(Duration.ofSeconds(10))
-                    .GET()
-                    .build();
+                        .header("User-Agent", "Mozilla/5.0")
+                        .timeout(Duration.ofSeconds(10))
+                        .GET()
+                        .build();
                 HttpResponse<InputStream> resp = BiliWbiSigner.HTTP.send(req,
-                    HttpResponse.BodyHandlers.ofInputStream());
+                        HttpResponse.BodyHandlers.ofInputStream());
                 try (InputStream in = resp.body()) {
                     return ImageIO.read(in);
                 }

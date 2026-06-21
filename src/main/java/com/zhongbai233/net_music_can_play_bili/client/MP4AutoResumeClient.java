@@ -54,7 +54,10 @@ public final class MP4AutoResumeClient {
         }
         int queueIndex = Math.max(0, Math.min(queueSize - 1, state.selectedQueueIndex()));
         long targetMillis = targetMillis(stack, state, queueIndex);
-        UUID deviceId = MP4Item.getOrCreateDeviceId(stack);
+        UUID deviceId = MP4Item.readDeviceId(stack);
+        if (deviceId == null) {
+            return;
+        }
         int fingerprint = resumeFingerprint(deviceId, queueIndex, state.volumePerMille(), targetMillis);
         if (MP4ClientPlayback.hasLocalPlayback(deviceId)) {
             return;
@@ -68,8 +71,8 @@ public final class MP4AutoResumeClient {
                 MP4PlaybackControlPacket.Action.START,
                 queueIndex,
                 state.volumePerMille(),
-            targetMillis,
-            deviceId));
+                targetMillis,
+                deviceId));
     }
 
     public static void reset() {

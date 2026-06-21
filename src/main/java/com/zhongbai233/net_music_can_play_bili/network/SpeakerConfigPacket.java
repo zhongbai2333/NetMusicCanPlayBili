@@ -1,13 +1,11 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
-import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.blockentity.SpeakerBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.phys.Vec3;
@@ -17,7 +15,7 @@ public record SpeakerConfigPacket(BlockPos pos, int channelIndex, float volume,
         boolean autoMixJoc) implements CustomPacketPayload {
 
     public static final Type<SpeakerConfigPacket> TYPE = new Type<>(
-            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID, "speaker_config"));
+            NetworkPayloadIds.id("speaker_config"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, SpeakerConfigPacket> STREAM_CODEC = StreamCodec
             .composite(

@@ -27,8 +27,8 @@ public final class MP4PlaybackSavedData extends SavedData {
 
     public static final Codec<MP4PlaybackSavedData> CODEC = RecordCodecBuilder.create(instance -> instance.group(
             ENTRIES_CODEC.optionalFieldOf("entries", Map.of()).forGetter(data -> data.entries),
-            DEVICES_CODEC.optionalFieldOf("devices", Map.of()).forGetter(data -> data.devices)
-    ).apply(instance, MP4PlaybackSavedData::new));
+            DEVICES_CODEC.optionalFieldOf("devices", Map.of()).forGetter(data -> data.devices))
+            .apply(instance, MP4PlaybackSavedData::new));
 
     public static final SavedDataType<MP4PlaybackSavedData> TYPE = new SavedDataType<>(
             Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID, NAME),
@@ -135,15 +135,16 @@ public final class MP4PlaybackSavedData extends SavedData {
     public record Entry(int queueIndex, long elapsedMillis, int durationSeconds, int volumePerMille,
             String sessionId, boolean playing) {
         public static final Codec<Entry> CODEC = RecordCodecBuilder.create(instance -> instance.group(
-            Codec.INT.optionalFieldOf("queueIndex", 0).forGetter(entry -> entry.queueIndex()),
-            Codec.LONG.optionalFieldOf("elapsedMillis", 0L).forGetter(entry -> entry.elapsedMillis()),
-            Codec.INT.optionalFieldOf("durationSeconds", 0).forGetter(entry -> entry.durationSeconds()),
-            Codec.INT.optionalFieldOf("volumePerMille", 700).forGetter(entry -> entry.volumePerMille()),
-            Codec.STRING.optionalFieldOf("sessionId", "").forGetter(entry -> entry.sessionId()),
-            Codec.BOOL.optionalFieldOf("playing", false).forGetter(entry -> entry.playing())
-        ).apply(instance, (queueIndex, elapsedMillis, durationSeconds, volumePerMille, sessionId, playing) ->
-            new Entry(intValue(queueIndex, 0), longValue(elapsedMillis, 0L), intValue(durationSeconds, 0),
-                intValue(volumePerMille, 700), sessionId, boolValue(playing))));
+                Codec.INT.optionalFieldOf("queueIndex", 0).forGetter(entry -> entry.queueIndex()),
+                Codec.LONG.optionalFieldOf("elapsedMillis", 0L).forGetter(entry -> entry.elapsedMillis()),
+                Codec.INT.optionalFieldOf("durationSeconds", 0).forGetter(entry -> entry.durationSeconds()),
+                Codec.INT.optionalFieldOf("volumePerMille", 700).forGetter(entry -> entry.volumePerMille()),
+                Codec.STRING.optionalFieldOf("sessionId", "").forGetter(entry -> entry.sessionId()),
+                Codec.BOOL.optionalFieldOf("playing", false).forGetter(entry -> entry.playing()))
+                .apply(instance,
+                        (queueIndex, elapsedMillis, durationSeconds, volumePerMille, sessionId, playing) -> new Entry(
+                                intValue(queueIndex, 0), longValue(elapsedMillis, 0L), intValue(durationSeconds, 0),
+                                intValue(volumePerMille, 700), sessionId, boolValue(playing))));
 
         Entry normalized() {
             int duration = Math.max(0, durationSeconds);
@@ -172,15 +173,17 @@ public final class MP4PlaybackSavedData extends SavedData {
                 Codec.INT.optionalFieldOf("subtitleMode", 0).forGetter(state -> state.subtitleMode()),
                 Codec.BOOL.optionalFieldOf("subtitleAiEnabled", false).forGetter(state -> state.subtitleAiEnabled()),
                 Codec.INT.optionalFieldOf("progressPerMille", 0).forGetter(state -> state.progressPerMille()),
-                Codec.BOOL.optionalFieldOf("rotationHintShown", false).forGetter(state -> state.rotationHintShown())
-            ).apply(instance, (playing, shuffle, videoEnabled, landscape, qualityIndex, selectedQueueIndex,
-                queueScrollOffset, volumePerMille, repeatMode, playlistOpen, lyricsEnabled, subtitleMode,
-                subtitleAiEnabled, progressPerMille, rotationHintShown) -> new DeviceStateCodec(boolValue(playing),
-                    boolValue(shuffle), boolValue(videoEnabled, true), boolValue(landscape), intValue(qualityIndex, 5),
-                    intValue(selectedQueueIndex, 0), intValue(queueScrollOffset, 0),
-                    intValue(volumePerMille, 1000), intValue(repeatMode, 0), boolValue(playlistOpen),
-                    boolValue(lyricsEnabled), intValue(subtitleMode, 0), boolValue(subtitleAiEnabled),
-                    intValue(progressPerMille, 0), boolValue(rotationHintShown))));
+                Codec.BOOL.optionalFieldOf("rotationHintShown", false).forGetter(state -> state.rotationHintShown()))
+                .apply(instance, (playing, shuffle, videoEnabled, landscape, qualityIndex, selectedQueueIndex,
+                        queueScrollOffset, volumePerMille, repeatMode, playlistOpen, lyricsEnabled, subtitleMode,
+                        subtitleAiEnabled, progressPerMille,
+                        rotationHintShown) -> new DeviceStateCodec(boolValue(playing),
+                                boolValue(shuffle), boolValue(videoEnabled, true), boolValue(landscape),
+                                intValue(qualityIndex, 5),
+                                intValue(selectedQueueIndex, 0), intValue(queueScrollOffset, 0),
+                                intValue(volumePerMille, 1000), intValue(repeatMode, 0), boolValue(playlistOpen),
+                                boolValue(lyricsEnabled), intValue(subtitleMode, 0), boolValue(subtitleAiEnabled),
+                                intValue(progressPerMille, 0), boolValue(rotationHintShown))));
 
         static DeviceStateCodec from(MP4Item.State state) {
             MP4Item.State s = state == null ? MP4Item.State.DEFAULT : state;
@@ -197,29 +200,31 @@ public final class MP4PlaybackSavedData extends SavedData {
         }
     }
 
-        private record DeviceEntryCodec(DeviceStateCodec state, long elapsedMillis, int durationSeconds, String sessionId,
+    private record DeviceEntryCodec(DeviceStateCodec state, long elapsedMillis, int durationSeconds, String sessionId,
             long updatedGameTime) {
         private static final Codec<DeviceEntryCodec> CODEC = RecordCodecBuilder.create(instance -> instance.group(
                 DeviceStateCodec.CODEC.optionalFieldOf("state", DeviceStateCodec.from(MP4Item.State.DEFAULT))
-                .forGetter(entry -> entry.state()),
-            Codec.LONG.optionalFieldOf("elapsedMillis", 0L).forGetter(entry -> entry.elapsedMillis()),
-            Codec.INT.optionalFieldOf("durationSeconds", 0).forGetter(entry -> entry.durationSeconds()),
-            Codec.STRING.optionalFieldOf("sessionId", "").forGetter(entry -> entry.sessionId()),
-            Codec.LONG.optionalFieldOf("updatedGameTime", 0L).forGetter(entry -> entry.updatedGameTime())
-        ).apply(instance, (state, elapsedMillis, durationSeconds, sessionId, updatedGameTime) ->
-            new DeviceEntryCodec(state, longValue(elapsedMillis, 0L), intValue(durationSeconds, 0), sessionId,
-                longValue(updatedGameTime, 0L))));
+                        .forGetter(entry -> entry.state()),
+                Codec.LONG.optionalFieldOf("elapsedMillis", 0L).forGetter(entry -> entry.elapsedMillis()),
+                Codec.INT.optionalFieldOf("durationSeconds", 0).forGetter(entry -> entry.durationSeconds()),
+                Codec.STRING.optionalFieldOf("sessionId", "").forGetter(entry -> entry.sessionId()),
+                Codec.LONG.optionalFieldOf("updatedGameTime", 0L).forGetter(entry -> entry.updatedGameTime()))
+                .apply(instance,
+                        (state, elapsedMillis, durationSeconds, sessionId, updatedGameTime) -> new DeviceEntryCodec(
+                                state, longValue(elapsedMillis, 0L), intValue(durationSeconds, 0), sessionId,
+                                longValue(updatedGameTime, 0L))));
 
         private MP4DeviceStateStore.DeviceEntry toDeviceEntry() {
             return new MP4DeviceStateStore.DeviceEntry(state.toState(), java.util.List.of(), elapsedMillis,
-                durationSeconds, sessionId, updatedGameTime).normalized();
+                    durationSeconds, sessionId, updatedGameTime);
         }
 
         private static DeviceEntryCodec from(MP4DeviceStateStore.DeviceEntry entry) {
             MP4DeviceStateStore.DeviceEntry safe = entry == null
                     ? MP4DeviceStateStore.DeviceEntry.EMPTY
                     : entry.normalized();
-            return new DeviceEntryCodec(DeviceStateCodec.from(safe.state()), safe.elapsedMillis(), safe.durationSeconds(),
+            return new DeviceEntryCodec(DeviceStateCodec.from(safe.state()), safe.elapsedMillis(),
+                    safe.durationSeconds(),
                     safe.sessionId(), safe.updatedGameTime());
         }
     }

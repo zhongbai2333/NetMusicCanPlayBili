@@ -16,7 +16,6 @@ import net.minecraft.server.level.ServerPlayer;
 
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkData;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
-import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackSyncManager;
 
 import java.util.function.Consumer;
 import java.util.UUID;
@@ -36,18 +35,6 @@ public class InvisibleHeadphonesItem extends Item {
         if (level.isClientSide()) {
             return InteractionResult.SUCCESS;
         }
-        ItemStack offhand = player.getOffhandItem();
-        if (offhand.getItem() instanceof MP4Item) {
-            UUID deviceId = MP4Item.getOrCreateDeviceId(offhand);
-            AudioLinkData.writeHeadphoneMp4(stack, deviceId);
-            if (player instanceof ServerPlayer serverPlayer) {
-                AudioLinkIndex.updatePlayerHeadphones(serverPlayer);
-                MP4PlaybackSyncManager.stopExternalPlaybackForLinkedHeadphones(serverPlayer, deviceId);
-            }
-            player.sendSystemMessage(Component.translatable(
-                    "message.net_music_can_play_bili.headphones.mp4_linked"));
-            return InteractionResult.SUCCESS;
-        }
         ItemStack head = player.getItemBySlot(EquipmentSlot.HEAD);
         if (head.isEmpty()) {
             player.setItemSlot(EquipmentSlot.HEAD, stack.copyWithCount(1));
@@ -58,8 +45,8 @@ public class InvisibleHeadphonesItem extends Item {
             player.sendSystemMessage(Component.translatable("message.net_music_can_play_bili.headphones.equipped"));
             return InteractionResult.SUCCESS;
         }
-        player.sendSystemMessage(Component.translatable(
-                "message.net_music_can_play_bili.headphones.need_offhand_mp4"));
+        player.sendSystemMessage(
+                Component.translatable("message.net_music_can_play_bili.headphones.equip_slot_occupied"));
         return InteractionResult.PASS;
     }
 

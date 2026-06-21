@@ -82,9 +82,7 @@ public final class IrisShaderpackCompat {
     }
 
     static boolean shouldRegisterTexturedProbePipeline() {
-        // 在强制 Iris 安全模式下，即使只是注册一个自定义探针 pipeline，也足以让 Iris 尝试把它
-        // 匹配进 shaderpack 覆盖表。Complementary/Iris 1.10.9 可能会在我们提交视频四边形前，
-        // 因 "Missing sampler Sampler1" 让世界主渲染 pass 崩溃。因此探针改用原版 pipeline。
+        // 安全模式下探针改走原版 pipeline，避免部分光影包校验 Sampler1/2 时崩溃。
         return !shouldForceSafeProbeRenderType();
     }
 

@@ -6,8 +6,10 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientMediaPreparer;
 import com.zhongbai233.net_music_can_play_bili.client.audio.SyncedMediaPlaybackLauncher;
+import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldMediaPlayback;
 import com.zhongbai233.net_music_can_play_bili.client.sync.MediaTimelineClock;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
+import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackTimelinePacket;
 import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackSyncPacket;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.entity.Entity;
@@ -28,9 +30,10 @@ public final class MP4ClientPlayback {
     private static final Map<UUID, MP4MovingSound> ACTIVE_SOUNDS = new ConcurrentHashMap<>();
     private static final Set<String> STREAM_RETRY_SESSIONS = ConcurrentHashMap.newKeySet();
     private static final Set<String> SOUND_PREPARES = ConcurrentHashMap.newKeySet();
+    private static final Set<String> STARTED_SOUND_SESSIONS = ConcurrentHashMap.newKeySet();
     private static final long STREAM_RETRY_DELAY_MILLIS = 750L;
     private static final long PREPARE_TIMEOUT_SECONDS = Math.max(3L,
-        Long.getLong("bili.mp4.client_prepare_timeout_seconds", 12L));
+            Long.getLong("bili.mp4.client_prepare_timeout_seconds", 12L));
 
     private MP4ClientPlayback() {
     }
@@ -48,7 +51,7 @@ public final class MP4ClientPlayback {
         if (!canHear(sourceId, payload.headphoneRouted())) {
             stop(sourceId);
             LOGGER.trace("MP4 客户端忽略非当前耳机绑定播放: source={} session={} headphoneRouted={} equipped={}",
-                sourceId, payload.sessionId(), payload.headphoneRouted(), HeadphoneClientState.equipped());
+                    sourceId, payload.sessionId(), payload.headphoneRouted(), HeadphoneClientState.equipped());
             return;
         }
         if (payload.playUrl().isBlank() || payload.sessionId().isBlank()) {
@@ -61,25 +64,43 @@ public final class MP4ClientPlayback {
         }
         if (previous != null && payload.sessionId().equals(previous.sessionId())) {
             ActivePlayback updated = previous.withServerElapsed(Math.max(0L, payload.elapsedMillis()),
-                Math.max(0L, payload.durationSeconds()) * 1000L)
-                .withSourceLocation(sourceLocation)
-                .withHeadphoneRouted(payload.headphoneRouted());
+                    Math.max(0L, payload.durationSeconds()) * 1000L)
+                    .withSourceLocation(sourceLocation)
+                    .withHeadphoneRouted(payload.headphoneRouted());
             ACTIVE.put(sourceId, updated);
             updateVolume(sourceId, payload.volumePerMille() / 1000.0F);
             if (shouldRebuildSound(sourceId, payload)) {
                 LOGGER.debug("MP4 客户端重建声音实例: source={} session={} headphoneRouted={} elapsed={}ms",
-                    sourceId, payload.sessionId(), payload.headphoneRouted(), payload.elapsedMillis());
+                        sourceId, payload.sessionId(), payload.headphoneRouted(), payload.elapsedMillis());
                 preparePlaybackAsync(payload, sourceId);
             }
             return;
         }
 
         ACTIVE.put(sourceId, new ActivePlayback(payload.sessionId(), payload.queueIndex(), payload.songName(),
-            payload.rawUrl(),
-            MediaTimelineClock.start(payload.sessionId(), Math.max(0L, payload.elapsedMillis()),
-                Math.max(0L, payload.durationSeconds()) * 1000L),
-            null, "", "", payload.volumePerMille() / 1000.0F, sourceLocation, payload.headphoneRouted()));
+                payload.rawUrl(),
+                MediaTimelineClock.start(payload.sessionId(), Math.max(0L, payload.elapsedMillis()),
+                        Math.max(0L, payload.durationSeconds()) * 1000L),
+                null, "", "", payload.volumePerMille() / 1000.0F, sourceLocation, payload.headphoneRouted()));
         preparePlaybackAsync(payload, sourceId);
+    }
+
+    public static void handleTimeline(MP4PlaybackTimelinePacket payload) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.player == null || minecraft.level == null || payload.sourceId() == null) {
+            return;
+        }
+        if (!canHear(payload.sourceId(), payload.headphoneRouted())) {
+            stop(payload.sourceId());
+            return;
+        }
+        ActivePlayback previous = ACTIVE.get(payload.sourceId());
+        if (previous == null || payload.sessionId() == null || !payload.sessionId().equals(previous.sessionId())) {
+            return;
+        }
+        ACTIVE.put(payload.sourceId(), previous.withServerElapsed(Math.max(0L, payload.elapsedMillis()),
+                previous.durationMillis()).withHeadphoneRouted(payload.headphoneRouted()));
+        updateVolume(payload.sourceId(), payload.volumePerMille() / 1000.0F);
     }
 
     private static void preparePlaybackAsync(MP4PlaybackSyncPacket payload, UUID sourceId) {
@@ -88,18 +109,18 @@ public final class MP4ClientPlayback {
             return;
         }
         UUID localPlayerId = Minecraft.getInstance().player != null ? Minecraft.getInstance().player.getUUID() : null;
+        boolean loadLyrics = localPlayerId != null && localPlayerId.equals(payload.ownerId())
+                && GeneralConfig.ENABLE_PLAYER_LYRICS.get();
         CompletableFuture.supplyAsync(() -> {
-            boolean enableLyrics = localPlayerId != null && localPlayerId.equals(payload.ownerId())
-                    && GeneralConfig.ENABLE_PLAYER_LYRICS.get();
             long started = System.currentTimeMillis();
             LOGGER.trace("MP4 客户端准备播放开始: owner={} source={} session={} song='{}' host={} lyrics={}",
-                payload.ownerId(), sourceId, payload.sessionId(), payload.songName(),
-                ClientMediaPreparer.hostOf(payload.playUrl()), enableLyrics);
-            ClientMediaPreparer.PreparedMedia prepared = ClientMediaPreparer.prepare(payload.rawUrl(),
-                payload.playUrl(), payload.songName(), true, enableLyrics);
-            LOGGER.trace("MP4 客户端准备播放完成: owner={} source={} session={} cost={}ms host={}",
-                payload.ownerId(), sourceId, payload.sessionId(), System.currentTimeMillis() - started,
-                prepared != null ? ClientMediaPreparer.hostOf(prepared.playUrl()) : "unknown");
+                    payload.ownerId(), sourceId, payload.sessionId(), payload.songName(),
+                    ClientMediaPreparer.hostOf(payload.playUrl()), loadLyrics);
+            ClientMediaPreparer.PreparedMedia prepared = ClientMediaPreparer.prepareAudioOnly(payload.rawUrl(),
+                    payload.playUrl(), payload.songName(), true);
+            LOGGER.debug("MP4 客户端准备播放完成: owner={} source={} session={} cost={}ms host={}",
+                    payload.ownerId(), sourceId, payload.sessionId(), System.currentTimeMillis() - started,
+                    prepared != null ? ClientMediaPreparer.hostOf(prepared.playUrl()) : "unknown");
             return prepared;
         }).completeOnTimeout(null, PREPARE_TIMEOUT_SECONDS, TimeUnit.SECONDS).whenComplete((prepared, error) -> {
             SOUND_PREPARES.remove(prepareKey);
@@ -112,32 +133,38 @@ public final class MP4ClientPlayback {
                 if (!canHear(sourceId, payload.headphoneRouted())) {
                     stop(sourceId);
                     LOGGER.trace("MP4 客户端准备完成后取消非当前耳机绑定播放: source={} session={} headphoneRouted={} equipped={}",
-                        sourceId, payload.sessionId(), payload.headphoneRouted(), HeadphoneClientState.equipped());
+                            sourceId, payload.sessionId(), payload.headphoneRouted(), HeadphoneClientState.equipped());
                     return;
                 }
                 if (error != null) {
                     LOGGER.warn("MP4 客户端异步准备播放失败，使用服务端直链继续: owner={} session={} song='{}' reason={}",
                             payload.ownerId(), payload.sessionId(), payload.songName(), error.toString());
                 } else if (prepared == null) {
-                    LOGGER.warn("MP4 客户端准备播放超时或无结果，使用服务端直链继续: owner={} source={} session={} song='{}' timeout={}s host={}",
+                    LOGGER.warn(
+                            "MP4 客户端准备播放超时或无结果，使用服务端直链继续: owner={} source={} session={} song='{}' timeout={}s host={}",
                             payload.ownerId(), sourceId, payload.sessionId(), payload.songName(),
                             PREPARE_TIMEOUT_SECONDS, ClientMediaPreparer.hostOf(payload.playUrl()));
                 }
-                long startOffsetMillis = current.elapsedMillis();
+                long startOffsetMillis = isWhitelistPreviewSession(payload.sessionId())
+                        ? Math.max(0L, payload.elapsedMillis())
+                        : current.elapsedMillis();
                 long totalMillis = current.durationMillis() > 0L
-                    ? current.durationMillis()
-                    : Math.max(0L, payload.durationSeconds()) * 1000L;
+                        ? current.durationMillis()
+                        : Math.max(0L, payload.durationSeconds()) * 1000L;
                 SyncedMediaPlaybackLauncher.LaunchResult launch = SyncedMediaPlaybackLauncher.fromPrepared(
-                    payload.rawUrl(), payload.songName(), prepared, payload.playUrl(), payload.sessionId(),
-                    startOffsetMillis, totalMillis, null, sourceId);
-                ACTIVE.put(sourceId, current.withLyrics(launch.lyricRecord(), "", ""));
+                        payload.rawUrl(), payload.songName(), prepared, payload.playUrl(), payload.sessionId(),
+                        startOffsetMillis, totalMillis, null, sourceId);
+                ACTIVE.put(sourceId, current.withLyrics(null, "", ""));
+                if (loadLyrics) {
+                    loadLyricsAsync(sourceId, payload.sessionId(), payload.rawUrl(), payload.songName());
+                }
                 LOGGER.trace("MP4 客户端开始播放: owner={} source={} type={} song='{}' session={} offset={}ms host={}",
-                    payload.ownerId(), sourceId, payload.sourceType(), payload.songName(), payload.sessionId(),
-                    startOffsetMillis, ClientMediaPreparer.hostOf(launch.playUrl()));
+                        payload.ownerId(), sourceId, payload.sourceType(), payload.songName(), payload.sessionId(),
+                        startOffsetMillis, ClientMediaPreparer.hostOf(launch.playUrl()));
                 SyncedMediaPlaybackLauncher.play(launch, payload.songName(),
-                    (url, lyricRecord) -> new MP4MovingSound(sourceId, url, payload.durationSeconds(), lyricRecord,
-                        payload.sessionId(), startOffsetMillis, payload.volumePerMille() / 1000.0F,
-                        payload.headphoneRouted()));
+                        (url, lyricRecord) -> new MP4MovingSound(sourceId, url, payload.durationSeconds(), lyricRecord,
+                                payload.sessionId(), startOffsetMillis, payload.volumePerMille() / 1000.0F,
+                                payload.headphoneRouted()));
             });
         });
     }
@@ -157,6 +184,22 @@ public final class MP4ClientPlayback {
 
     private static String soundPrepareKey(UUID sourceId, String sessionId, boolean headphoneRouted) {
         return String.valueOf(sourceId) + ':' + sessionId + ':' + headphoneRouted;
+    }
+
+    private static void loadLyricsAsync(UUID sourceId, String sessionId, String rawUrl, String songName) {
+        ClientMediaPreparer.buildLyricAsync(rawUrl, songName).whenComplete((record, error) -> {
+            if (error != null) {
+                LOGGER.debug("MP4 客户端歌词后台解析失败: source={} session={} song='{}' reason={}", sourceId,
+                        sessionId, songName, error.toString());
+                return;
+            }
+            if (record == null) {
+                return;
+            }
+            Minecraft.getInstance().execute(() -> ACTIVE.computeIfPresent(sourceId,
+                    (ignored, active) -> sessionId.equals(active.sessionId()) ? active.withLyrics(record, "", "")
+                            : active));
+        });
     }
 
     public static boolean isCurrent(UUID ownerId, String sessionId) {
@@ -221,6 +264,20 @@ public final class MP4ClientPlayback {
         if (isCurrent(ownerId, sessionId) && sound != null) {
             ACTIVE_SOUNDS.put(ownerId, sound);
         }
+    }
+
+    public static void markSoundStarted(UUID ownerId, String sessionId, long startOffsetMillis, long totalMillis) {
+        if (ownerId != null && sessionId != null && !sessionId.isBlank() && isCurrent(ownerId, sessionId)) {
+            if (STARTED_SOUND_SESSIONS.add(soundSessionKey(ownerId, sessionId))) {
+                ACTIVE.computeIfPresent(ownerId, (ignored, active) -> active.reanchoredAtSoundStart(
+                        Math.max(0L, startOffsetMillis), Math.max(0L, totalMillis)));
+            }
+        }
+    }
+
+    public static boolean hasStartedSound(UUID ownerId, String sessionId) {
+        return ownerId != null && sessionId != null
+                && STARTED_SOUND_SESSIONS.contains(soundSessionKey(ownerId, sessionId));
     }
 
     public static void updateVolume(UUID ownerId, float volume) {
@@ -298,47 +355,49 @@ public final class MP4ClientPlayback {
         return active != null ? active.songName() : "";
     }
 
-    public static LocalVideoPlayback localVideoPlayback() {
+    public static HandheldMediaPlayback localVideoPlayback() {
         ActivePlayback active = localPlayback();
         if (active == null) {
-            return LocalVideoPlayback.EMPTY;
+            return HandheldMediaPlayback.EMPTY;
         }
-        return new LocalVideoPlayback(active.sessionId(), active.rawUrl(), active.songName(), active.timelineSnapshot(),
-            MP4FocusState.subtitleAiEnabled());
+        return new HandheldMediaPlayback(active.sessionId(), active.rawUrl(), active.songName(),
+                active.timelineSnapshot(),
+                MP4FocusState.subtitleAiEnabled());
     }
 
-    public static LocalVideoPlayback localVideoPlayback(UUID deviceId) {
+    public static HandheldMediaPlayback localVideoPlayback(UUID deviceId) {
         ActivePlayback active = deviceId != null ? ACTIVE.get(deviceId) : localPlayback();
         if (active == null) {
-            return LocalVideoPlayback.EMPTY;
+            return HandheldMediaPlayback.EMPTY;
         }
         MP4Item.State state = MP4Item.State.DEFAULT;
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft != null && minecraft.player != null && deviceId != null) {
             state = MP4Client.stateForHeldRender(MP4Item.findByDeviceId(minecraft.player, deviceId));
         }
-        return new LocalVideoPlayback(active.sessionId(), active.rawUrl(), active.songName(), active.timelineSnapshot(),
-            state.subtitleAiEnabled());
+        return new HandheldMediaPlayback(active.sessionId(), active.rawUrl(), active.songName(),
+                active.timelineSnapshot(),
+                state.subtitleAiEnabled());
     }
 
     public static String localLyricLine() {
         ActivePlayback active = localPlayback();
-        return active != null ? active.currentLyric() : "";
+        return active != null ? active.lyricLineAtCurrentTime(false) : "";
     }
 
     public static String localLyricLine(UUID deviceId) {
         ActivePlayback active = deviceId != null ? ACTIVE.get(deviceId) : localPlayback();
-        return active != null ? active.currentLyric() : "";
+        return active != null ? active.lyricLineAtCurrentTime(false) : "";
     }
 
     public static String localTranslatedLyricLine() {
         ActivePlayback active = localPlayback();
-        return active != null ? active.translatedLyric() : "";
+        return active != null ? active.lyricLineAtCurrentTime(true) : "";
     }
 
     public static String localTranslatedLyricLine(UUID deviceId) {
         ActivePlayback active = deviceId != null ? ACTIVE.get(deviceId) : localPlayback();
-        return active != null ? active.translatedLyric() : "";
+        return active != null ? active.lyricLineAtCurrentTime(true) : "";
     }
 
     public static void syncFocusedUiProgress() {
@@ -393,7 +452,9 @@ public final class MP4ClientPlayback {
     public static void finish(UUID ownerId, String sessionId) {
         if (ownerId != null && sessionId != null && !sessionId.isBlank()) {
             ACTIVE.computeIfPresent(ownerId, (ignored, active) -> active.sessionId().equals(sessionId) ? null : active);
-            ACTIVE_SOUNDS.computeIfPresent(ownerId, (ignored, sound) -> sessionId.equals(sound.sessionId()) ? null : sound);
+            ACTIVE_SOUNDS.computeIfPresent(ownerId,
+                    (ignored, sound) -> sessionId.equals(sound.sessionId()) ? null : sound);
+            STARTED_SOUND_SESSIONS.remove(soundSessionKey(ownerId, sessionId));
         }
     }
 
@@ -401,6 +462,7 @@ public final class MP4ClientPlayback {
         if (ownerId != null) {
             ACTIVE.remove(ownerId);
             ACTIVE_SOUNDS.remove(ownerId);
+            STARTED_SOUND_SESSIONS.removeIf(key -> key.startsWith(ownerId.toString() + ":"));
             STREAM_RETRY_SESSIONS.removeIf(key -> key.startsWith(ownerId.toString() + ":"));
             SOUND_PREPARES.removeIf(key -> key.startsWith(ownerId.toString() + ":"));
             MP4HandheldVideoClient.stop(ownerId, "播放已停止");
@@ -410,6 +472,7 @@ public final class MP4ClientPlayback {
     public static void clearAll() {
         ACTIVE.clear();
         ACTIVE_SOUNDS.clear();
+        STARTED_SOUND_SESSIONS.clear();
         STREAM_RETRY_SESSIONS.clear();
         SOUND_PREPARES.clear();
         MP4HandheldVideoClient.clearAll();
@@ -452,12 +515,13 @@ public final class MP4ClientPlayback {
                     return;
                 }
                 long retryTargetMillis = current.elapsedMillis();
-                client.getConnection().send(new com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackControlPacket(
-                        com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackControlPacket.Action.SEEK,
-                        queueIndex,
-                        volumePerMille,
-                    retryTargetMillis,
-                    ownerId));
+                client.getConnection()
+                        .send(new com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackControlPacket(
+                                com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackControlPacket.Action.SEEK,
+                                queueIndex,
+                                volumePerMille,
+                                retryTargetMillis,
+                                ownerId));
             });
         });
         return true;
@@ -469,6 +533,14 @@ public final class MP4ClientPlayback {
 
     private static String retryKey(UUID ownerId, String sessionId) {
         return ownerId + ":" + sessionId;
+    }
+
+    private static String soundSessionKey(UUID ownerId, String sessionId) {
+        return ownerId + ":" + sessionId;
+    }
+
+    private static boolean isWhitelistPreviewSession(String sessionId) {
+        return sessionId != null && sessionId.contains("-whitelist-preview-");
     }
 
     static long elapsedMillis(UUID sourceId, String sessionId, long fallbackMillis) {
@@ -496,13 +568,13 @@ public final class MP4ClientPlayback {
         long durationMillis = active.durationMillis();
         if (durationMillis > 0L) {
             progressPerMille = (int) Math.round(Math.max(0L, Math.min(durationMillis,
-                active.elapsedMillis())) * 1000.0D / durationMillis);
+                    active.elapsedMillis())) * 1000.0D / durationMillis);
         }
         return new MP4Item.State(true, baseState.shuffle(), baseState.videoEnabled(), baseState.landscape(),
-            baseState.qualityIndex(), active.queueIndex(), baseState.queueScrollOffset(),
-            Math.round(active.volume() * 1000.0F), baseState.repeatMode(), baseState.playlistOpen(),
-            baseState.lyricsEnabled(), baseState.subtitleMode(), baseState.subtitleAiEnabled(),
-            Math.max(0, Math.min(1000, progressPerMille)), baseState.rotationHintShown());
+                baseState.qualityIndex(), active.queueIndex(), baseState.queueScrollOffset(),
+                Math.round(active.volume() * 1000.0F), baseState.repeatMode(), baseState.playlistOpen(),
+                baseState.lyricsEnabled(), baseState.subtitleMode(), baseState.subtitleAiEnabled(),
+                Math.max(0, Math.min(1000, progressPerMille)), baseState.rotationHintShown());
     }
 
     private static ActivePlayback localPlayback() {
@@ -511,8 +583,8 @@ public final class MP4ClientPlayback {
             return null;
         }
         ItemStack stack = MP4FocusState.active()
-            ? minecraft.player.getItemInHand(MP4FocusState.hand())
-            : MP4Item.findAnyInInventory(minecraft.player);
+                ? minecraft.player.getItemInHand(MP4FocusState.hand())
+                : MP4Item.findAnyInInventory(minecraft.player);
         UUID deviceId = MP4Item.readDeviceId(stack);
         ActivePlayback byDevice = deviceId != null ? ACTIVE.get(deviceId) : null;
         if (byDevice != null) {
@@ -521,16 +593,17 @@ public final class MP4ClientPlayback {
         return ACTIVE.get(minecraft.player.getUUID());
     }
 
-    private static void sendControl(com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackControlPacket.Action action,
+    private static void sendControl(
+            com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackControlPacket.Action action,
             long targetMillis) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.getConnection() == null) {
             return;
         }
         ItemStack stack = minecraft.player != null
-            ? (MP4FocusState.active()
-                ? minecraft.player.getItemInHand(MP4FocusState.hand())
-                : MP4Item.findAnyInInventory(minecraft.player))
+                ? (MP4FocusState.active()
+                        ? minecraft.player.getItemInHand(MP4FocusState.hand())
+                        : MP4Item.findAnyInInventory(minecraft.player))
                 : ItemStack.EMPTY;
         if (stack.isEmpty()) {
             return;
@@ -538,12 +611,12 @@ public final class MP4ClientPlayback {
         UUID deviceId = MP4Item.readDeviceId(stack);
         if (deviceId == null) {
             minecraft.getConnection().send(new com.zhongbai233.net_music_can_play_bili.network.MP4EnsureDeviceIdPacket(
-                MP4FocusState.active() ? MP4FocusState.hand() : net.minecraft.world.InteractionHand.MAIN_HAND));
+                    MP4FocusState.active() ? MP4FocusState.hand() : net.minecraft.world.InteractionHand.MAIN_HAND));
             return;
         }
         minecraft.getConnection().send(new com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackControlPacket(
                 action, MP4FocusState.selectedQueueIndex(), Math.round(MP4FocusState.volume() * 1000.0F),
-            Math.max(0L, targetMillis), deviceId));
+                Math.max(0L, targetMillis), deviceId));
     }
 
     private static String currentLineAt(it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap<String> lyrics, int tick) {
@@ -559,18 +632,6 @@ public final class MP4ClientPlayback {
         }
         String line = lyrics.get(key);
         return line != null ? line : "";
-    }
-
-        public record LocalVideoPlayback(String sessionId, String rawUrl, String songName,
-            MediaTimelineClock.TimelineSnapshot timeline, boolean allowAiSubtitle) {
-        public static final LocalVideoPlayback EMPTY = new LocalVideoPlayback("", "", "",
-            MediaTimelineClock.TimelineSnapshot.EMPTY, false);
-
-        public boolean hasPlayableVideoSource() {
-            return sessionId != null && !sessionId.isBlank()
-                    && rawUrl != null && !rawUrl.isBlank()
-                    && timeline != null && timeline.totalMillis() > 0L;
-        }
     }
 
     private record ActivePlayback(String sessionId, int queueIndex, String songName, String rawUrl,
@@ -598,17 +659,36 @@ public final class MP4ClientPlayback {
         }
 
         ActivePlayback withLyrics(LyricRecord record, String current, String translated) {
-            return new ActivePlayback(sessionId, queueIndex, songName, rawUrl, timeline, record, current != null ? current : "",
-                translated != null ? translated : "", volume, sourceLocation, headphoneRouted);
+            return new ActivePlayback(sessionId, queueIndex, songName, rawUrl, timeline, record,
+                    current != null ? current : "",
+                    translated != null ? translated : "", volume, sourceLocation, headphoneRouted);
+        }
+
+        String lyricLineAtCurrentTime(boolean translated) {
+            if (lyricRecord == null) {
+                return translated ? translatedLyric : currentLyric;
+            }
+            long mediaMillis = timeline.mediaMillis();
+            if (mediaMillis < 0L) {
+                return "";
+            }
+            int lyricTick = (int) Math.min(Integer.MAX_VALUE, mediaMillis / 50L);
+            return currentLineAt(translated ? lyricRecord.getTransLyrics() : lyricRecord.getLyrics(), lyricTick);
         }
 
         ActivePlayback withVolume(float newVolume) {
             return new ActivePlayback(sessionId, queueIndex, songName, rawUrl, timeline, lyricRecord, currentLyric,
-                translatedLyric, newVolume, sourceLocation, headphoneRouted);
+                    translatedLyric, newVolume, sourceLocation, headphoneRouted);
         }
 
         ActivePlayback withServerElapsed(long serverElapsedMillis, long serverDurationMillis) {
-            timeline.observeServer(serverElapsedMillis, serverDurationMillis > 0L ? serverDurationMillis : timeline.totalMillis());
+            timeline.observeServer(serverElapsedMillis,
+                    serverDurationMillis > 0L ? serverDurationMillis : timeline.totalMillis());
+            return this;
+        }
+
+        ActivePlayback reanchoredAtSoundStart(long startOffsetMillis, long totalMillis) {
+            timeline.reanchor(startOffsetMillis, totalMillis > 0L ? totalMillis : timeline.totalMillis());
             return this;
         }
 

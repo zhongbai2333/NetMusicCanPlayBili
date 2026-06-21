@@ -1,6 +1,5 @@
 package com.zhongbai233.net_music_can_play_bili.gui;
 
-import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.client.MP4BiliLoginOverlay;
 import com.zhongbai233.net_music_can_play_bili.client.MP4Client;
 import com.zhongbai233.net_music_can_play_bili.client.MP4FocusState;
@@ -11,49 +10,17 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
-import org.slf4j.Logger;
-
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
 
 /** MP4 submitCustomGeometry 表面的透明输入层。 */
 public class MP4FocusScreen extends Screen {
-    private static final Logger LOGGER = LogUtils.getLogger();
-    private static final boolean CALIBRATION_MODE = Boolean.getBoolean("netmusic.mp4.calibration");
-    private static final List<CalibrationRunSummary> CALIBRATION_REPORTS = new ArrayList<>();
     private static final int TEXTURE_W = 256;
     private static final int TEXTURE_H = 448;
-        private static final int[] CALIBRATION_TEXTURE_X = { 0, 0, TEXTURE_W - 1, TEXTURE_W - 1, TEXTURE_W / 2,
-            TEXTURE_W / 4, TEXTURE_W / 2, TEXTURE_W * 3 / 4, TEXTURE_W / 2 };
-        private static final int[] CALIBRATION_TEXTURE_Y = { 0, TEXTURE_H - 1, 0, TEXTURE_H - 1, TEXTURE_H / 2,
-            TEXTURE_H / 2, TEXTURE_H / 4, TEXTURE_H / 2, TEXTURE_H * 3 / 4 };
-    private static final float DEFAULT_PORTRAIT_SCALE_MIN = 0.35F;
-    private static final float DEFAULT_PORTRAIT_SCALE_MAX = 0.72F;
-    private static final float DEFAULT_PORTRAIT_SCALE_HEIGHT_FACTOR = 0.001543F;
-    private static final float DEFAULT_PORTRAIT_SCALE_BASE = 0.004F;
-    private static final float DEFAULT_PORTRAIT_X_OFFSET_HEIGHT_FACTOR = 0.306162F;
-    private static final float DEFAULT_PORTRAIT_X_OFFSET_BASE = 0.448F;
-    private static final float DEFAULT_PORTRAIT_Y_OFFSET_HEIGHT_FACTOR = -0.063369F;
-    private static final float DEFAULT_PORTRAIT_Y_OFFSET_BASE = -0.340F;
-    private static final float PORTRAIT_RIGHT_HALF_SCREEN_X_FIX = -5.0F;
-    private static final float LANDSCAPE_FINE_TUNE_X = 4.4F;
-    private static final float LANDSCAPE_FINE_TUNE_Y = -4.2F;
-    private static final float LANDSCAPE_TOP_HALF_TEXTURE_X_FIX = 18.0F;
-    private static final int CLICK_SNAP_RADIUS = 12;
     private static final int BORDER_DRAG_PIXELS = 18;
     private static final float BORDER_DRAG_REVERSE_LIMIT = 16.0F;
     private static final float FLICK_IMPULSE_SCALE = 0.22F;
     private static final float FLICK_IMPULSE_MAX = 32.0F;
     private static final float FLICK_COMMIT_DEGREES = 24.0F;
     private static final float ORIENTATION_SNAP_DEGREES = 45.0F;
-    private static final long CALIBRATION_SCROLL_TOGGLE_COOLDOWN_NANOS = 180_000_000L;
     private final InteractionHand hand;
     private boolean rotatingDevice;
     private SliderDrag draggingSlider = SliderDrag.NONE;
@@ -62,7 +29,6 @@ public class MP4FocusScreen extends Screen {
     private boolean rotationMoved;
     private float lastDragAngle;
     private long lastDragNanos;
-    private long lastCalibrationScrollToggleNanos;
     private float dragVelocityDegreesPerSecond;
 
     public MP4FocusScreen(InteractionHand hand) {
@@ -78,7 +44,6 @@ public class MP4FocusScreen extends Screen {
     @Override
     protected void init() {
         MP4FocusState.activate(hand);
-        MP4FocusState.setCalibrationMode(CALIBRATION_MODE);
     }
 
     @Override
@@ -168,11 +133,6 @@ public class MP4FocusScreen extends Screen {
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
         updateHover((int) mouseX, (int) mouseY);
-        if (CALIBRATION_MODE) {
-            toggleCalibrationOrientation(scrollY);
-            MP4Client.syncFocusedStateToServer();
-            return true;
-        }
         TexturePoint point = toTexturePoint((int) mouseX, (int) mouseY);
         if (point != null && MP4TextureHitTest.hit(point) == MP4TextureHit.VOLUME) {
             MP4FocusState.adjustVolume(scrollY);
@@ -185,35 +145,13 @@ public class MP4FocusScreen extends Screen {
         return true;
     }
 
-    private void toggleCalibrationOrientation(double scrollY) {
-        if (Math.abs(scrollY) < 0.01D) {
-            return;
-        }
-        long now = System.nanoTime();
-        if (now - lastCalibrationScrollToggleNanos < CALIBRATION_SCROLL_TOGGLE_COOLDOWN_NANOS) {
-            return;
-        }
-        lastCalibrationScrollToggleNanos = now;
-        boolean targetLandscape = !MP4FocusState.landscape();
-        float targetDegrees = targetLandscape ? -90.0F : 90.0F;
-        MP4FocusState.animateRotationTo(targetDegrees, targetLandscape);
-        LOGGER.info("MP4 校准模式滚轮旋转: scrollY={} targetLandscape={}", fmt(scrollY), targetLandscape);
-    }
-
     private void handleLeftClick(int mouseX, int mouseY) {
         if (rotationMoved) {
             rotationMoved = false;
             return;
         }
-        if (CALIBRATION_MODE) {
-            handleCalibrationClick(mouseX, mouseY);
-            return;
-        }
         TexturePoint point = toTexturePoint(mouseX, mouseY);
         if (point == null) {
-            if (CALIBRATION_MODE) {
-                LOGGER.info("MP4 点击校准: screen=({}, {}) outside surface={}", mouseX, mouseY, projectedSurface());
-            }
             return;
         }
         if (MP4FocusState.rotationHintVisible()) {
@@ -223,7 +161,7 @@ public class MP4FocusScreen extends Screen {
             }
             return;
         }
-        HitResult hit = MP4TextureHitTest.hitOrSnap(point);
+        HitResult hit = new HitResult(MP4TextureHitTest.hit(point), point, false);
         if (MP4BiliLoginOverlay.visible() && hit.hit() != MP4TextureHit.BILI_LOGIN) {
             return;
         }
@@ -233,9 +171,6 @@ public class MP4FocusScreen extends Screen {
                 MP4FocusState.setScrubbingProgress(true);
             }
             updateSliderValue(hit.hit(), hit.point());
-        }
-        if (CALIBRATION_MODE) {
-            logCalibration(mouseX, mouseY, hit.point(), hit.hit());
         }
         handleHit(hit.hit(), hit.point());
         MP4Client.syncFocusedStateToServer();
@@ -248,7 +183,7 @@ public class MP4FocusScreen extends Screen {
             return;
         }
         updateSliderValue(draggingSlider == SliderDrag.PROGRESS ? MP4TextureHit.PROGRESS : MP4TextureHit.VOLUME,
-            point);
+                point);
     }
 
     private void updateSliderValue(MP4TextureHit hit, TexturePoint point) {
@@ -260,10 +195,10 @@ public class MP4FocusScreen extends Screen {
     }
 
     private boolean isBorderDragStart(int mouseX, int mouseY) {
-        if (CALIBRATION_MODE) {
+        ProjectedSurface surface = projectedSurface();
+        if (surface == null) {
             return false;
         }
-        ProjectedSurface surface = projectedSurface();
         if (!surface.inflate(BORDER_DRAG_PIXELS).contains(mouseX, mouseY) || surface.contains(mouseX, mouseY)) {
             return false;
         }
@@ -280,9 +215,6 @@ public class MP4FocusScreen extends Screen {
         lastDragAngle = rotationStartAngle;
         lastDragNanos = System.nanoTime();
         dragVelocityDegreesPerSecond = 0.0F;
-        if (CALIBRATION_MODE) {
-            LOGGER.info("MP4 边框旋转开始: screen=({}, {}) landscape={}", mouseX, mouseY, MP4FocusState.landscape());
-        }
     }
 
     private void updateDeviceRotation(int mouseX, int mouseY) {
@@ -329,7 +261,7 @@ public class MP4FocusScreen extends Screen {
     private void finishDeviceRotation() {
         float base = MP4FocusState.landscape() ? -90.0F : 0.0F;
         float impulse = Math.max(-FLICK_IMPULSE_MAX,
-            Math.min(FLICK_IMPULSE_MAX, dragVelocityDegreesPerSecond * FLICK_IMPULSE_SCALE));
+                Math.min(FLICK_IMPULSE_MAX, dragVelocityDegreesPerSecond * FLICK_IMPULSE_SCALE));
         float absolute = base + MP4FocusState.dragRotationDegrees() + impulse;
         boolean targetLandscape = Math.abs(normalizeDegrees(absolute + 90.0F)) < ORIENTATION_SNAP_DEGREES;
         boolean targetPortrait = Math.abs(normalizeDegrees(absolute)) < ORIENTATION_SNAP_DEGREES;
@@ -349,10 +281,6 @@ public class MP4FocusScreen extends Screen {
         } else {
             MP4FocusState.animateRotationTo(0.0F, MP4FocusState.landscape());
         }
-        if (CALIBRATION_MODE) {
-            LOGGER.info("MP4 边框旋转结束: absolute={} targetLandscape={} targetPortrait={} landscape={}",
-                fmt(absolute), targetLandscape, targetPortrait, MP4FocusState.landscape());
-        }
         rotatingDevice = false;
     }
 
@@ -364,7 +292,11 @@ public class MP4FocusScreen extends Screen {
     }
 
     private ScreenPoint rotationPivotScreenPoint() {
-        return activeInputQuad().pivotPoint(MP4FocusState.ROTATION_PIVOT_U, MP4FocusState.ROTATION_PIVOT_V);
+        Quad quad = projectedInputQuadOrNull();
+        if (quad != null) {
+            return quad.pivotPoint(MP4FocusState.ROTATION_PIVOT_U, MP4FocusState.ROTATION_PIVOT_V);
+        }
+        return new ScreenPoint(width * 0.5F, height * 0.5F);
     }
 
     private float normalizeDegrees(float degrees) {
@@ -376,248 +308,6 @@ public class MP4FocusScreen extends Screen {
             result -= 360.0F;
         }
         return result;
-    }
-
-    private void handleCalibrationClick(int mouseX, int mouseY) {
-        if (MP4FocusState.calibrationComplete(width, height)) {
-            MP4FocusState.resetCalibration(width, height);
-        }
-        int step = MP4FocusState.calibrationStep();
-        if (step >= MP4FocusState.calibrationPoints()) {
-            return;
-        }
-        int targetX = calibrationTextureX(step);
-        int targetY = calibrationTextureY(step);
-        MP4FocusState.recordCalibrationPoint(width, height, mouseX, mouseY);
-        MP4FocusState.pressFeedback(targetX, targetY);
-        boolean complete = MP4FocusState.calibrationComplete(width, height);
-        LOGGER.info("MP4 九点校准采样: run={} step={}/{} window={}x{} screen=({}, {}) target=({}, {}) complete={}",
-            MP4FocusState.calibrationRun() + 1, step + 1, MP4FocusState.calibrationPoints(), width, height,
-            mouseX, mouseY, targetX, targetY, complete);
-        if (complete) {
-            SamplePoint[] samples = calibrationSamples();
-            CalibrationRunSummary summary = buildCalibrationRunSummary(samples);
-            CALIBRATION_REPORTS.add(summary);
-            logCalibrationReport(samples, summary);
-            writeCalibrationReportFiles(samples, summary);
-            MP4FocusState.finishCalibrationRun();
-            MP4FocusState.resetCalibration(width, height);
-        }
-    }
-
-    private CalibrationRunSummary buildCalibrationRunSummary(SamplePoint[] samples) {
-        float minX = Float.MAX_VALUE;
-        float minY = Float.MAX_VALUE;
-        float maxX = -Float.MAX_VALUE;
-        float maxY = -Float.MAX_VALUE;
-        double totalError = 0.0D;
-        double maxError = 0.0D;
-        Quad defaultQuad = activeInputQuad();
-        for (SamplePoint sample : samples) {
-            minX = Math.min(minX, sample.screenX());
-            minY = Math.min(minY, sample.screenY());
-            maxX = Math.max(maxX, sample.screenX());
-            maxY = Math.max(maxY, sample.screenY());
-            ScreenPoint expected = defaultQuad.screenPointForTexture(sample.textureX(), sample.textureY());
-            double dx = sample.screenX() - expected.x();
-            double dy = sample.screenY() - expected.y();
-            double error = Math.sqrt(dx * dx + dy * dy);
-            totalError += error;
-            maxError = Math.max(maxError, error);
-        }
-        float surfaceW = Math.max(1.0F, maxX - minX);
-        float surfaceH = Math.max(1.0F, maxY - minY);
-        float centerX = (minX + maxX) * 0.5F;
-        float centerY = (minY + maxY) * 0.5F;
-        float scaleX = surfaceW / (TEXTURE_W - 1.0F);
-        float scaleY = surfaceH / (TEXTURE_H - 1.0F);
-        float scale = (scaleX + scaleY) * 0.5F;
-        float offsetX = centerX - width * 0.5F;
-        float offsetY = centerY - height * 0.5F;
-        return new CalibrationRunSummary(MP4FocusState.calibrationRun() + 1, MP4FocusState.landscape(), width, height,
-            scaleX, scaleY, scale, offsetX, offsetY, totalError / samples.length, maxError);
-    }
-
-    private void logCalibrationReport(SamplePoint[] samples, CalibrationRunSummary summary) {
-        LOGGER.info(
-            "MP4 校准报告: run={} orientation={} window={}x{} fitScaleX={} fitScaleY={} fitScaleAvg={} centerOffset=({}, {}) currentDefaultErrorAvgPx={} currentDefaultErrorMaxPx={} samples={}",
-            summary.run(), summary.orientationName(), summary.width(), summary.height(), fmt(summary.scaleX()), fmt(summary.scaleY()),
-            fmt(summary.scale()), fmt(summary.offsetX()), fmt(summary.offsetY()), fmt(summary.avgErrorPx()),
-            fmt(summary.maxErrorPx()), csvSamples(samples));
-        LOGGER.info(
-            "MP4 校准汇总: runs={} portrait(scale={}, xOffset={}, yOffset={}, avgErrorPx={}) landscape(scale={}, xOffset={}, yOffset={}, avgErrorPx={})",
-            CALIBRATION_REPORTS.size(), fmt(averageScale(false)), Math.round(averageOffsetX(false)),
-            Math.round(averageOffsetY(false)), fmt(averageError(false)), fmt(averageScale(true)),
-            Math.round(averageOffsetX(true)), Math.round(averageOffsetY(true)), fmt(averageError(true)));
-    }
-
-    private String csvSamples(SamplePoint[] samples) {
-        StringBuilder builder = new StringBuilder();
-        for (int i = 0; i < samples.length; i++) {
-            if (i > 0) {
-                builder.append(';');
-            }
-            builder.append(calibrationLabel(i)).append(':')
-                .append(samples[i].textureX()).append(',').append(samples[i].textureY()).append("->")
-                .append(fmt(samples[i].screenX())).append(',').append(fmt(samples[i].screenY()));
-        }
-        return builder.toString();
-    }
-
-    private void writeCalibrationReportFiles(SamplePoint[] samples, CalibrationRunSummary summary) {
-        Path directory = Minecraft.getInstance().gameDirectory.toPath();
-        Path csv = directory.resolve("mp4-calibration-report.csv");
-        Path text = directory.resolve("mp4-calibration-summary.txt");
-        try {
-            migrateLegacyCalibrationCsv(csv);
-            if (Files.notExists(csv)) {
-                Files.writeString(csv,
-                    "run,orientation,width,height,label,textureX,textureY,screenX,screenY,fitScaleX,fitScaleY,fitScaleAvg,offsetX,offsetY,defaultErrorAvgPx,defaultErrorMaxPx\n",
-                    StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            }
-            StringBuilder rows = new StringBuilder();
-            for (int i = 0; i < samples.length; i++) {
-                rows.append(summary.run()).append(',')
-                    .append(summary.orientationName()).append(',')
-                    .append(summary.width()).append(',')
-                    .append(summary.height()).append(',')
-                    .append(calibrationLabel(i)).append(',')
-                    .append(samples[i].textureX()).append(',')
-                    .append(samples[i].textureY()).append(',')
-                    .append(fmt(samples[i].screenX())).append(',')
-                    .append(fmt(samples[i].screenY())).append(',')
-                    .append(fmt(summary.scaleX())).append(',')
-                    .append(fmt(summary.scaleY())).append(',')
-                    .append(fmt(summary.scale())).append(',')
-                    .append(fmt(summary.offsetX())).append(',')
-                    .append(fmt(summary.offsetY())).append(',')
-                    .append(fmt(summary.avgErrorPx())).append(',')
-                    .append(fmt(summary.maxErrorPx())).append('\n');
-            }
-            Files.writeString(csv, rows.toString(), StandardCharsets.UTF_8, StandardOpenOption.CREATE,
-                StandardOpenOption.APPEND);
-            Files.writeString(text, calibrationSummaryText(), StandardCharsets.UTF_8, StandardOpenOption.CREATE,
-                StandardOpenOption.TRUNCATE_EXISTING);
-        } catch (IOException ex) {
-            LOGGER.warn("MP4 校准报告写入失败", ex);
-        }
-    }
-
-    private void migrateLegacyCalibrationCsv(Path csv) throws IOException {
-        if (Files.notExists(csv)) {
-            return;
-        }
-        String header = Files.readString(csv, StandardCharsets.UTF_8).lines().findFirst().orElse("");
-        if (header.contains("orientation")) {
-            return;
-        }
-        Path legacy = csv.resolveSibling("mp4-calibration-report-legacy-" + System.currentTimeMillis() + ".csv");
-        Files.move(csv, legacy, StandardCopyOption.REPLACE_EXISTING);
-        LOGGER.info("MP4 旧版校准 CSV 已备份: {}", legacy.getFileName());
-    }
-
-    private String calibrationSummaryText() {
-        StringBuilder builder = new StringBuilder();
-        builder.append("MP4 GUI calibration summary\n")
-            .append("runs=").append(CALIBRATION_REPORTS.size()).append('\n')
-            .append("active portrait fit scale=").append(fmt(DEFAULT_PORTRAIT_SCALE_HEIGHT_FACTOR))
-            .append("*height+").append(fmt(DEFAULT_PORTRAIT_SCALE_BASE)).append('\n')
-            .append("active portrait fit xOffset=").append(fmt(DEFAULT_PORTRAIT_X_OFFSET_HEIGHT_FACTOR))
-            .append("*height+").append(fmt(DEFAULT_PORTRAIT_X_OFFSET_BASE)).append('\n')
-            .append("active portrait fit yOffset=").append(fmt(DEFAULT_PORTRAIT_Y_OFFSET_HEIGHT_FACTOR))
-            .append("*height+").append(fmt(DEFAULT_PORTRAIT_Y_OFFSET_BASE)).append('\n')
-            .append("active portrait right-half screenX fix=").append(fmt(PORTRAIT_RIGHT_HALF_SCREEN_X_FIX)).append("px")
-            .append('\n')
-            .append("landscape note=screen vertical maps to texture X; screen horizontal maps to texture Y")
-            .append('\n')
-            .append("active landscape fine tune dx=").append(fmt(LANDSCAPE_FINE_TUNE_X))
-            .append(" dy=").append(fmt(LANDSCAPE_FINE_TUNE_Y))
-            .append(" topHalfTextureXFix=").append(fmt(LANDSCAPE_TOP_HALF_TEXTURE_X_FIX))
-            .append("\n\n")
-            .append("portrait runs=").append(countRuns(false)).append('\n')
-            .append("recommended PORTRAIT_SCALE=").append(fmt(averageScale(false))).append('\n')
-            .append("recommended PORTRAIT_X_OFFSET=").append(Math.round(averageOffsetX(false))).append('\n')
-            .append("recommended PORTRAIT_Y_OFFSET=").append(Math.round(averageOffsetY(false))).append('\n')
-            .append("portrait avg error px=").append(fmt(averageError(false))).append("\n\n")
-            .append("landscape runs=").append(countRuns(true)).append('\n')
-            .append("recommended LANDSCAPE_SCALE=").append(fmt(averageScale(true))).append('\n')
-            .append("recommended LANDSCAPE_X_OFFSET=").append(Math.round(averageOffsetX(true))).append('\n')
-            .append("recommended LANDSCAPE_Y_OFFSET=").append(Math.round(averageOffsetY(true))).append('\n')
-            .append("landscape avg error px=").append(fmt(averageError(true))).append("\n\n");
-        for (CalibrationRunSummary summary : CALIBRATION_REPORTS) {
-            builder.append("run ").append(summary.run())
-                .append(" orientation=").append(summary.orientationName())
-                .append(" window=").append(summary.width()).append('x').append(summary.height())
-                .append(" scale=").append(fmt(summary.scale()))
-                .append(" scaleX=").append(fmt(summary.scaleX()))
-                .append(" scaleY=").append(fmt(summary.scaleY()))
-                .append(" offsetX=").append(fmt(summary.offsetX()))
-                .append(" offsetY=").append(fmt(summary.offsetY()))
-                .append(" avgErrorPx=").append(fmt(summary.avgErrorPx()))
-                .append(" maxErrorPx=").append(fmt(summary.maxErrorPx()))
-                .append('\n');
-        }
-        return builder.toString();
-    }
-
-    private long countRuns(boolean landscape) {
-        return CALIBRATION_REPORTS.stream().filter(summary -> summary.landscape() == landscape).count();
-    }
-
-    private double averageScale(boolean landscape) {
-        return CALIBRATION_REPORTS.stream().filter(summary -> summary.landscape() == landscape)
-            .mapToDouble(summary -> summary.scale()).average()
-            .orElse(defaultPortraitScale(height));
-    }
-
-    private double averageOffsetX(boolean landscape) {
-        return CALIBRATION_REPORTS.stream().filter(summary -> summary.landscape() == landscape)
-            .mapToDouble(summary -> summary.offsetX()).average()
-            .orElse(defaultPortraitXOffset(height));
-    }
-
-    private double averageOffsetY(boolean landscape) {
-        return CALIBRATION_REPORTS.stream().filter(summary -> summary.landscape() == landscape)
-            .mapToDouble(summary -> summary.offsetY()).average()
-            .orElse(defaultPortraitYOffset(height));
-    }
-
-    private double averageError(boolean landscape) {
-        return CALIBRATION_REPORTS.stream().filter(summary -> summary.landscape() == landscape)
-            .mapToDouble(summary -> summary.avgErrorPx()).average().orElse(0.0D);
-    }
-
-    private String fmt(double value) {
-        return String.format(Locale.ROOT, "%.3f", value);
-    }
-
-    private String calibrationLabel(int step) {
-        return switch (step) {
-            case 0 -> "TL";
-            case 1 -> "BL";
-            case 2 -> "TR";
-            case 3 -> "BR";
-            case 4 -> "CENTER";
-            case 5 -> "LEFT_HALF_CENTER";
-            case 6 -> "TOP_HALF_CENTER";
-            case 7 -> "RIGHT_HALF_CENTER";
-            case 8 -> "BOTTOM_HALF_CENTER";
-            default -> "DONE";
-        };
-    }
-
-    private void logCalibration(int mouseX, int mouseY, TexturePoint point, MP4TextureHit hit) {
-        ProjectedSurface surface = projectedSurface();
-        float hoverX = (mouseX - surface.centerX()) / Math.max(1.0F, surface.width() * 0.5F);
-        float hoverY = (mouseY - surface.centerY()) / Math.max(1.0F, surface.height() * 0.5F);
-        CalibrationPoint nearest = CalibrationPoint.nearest(point);
-        LOGGER.info(
-            "MP4 点击校准: screen=({}, {}) surface=[left={}, top={}, w={}, h={}, center=({}, {})] texture=({}, {}) normalized=({}/{}, {}/{}) hover=({}, {}) landscape={} hit={} nearest={} target=({}, {}) error=({}, {})",
-            mouseX, mouseY, surface.left(), surface.top(), surface.width(), surface.height(), surface.centerX(),
-            surface.centerY(), point.x(), point.y(), point.x(), TEXTURE_W, point.y(), TEXTURE_H,
-            String.format(java.util.Locale.ROOT, "%.3f", hoverX),
-            String.format(java.util.Locale.ROOT, "%.3f", hoverY), MP4FocusState.landscape(), hit, nearest.label(),
-            nearest.x(), nearest.y(), point.x() - nearest.x(), point.y() - nearest.y());
     }
 
     private void handleHit(MP4TextureHit hit, TexturePoint point) {
@@ -681,17 +371,18 @@ public class MP4FocusScreen extends Screen {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.getConnection() != null) {
             java.util.UUID deviceId = minecraft.player != null
-                ? com.zhongbai233.net_music_can_play_bili.item.MP4Item.readDeviceId(
-                    minecraft.player.getItemInHand(MP4FocusState.hand()))
-                : null;
+                    ? com.zhongbai233.net_music_can_play_bili.item.MP4Item.readDeviceId(
+                            minecraft.player.getItemInHand(MP4FocusState.hand()))
+                    : null;
             if (deviceId == null) {
-                minecraft.getConnection().send(new com.zhongbai233.net_music_can_play_bili.network.MP4EnsureDeviceIdPacket(
-                    MP4FocusState.hand()));
+                minecraft.getConnection()
+                        .send(new com.zhongbai233.net_music_can_play_bili.network.MP4EnsureDeviceIdPacket(
+                                MP4FocusState.hand()));
                 return;
             }
             MP4Client.cacheFocusedState(deviceId);
             minecraft.getConnection().send(new MP4PlaybackControlPacket(action, MP4FocusState.selectedQueueIndex(),
-                Math.round(MP4FocusState.volume() * 1000.0F), Math.max(0L, targetMillis), deviceId));
+                    Math.round(MP4FocusState.volume() * 1000.0F), Math.max(0L, targetMillis), deviceId));
         }
     }
 
@@ -712,239 +403,24 @@ public class MP4FocusScreen extends Screen {
     }
 
     private TexturePoint toTexturePoint(int mouseX, int mouseY) {
-        if (CALIBRATION_MODE && MP4FocusState.calibrationComplete(width, height)) {
-            return calibratedPortraitPoint(mouseX, mouseY);
-        }
-        TexturePoint point = activeInputQuad().toTexturePoint(mouseX, mouseY);
-        if (point == null) {
-            return null;
-        }
-        point = adjustPortraitTexturePoint(point);
-        return adjustLandscapeTexturePoint(point);
-    }
-
-    private TexturePoint adjustPortraitTexturePoint(TexturePoint point) {
-        float landscapeShift = MP4FocusState.landscapeTransformProgress(1.0F)
-            * MP4FocusState.LANDSCAPE_LEFT_SHIFT_FRACTION;
-        if (landscapeShift > 0.0F) {
-            return point;
-        }
-        float rightWeight = Math.max(0.0F, Math.min(1.0F, (point.x() - TEXTURE_W * 0.5F) / (TEXTURE_W * 0.5F)));
-        if (rightWeight <= 0.0F) {
-            return point;
-        }
-        float textureXFix = PORTRAIT_RIGHT_HALF_SCREEN_X_FIX / Math.max(0.001F, defaultPortraitScale(height));
-        int adjustedX = Math.round(point.x() + textureXFix * rightWeight);
-        return new TexturePoint(Math.max(0, Math.min(TEXTURE_W - 1, adjustedX)), point.y());
-    }
-
-    private TexturePoint adjustLandscapeTexturePoint(TexturePoint point) {
-        float landscapeShift = MP4FocusState.landscapeTransformProgress(1.0F)
-            * MP4FocusState.LANDSCAPE_LEFT_SHIFT_FRACTION;
-        if (landscapeShift <= 0.0F) {
-            return point;
-        }
-        float upperWeight = Math.max(0.0F, Math.min(1.0F, (TEXTURE_W * 0.5F - point.x()) / (TEXTURE_W * 0.5F)));
-        if (upperWeight <= 0.0F) {
-            return point;
-        }
-        int adjustedX = Math.round(point.x() + LANDSCAPE_TOP_HALF_TEXTURE_X_FIX * landscapeShift * upperWeight);
-        return new TexturePoint(Math.max(0, Math.min(TEXTURE_W - 1, adjustedX)), point.y());
+        Quad quad = projectedInputQuadOrNull();
+        return quad != null ? quad.toTexturePoint(mouseX, mouseY) : null;
     }
 
     private ProjectedSurface projectedSurface() {
-        if (CALIBRATION_MODE && MP4FocusState.calibrationComplete(width, height)) {
-            return calibratedBounds();
-        }
-        return activeInputQuad().bounds();
+        Quad quad = projectedInputQuadOrNull();
+        return quad != null ? quad.bounds() : null;
     }
 
-    private Quad activeInputQuad() {
-        Quad portrait = defaultPortraitQuad();
-        Quad rotated = portrait.rotateDegrees(MP4FocusState.deviceRotationDegrees(1.0F),
-            MP4FocusState.ROTATION_PIVOT_U, MP4FocusState.ROTATION_PIVOT_V);
-        float landscapeShift = MP4FocusState.landscapeTransformProgress(1.0F)
-            * MP4FocusState.LANDSCAPE_LEFT_SHIFT_FRACTION;
-        if (landscapeShift <= 0.0F) {
-            return rotated;
-        }
-        float shift = -rotated.height() * landscapeShift;
-        return rotated.translate(shift + LANDSCAPE_FINE_TUNE_X * landscapeShift,
-            LANDSCAPE_FINE_TUNE_Y * landscapeShift);
-    }
-
-    private Quad defaultPortraitQuad() {
-        float scale = defaultPortraitScale(height);
-        float centerX = width * 0.5F + defaultPortraitXOffset(height);
-        float centerY = height * 0.5F + defaultPortraitYOffset(height);
-        float halfW = TEXTURE_W * scale * 0.5F;
-        float halfH = TEXTURE_H * scale * 0.5F;
-        return new Quad(
-            new ScreenPoint(centerX - halfW, centerY - halfH),
-            new ScreenPoint(centerX + halfW, centerY - halfH),
-            new ScreenPoint(centerX + halfW, centerY + halfH),
-            new ScreenPoint(centerX - halfW, centerY + halfH));
-    }
-
-    private static float defaultPortraitScale(int screenHeight) {
-        float fitted = DEFAULT_PORTRAIT_SCALE_HEIGHT_FACTOR * screenHeight + DEFAULT_PORTRAIT_SCALE_BASE;
-        return Math.max(DEFAULT_PORTRAIT_SCALE_MIN, Math.min(DEFAULT_PORTRAIT_SCALE_MAX, fitted));
-    }
-
-    private static float defaultPortraitXOffset(int screenHeight) {
-        return DEFAULT_PORTRAIT_X_OFFSET_HEIGHT_FACTOR * screenHeight + DEFAULT_PORTRAIT_X_OFFSET_BASE;
-    }
-
-    private static float defaultPortraitYOffset(int screenHeight) {
-        return DEFAULT_PORTRAIT_Y_OFFSET_HEIGHT_FACTOR * screenHeight + DEFAULT_PORTRAIT_Y_OFFSET_BASE;
-    }
-
-    private TexturePoint calibratedPortraitPoint(float mouseX, float mouseY) {
-        SamplePoint[] points = calibrationSamples();
-        int[] nearest = nearestSamples(points, mouseX, mouseY);
-        if (nearest.length < 3) {
-            return defaultPortraitQuad().toTexturePoint(mouseX, mouseY);
-        }
-        float totalWeight = 0.0F;
-        float textureX = 0.0F;
-        float textureY = 0.0F;
-        for (int index : nearest) {
-            SamplePoint sample = points[index];
-            float dx = mouseX - sample.screenX();
-            float dy = mouseY - sample.screenY();
-            float weight = 1.0F / Math.max(1.0F, dx * dx + dy * dy);
-            totalWeight += weight;
-            textureX += (sample.textureX() + dx * localScaleX(points, index)) * weight;
-            textureY += (sample.textureY() + dy * localScaleY(points, index)) * weight;
-        }
-        if (totalWeight <= 0.0F) {
+    private Quad projectedInputQuadOrNull() {
+        if (!MP4FocusState.hasProjectedQuad(width, height)) {
             return null;
         }
-        int x = Math.round(textureX / totalWeight);
-        int y = Math.round(textureY / totalWeight);
-        return new TexturePoint(Math.max(0, Math.min(TEXTURE_W - 1, x)), Math.max(0, Math.min(TEXTURE_H - 1, y)));
-    }
-
-    private ProjectedSurface calibratedBounds() {
-        float minX = Float.MAX_VALUE;
-        float minY = Float.MAX_VALUE;
-        float maxX = -Float.MAX_VALUE;
-        float maxY = -Float.MAX_VALUE;
-        for (SamplePoint point : calibrationSamples()) {
-            minX = Math.min(minX, point.screenX());
-            minY = Math.min(minY, point.screenY());
-            maxX = Math.max(maxX, point.screenX());
-            maxY = Math.max(maxY, point.screenY());
-        }
-        return new ProjectedSurface(Math.round(minX), Math.round(minY), Math.round(maxX - minX),
-            Math.round(maxY - minY)).inflate(8);
-    }
-
-    private SamplePoint[] calibrationSamples() {
-        SamplePoint[] points = new SamplePoint[CALIBRATION_TEXTURE_X.length];
-        for (int i = 0; i < points.length; i++) {
-            points[i] = new SamplePoint(MP4FocusState.calibrationScreenX(i), MP4FocusState.calibrationScreenY(i),
-                calibrationTextureX(i), calibrationTextureY(i));
-        }
-        return points;
-    }
-
-    private int calibrationTextureX(int step) {
-        if (!MP4FocusState.landscape()) {
-            return CALIBRATION_TEXTURE_X[Math.max(0, Math.min(CALIBRATION_TEXTURE_X.length - 1, step))];
-        }
-        return landscapeCalibrationTextureY(step);
-    }
-
-    private int calibrationTextureY(int step) {
-        if (!MP4FocusState.landscape()) {
-            return CALIBRATION_TEXTURE_Y[Math.max(0, Math.min(CALIBRATION_TEXTURE_Y.length - 1, step))];
-        }
-        return TEXTURE_H - 1 - landscapeCalibrationTextureX(step);
-    }
-
-    private int landscapeCalibrationTextureX(int step) {
-        return switch (Math.max(0, Math.min(CALIBRATION_TEXTURE_X.length - 1, step))) {
-            case 0, 1 -> 0;
-            case 2, 3 -> TEXTURE_H - 1;
-            case 5 -> TEXTURE_H / 4;
-            case 7 -> TEXTURE_H * 3 / 4;
-            default -> TEXTURE_H / 2;
-        };
-    }
-
-    private int landscapeCalibrationTextureY(int step) {
-        return switch (Math.max(0, Math.min(CALIBRATION_TEXTURE_Y.length - 1, step))) {
-            case 0, 2 -> 0;
-            case 1, 3 -> TEXTURE_W - 1;
-            case 6 -> TEXTURE_W / 4;
-            case 8 -> TEXTURE_W * 3 / 4;
-            default -> TEXTURE_W / 2;
-        };
-    }
-
-    private int[] nearestSamples(SamplePoint[] points, float x, float y) {
-        int[] result = { 0, 1, 2, 3 };
-        float[] distances = { Float.MAX_VALUE, Float.MAX_VALUE, Float.MAX_VALUE, Float.MAX_VALUE };
-        for (int i = 0; i < points.length; i++) {
-            float dx = x - points[i].screenX();
-            float dy = y - points[i].screenY();
-            float distance = dx * dx + dy * dy;
-            for (int slot = 0; slot < result.length; slot++) {
-                if (distance < distances[slot]) {
-                    for (int move = result.length - 1; move > slot; move--) {
-                        distances[move] = distances[move - 1];
-                        result[move] = result[move - 1];
-                    }
-                    distances[slot] = distance;
-                    result[slot] = i;
-                    break;
-                }
-            }
-        }
-        return result;
-    }
-
-    private float localScaleX(SamplePoint[] points, int index) {
-        SamplePoint point = points[index];
-        SamplePoint best = null;
-        float bestDistance = Float.MAX_VALUE;
-        for (SamplePoint other : points) {
-            if (other == point || other.textureX() == point.textureX()) {
-                continue;
-            }
-            float verticalPenalty = Math.abs(other.textureY() - point.textureY()) * 3.0F;
-            float distance = Math.abs(other.textureX() - point.textureX()) + verticalPenalty;
-            if (distance < bestDistance) {
-                best = other;
-                bestDistance = distance;
-            }
-        }
-        if (best == null || Math.abs(best.screenX() - point.screenX()) < 1.0F) {
-            return 1.0F;
-        }
-        return (best.textureX() - point.textureX()) / (best.screenX() - point.screenX());
-    }
-
-    private float localScaleY(SamplePoint[] points, int index) {
-        SamplePoint point = points[index];
-        SamplePoint best = null;
-        float bestDistance = Float.MAX_VALUE;
-        for (SamplePoint other : points) {
-            if (other == point || other.textureY() == point.textureY()) {
-                continue;
-            }
-            float horizontalPenalty = Math.abs(other.textureX() - point.textureX()) * 3.0F;
-            float distance = Math.abs(other.textureY() - point.textureY()) + horizontalPenalty;
-            if (distance < bestDistance) {
-                best = other;
-                bestDistance = distance;
-            }
-        }
-        if (best == null || Math.abs(best.screenY() - point.screenY()) < 1.0F) {
-            return 1.0F;
-        }
-        return (best.textureY() - point.textureY()) / (best.screenY() - point.screenY());
+        return new Quad(
+                new ScreenPoint(MP4FocusState.projectedQuadX(0), MP4FocusState.projectedQuadY(0)),
+                new ScreenPoint(MP4FocusState.projectedQuadX(1), MP4FocusState.projectedQuadY(1)),
+                new ScreenPoint(MP4FocusState.projectedQuadX(2), MP4FocusState.projectedQuadY(2)),
+                new ScreenPoint(MP4FocusState.projectedQuadX(3), MP4FocusState.projectedQuadY(3)));
     }
 
     private record ProjectedSurface(int left, int top, int width, int height) {
@@ -956,13 +432,6 @@ public class MP4FocusScreen extends Screen {
             return x >= left && y >= top && x < left + width && y < top + height;
         }
 
-        int centerX() {
-            return left + width / 2;
-        }
-
-        int centerY() {
-            return top + height / 2;
-        }
     }
 
     private record TexturePoint(int x, int y) {
@@ -971,96 +440,12 @@ public class MP4FocusScreen extends Screen {
     private record HitResult(MP4TextureHit hit, TexturePoint point, boolean snapped) {
     }
 
-    private record CalibrationPoint(String label, int x, int y) {
-        private static final CalibrationPoint[] POINTS = {
-                new CalibrationPoint("TL", 0, 0),
-                new CalibrationPoint("TR", TEXTURE_W - 1, 0),
-                new CalibrationPoint("BR", TEXTURE_W - 1, TEXTURE_H - 1),
-                new CalibrationPoint("BL", 0, TEXTURE_H - 1),
-                new CalibrationPoint("TOP_HALF_CENTER", TEXTURE_W / 2, TEXTURE_H / 4),
-                new CalibrationPoint("BOTTOM_HALF_CENTER", TEXTURE_W / 2, TEXTURE_H * 3 / 4),
-                new CalibrationPoint("LEFT_HALF_CENTER", TEXTURE_W / 4, TEXTURE_H / 2),
-                new CalibrationPoint("RIGHT_HALF_CENTER", TEXTURE_W * 3 / 4, TEXTURE_H / 2),
-                new CalibrationPoint("CENTER", TEXTURE_W / 2, TEXTURE_H / 2)
-        };
-
-        static CalibrationPoint nearest(TexturePoint point) {
-            CalibrationPoint best = POINTS[0];
-            int bestDistance = Integer.MAX_VALUE;
-            for (CalibrationPoint candidate : POINTS) {
-                int dx = point.x() - candidate.x();
-                int dy = point.y() - candidate.y();
-                int distance = dx * dx + dy * dy;
-                if (distance < bestDistance) {
-                    best = candidate;
-                    bestDistance = distance;
-                }
-            }
-            return best;
-        }
-    }
-
     private record ScreenPoint(float x, float y) {
     }
 
-    private record SamplePoint(float screenX, float screenY, int textureX, int textureY) {
-    }
-
-    private record CalibrationRunSummary(int run, boolean landscape, int width, int height, double scaleX,
-            double scaleY, double scale, double offsetX, double offsetY, double avgErrorPx, double maxErrorPx) {
-        String orientationName() {
-            return landscape ? "landscape" : "portrait";
-        }
-    }
-
     private record Quad(ScreenPoint topLeft, ScreenPoint topRight, ScreenPoint bottomRight, ScreenPoint bottomLeft) {
-        Quad rotateDegrees(float degrees, float pivotU, float pivotV) {
-            if (Math.abs(degrees) < 0.01F) {
-                return this;
-            }
-            ScreenPoint pivot = pivotPoint(pivotU, pivotV);
-            return new Quad(rotatePoint(topLeft, pivot, degrees), rotatePoint(topRight, pivot, degrees),
-                rotatePoint(bottomRight, pivot, degrees), rotatePoint(bottomLeft, pivot, degrees));
-        }
-
         ScreenPoint pivotPoint(float pivotU, float pivotV) {
             return sample(Math.max(0.0F, Math.min(1.0F, pivotU)), Math.max(0.0F, Math.min(1.0F, pivotV)));
-        }
-
-        Quad translate(float dx, float dy) {
-            return new Quad(translatePoint(topLeft, dx, dy), translatePoint(topRight, dx, dy),
-                translatePoint(bottomRight, dx, dy), translatePoint(bottomLeft, dx, dy));
-        }
-
-        float height() {
-            float left = distance(topLeft, bottomLeft);
-            float right = distance(topRight, bottomRight);
-            return (left + right) * 0.5F;
-        }
-
-        private static ScreenPoint translatePoint(ScreenPoint point, float dx, float dy) {
-            return new ScreenPoint(point.x() + dx, point.y() + dy);
-        }
-
-        private static float distance(ScreenPoint a, ScreenPoint b) {
-            float dx = a.x() - b.x();
-            float dy = a.y() - b.y();
-            return (float) Math.sqrt(dx * dx + dy * dy);
-        }
-
-        private static ScreenPoint rotatePoint(ScreenPoint point, ScreenPoint center, float degrees) {
-            float dx = point.x() - center.x();
-            float dy = point.y() - center.y();
-            double radians = Math.toRadians(degrees);
-            float cos = (float) Math.cos(radians);
-            float sin = (float) Math.sin(radians);
-            return new ScreenPoint(center.x() + dx * cos + dy * sin, center.y() - dx * sin + dy * cos);
-        }
-
-        ScreenPoint screenPointForTexture(int textureX, int textureY) {
-            float u = textureX / (TEXTURE_W - 1.0F);
-            float v = textureY / (TEXTURE_H - 1.0F);
-            return sample(u, v);
         }
 
         TexturePoint toTexturePoint(float screenX, float screenY) {
@@ -1103,7 +488,7 @@ public class MP4FocusScreen extends Screen {
             float maxX = Math.max(Math.max(topLeft.x(), topRight.x()), Math.max(bottomRight.x(), bottomLeft.x()));
             float maxY = Math.max(Math.max(topLeft.y(), topRight.y()), Math.max(bottomRight.y(), bottomLeft.y()));
             return new ProjectedSurface(Math.round(minX), Math.round(minY), Math.round(maxX - minX),
-                Math.round(maxY - minY));
+                    Math.round(maxY - minY));
         }
 
         private ScreenPoint sample(float u, float v) {
@@ -1179,18 +564,6 @@ public class MP4FocusScreen extends Screen {
         private MP4TextureHitTest() {
         }
 
-        static HitResult hitOrSnap(TexturePoint point) {
-            MP4TextureHit direct = hit(point);
-            if (direct != MP4TextureHit.NONE) {
-                return new HitResult(direct, point, false);
-            }
-            SnapCandidate best = nearestSnap(point);
-            if (best != null && best.distanceSquared() <= CLICK_SNAP_RADIUS * CLICK_SNAP_RADIUS) {
-                return new HitResult(best.hit(), best.point(), true);
-            }
-            return new HitResult(MP4TextureHit.NONE, point, false);
-        }
-
         static MP4TextureHit hit(TexturePoint point) {
             return MP4FocusState.landscape() ? landscapeHit(toLandscape(point)) : portraitHit(point);
         }
@@ -1226,13 +599,13 @@ public class MP4FocusScreen extends Screen {
                     return -1;
                 }
                 return Math.max(0, Math.min(MP4FocusState.LANDSCAPE_QUEUE_VISIBLE_ROWS - 1,
-                    (landscape.y() - 75) / 14));
+                        (landscape.y() - 75) / 14));
             }
             if (!inside(point, 31, 116, TEXTURE_W - 70, 168)) {
                 return -1;
             }
             return Math.max(0, Math.min(MP4FocusState.PORTRAIT_QUEUE_VISIBLE_ROWS - 1,
-                (point.y() - 116) / 28));
+                    (point.y() - 116) / 28));
         }
 
         static boolean rotationHintConfirm(TexturePoint point) {
@@ -1361,90 +734,6 @@ public class MP4FocusScreen extends Screen {
             return MP4TextureHit.NONE;
         }
 
-        private static SnapCandidate nearestSnap(TexturePoint point) {
-            if (MP4FocusState.landscape()) {
-                return nearestLandscapeSnap(point);
-            }
-            SnapCandidate best = null;
-            best = nearest(best, point, MP4TextureHit.QUALITY, 193, 21, 42, 22);
-            best = nearest(best, point, MP4TextureHit.PREVIOUS, 34, 333, 42, 42);
-            best = nearest(best, point, MP4TextureHit.PLAY, 101, 325, 54, 54);
-            best = nearest(best, point, MP4TextureHit.NEXT, 180, 333, 42, 42);
-            best = nearest(best, point, MP4TextureHit.PROGRESS, 28, 292, 200, 16);
-            best = nearest(best, point, MP4TextureHit.VOLUME, 56, 386, 172, 24);
-            best = nearest(best, point, MP4TextureHit.BILI_LOGIN, 20, 411, 42, 14);
-            best = nearest(best, point, MP4TextureHit.SHUFFLE, 68, 411, 58, 14);
-            best = nearest(best, point, MP4TextureHit.PLAYLIST, 136, 411, 58, 14);
-            best = nearest(best, point, MP4TextureHit.LYRICS, 203, 411, 32, 14);
-            if (MP4FocusState.qualityMenuOpen()) {
-                for (int i = 0; i < MP4FocusState.QUALITIES.length; i++) {
-                    best = nearest(best, point, qualityHit(i), 160, 68 + i * 13, 66, 11);
-                }
-            }
-            if (MP4FocusState.subtitleMenuOpen()) {
-                best = nearest(best, point, MP4TextureHit.SUBTITLE_OFF, 146, 354, 44, 14);
-                best = nearest(best, point, MP4TextureHit.SUBTITLE_PRIMARY, 146, 375, 44, 14);
-                best = nearest(best, point, MP4TextureHit.SUBTITLE_SECONDARY, 146, 396, 44, 14);
-                best = nearest(best, point, MP4TextureHit.SUBTITLE_AI, 146, 417, 72, 14);
-            }
-            return best;
-        }
-
-        private static SnapCandidate nearestLandscapeSnap(TexturePoint point) {
-            if (!MP4FocusState.controlsVisible()) {
-                return null;
-            }
-            TexturePoint landscape = toLandscape(point);
-            SnapCandidate best = null;
-            best = nearestLandscape(best, landscape, MP4TextureHit.QUALITY, 330, 14, 52, 28);
-            best = nearestLandscape(best, landscape, MP4TextureHit.PLAYLIST, 278, 16, 44, 20);
-            best = nearestLandscape(best, landscape, MP4TextureHit.LYRICS, 28, 207, 48, 24);
-            if (MP4FocusState.qualityMenuOpen()) {
-                for (int i = 0; i < MP4FocusState.QUALITIES.length; i++) {
-                    best = nearestLandscape(best, landscape, qualityHit(i), 330, 65 + i * 13, 70, 11);
-                }
-            }
-            best = nearestLandscape(best, landscape, MP4TextureHit.PREVIOUS, 146, 204, 30, 24);
-            best = nearestLandscape(best, landscape, MP4TextureHit.PLAY, 200, 198, 46, 34);
-            best = nearestLandscape(best, landscape, MP4TextureHit.NEXT, 270, 204, 30, 24);
-            best = nearestLandscape(best, landscape, MP4TextureHit.PROGRESS, 32, 176, 384, 18);
-            best = nearestLandscape(best, landscape, MP4TextureHit.VOLUME, 340, 202, 86, 22);
-            best = nearestLandscape(best, landscape, MP4TextureHit.REPEAT, 88, 213, 48, 14);
-            if (MP4FocusState.subtitleMenuOpen()) {
-                best = nearestLandscape(best, landscape, MP4TextureHit.SUBTITLE_OFF, 244, 72, 52, 14);
-                best = nearestLandscape(best, landscape, MP4TextureHit.SUBTITLE_PRIMARY, 244, 94, 52, 14);
-                best = nearestLandscape(best, landscape, MP4TextureHit.SUBTITLE_SECONDARY, 244, 116, 52, 14);
-                best = nearestLandscape(best, landscape, MP4TextureHit.SUBTITLE_AI, 244, 138, 82, 14);
-            }
-            return best;
-        }
-
-        private static SnapCandidate nearest(SnapCandidate best, TexturePoint point, MP4TextureHit hit, int x, int y,
-                int w, int h) {
-            int snappedX = Math.max(x, Math.min(x + w - 1, point.x()));
-            int snappedY = Math.max(y, Math.min(y + h - 1, point.y()));
-            int dx = point.x() - snappedX;
-            int dy = point.y() - snappedY;
-            int distanceSquared = dx * dx + dy * dy;
-            if (best == null || distanceSquared < best.distanceSquared()) {
-                return new SnapCandidate(hit, new TexturePoint(snappedX, snappedY), distanceSquared);
-            }
-            return best;
-        }
-
-        private static SnapCandidate nearestLandscape(SnapCandidate best, TexturePoint landscapePoint,
-                MP4TextureHit hit, int x, int y, int w, int h) {
-            int snappedX = Math.max(x, Math.min(x + w - 1, landscapePoint.x()));
-            int snappedY = Math.max(y, Math.min(y + h - 1, landscapePoint.y()));
-            int dx = landscapePoint.x() - snappedX;
-            int dy = landscapePoint.y() - snappedY;
-            int distanceSquared = dx * dx + dy * dy;
-            if (best == null || distanceSquared < best.distanceSquared()) {
-                return new SnapCandidate(hit, fromLandscape(new TexturePoint(snappedX, snappedY)), distanceSquared);
-            }
-            return best;
-        }
-
         private static MP4TextureHit qualityHit(int index) {
             return switch (Math.max(0, Math.min(7, index))) {
                 case 0 -> MP4TextureHit.QUALITY_0;
@@ -1460,13 +749,6 @@ public class MP4FocusScreen extends Screen {
 
         private static TexturePoint toLandscape(TexturePoint point) {
             return new TexturePoint(TEXTURE_H - 1 - point.y(), point.x());
-        }
-
-        private static TexturePoint fromLandscape(TexturePoint point) {
-            return new TexturePoint(point.y(), TEXTURE_H - 1 - point.x());
-        }
-
-        private record SnapCandidate(MP4TextureHit hit, TexturePoint point, int distanceSquared) {
         }
 
         private static boolean inside(TexturePoint p, int x, int y, int w, int h) {

@@ -3,12 +3,14 @@ package com.zhongbai233.net_music_can_play_bili.block;
 import com.mojang.serialization.MapCodec;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
+import com.zhongbai233.net_music_can_play_bili.item.MediaManagementToolItem;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.InteractionResult;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -29,9 +31,6 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
-/**
- * 视频投影仪方块
- */
 public class VideoProjectorBlock extends Block implements EntityBlock {
     public static final EnumProperty<Direction> FACING = EnumProperty.create("facing", Direction.class,
             Direction.UP, Direction.DOWN);
@@ -108,11 +107,27 @@ public class VideoProjectorBlock extends Block implements EntityBlock {
     }
 
     @Override
+    protected InteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
+            Player player, InteractionHand hand, BlockHitResult hitResult) {
+        if (hand == InteractionHand.MAIN_HAND && stack.getItem() instanceof MediaManagementToolItem) {
+            return InteractionResult.PASS;
+        }
+        if (level.isClientSide()) {
+            openClientScreen(pos);
+        }
+        return InteractionResult.SUCCESS;
+    }
+
+    @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
             BlockHitResult hitResult) {
         if (level.isClientSide()) {
-            com.zhongbai233.net_music_can_play_bili.client.VideoProjectorClient.openScreen(pos);
+            openClientScreen(pos);
         }
         return InteractionResult.SUCCESS;
+    }
+
+    private static void openClientScreen(BlockPos pos) {
+        com.zhongbai233.net_music_can_play_bili.client.VideoProjectorClient.openScreen(pos);
     }
 }

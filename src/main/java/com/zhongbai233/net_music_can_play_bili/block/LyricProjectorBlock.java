@@ -99,7 +99,8 @@ public class LyricProjectorBlock extends Block implements EntityBlock {
     /** 从物品 NBT 读取远程连接目标并写入投影仪方块实体 */
     private static void applyLinkedPosition(Level level, BlockPos pos, ItemStack stack) {
         BlockPos linkedPos = LinkHelper.readLinkFromItem(stack);
-        if (linkedPos == null) return;
+        if (linkedPos == null)
+            return;
         BlockEntity be = level.getBlockEntity(pos);
         if (be instanceof LyricProjectorBlockEntity projector) {
             projector.linkTo(linkedPos);

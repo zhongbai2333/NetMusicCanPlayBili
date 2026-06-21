@@ -4,6 +4,8 @@ import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
+import com.zhongbai233.net_music_can_play_bili.item.HolographicGlassesItem;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
@@ -91,6 +93,7 @@ final class VideoPlaybackInstance {
     private volatile long offscreenSinceNanoTime;
     private volatile boolean prewarmVisible = true;
     private volatile boolean loggedOffscreenPause;
+    private volatile boolean guiConsumer;
     private int consecutiveBadUploads;
 
     VideoPlaybackInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
@@ -173,13 +176,13 @@ final class VideoPlaybackInstance {
         decoderStartOffsetMillis = effectiveStartOffsetMillis;
         adaptiveRestartOffsetMillis = -1L;
         try (AutoCloseable dec = VideoBillboardPreview.openDecoder(videoUrl, targetWidth, targetHeight, fps, codecId,
-                preferNative, decoderOverride, effectiveStartOffsetMillis, totalMillis)) {
+                preferNative, decoderOverride, effectiveStartOffsetMillis, totalMillis, guiConsumer)) {
             decoder = dec;
             while (running && gen == generation.get()) {
                 if (!waitWhilePaused(gen)) {
                     break;
                 }
-                if (projectorPositions.isEmpty()) {
+                if (!hasVideoConsumer()) {
                     break;
                 }
                 if (!waitWhileOffscreen(gen)) {
@@ -649,6 +652,42 @@ final class VideoPlaybackInstance {
         backTextureId = oldFrontId;
     }
 
+    VideoBillboardPreview.ProjectorFrameSnapshot frameSnapshot(BlockPos projectorPos) {
+        if (projectorPos != null && !projectorPositions.contains(projectorPos)) {
+            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
+        }
+        if (!hasFrame) {
+            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
+        }
+        return currentFrameSnapshot();
+    }
+
+    VideoBillboardPreview.ProjectorFrameSnapshot turntableFrameSnapshot(BlockPos turntablePos) {
+        if (turntablePos == null || !anchor.isForTurntable(turntablePos) || !hasFrame) {
+            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
+        }
+        return currentFrameSnapshot();
+    }
+
+    private VideoBillboardPreview.ProjectorFrameSnapshot currentFrameSnapshot() {
+        if (frontTexture != null) {
+            return new VideoBillboardPreview.ProjectorFrameSnapshot(true, false, frontTextureId, null, null, null,
+                    com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA);
+        }
+        if (yuvTextureSet != null) {
+            return new VideoBillboardPreview.ProjectorFrameSnapshot(true, true, null, yuvTextureSet.yId(),
+                    yuvTextureSet.uId(), yuvTextureSet.vId(), yuvTextureSet.format());
+        }
+        return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
+    }
+
+    VideoBillboardPreview.ProjectorFrameSnapshot previewFrameSnapshot() {
+        if (!hasFrame) {
+            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
+        }
+        return currentFrameSnapshot();
+    }
+
     void submit(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera) {
         if (!firstSubmitLogged) {
             firstSubmitLogged = true;
@@ -668,14 +707,17 @@ final class VideoPlaybackInstance {
             renderable |= projectorRenderable;
             prewarm |= projectorPrewarm;
         }
-        markVisibility(renderable, prewarm);
+        boolean holographicVisible = hasHolographicTurntableConsumer();
+        markVisibility(renderable || holographicVisible, prewarm || holographicVisible);
         pumpUploadOnRenderThread();
         for (BlockPos pos : projectorPositions) {
             if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
                 stale.add(pos);
                 continue;
             }
-            if (hasFrame && frontTexture != null) {
+            if (HolographicGlassesClient.shouldHideProjectorVideos()) {
+                VideoBillboardPreview.submitProjectorPrivacyOverlay(event, minecraft, camera, projector);
+            } else if (hasFrame && frontTexture != null) {
                 VideoBillboardPreview.submitProjectorGeometry(event, minecraft, camera, projector, frontTextureId,
                         targetWidth, targetHeight);
             } else if (hasFrame && yuvTextureSet != null && VideoBillboardPreview.isCustomYuvShaderAvailable()
@@ -758,8 +800,13 @@ final class VideoPlaybackInstance {
             }
             prewarm |= VideoBillboardPreview.isProjectorScreenRenderable(minecraft, camera, projector,
                     OFFSCREEN_PREWARM_DOT_THRESHOLD);
-            drew |= VideoBillboardPreview.drawProjectorYuvImmediate(event, minecraft, camera, projector, yuvTextureSet,
-                    route);
+            if (HolographicGlassesClient.shouldHideProjectorVideos()) {
+                VideoBillboardPreview.drawProjectorPrivacyOverlayImmediate(event, minecraft, camera, projector, route);
+                drew = true;
+            } else {
+                drew |= VideoBillboardPreview.drawProjectorYuvImmediate(event, minecraft, camera, projector,
+                        yuvTextureSet, route);
+            }
         }
         markVisibility(drew, prewarm);
         projectorPositions.removeAll(stale);
@@ -805,7 +852,7 @@ final class VideoPlaybackInstance {
     }
 
     boolean isWithinAudioRange(Minecraft minecraft) {
-        if (minecraft.player == null || projectorPositions.isEmpty()) {
+        if (minecraft.player == null || !hasVideoConsumer()) {
             return false;
         }
         return anchor.isWithinAudioRange(minecraft, projectorPositions, VideoBillboardPreview.AUDIO_SYNC_RANGE_SQR);
@@ -886,6 +933,38 @@ final class VideoPlaybackInstance {
 
     boolean hasProjectors() {
         return !projectorPositions.isEmpty();
+    }
+
+    boolean hasVideoConsumer() {
+        return guiConsumer || !projectorPositions.isEmpty() || hasHolographicTurntableConsumer();
+    }
+
+    void setGuiConsumer(boolean value) {
+        guiConsumer = value;
+        if (value) {
+            prewarmVisible = true;
+            offscreenSinceNanoTime = 0L;
+            lastVisibleNanoTime = System.nanoTime();
+        }
+    }
+
+    boolean hasGuiConsumer() {
+        return guiConsumer;
+    }
+
+    private boolean hasHolographicTurntableConsumer() {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft == null || minecraft.level == null) {
+            return false;
+        }
+        for (HolographicGlassesItem.ScreenBinding binding : HolographicGlassesClient.screenBindings()) {
+            if (binding.source() != null && binding.source().isTurntable()
+                    && minecraft.level.dimension().equals(binding.source().dimension())
+                    && anchor.isForTurntable(binding.source().pos())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     boolean containsProjector(BlockPos pos) {

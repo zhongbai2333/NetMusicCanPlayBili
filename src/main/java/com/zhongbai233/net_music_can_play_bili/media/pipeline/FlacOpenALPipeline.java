@@ -48,9 +48,9 @@ public final class FlacOpenALPipeline extends AbstractAudioPipeline {
             float timelineStartOffsetSeconds, String sessionId)
             throws IOException {
         this(dfLa, ownerClosed, sourcePos, startOffsetSeconds, timelineStartOffsetSeconds, sessionId, null);
-        }
+    }
 
-        public FlacOpenALPipeline(byte[] dfLa, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds,
+    public FlacOpenALPipeline(byte[] dfLa, AtomicBoolean ownerClosed, BlockPos sourcePos, float startOffsetSeconds,
             float timelineStartOffsetSeconds, String sessionId, UUID ownerId)
             throws IOException {
         super("fMP4", "flac", null, true);

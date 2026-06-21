@@ -3,13 +3,14 @@ package com.zhongbai233.net_music_can_play_bili.network;
 import com.github.tartaricacid.netmusic.api.resolver.MusicPlayResolverManager;
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import com.mojang.logging.LogUtils;
-import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliSongInfoSanitizer;
 import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
+import com.zhongbai233.net_music_can_play_bili.server.BiliWhitelistManager;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
@@ -25,13 +26,13 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, int volumePerMille, long targetMillis,
-    UUID deviceId)
+        UUID deviceId)
         implements CustomPacketPayload {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final Set<UUID> PENDING_STARTS = ConcurrentHashMap.newKeySet();
 
     public static final Type<MP4PlaybackControlPacket> TYPE = new Type<>(
-            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID, "mp4_playback_control"));
+            NetworkPayloadIds.id("mp4_playback_control"));
 
     public MP4PlaybackControlPacket(Action action, int selectedQueueIndex, int volumePerMille, long targetMillis) {
         this(action, selectedQueueIndex, volumePerMille, targetMillis, null);
@@ -71,42 +72,51 @@ public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, in
         if (!(context.player() instanceof ServerPlayer player)) {
             return;
         }
+        if (!NetworkRateLimiter.allow(player.getUUID(), "mp4_playback_control", 8)) {
+            LOGGER.debug("丢弃过频 MP4 播放控制包: player={} action={}", player.getUUID(),
+                    payload.action());
+            return;
+        }
         ItemStack stack = nonNullStack(payload.deviceId() != null ? MP4Item.findByDeviceId(player, payload.deviceId())
-            : MP4Item.findPlayableInInventory(player));
+                : MP4Item.findPlayableInInventory(player));
         if (!(stack.getItem() instanceof MP4Item)) {
             return;
         }
 
-        UUID deviceId = MP4Item.getOrCreateDeviceId(stack);
         ServerLevel level = (ServerLevel) player.level();
+        UUID deviceId = MP4DeviceIdentity.getOrCreateUnique(level, player, stack);
+        if (deviceId == null) {
+            return;
+        }
         MP4DeviceStateStore.DeviceEntry entry = MP4DeviceStateStore.getOrCreate(level, deviceId, stack);
         List<ItemStack> queue = queueForPlayback(entry, stack);
         int index = queue.isEmpty() ? 0 : clamp(payload.selectedQueueIndex(), 0, queue.size() - 1);
 
+        boolean selectedTrackChanged = index != entry.state().selectedQueueIndex();
         MP4Item.State state = withSelectedIndex(entry.state(), index);
         int volume = clamp(payload.volumePerMille(), 0, 1000);
         switch (payload.action()) {
             case STOP, PAUSE -> {
                 long elapsedMillis = MP4PlaybackSyncManager.currentElapsedMillis(player, deviceId,
                         Math.max(0L, payload.targetMillis()));
-            MP4Item.State newState = withPlayback(state, false, index, volume,
-                MP4PlaybackSyncManager.currentProgressPerMille(player,
-                    progressPerMille(queue, index, elapsedMillis, state.progressPerMille())));
-            MP4DeviceStateStore.update(level, deviceId, new MP4DeviceStateStore.DeviceEntry(newState, queue,
-                elapsedMillis, durationSeconds(queue, index), ""));
+                MP4Item.State newState = withPlayback(state, false, index, volume,
+                        MP4PlaybackSyncManager.currentProgressPerMille(player,
+                                progressPerMille(queue, index, elapsedMillis, state.progressPerMille())));
+                MP4DeviceStateStore.update(level, deviceId, new MP4DeviceStateStore.DeviceEntry(newState, queue,
+                        elapsedMillis, durationSeconds(queue, index), ""));
                 MP4PlaybackSyncManager.recordProgress(player, deviceId, index, elapsedMillis, queue, volume, false);
                 MP4PlaybackSyncManager.stop(player, deviceId);
                 broadcastStop(player, deviceId, index);
             }
             case VOLUME -> {
-            MP4DeviceStateStore.updateState(level, deviceId,
-                withPlayback(state, state.playing(), index, volume, state.progressPerMille()));
+                MP4DeviceStateStore.updateState(level, deviceId,
+                        withPlayback(state, state.playing(), index, volume, state.progressPerMille()));
                 MP4PlaybackSyncManager.updateVolume(deviceId, volume);
                 PacketDistributor.sendToPlayersTrackingEntityAndSelf(player,
-                    new MP4PlaybackVolumePacket(deviceId, volume));
+                        new MP4PlaybackVolumePacket(deviceId, volume));
             }
             case START -> {
-                long requestedMillis = Math.max(0L, payload.targetMillis());
+                long requestedMillis = selectedTrackChanged ? 0L : Math.max(0L, payload.targetMillis());
                 if (!MP4PlaybackSyncManager.resumeExisting(player, deviceId, index, volume, requestedMillis)) {
                     if (!PENDING_STARTS.add(deviceId)) {
                         return;
@@ -149,11 +159,18 @@ public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, in
             broadcastStop(player, deviceId, index);
             return;
         }
+        if (!isPlaybackAllowed(player, songInfo.songUrl)) {
+            clearPendingStart(pendingStartDeviceId);
+            UUID deviceId = MP4Item.readDeviceId(stack);
+            MP4PlaybackSyncManager.stop(player, deviceId);
+            broadcastStop(player, deviceId, index);
+            return;
+        }
 
         ItemMusicCD.SongInfo original = songInfo.clone();
         MusicPlayResolverManager.resolve(original.clone())
                 .thenAcceptAsync(resolved -> applyResolvedPlayback(player, stack, index, volumePerMille, targetMillis,
-                original, resolved, pendingStartDeviceId), player.level().getServer())
+                        original, resolved, pendingStartDeviceId), player.level().getServer())
                 .exceptionally(error -> {
                     clearPendingStart(pendingStartDeviceId);
                     LOGGER.error("MP4 解析播放失败: {}", original.songName, error);
@@ -162,13 +179,17 @@ public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, in
     }
 
     private static void applyResolvedPlayback(ServerPlayer player, ItemStack stack, int index, int volumePerMille,
-            long targetMillis, ItemMusicCD.SongInfo original, ItemMusicCD.SongInfo resolved, UUID pendingStartDeviceId) {
+            long targetMillis, ItemMusicCD.SongInfo original, ItemMusicCD.SongInfo resolved,
+            UUID pendingStartDeviceId) {
         clearPendingStart(pendingStartDeviceId);
         if (!(stack.getItem() instanceof MP4Item)) {
             return;
         }
-        UUID deviceId = MP4Item.getOrCreateDeviceId(stack);
         ServerLevel level = (ServerLevel) player.level();
+        UUID deviceId = MP4DeviceIdentity.getOrCreateUnique(level, player, stack);
+        if (deviceId == null) {
+            return;
+        }
         MP4DeviceStateStore.DeviceEntry entry = MP4DeviceStateStore.getOrCreate(level, deviceId, stack);
         List<ItemStack> queue = queueForPlayback(entry, stack);
         if (index < 0 || index >= queue.size()) {
@@ -178,9 +199,17 @@ public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, in
         if (current == null || !Objects.equals(current.songUrl, original.songUrl)) {
             return;
         }
+        if (!isPlaybackAllowed(player, original.songUrl)) {
+            MP4PlaybackSyncManager.stop(player, deviceId);
+            broadcastStop(player, deviceId, index);
+            return;
+        }
 
         String rawUrl = original.songUrl != null ? original.songUrl : "";
         String playUrl = resolved.songUrl != null && !resolved.songUrl.isBlank() ? resolved.songUrl : rawUrl;
+        if (BiliApiClient.isStoredVideoSelection(rawUrl)) {
+            playUrl = rawUrl;
+        }
         if (playUrl.isBlank()) {
             MP4PlaybackSyncManager.stop(player, deviceId);
             broadcastStop(player, deviceId, index);
@@ -194,23 +223,25 @@ public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, in
         String syncedPlayUrl = PlaybackSync.withSync(playUrl, sessionId, elapsedMillis, durationSeconds * 1000L);
 
         MP4Item.State state = entry.state();
-        int progress = durationSeconds <= 0 ? 0 : (int) Math.round(elapsedMillis * 1000.0D / (durationSeconds * 1000.0D));
+        int progress = durationSeconds <= 0 ? 0
+                : (int) Math.round(elapsedMillis * 1000.0D / (durationSeconds * 1000.0D));
         MP4DeviceStateStore.update(level, deviceId, new MP4DeviceStateStore.DeviceEntry(
-            withPlayback(state, true, index, volumePerMille, progress), queue, elapsedMillis, durationSeconds,
-            sessionId));
+                withPlayback(state, true, index, volumePerMille, progress), queue, elapsedMillis, durationSeconds,
+                sessionId));
         MP4PlaybackSyncManager.recordProgress(player, deviceId, index, elapsedMillis, durationSeconds,
-            clamp(volumePerMille, 0, 1000), sessionId, true);
+                clamp(volumePerMille, 0, 1000), sessionId, true);
 
         MP4PlaybackSyncManager.start(player, new MP4PlaybackSyncPacket(
-            player.getUUID(), deviceId, MP4PlaybackSyncPacket.SOURCE_PLAYER, player.getId(),
-            player.getX(), player.getY() + 1.2D, player.getZ(), true, index, syncedPlayUrl, rawUrl,
-            songName == null ? "" : songName,
+                player.getUUID(), deviceId, MP4PlaybackSyncPacket.SOURCE_PLAYER, player.getId(),
+                player.getX(), player.getY() + 1.2D, player.getZ(), true, index, syncedPlayUrl, rawUrl,
+                songName == null ? "" : songName,
                 durationSeconds, clamp(volumePerMille, 0, 1000), sessionId, elapsedMillis, false));
     }
 
     private static void broadcastStop(ServerPlayer player, UUID deviceId, int index) {
         UUID sourceId = deviceId != null ? deviceId : player.getUUID();
-        PacketDistributor.sendToPlayersTrackingEntityAndSelf(player, MP4PlaybackSyncPacket.stop(player.getUUID(), sourceId, index));
+        PacketDistributor.sendToPlayersTrackingEntityAndSelf(player,
+                MP4PlaybackSyncPacket.stop(player.getUUID(), sourceId, index));
     }
 
     private static int progressPerMille(List<ItemStack> queue, int index, long elapsedMillis, int fallback) {
@@ -231,15 +262,16 @@ public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, in
             int volumePerMille, int progressPerMille) {
         return new MP4Item.State(playing, state.shuffle(), state.videoEnabled(), state.landscape(),
                 state.qualityIndex(), selectedIndex, state.queueScrollOffset(), clamp(volumePerMille, 0, 1000),
-            state.repeatMode(), state.playlistOpen(), state.lyricsEnabled(), state.subtitleMode(),
-            state.subtitleAiEnabled(), clamp(progressPerMille, 0, 1000), state.rotationHintShown());
+                state.repeatMode(), state.playlistOpen(), state.lyricsEnabled(), state.subtitleMode(),
+                state.subtitleAiEnabled(), clamp(progressPerMille, 0, 1000), state.rotationHintShown());
     }
 
     private static MP4Item.State withSelectedIndex(MP4Item.State state, int selectedIndex) {
+        int progressPerMille = selectedIndex == state.selectedQueueIndex() ? state.progressPerMille() : 0;
         return new MP4Item.State(state.playing(), state.shuffle(), state.videoEnabled(), state.landscape(),
                 state.qualityIndex(), selectedIndex, state.queueScrollOffset(), state.volumePerMille(),
                 state.repeatMode(), state.playlistOpen(), state.lyricsEnabled(), state.subtitleMode(),
-                state.subtitleAiEnabled(), state.progressPerMille(), state.rotationHintShown());
+                state.subtitleAiEnabled(), progressPerMille, state.rotationHintShown());
     }
 
     private static int durationSeconds(List<ItemStack> queue, int index) {
@@ -276,6 +308,24 @@ public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, in
         if (deviceId != null) {
             PENDING_STARTS.remove(deviceId);
         }
+    }
+
+    private static boolean isPlaybackAllowed(ServerPlayer player, String sourceUrl) {
+        if (BiliSongInfoSanitizer.isForbiddenBiliDirectUrl(sourceUrl)) {
+            if (player != null) {
+                player.sendSystemMessage(BiliWhitelistManager.denialMessage(player, sourceUrl, "播放"));
+            }
+            return false;
+        }
+        if (player == null || !BiliWhitelistManager.enabled()
+                || BiliWhitelistManager.canonicalResource(sourceUrl).isEmpty()) {
+            return true;
+        }
+        if (BiliWhitelistManager.isAllowed(player.level().getServer(), sourceUrl)) {
+            return true;
+        }
+        player.sendSystemMessage(BiliWhitelistManager.denialMessage(player, sourceUrl, "播放"));
+        return false;
     }
 
     public enum Action {

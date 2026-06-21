@@ -1,0 +1,8 @@
+{
+  "replace": false,
+  "values": [
+    "net_music_can_play_bili:invisible_headphones",
+    "net_music_can_play_bili:cat_headphones",
+    "net_music_can_play_bili:holographic_glasses"
+  ]
+}

@@ -3,8 +3,6 @@ package com.zhongbai233.net_music_can_play_bili.bili;
 import com.github.tartaricacid.netmusic.api.resolver.IAsyncSongUrlResolver;
 import com.mojang.logging.LogUtils;
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.fml.loading.FMLEnvironment;
 import org.slf4j.Logger;
 
 import java.util.Objects;
@@ -22,12 +20,14 @@ public class BiliAudioResolver implements IAsyncSongUrlResolver {
     }
 
     public static ItemMusicCD.SongInfo resolveBiliSongInfo(String rawInput, int page) throws Exception {
-        BiliApiClient.VideoId videoId = BiliApiClient.extractVideoId(rawInput);
-        if (videoId == null) {
+        BiliApiClient.VideoSelection selection = BiliApiClient.extractVideoSelectionLenientWithShortLink(rawInput);
+        if (selection == null) {
             throw new IllegalArgumentException("请输入 B站 BV 号或 AV 号: " + rawInput);
         }
+        BiliApiClient.VideoId videoId = selection.videoId();
+        int selectedPage = page > 1 ? page : selection.page();
 
-        BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(videoId, page);
+        BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(videoId, selectedPage);
 
         ItemMusicCD.SongInfo songInfo = new ItemMusicCD.SongInfo(
                 Objects.requireNonNull(BiliApiClient.formatStoredVideoSelection(videoId, info.page())),
@@ -68,24 +68,25 @@ public class BiliAudioResolver implements IAsyncSongUrlResolver {
             throw new IllegalArgumentException("无法从唱片存储的内容提取 B站 ID: " + songInfo.songUrl);
         }
 
-        BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(selection.videoId(), selection.page());
-        String audioUrl = Objects.requireNonNull(BiliApiClient.getBestAudioUrl(selection.videoId(), info.cid()),
-                "音频直链不能为空");
-
+        BiliApiClient.VideoInfo info = null;
         String title = songInfo.songName;
-        if (title == null || title.isBlank()) {
+        if (title == null || title.isBlank() || songInfo.songTime <= 0) {
+            info = BiliApiClient.getVideoInfo(selection.videoId(), selection.page());
+        }
+        if ((title == null || title.isBlank()) && info != null) {
             title = info.displayTitle();
         }
         title = Objects.requireNonNull(title, "标题不能为空");
+        String storedSelection = Objects.requireNonNull(songInfo.songUrl, "B站存储选集不能为空");
 
-        // 不修改传入的 songInfo，避免 CDN 直链覆盖 BV 号导致下次无法重新解析
+        // 唱片和服务端同步只保留 BV/AV 选集，实际 CDN 直链由客户端播放前解析。
         ItemMusicCD.SongInfo resolved = new ItemMusicCD.SongInfo(
-                audioUrl,
+                storedSelection,
                 title,
-                songInfo.songTime > 0 ? songInfo.songTime : info.duration(),
+                songInfo.songTime > 0 ? songInfo.songTime : info != null ? info.duration() : 0,
                 false);
         if ((songInfo.artists == null || songInfo.artists.isEmpty())
-                && info.staffNames() != null && !info.staffNames().isEmpty()) {
+                && info != null && info.staffNames() != null && !info.staffNames().isEmpty()) {
             resolved.artists = new java.util.ArrayList<>(info.staffNames());
         } else {
             resolved.artists = songInfo.artists;
@@ -95,10 +96,6 @@ public class BiliAudioResolver implements IAsyncSongUrlResolver {
 
     @Override
     public CompletableFuture<ItemMusicCD.SongInfo> resolve(ItemMusicCD.SongInfo songInfo) {
-        if (FMLEnvironment.getDist() == Dist.DEDICATED_SERVER) {
-            return CompletableFuture.completedFuture(songInfo);
-        }
-
         return CompletableFuture.supplyAsync(() -> {
             try {
                 ItemMusicCD.SongInfo resolved = resolvePlayableSongInfo(songInfo);

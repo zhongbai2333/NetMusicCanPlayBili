@@ -6,7 +6,6 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
@@ -26,7 +25,6 @@ public final class MP4FocusState {
     public static final int ROTATION_HINT_DURATION_TICKS = 100;
 
     private static boolean active;
-    private static boolean calibrationMode;
     private static InteractionHand hand = InteractionHand.MAIN_HAND;
     private static int ticks;
     private static long lastFrameTickNanos;
@@ -69,13 +67,13 @@ public final class MP4FocusState {
     private static int pressTicks;
     private static boolean scrubbingProgress;
     private static float mediaProgress = 0.0F;
-    private static final int CALIBRATION_POINTS = 9;
-    private static final float[] calibrationScreenX = new float[CALIBRATION_POINTS];
-    private static final float[] calibrationScreenY = new float[CALIBRATION_POINTS];
-    private static int calibrationStep;
-    private static int calibrationWidth = -1;
-    private static int calibrationHeight = -1;
-    private static int calibrationRun;
+    private static final float[] projectedQuadX = new float[4];
+    private static final float[] projectedQuadY = new float[4];
+    private static boolean projectedQuadValid;
+    private static int projectedQuadGuiWidth = -1;
+    private static int projectedQuadGuiHeight = -1;
+    private static boolean projectedQuadLandscape;
+    private static long projectedQuadNanos;
 
     private MP4FocusState() {
     }
@@ -84,14 +82,6 @@ public final class MP4FocusState {
         active = true;
         hand = focusHand;
         ticks = 0;
-    }
-
-    public static void setCalibrationMode(boolean value) {
-        calibrationMode = value;
-    }
-
-    public static boolean calibrationMode() {
-        return calibrationMode;
     }
 
     public static void load(MP4Item.State state) {
@@ -189,7 +179,6 @@ public final class MP4FocusState {
 
     public static void deactivate() {
         active = false;
-        calibrationMode = false;
         ticks = 0;
         rotationHintTicks = 0;
     }
@@ -197,7 +186,6 @@ public final class MP4FocusState {
     /** 断连/切世界时清理所有纯客户端 UI 暂存状态，避免重连后继承旧设备界面。 */
     public static void resetAll() {
         active = false;
-        calibrationMode = false;
         hand = InteractionHand.MAIN_HAND;
         ticks = 0;
         lastFrameTickNanos = 0L;
@@ -240,12 +228,11 @@ public final class MP4FocusState {
         pressTicks = 0;
         scrubbingProgress = false;
         mediaProgress = 0.0F;
-        Arrays.fill(calibrationScreenX, 0.0F);
-        Arrays.fill(calibrationScreenY, 0.0F);
-        calibrationStep = 0;
-        calibrationWidth = -1;
-        calibrationHeight = -1;
-        calibrationRun = 0;
+        projectedQuadValid = false;
+        projectedQuadGuiWidth = -1;
+        projectedQuadGuiHeight = -1;
+        projectedQuadLandscape = false;
+        projectedQuadNanos = 0L;
     }
 
     public static void tick() {
@@ -534,50 +521,38 @@ public final class MP4FocusState {
         pressTicks = 8;
     }
 
-    public static int calibrationStep() {
-        return calibrationStep;
+    public static void updateProjectedQuad(float topLeftX, float topLeftY, float topRightX, float topRightY,
+            float bottomRightX, float bottomRightY, float bottomLeftX, float bottomLeftY, int guiWidth,
+            int guiHeight, boolean landscape) {
+        projectedQuadX[0] = topLeftX;
+        projectedQuadY[0] = topLeftY;
+        projectedQuadX[1] = topRightX;
+        projectedQuadY[1] = topRightY;
+        projectedQuadX[2] = bottomRightX;
+        projectedQuadY[2] = bottomRightY;
+        projectedQuadX[3] = bottomLeftX;
+        projectedQuadY[3] = bottomLeftY;
+        projectedQuadGuiWidth = guiWidth;
+        projectedQuadGuiHeight = guiHeight;
+        projectedQuadLandscape = landscape;
+        projectedQuadNanos = System.nanoTime();
+        projectedQuadValid = true;
     }
 
-    public static int calibrationRun() {
-        return calibrationRun;
+    public static boolean hasProjectedQuad(int guiWidth, int guiHeight) {
+        return projectedQuadValid
+                && projectedQuadGuiWidth == guiWidth
+                && projectedQuadGuiHeight == guiHeight
+                && projectedQuadLandscape == landscape
+                && System.nanoTime() - projectedQuadNanos < 250_000_000L;
     }
 
-    public static int calibrationPoints() {
-        return CALIBRATION_POINTS;
+    public static float projectedQuadX(int index) {
+        return projectedQuadX[index];
     }
 
-    public static boolean calibrationComplete(int width, int height) {
-        return calibrationStep >= CALIBRATION_POINTS && calibrationWidth == width && calibrationHeight == height;
-    }
-
-    public static void resetCalibration(int width, int height) {
-        calibrationStep = 0;
-        calibrationWidth = width;
-        calibrationHeight = height;
-    }
-
-    public static void finishCalibrationRun() {
-        calibrationRun++;
-    }
-
-    public static void recordCalibrationPoint(int width, int height, float screenX, float screenY) {
-        if (calibrationWidth != width || calibrationHeight != height) {
-            resetCalibration(width, height);
-        }
-        if (calibrationStep >= CALIBRATION_POINTS) {
-            return;
-        }
-        calibrationScreenX[calibrationStep] = screenX;
-        calibrationScreenY[calibrationStep] = screenY;
-        calibrationStep++;
-    }
-
-    public static float calibrationScreenX(int index) {
-        return calibrationScreenX[index];
-    }
-
-    public static float calibrationScreenY(int index) {
-        return calibrationScreenY[index];
+    public static float projectedQuadY(int index) {
+        return projectedQuadY[index];
     }
 
     public static void togglePlaying() {
@@ -687,9 +662,6 @@ public final class MP4FocusState {
         hoverTextureX = -1;
         hoverTextureY = -1;
         hoverControl = "NONE";
-        if (calibrationMode) {
-            return;
-        }
         targetHoverX = 0.0F;
         targetHoverY = 0.0F;
     }

@@ -13,7 +13,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>
  * 默认关闭。需同时启用 {@code -Dbili.video.advanced_features=true}
- * 与 {@code -Dbili.video.enable_bench_features=true}，再用 {@code -Dbili.playback.bench=true}
+ * 与 {@code -Dbili.video.enable_bench_features=true}，再用
+ * {@code -Dbili.playback.bench=true}
  * 打开后，才会做低频采样日志；不参与同步决策。
  * </p>
  */

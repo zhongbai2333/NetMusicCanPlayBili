@@ -19,14 +19,14 @@ import java.util.function.Consumer;
  */
 public abstract class BlackGoldScreen extends Screen {
     // ──── 主题常量 ────
-    public static final int GOLD = 0xFFD4A843;
-    public static final int GOLD_DIM = 0xFF6B4F12;
-    public static final int GOLD_GLOW = 0x30D4A843;
-    public static final int BG_BLACK = 0xFF0D0D0D;
-    public static final int BG_HEADER = 0xFF1C1C1C;
-    public static final int TEXT_PRIMARY = 0xFFE0D8C8;
-    public static final int TEXT_SECONDARY = 0xFFA09888;
-    public static final int TEXT_DIM = 0xFF605848;
+    public static final int GOLD = BlackGoldUi.GOLD;
+    public static final int GOLD_DIM = BlackGoldUi.GOLD_DIM;
+    public static final int GOLD_GLOW = BlackGoldUi.GOLD_GLOW;
+    public static final int BG_BLACK = BlackGoldUi.BG_BLACK;
+    public static final int BG_HEADER = BlackGoldUi.BG_HEADER;
+    public static final int TEXT_PRIMARY = BlackGoldUi.TEXT_PRIMARY;
+    public static final int TEXT_SECONDARY = BlackGoldUi.TEXT_SECONDARY;
+    public static final int TEXT_DIM = BlackGoldUi.TEXT_DIM;
 
     // ──── 布局常量 ────
     protected static final int BOX_W = 320;
@@ -77,7 +77,7 @@ public abstract class BlackGoldScreen extends Screen {
 
     @Override
     public void extractBackground(GuiGraphicsExtractor g, int mx, int my, float pt) {
-        g.fillGradient(0, 0, width, height, 0xCC000000, 0xDD050505);
+        BlackGoldUi.drawBackground(g, width, height);
     }
 
     @Override
@@ -125,18 +125,12 @@ public abstract class BlackGoldScreen extends Screen {
     // ──── 绘制 ────
 
     protected void drawBox(GuiGraphicsExtractor g, int x, int y) {
-        int h = boxH();
-        g.fillGradient(x - 2, y - 2, x + BOX_W + 2, y + h + 2, GOLD_GLOW, GOLD_GLOW);
-        g.fillGradient(x, y, x + BOX_W, y + h, BG_BLACK, BG_BLACK);
+        BlackGoldUi.drawPanel(g, x, y, BOX_W, boxH());
     }
 
     /** 绘制标题栏和关闭按钮 */
     protected void drawHeader(GuiGraphicsExtractor g, int bx, int by, int mx, int my) {
-        g.fillGradient(bx + 1, by + 1, bx + BOX_W - 1, by + HEADER_H, BG_HEADER, BG_HEADER);
-        g.fillGradient(bx + 8, by + HEADER_H - 1, bx + BOX_W - 8, by + HEADER_H, GOLD_DIM, GOLD_DIM);
-
-        Component title = getTitle();
-        g.centeredText(font, title, bx + BOX_W / 2, by + 9, GOLD);
+        BlackGoldUi.drawHeader(g, font, getTitle(), bx, by, BOX_W, HEADER_H);
 
         int cx = bx + BOX_W - CLOSE_SIZE - 8;
         int cy = by + (HEADER_H - CLOSE_SIZE) / 2;

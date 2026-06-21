@@ -2,10 +2,15 @@ package com.zhongbai233.net_music_can_play_bili.client;
 
 import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.mojang.logging.LogUtils;
-import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
-import com.zhongbai233.net_music_can_play_bili.bili.BiliSubtitleLyricService;
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.ResolvedVideoStream;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTimelineView;
+import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldMediaPlayback;
+import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldMediaRenderState;
+import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldVideoFrame;
+import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldVideoPipelineConfig;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
 import it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap;
@@ -40,30 +45,15 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public final class MP4HandheldVideoClient {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int MAX_ALLOWED_WIDTH = 8192;
-    private static final int MAX_ALLOWED_HEIGHT = 4320;
-    private static final int HIGH_RES_WARNING_WIDTH = 1920;
-    private static final int HIGH_RES_WARNING_HEIGHT = 1080;
-    private static final int MAX_FRAMES = Integer.getInteger("netmusic.mp4.video.max_frames", 1_000_000);
-    private static final long FRAME_WAIT_SLICE_MILLIS = Long.getLong("netmusic.mp4.video.frame_wait_slice_ms", 8L);
-    private static final long MAX_LATE_FRAME_NANOS = Long.getLong("netmusic.mp4.video.max_late_frame_ms", 250L)
-            * 1_000_000L;
-    private static final long STARTUP_DROP_LAG_NANOS = Long.getLong("netmusic.mp4.video.startup_drop_lag_ms", 750L)
-            * 1_000_000L;
-    private static final long MAX_DECODE_LEAD_NANOS = Long.getLong("netmusic.mp4.video.max_decode_lead_ms", 350L)
-            * 1_000_000L;
-    private static final long EARLY_TOLERANCE_NANOS = Long.getLong("netmusic.mp4.video.early_tolerance_ms", 24L)
-            * 1_000_000L;
-    private static final int FRAME_QUEUE_CAPACITY = Integer.getInteger("netmusic.mp4.video.queue_capacity", 4);
-    private static final boolean OFFSCREEN_PAUSE_DECODE = Boolean.parseBoolean(
-            System.getProperty("netmusic.mp4.video.offscreen.pause_decode", "true"));
-    private static final long OFFSCREEN_GRACE_NANOS = Long.getLong("netmusic.mp4.video.offscreen.grace_ms", 500L)
-            * 1_000_000L;
-    private static final long OFFSCREEN_RESUME_RESTART_LAG_NANOS = Long.getLong(
-            "netmusic.mp4.video.offscreen.resume_restart_lag_ms", 1_500L) * 1_000_000L;
-    private static final ExecutorService EXECUTOR = Executors.newCachedThreadPool(new Mp4VideoThreadFactory());
+    private static final HandheldVideoPipelineConfig CONFIG = HandheldVideoPipelineConfig.fromSystemProperties(
+            "netmusic.mp4.video");
+    private static final int MAX_VIDEO_THREADS = Math.max(2,
+            Integer.getInteger("netmusic.mp4.video.max_threads", 4));
+    private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(MAX_VIDEO_THREADS,
+            new Mp4VideoThreadFactory());
     private static final Map<UUID, DeviceVideoState> STATES = new ConcurrentHashMap<>();
     private static final AtomicBoolean highResolutionWarningShown = new AtomicBoolean(false);
+    private static final MP4HandheldMediaProfile MP4_PROFILE = MP4HandheldMediaProfile.INSTANCE;
 
     private MP4HandheldVideoClient() {
     }
@@ -73,41 +63,57 @@ public final class MP4HandheldVideoClient {
             return false;
         }
         DeviceVideoState state = state(deviceId);
-        if (!isDeviceInHotbar(deviceId)) {
+        if (!MP4_PROFILE.isDeviceAvailable(deviceId)) {
             stop(deviceId, "等待快捷栏");
             return false;
         }
-        MP4Item.State renderState = stateForDevice(deviceId);
+        HandheldMediaRenderState renderState = MP4_PROFILE.renderState(deviceId);
         if (!renderState.videoDecodeEnabled()) {
             stop(deviceId, "等待横屏播放");
             return false;
         }
-        MP4ClientPlayback.LocalVideoPlayback playback = MP4ClientPlayback.localVideoPlayback(deviceId);
+        HandheldMediaPlayback playback = MP4_PROFILE.playback(deviceId);
         if (!playback.hasPlayableVideoSource()) {
             stop(deviceId, "等待播放同步");
             return false;
         }
+        if (!MP4_PROFILE.hasStartedSound(deviceId, playback.sessionId())) {
+            waitForAudioStart(state);
+            return false;
+        }
         PlaybackKey key = new PlaybackKey(playback.sessionId(), playback.rawUrl(), renderState.videoQualityCeiling(),
-                renderState.subtitleAiEnabled(), shouldUseRgbaFallback());
-        VideoSession session = state.activeSession;
-        if (key.equals(state.activeKey) && session != null && !session.closed.get()) {
-            return pumpFrameForTimeline(state, session, anchoredVisualMillis(deviceId, playback));
+                renderState.allowAiSubtitle(), shouldUseRgbaFallback() || hasActiveRgbaConsumer(state));
+        synchronized (state.lifecycleLock) {
+            VideoSession session = state.activeSession;
+            if (key.equals(state.activeKey) && session != null && !session.closed.get()) {
+                return pumpFrameForTimeline(state, session, anchoredVisualMillis(deviceId, playback));
+            }
+            if (key.equals(state.resolvingKey)) {
+                return false;
+            }
+            if (key.equals(state.activeKey) && (key.equals(state.failedKey) || key.equals(state.endedKey))) {
+                return false;
+            }
+            stopLocked(state, "切换视频源");
+            state.activeKey = key;
+            state.resolvingKey = key;
+            state.failedKey = PlaybackKey.EMPTY;
+            state.endedKey = PlaybackKey.EMPTY;
+            if (!BiliVideoStreamResolver.isStoredVideoSelection(playback.rawUrl())) {
+                state.resolvingKey = PlaybackKey.EMPTY;
+                state.failedKey = key;
+                state.audioOnly = true;
+                state.statusText = "纯音乐";
+                state.sourceWidth = 0;
+                state.sourceHeight = 0;
+                clearFrameQueue(state);
+                return false;
+            }
+            state.audioOnly = false;
+            state.statusText = "解析视频流...";
+            state.sourceWidth = 0;
+            state.sourceHeight = 0;
         }
-        if (key.equals(state.resolvingKey)) {
-            return false;
-        }
-        if (key.equals(state.activeKey) && (key.equals(state.failedKey) || key.equals(state.endedKey))) {
-            return false;
-        }
-        stop(deviceId, "切换视频源");
-        state = state(deviceId);
-        state.activeKey = key;
-        state.resolvingKey = key;
-        state.failedKey = PlaybackKey.EMPTY;
-        state.endedKey = PlaybackKey.EMPTY;
-        state.statusText = "解析视频流...";
-        state.sourceWidth = 0;
-        state.sourceHeight = 0;
         resolveAndStart(deviceId, state, playback, key);
         return false;
     }
@@ -126,7 +132,16 @@ public final class MP4HandheldVideoClient {
         }
     }
 
-    public static VideoFrame latestFrame(UUID deviceId) {
+    public static void requestRgbaOutput(UUID deviceId) {
+        if (deviceId == null) {
+            return;
+        }
+        DeviceVideoState state = state(deviceId);
+        state.rgbaConsumerUntilNanoTime = System.nanoTime() + Math.max(0L, CONFIG.rgbaConsumerGraceNanos());
+        markVisible(deviceId);
+    }
+
+    public static HandheldVideoFrame latestFrame(UUID deviceId) {
         DeviceVideoState state = stateOrNull(deviceId);
         return state != null ? state.latestFrame.get() : null;
     }
@@ -141,12 +156,17 @@ public final class MP4HandheldVideoClient {
         return state != null ? state.statusText : "等待设备 ID";
     }
 
+    public static boolean audioOnly(UUID deviceId) {
+        DeviceVideoState state = stateOrNull(deviceId);
+        return state != null && state.audioOnly;
+    }
+
     public static String currentResolutionLabel(UUID deviceId) {
         DeviceVideoState state = stateOrNull(deviceId);
         if (state == null) {
             return "";
         }
-        VideoFrame frame = state.latestFrame.get();
+        HandheldVideoFrame frame = state.latestFrame.get();
         if (frame != null && frame.width() > 0 && frame.height() > 0) {
             return frame.width() + "x" + frame.height();
         }
@@ -168,25 +188,36 @@ public final class MP4HandheldVideoClient {
         if (record == null) {
             return state.currentSubtitle != null ? state.currentSubtitle : "";
         }
-        MP4ClientPlayback.LocalVideoPlayback playback = MP4ClientPlayback.localVideoPlayback(deviceId);
+        HandheldMediaPlayback playback = MP4_PROFILE.playback(deviceId);
         long visualMillis = anchoredVisualMillis(deviceId, playback);
         int tick = visualMillis >= 0L
                 ? (int) Math.min(Integer.MAX_VALUE, visualMillis / 50L)
                 : -1;
         String primary = currentLineAt(record.getLyrics(), tick);
         String secondary = currentLineAt(record.getTransLyrics(), tick);
-        return MP4FocusState.subtitlePrimaryMode() ? primary : secondary;
+        return "primary".equals(MP4_PROFILE.subtitleMode(deviceId)) ? primary : secondary;
     }
 
     public static void stop(String reason) {
         STATES.values().forEach(state -> stop(state, reason));
+        MP4ItemScreenRenderer.releaseAllVideoLayers();
     }
 
     public static void stop(UUID deviceId, String reason) {
-        stop(state(deviceId), reason);
+        DeviceVideoState state = stateOrNull(deviceId);
+        if (state != null) {
+            stop(state, reason);
+        }
+        MP4ItemScreenRenderer.releaseVideoLayers(deviceId);
     }
 
     private static void stop(DeviceVideoState state, String reason) {
+        synchronized (state.lifecycleLock) {
+            stopLocked(state, reason);
+        }
+    }
+
+    private static void stopLocked(DeviceVideoState state, String reason) {
         state.activeKey = PlaybackKey.EMPTY;
         state.resolvingKey = PlaybackKey.EMPTY;
         state.failedKey = PlaybackKey.EMPTY;
@@ -199,12 +230,35 @@ public final class MP4HandheldVideoClient {
         if (reason != null && !reason.isBlank()) {
             state.statusText = reason;
         }
+        state.audioOnly = false;
         state.subtitleRecord = null;
         state.currentSubtitle = "";
         state.sourceWidth = 0;
         state.sourceHeight = 0;
         clearFrameQueue(state);
-        VideoFrame latest = state.latestFrame.getAndSet(null);
+        HandheldVideoFrame latest = state.latestFrame.getAndSet(null);
+        if (latest != null) {
+            latest.close();
+            state.frameSequence.incrementAndGet();
+        }
+    }
+
+    private static void waitForAudioStart(DeviceVideoState state) {
+        synchronized (state.lifecycleLock) {
+            state.statusText = "等待音频缓冲...";
+            state.audioOnly = false;
+            VideoSession session = state.activeSession;
+            if (session != null) {
+                session.close();
+                state.activeSession = null;
+            }
+            state.activeKey = PlaybackKey.EMPTY;
+            state.resolvingKey = PlaybackKey.EMPTY;
+            state.failedKey = PlaybackKey.EMPTY;
+            state.endedKey = PlaybackKey.EMPTY;
+        }
+        clearFrameQueue(state);
+        HandheldVideoFrame latest = state.latestFrame.getAndSet(null);
         if (latest != null) {
             latest.close();
             state.frameSequence.incrementAndGet();
@@ -214,13 +268,15 @@ public final class MP4HandheldVideoClient {
     public static void clearAll() {
         STATES.values().forEach(state -> stop(state, "等待播放"));
         STATES.clear();
+        MP4ItemScreenRenderer.releaseAllVideoLayers();
     }
 
     public static void stopDevicesOutsideHotbar() {
         for (Map.Entry<UUID, DeviceVideoState> entry : STATES.entrySet()) {
             UUID deviceId = entry.getKey();
-            if (!isDeviceInHotbar(deviceId)) {
+            if (!MP4_PROFILE.isDeviceAvailable(deviceId)) {
                 stop(entry.getValue(), "等待快捷栏");
+                MP4ItemScreenRenderer.releaseVideoLayers(deviceId);
             }
         }
     }
@@ -229,7 +285,7 @@ public final class MP4HandheldVideoClient {
         tickHotbarVideoSessions();
         for (Map.Entry<UUID, DeviceVideoState> entry : STATES.entrySet()) {
             UUID deviceId = entry.getKey();
-            if (!isDeviceInHotbar(deviceId)) {
+            if (!MP4_PROFILE.isDeviceAvailable(deviceId)) {
                 continue;
             }
             DeviceVideoState state = entry.getValue();
@@ -237,7 +293,7 @@ public final class MP4HandheldVideoClient {
             if (session == null || session.closed.get() || !session.key.equals(state.activeKey)) {
                 continue;
             }
-            MP4ClientPlayback.LocalVideoPlayback playback = MP4ClientPlayback.localVideoPlayback(deviceId);
+            HandheldMediaPlayback playback = MP4_PROFILE.playback(deviceId);
             if (playback == null || !session.key.sessionId().equals(playback.sessionId())) {
                 continue;
             }
@@ -273,56 +329,56 @@ public final class MP4HandheldVideoClient {
     }
 
     private static void resolveAndStart(UUID deviceId, DeviceVideoState state,
-            MP4ClientPlayback.LocalVideoPlayback playback,
+            HandheldMediaPlayback playback,
             PlaybackKey key) {
         CompletableFuture.supplyAsync(() -> resolveStream(playback, key.quality()), EXECUTOR)
                 .whenComplete((stream, error) -> {
-                    if (!key.equals(state.activeKey)) {
-                        return;
+                    synchronized (state.lifecycleLock) {
+                        if (!key.equals(state.activeKey) || !key.equals(state.resolvingKey)) {
+                            return;
+                        }
+                        state.resolvingKey = PlaybackKey.EMPTY;
+                        if (error != null) {
+                            state.failedKey = key;
+                            state.audioOnly = !BiliVideoStreamResolver.isStoredVideoSelection(playback.rawUrl());
+                            state.statusText = state.audioOnly ? "纯音乐" : "视频解析失败";
+                            LOGGER.warn("MP4 横屏视频流解析失败: session={} raw='{}' reason={}", playback.sessionId(),
+                                    playback.rawUrl(), error.toString());
+                            return;
+                        }
+                        state.audioOnly = false;
+                        state.subtitleRecord = stream.subtitleRecord();
+                        state.currentSubtitle = state.subtitleRecord != null ? "" : "无可用字幕";
+                        state.sourceWidth = stream.sourceWidth();
+                        state.sourceHeight = stream.sourceHeight();
                     }
-                    state.resolvingKey = PlaybackKey.EMPTY;
-                    if (error != null) {
-                        state.failedKey = key;
-                        state.statusText = "视频解析失败";
-                        LOGGER.warn("MP4 横屏视频流解析失败: session={} raw='{}' reason={}", playback.sessionId(),
-                                playback.rawUrl(), error.toString());
-                        return;
-                    }
-                    state.subtitleRecord = stream.subtitleRecord();
-                    state.currentSubtitle = state.subtitleRecord != null ? "" : "无可用字幕";
-                    state.sourceWidth = stream.sourceWidth();
-                    state.sourceHeight = stream.sourceHeight();
                     startDecoder(deviceId, state, playback, key, stream);
                 });
     }
 
-    private static ResolvedStream resolveStream(MP4ClientPlayback.LocalVideoPlayback playback, int qualityCeiling) {
+    private static ResolvedVideoStream resolveStream(HandheldMediaPlayback playback, int qualityCeiling) {
         try {
-            BiliApiClient.VideoSelection selection = BiliApiClient.parseStoredVideoSelection(playback.rawUrl());
-            if (selection == null) {
-                throw new IllegalArgumentException("不是 B 站视频选择: " + playback.rawUrl());
-            }
-            BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(selection.videoId(), selection.page());
-            BiliApiClient.VideoStream stream = BiliApiClient.getBestVideoStream(selection.videoId(), info.cid(),
-                    qualityCeiling);
-            int fps = parseFrameRate(stream.frameRate());
-            LyricRecord subtitle = BiliSubtitleLyricService.tryBuildLyricRecord(playback.rawUrl(), playback.songName(),
+            return BiliVideoStreamResolver.resolveWithSubtitle(playback.rawUrl(), qualityCeiling, playback.title(),
                     playback.allowAiSubtitle());
-            return new ResolvedStream(stream.baseUrl(), stream.codecId(), Math.max(1, stream.width()),
-                    Math.max(1, stream.height()), fps, stream.quality(), info.displayTitle(), subtitle);
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
     }
 
     private static void startDecoder(UUID deviceId, DeviceVideoState state,
-            MP4ClientPlayback.LocalVideoPlayback playback, PlaybackKey key,
-            ResolvedStream stream) {
+            HandheldMediaPlayback playback, PlaybackKey key,
+            ResolvedVideoStream stream) {
         long elapsedMillis = Math.max(0L, playback.timeline().mediaMillis());
         long totalMillis = Math.max(0L, playback.timeline().totalMillis());
         VideoSession session = new VideoSession(key, elapsedMillis);
-        state.activeSession = session;
-        state.statusText = "视频缓冲中...";
+        synchronized (state.lifecycleLock) {
+            if (!key.equals(state.activeKey) || state.activeSession != null && !state.activeSession.closed.get()) {
+                session.close();
+                return;
+            }
+            state.activeSession = session;
+            state.statusText = "视频缓冲中...";
+        }
         CompletableFuture.runAsync(() -> {
             try {
                 decodeLoop(deviceId, state, session, stream, elapsedMillis, totalMillis);
@@ -331,19 +387,22 @@ public final class MP4HandheldVideoClient {
             }
         }, EXECUTOR)
                 .whenComplete((ignored, error) -> {
-                    if (state.activeSession == session) {
-                        state.activeSession = null;
-                    }
-                    if (error != null && !session.closed.get()) {
-                        state.failedKey = key;
-                        state.statusText = "视频播放失败";
-                        LOGGER.warn("MP4 横屏视频解码失败: session={} stream={} quality={} reason={}", key.sessionId(),
-                                stream.url(), stream.quality(), error.toString());
+                    synchronized (state.lifecycleLock) {
+                        if (state.activeSession == session) {
+                            state.activeSession = null;
+                        }
+                        if (error != null && !session.closed.get()) {
+                            state.failedKey = key;
+                            state.statusText = "视频播放失败";
+                            LOGGER.warn("MP4 横屏视频解码失败: session={} stream={} quality={} reason={}", key.sessionId(),
+                                    stream.url(), stream.quality(), error.toString());
+                        }
                     }
                 });
     }
 
-    private static void decodeLoop(UUID deviceId, DeviceVideoState state, VideoSession session, ResolvedStream stream,
+    private static void decodeLoop(UUID deviceId, DeviceVideoState state, VideoSession session,
+            ResolvedVideoStream stream,
             long elapsedMillis, long totalMillis)
             throws IOException {
         LOGGER.debug("MP4 横屏视频启动: session={} quality={} source={}x{} fps={} offset={}ms title='{}'",
@@ -360,7 +419,7 @@ public final class MP4HandheldVideoClient {
                 session.key.sessionId(), outputFormat, session.key.rgbaFallback());
         try (Fmp4NativeVideoDecoder decoder = new Fmp4NativeVideoDecoder(stream.url(), stream.codecId(),
                 decodeSize.width(),
-                decodeSize.height(), MAX_FRAMES, true, outputFormat, null,
+                decodeSize.height(), CONFIG.maxFrames(), true, outputFormat, null,
                 elapsedMillis, totalMillis, stream.fps())) {
             long displayedFrames = 0L;
             boolean firstFrameAccepted = false;
@@ -370,8 +429,12 @@ public final class MP4HandheldVideoClient {
                 }
                 Fmp4NativeVideoDecoder.DecodedFrame decoded = decoder.getNextDecodedFrame();
                 if (decoded == null) {
-                    state.endedKey = session.key;
-                    state.statusText = "视频播放结束";
+                    synchronized (state.lifecycleLock) {
+                        if (state.activeSession == session && session.key.equals(state.activeKey)) {
+                            state.endedKey = session.key;
+                            state.statusText = "视频播放结束";
+                        }
+                    }
                     return;
                 }
                 int requiredBytes = requiredFrameBytes(decoded.format(), decodeSize.width(), decodeSize.height());
@@ -390,7 +453,8 @@ public final class MP4HandheldVideoClient {
                     decoded.close();
                     return;
                 }
-                VideoFrame frame = VideoFrame.retain(decoded, requiredBytes, decodeSize.width(), decodeSize.height(),
+                HandheldVideoFrame frame = HandheldVideoFrame.retain(decoded, requiredBytes, decodeSize.width(),
+                        decodeSize.height(),
                         framePtsNanos);
                 if (!offerFrame(state, session, frame)) {
                     frame.close();
@@ -403,7 +467,7 @@ public final class MP4HandheldVideoClient {
     }
 
     private static boolean waitWhileOffscreen(UUID deviceId, DeviceVideoState state, VideoSession session) {
-        if (!OFFSCREEN_PAUSE_DECODE || !isOffscreenPauseActive(state)) {
+        if (!CONFIG.offscreenPauseDecode() || !isOffscreenPauseActive(state)) {
             return !session.closed.get() && session.key.equals(state.activeKey);
         }
         long pauseStartNs = System.nanoTime();
@@ -430,7 +494,7 @@ public final class MP4HandheldVideoClient {
             return false;
         }
         long nowNs = System.nanoTime();
-        boolean paused = nowNs - lastVisible > Math.max(0L, OFFSCREEN_GRACE_NANOS);
+        boolean paused = nowNs - lastVisible > Math.max(0L, CONFIG.offscreenGraceNanos());
         if (paused && state.offscreenSinceNanoTime == 0L) {
             state.offscreenSinceNanoTime = nowNs;
         }
@@ -439,17 +503,17 @@ public final class MP4HandheldVideoClient {
 
     private static void maybeRestartVisibleSession(UUID deviceId, DeviceVideoState state, long offscreenDurationNs) {
         VideoSession session = state.activeSession;
-        if (session == null || session.closed.get() || OFFSCREEN_RESUME_RESTART_LAG_NANOS <= 0L) {
+        if (session == null || session.closed.get() || CONFIG.offscreenResumeRestartLagNanos() <= 0L) {
             return;
         }
-        MP4ClientPlayback.LocalVideoPlayback playback = MP4ClientPlayback.localVideoPlayback(deviceId);
+        HandheldMediaPlayback playback = MP4_PROFILE.playback(deviceId);
         if (playback == null || !session.key.sessionId().equals(playback.sessionId())) {
             return;
         }
         long visualMillis = anchoredVisualMillis(deviceId, playback);
         long latestMillis = latestFrameMillis(state, session);
         long lagNs = latestMillis >= 0L ? (visualMillis - latestMillis) * 1_000_000L : offscreenDurationNs;
-        if (visualMillis < 0L || lagNs < OFFSCREEN_RESUME_RESTART_LAG_NANOS) {
+        if (visualMillis < 0L || lagNs < CONFIG.offscreenResumeRestartLagNanos()) {
             return;
         }
         LOGGER.debug("MP4 横屏视频离屏恢复重定位: device={}, session={}, offscreen={}ms, visual={}ms, latest={}ms",
@@ -459,29 +523,31 @@ public final class MP4HandheldVideoClient {
     }
 
     private static void stopForVisibleResync(DeviceVideoState state, String reason) {
-        state.activeKey = PlaybackKey.EMPTY;
-        state.resolvingKey = PlaybackKey.EMPTY;
-        state.failedKey = PlaybackKey.EMPTY;
-        state.endedKey = PlaybackKey.EMPTY;
-        VideoSession session = state.activeSession;
-        state.activeSession = null;
-        if (session != null) {
-            session.close();
-        }
-        if (reason != null && !reason.isBlank()) {
-            state.statusText = reason;
+        synchronized (state.lifecycleLock) {
+            state.activeKey = PlaybackKey.EMPTY;
+            state.resolvingKey = PlaybackKey.EMPTY;
+            state.failedKey = PlaybackKey.EMPTY;
+            state.endedKey = PlaybackKey.EMPTY;
+            VideoSession session = state.activeSession;
+            state.activeSession = null;
+            if (session != null) {
+                session.close();
+            }
+            if (reason != null && !reason.isBlank()) {
+                state.statusText = reason;
+            }
         }
         clearFrameQueue(state);
     }
 
     private static long latestFrameMillis(DeviceVideoState state, VideoSession session) {
         long latestPts = -1L;
-        VideoFrame latest = state.latestFrame.get();
+        HandheldVideoFrame latest = state.latestFrame.get();
         if (latest != null) {
             latestPts = Math.max(latestPts, latest.ptsNanos());
         }
         synchronized (state.frameQueueLock) {
-            for (VideoFrame frame : state.frameQueue) {
+            for (HandheldVideoFrame frame : state.frameQueue) {
                 latestPts = Math.max(latestPts, frame.ptsNanos());
             }
         }
@@ -518,20 +584,15 @@ public final class MP4HandheldVideoClient {
         return IrisShaderpackCompat.isShaderPackInUse();
     }
 
-    private static MP4Item.State stateForDevice(UUID deviceId) {
-        Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft == null || minecraft.player == null || deviceId == null) {
-            return MP4Item.State.DEFAULT;
-        }
-        ItemStack stack = MP4Item.findByDeviceId(minecraft.player, deviceId);
-        return MP4Client.stateForHeldRender(stack);
+    private static boolean hasActiveRgbaConsumer(DeviceVideoState state) {
+        return state != null && System.nanoTime() <= state.rgbaConsumerUntilNanoTime;
     }
 
     private static DecodeSize chooseDecodeSize(int sourceWidth, int sourceHeight) {
         int safeSourceWidth = Math.max(2, sourceWidth);
         int safeSourceHeight = Math.max(2, sourceHeight);
-        int maxWidth = MAX_ALLOWED_WIDTH;
-        int maxHeight = MAX_ALLOWED_HEIGHT;
+        int maxWidth = CONFIG.maxAllowedWidth();
+        int maxHeight = CONFIG.maxAllowedHeight();
         double scale = Math.min(1.0D, Math.min(maxWidth / (double) safeSourceWidth,
                 maxHeight / (double) safeSourceHeight));
         int width = evenAtLeastTwo((int) Math.round(safeSourceWidth * scale));
@@ -548,7 +609,8 @@ public final class MP4HandheldVideoClient {
     }
 
     private static void maybeWarnHighResolution(DecodeSize decodeSize) {
-        if (decodeSize.width() <= HIGH_RES_WARNING_WIDTH && decodeSize.height() <= HIGH_RES_WARNING_HEIGHT) {
+        if (decodeSize.width() <= CONFIG.highResWarningWidth()
+                && decodeSize.height() <= CONFIG.highResWarningHeight()) {
             return;
         }
         if (!highResolutionWarningShown.compareAndSet(false, true)) {
@@ -572,19 +634,19 @@ public final class MP4HandheldVideoClient {
             long framePtsNanos) {
         long targetNanos = Math.max(0L, framePtsNanos);
         while (!session.closed.get() && session.key.equals(state.activeKey)) {
-            MP4ClientPlayback.LocalVideoPlayback playback = MP4ClientPlayback.localVideoPlayback(deviceId);
+            HandheldMediaPlayback playback = MP4_PROFILE.playback(deviceId);
             if (!session.key.sessionId().equals(playback.sessionId())) {
                 return false;
             }
             long visualMillis = anchoredVisualMillis(deviceId, playback);
             long visualNanos = sessionRelativeVisualNanos(session, visualMillis);
             long leadNanos = targetNanos - visualNanos;
-            if (leadNanos <= MAX_DECODE_LEAD_NANOS) {
+            if (leadNanos <= CONFIG.maxDecodeLeadNanos()) {
                 return true;
             }
             pumpFrameForTimeline(state, session, visualMillis);
-            long sleepMillis = Math.min(FRAME_WAIT_SLICE_MILLIS,
-                    Math.max(1L, (leadNanos - MAX_DECODE_LEAD_NANOS) / 1_000_000L));
+            long sleepMillis = Math.min(CONFIG.frameWaitSliceMillis(),
+                    Math.max(1L, (leadNanos - CONFIG.maxDecodeLeadNanos()) / 1_000_000L));
             try {
                 Thread.sleep(sleepMillis);
             } catch (InterruptedException e) {
@@ -597,19 +659,19 @@ public final class MP4HandheldVideoClient {
 
     private static boolean shouldDropStaleStartupFrame(UUID deviceId, DeviceVideoState state, VideoSession session,
             long framePtsNanos) {
-        if (STARTUP_DROP_LAG_NANOS <= 0L) {
+        if (CONFIG.startupDropLagNanos() <= 0L) {
             return false;
         }
-        MP4ClientPlayback.LocalVideoPlayback playback = MP4ClientPlayback.localVideoPlayback(deviceId);
+        HandheldMediaPlayback playback = MP4_PROFILE.playback(deviceId);
         long visualNanos = sessionRelativeVisualNanos(session, anchoredVisualMillis(deviceId, playback));
-        boolean drop = visualNanos - Math.max(0L, framePtsNanos) > STARTUP_DROP_LAG_NANOS;
+        boolean drop = visualNanos - Math.max(0L, framePtsNanos) > CONFIG.startupDropLagNanos();
         return drop && frameQueueEmpty(state);
     }
 
-    private static boolean offerFrame(DeviceVideoState state, VideoSession session, VideoFrame frame) {
+    private static boolean offerFrame(DeviceVideoState state, VideoSession session, HandheldVideoFrame frame) {
         synchronized (state.frameQueueLock) {
             while (!session.closed.get() && session.key.equals(state.activeKey)
-                    && state.frameQueue.size() >= Math.max(1, FRAME_QUEUE_CAPACITY)) {
+                    && state.frameQueue.size() >= Math.max(1, CONFIG.frameQueueCapacity())) {
                 try {
                     state.frameQueueLock.wait(5L);
                 } catch (InterruptedException e) {
@@ -634,7 +696,7 @@ public final class MP4HandheldVideoClient {
 
     private static void clearFrameQueue(DeviceVideoState state) {
         synchronized (state.frameQueueLock) {
-            for (VideoFrame frame : state.frameQueue) {
+            for (HandheldVideoFrame frame : state.frameQueue) {
                 frame.close();
             }
             state.frameQueue.clear();
@@ -647,31 +709,26 @@ public final class MP4HandheldVideoClient {
         return relativeMillis * 1_000_000L;
     }
 
-    private static long anchoredVisualMillis(UUID deviceId, MP4ClientPlayback.LocalVideoPlayback playback) {
+    private static long anchoredVisualMillis(UUID deviceId, HandheldMediaPlayback playback) {
         if (playback == null || playback.timeline() == null) {
             return -1L;
         }
-        DolbyAudioRegistry.AudioTimeline audioTimeline = DolbyAudioRegistry.getOwnerAudioTimeline(deviceId);
-        long audibleMillis = audioTimeline.audibleMillis();
-        if (audibleMillis >= 0L && (audioTimeline.sessionId() == null || audioTimeline.sessionId().isBlank()
-                || audioTimeline.sessionId().equals(playback.sessionId()))) {
-            long totalMillis = Math.max(0L, playback.timeline().totalMillis());
-            return totalMillis > 0L ? Math.min(totalMillis, audibleMillis) : audibleMillis;
-        }
-        return playback.timeline().visualMillis();
+        return ClientMediaTimelineView.forHandheldOwner(deviceId, playback,
+                MP4_PROFILE.hasStartedSound(deviceId, playback.sessionId()), playback.timeline().visualMillis(),
+                playback.timeline().totalMillis()).visualMillis();
     }
 
     private static boolean pumpFrameForTimeline(DeviceVideoState state, VideoSession session, long visualMillis) {
         long visualNanos = sessionRelativeVisualNanos(session, visualMillis);
-        VideoFrame selected = null;
+        HandheldVideoFrame selected = null;
         synchronized (state.frameQueueLock) {
             while (!state.frameQueue.isEmpty()) {
-                VideoFrame first = state.frameQueue.peekFirst();
-                if (first.ptsNanos() > visualNanos + EARLY_TOLERANCE_NANOS && selected == null) {
+                HandheldVideoFrame first = state.frameQueue.peekFirst();
+                if (first.ptsNanos() > visualNanos + CONFIG.earlyToleranceNanos() && selected == null) {
                     break;
                 }
-                VideoFrame candidate = state.frameQueue.pollFirst();
-                if (candidate.ptsNanos() <= visualNanos + EARLY_TOLERANCE_NANOS) {
+                HandheldVideoFrame candidate = state.frameQueue.pollFirst();
+                if (candidate.ptsNanos() <= visualNanos + CONFIG.earlyToleranceNanos()) {
                     if (selected != null) {
                         selected.close();
                     }
@@ -682,7 +739,7 @@ public final class MP4HandheldVideoClient {
                 break;
             }
             while (state.frameQueue.size() > 1
-                    && visualNanos - state.frameQueue.peekFirst().ptsNanos() > MAX_LATE_FRAME_NANOS) {
+                    && visualNanos - state.frameQueue.peekFirst().ptsNanos() > CONFIG.maxLateFrameNanos()) {
                 if (selected != null) {
                     selected.close();
                 }
@@ -690,7 +747,7 @@ public final class MP4HandheldVideoClient {
             }
         }
         if (selected != null) {
-            VideoFrame previous = state.latestFrame.getAndSet(selected);
+            HandheldVideoFrame previous = state.latestFrame.getAndSet(selected);
             if (previous != null) {
                 previous.close();
             }
@@ -741,57 +798,12 @@ public final class MP4HandheldVideoClient {
         return line != null ? line : "";
     }
 
-    private static int parseFrameRate(String value) {
-        if (value == null || value.isBlank()) {
-            return 30;
-        }
-        try {
-            String text = value.trim();
-            int slash = text.indexOf('/');
-            if (slash > 0) {
-                double numerator = Double.parseDouble(text.substring(0, slash));
-                double denominator = Double.parseDouble(text.substring(slash + 1));
-                if (denominator > 0.0D) {
-                    return Math.max(1, (int) Math.round(numerator / denominator));
-                }
-            }
-            return Math.max(1, (int) Math.round(Double.parseDouble(text)));
-        } catch (NumberFormatException ignored) {
-            return 30;
-        }
-    }
-
-    public record VideoFrame(byte[] data, ByteBuffer buffer, int byteLength,
-            Fmp4NativeVideoDecoder.DecodedFrame.Format format, int width, int height, long ptsNanos,
-            AutoCloseable delegate) implements AutoCloseable {
-        static VideoFrame retain(Fmp4NativeVideoDecoder.DecodedFrame decoded, int byteLength, int width, int height,
-                long ptsNanos) {
-            ByteBuffer buffer = decoded.buffer();
-            byte[] data = buffer == null ? decoded.data() : null;
-            return new VideoFrame(data, buffer, byteLength, decoded.format(), width, height, ptsNanos, decoded);
-        }
-
-        @Override
-        public void close() {
-            if (delegate != null) {
-                try {
-                    delegate.close();
-                } catch (Exception ignored) {
-                }
-            }
-        }
-    }
-
     private record PlaybackKey(String sessionId, String rawUrl, int quality, boolean allowAiSubtitle,
             boolean rgbaFallback) {
         static final PlaybackKey EMPTY = new PlaybackKey("", "", 0, false, false);
     }
 
     public record DecodeSize(int width, int height) {
-    }
-
-    private record ResolvedStream(String url, int codecId, int sourceWidth, int sourceHeight, int fps, int quality,
-            String title, LyricRecord subtitleRecord) {
     }
 
     private static final class VideoSession implements AutoCloseable {
@@ -811,10 +823,11 @@ public final class MP4HandheldVideoClient {
     }
 
     private static final class DeviceVideoState {
-        private final AtomicReference<VideoFrame> latestFrame = new AtomicReference<>();
+        private final AtomicReference<HandheldVideoFrame> latestFrame = new AtomicReference<>();
         private final AtomicLong frameSequence = new AtomicLong();
+        private final Object lifecycleLock = new Object();
         private final Object frameQueueLock = new Object();
-        private final ArrayDeque<VideoFrame> frameQueue = new ArrayDeque<>();
+        private final ArrayDeque<HandheldVideoFrame> frameQueue = new ArrayDeque<>();
         private volatile PlaybackKey activeKey = PlaybackKey.EMPTY;
         private volatile VideoSession activeSession;
         private volatile PlaybackKey resolvingKey = PlaybackKey.EMPTY;
@@ -823,10 +836,12 @@ public final class MP4HandheldVideoClient {
         private volatile String statusText = "等待播放";
         private volatile int sourceWidth;
         private volatile int sourceHeight;
+        private volatile boolean audioOnly;
         private volatile LyricRecord subtitleRecord;
         private volatile String currentSubtitle = "";
         private volatile long lastVisibleNanoTime = System.nanoTime();
         private volatile long offscreenSinceNanoTime;
+        private volatile long rgbaConsumerUntilNanoTime;
     }
 
     private static final class Mp4VideoThreadFactory implements ThreadFactory {

@@ -1,11 +1,9 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
-import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.client.MP4Client;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.Identifier;
 import net.minecraft.world.InteractionHand;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
@@ -14,7 +12,7 @@ import java.util.UUID;
 /** 聚焦手持界面的服务端权威 MP4 设备 ID 响应。 */
 public record MP4DeviceIdPacket(InteractionHand hand, UUID deviceId) implements CustomPacketPayload {
     public static final Type<MP4DeviceIdPacket> TYPE = new Type<>(
-            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID, "mp4_device_id"));
+            NetworkPayloadIds.id("mp4_device_id"));
 
     private static final StreamCodec<RegistryFriendlyByteBuf, InteractionHand> HAND_CODEC = new StreamCodec<>() {
         @Override

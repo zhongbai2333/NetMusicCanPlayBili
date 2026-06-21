@@ -27,7 +27,7 @@ public final class ModernTurntableTimeline {
             "bili.turntable.timeline.audio_anchor_max_lead_ms", 500L);
     private static final long CLOCK_PRUNE_INTERVAL_NANOS = Math.max(1_000L,
             Long.getLong("bili.turntable.timeline.clock_prune_interval_ms", 30_000L)) * 1_000_000L;
-        private static final ConcurrentHashMap<BlockPos, MediaTimelineClock> CLOCKS = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<BlockPos, MediaTimelineClock> CLOCKS = new ConcurrentHashMap<>();
     private static volatile long lastClockPruneNanos;
 
     private ModernTurntableTimeline() {

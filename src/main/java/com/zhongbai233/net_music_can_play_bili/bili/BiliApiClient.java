@@ -10,6 +10,7 @@ import com.zhongbai233.net_music_can_play_bili.media.stream.CdnUrlFallbacks;
 import org.slf4j.Logger;
 
 import java.net.URI;
+import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
@@ -31,18 +32,23 @@ public final class BiliApiClient {
 
     private static final Pattern BV_FULL_RE = Pattern.compile("^[Bb][Vv][0-9A-Za-z]{10}$");
     private static final Pattern AV_FULL_RE = Pattern.compile("^av(\\d+)$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern BV_ANYWHERE_RE = Pattern.compile("[Bb][Vv][0-9A-Za-z]{10}");
+    private static final Pattern AV_ANYWHERE_RE = Pattern.compile("(?:^|[^0-9A-Za-z])av(\\d+)(?:$|[^0-9A-Za-z])",
+            Pattern.CASE_INSENSITIVE);
     private static final Pattern STORED_SELECTION_RE = Pattern.compile(
             "^((?:[Bb][Vv][0-9A-Za-z]{10}|av\\d+))(?:\\|p=(\\d+))?$",
             Pattern.CASE_INSENSITIVE);
+    private static final Pattern PAGE_PARAM_RE = Pattern.compile("(?:^|[?&#|;])p=(\\d+)(?:$|[&#;])",
+            Pattern.CASE_INSENSITIVE);
     private static final int[] STANDARD_AUDIO_ORDER = { 30280, 30232, 30216 };
     private static final int[] LOSSLESS_AUDIO_ORDER = { 30251, 30280, 30232, 30216 };
-    private static final int[] DOLBY_AUDIO_ORDER = { 30250, 30280, 30232, 30216 };
+    private static final int[] DOLBY_AUDIO_ORDER = { 30250, 30251, 30280, 30232, 30216 };
     private static final int[] BEST_AUDIO_ORDER = { 30250, 30251, 30280, 30232, 30216 };
-    private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
-
+    private static final Duration SHORT_LINK_TIMEOUT = Duration.ofSeconds(5);
     // B站 SESSDATA Cookie，扫码登录后自动获取
     public static volatile String sessdata = System.getProperty("bili.sessdata", "");
+    // 扫码登录返回的完整 Web Cookie，可包含 buvid/bili_jct/DedeUserID 等降低风控概率的字段。
+    public static volatile String webCookie = System.getProperty("bili.cookie", "");
 
     private BiliApiClient() {
     }
@@ -72,6 +78,116 @@ public final class BiliApiClient {
             return VideoId.aid(fullAv.group(1));
 
         return null;
+    }
+
+    /**
+     * 从纯 BV/AV、已存储的 {@code BV...|p=N} 选择串，或常见 B 站链接中提取视频 ID。
+     * <p>
+     * b23.tv 短链需要联网跟随重定向，命令层暂不自动展开，避免服务器命令卡在网络请求上。
+     */
+    public static VideoId extractVideoIdLenient(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+
+        String trimmed = raw.trim();
+        VideoSelection selection = parseStoredVideoSelection(trimmed);
+        if (selection != null) {
+            return selection.videoId();
+        }
+
+        VideoId direct = extractVideoId(trimmed);
+        if (direct != null) {
+            return direct;
+        }
+
+        Matcher bv = BV_ANYWHERE_RE.matcher(trimmed);
+        if (bv.find()) {
+            String value = bv.group();
+            return VideoId.bvid("BV" + value.substring(2));
+        }
+
+        Matcher av = AV_ANYWHERE_RE.matcher(trimmed);
+        if (av.find()) {
+            return VideoId.aid(av.group(1));
+        }
+
+        return null;
+    }
+
+    public static boolean containsBiliVideoId(String input) {
+        return extractVideoIdLenient(input) != null;
+    }
+
+    public static VideoId extractVideoIdLenientWithShortLink(String raw) {
+        VideoId direct = extractVideoIdLenient(raw);
+        if (direct != null || raw == null || raw.isBlank() || !looksLikeBiliShortLink(raw)) {
+            return direct;
+        }
+        String expanded = expandBiliShortLink(raw.trim());
+        return expanded == null ? null : extractVideoIdLenient(expanded);
+    }
+
+    public static VideoSelection extractVideoSelectionLenient(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        VideoSelection stored = parseStoredVideoSelection(trimmed);
+        if (stored != null) {
+            return stored;
+        }
+        VideoId id = extractVideoIdLenient(trimmed);
+        return id != null ? new VideoSelection(id, extractPageOrDefault(trimmed, 1)) : null;
+    }
+
+    public static VideoSelection extractVideoSelectionLenientWithShortLink(String raw) {
+        VideoSelection direct = extractVideoSelectionLenient(raw);
+        if (direct != null || raw == null || raw.isBlank() || !looksLikeBiliShortLink(raw)) {
+            return direct;
+        }
+        String expanded = expandBiliShortLink(raw.trim());
+        return expanded == null ? null : extractVideoSelectionLenient(expanded);
+    }
+
+    private static boolean looksLikeBiliShortLink(String raw) {
+        String lower = raw.toLowerCase(java.util.Locale.ROOT);
+        return lower.contains("b23.tv/") || lower.contains("bili2233.cn/");
+    }
+
+    private static int extractPageOrDefault(String raw, int fallback) {
+        int safeFallback = Math.max(1, fallback);
+        if (raw == null || raw.isBlank()) {
+            return safeFallback;
+        }
+        Matcher matcher = PAGE_PARAM_RE.matcher(raw.trim());
+        if (!matcher.find()) {
+            return safeFallback;
+        }
+        try {
+            return Math.max(1, Integer.parseInt(matcher.group(1)));
+        } catch (NumberFormatException ignored) {
+            return safeFallback;
+        }
+    }
+
+    private static String expandBiliShortLink(String raw) {
+        try {
+            URI uri = URI.create(raw.startsWith("http://") || raw.startsWith("https://") ? raw : "https://" + raw);
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(SHORT_LINK_TIMEOUT)
+                    .followRedirects(HttpClient.Redirect.ALWAYS)
+                    .build();
+            HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
+                    .timeout(SHORT_LINK_TIMEOUT)
+                    .GET();
+            BiliRequestHeaders.applyWebApiHeaders(builder);
+            HttpRequest req = builder.build();
+            return client.send(req, HttpResponse.BodyHandlers.discarding()).uri().toString();
+        } catch (Exception e) {
+            LOGGER.debug("B站短链展开失败: {}", raw, e);
+            return null;
+        }
     }
 
     public static boolean isStoredVideoSelection(String raw) {
@@ -124,10 +240,17 @@ public final class BiliApiClient {
     }
 
     public record VideoStream(int quality, int codecId, int width, int height, String frameRate, String codecs,
-            String baseUrl, long initStart, long initEnd, long indexStart, long indexEnd) {
+            String baseUrl, long initStart, long initEnd, long indexStart, long indexEnd, List<String> cdnCandidates) {
         public VideoStream(int quality, int codecId, int width, int height, String frameRate, String codecs,
                 String baseUrl) {
-            this(quality, codecId, width, height, frameRate, codecs, baseUrl, -1L, -1L, -1L, -1L);
+            this(quality, codecId, width, height, frameRate, codecs, baseUrl, -1L, -1L, -1L, -1L,
+                    baseUrl == null || baseUrl.isBlank() ? List.of() : List.of(baseUrl));
+        }
+
+        public VideoStream(int quality, int codecId, int width, int height, String frameRate, String codecs,
+                String baseUrl, long initStart, long initEnd, long indexStart, long indexEnd) {
+            this(quality, codecId, width, height, frameRate, codecs, baseUrl, initStart, initEnd, indexStart, indexEnd,
+                    baseUrl == null || baseUrl.isBlank() ? List.of() : List.of(baseUrl));
         }
 
         public boolean hasSegmentBase() {
@@ -209,12 +332,12 @@ public final class BiliApiClient {
         String url = "https://api.bilibili.com/x/web-interface/view?"
                 + BiliWbiSigner.buildQuery(signed);
 
-        HttpRequest req = HttpRequest.newBuilder()
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
-                .header("User-Agent", USER_AGENT)
-                .header("Referer", "https://www.bilibili.com/")
                 .timeout(Duration.ofSeconds(15))
-                .GET().build();
+                .GET();
+        BiliRequestHeaders.applyWebApiHeaders(builder);
+        HttpRequest req = builder.build();
 
         HttpResponse<String> resp = BiliWbiSigner.HTTP.send(req,
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -295,12 +418,8 @@ public final class BiliApiClient {
 
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
-                .header("User-Agent", USER_AGENT)
-                .header("Referer", "https://www.bilibili.com/")
                 .timeout(Duration.ofSeconds(15));
-        if (!sessdata.isBlank()) {
-            builder.header("Cookie", "SESSDATA=" + sessdata);
-        }
+        BiliRequestHeaders.applyWebApiHeaders(builder);
         HttpRequest req = builder.GET().build();
 
         HttpResponse<String> resp = BiliWbiSigner.HTTP.send(req,
@@ -346,14 +465,18 @@ public final class BiliApiClient {
             }
         }
 
-        String audioPreference = System.getProperty("bili.audio.preference", "standard")
+        String configuredAudioPreference = System.getProperty("bili.audio.preference", "auto")
                 .trim().toLowerCase(java.util.Locale.ROOT);
-        boolean allowFlac = audioPreference.equals("flac")
-                || audioPreference.equals("lossless")
-                || audioPreference.equals("hires")
-                || audioPreference.equals("best");
+        boolean allowFlac = configuredAudioPreference.equals("auto")
+                || configuredAudioPreference.equals("dolby")
+                || configuredAudioPreference.equals("atmos")
+                || configuredAudioPreference.equals("eac3")
+                || configuredAudioPreference.equals("flac")
+                || configuredAudioPreference.equals("lossless")
+                || configuredAudioPreference.equals("hires")
+                || configuredAudioPreference.equals("best");
 
-        // Hi-Res FLAC 是独立的无损音频轨，不属于普通 AAC 清晰度；默认不抢占标准音频。
+        // Hi-Res FLAC 是独立的无损音频轨；自动模式按 杜比 -> FLAC -> AAC 顺位兜底。
         if (allowFlac && dash.has("flac") && !dash.get("flac").isJsonNull()) {
             JsonObject flac = dash.getAsJsonObject("flac");
             if (flac.has("audio") && !flac.get("audio").isJsonNull()) {
@@ -369,26 +492,28 @@ public final class BiliApiClient {
         int selectedQuality = -1;
         String selectedUrl = null;
         List<String> selectedCandidates = List.of();
-        int[] qualityOrder = audioQualityOrder(audioPreference, allowDolby);
+        String effectiveAudioPreference = effectiveAudioPreference(configuredAudioPreference);
+        int[] qualityOrder = audioQualityOrder(effectiveAudioPreference, allowDolby);
         for (int qid : qualityOrder) {
             List<String> candidates = streams.get(qid);
             if (candidates != null && !candidates.isEmpty()) {
                 selectedQuality = qid;
-                selectedCandidates = candidates;
-                selectedUrl = candidates.get(0);
+                selectedCandidates = BiliCdnSelector.orderCandidates(candidates);
+                selectedUrl = BiliCdnSelector.selectPreferred(selectedCandidates);
                 break;
             }
         }
 
         if (selectedUrl == null) {
             selectedQuality = streams.keySet().iterator().next();
-            selectedCandidates = streams.get(selectedQuality);
-            selectedUrl = selectedCandidates.get(0);
+            selectedCandidates = BiliCdnSelector.orderCandidates(streams.get(selectedQuality));
+            selectedUrl = BiliCdnSelector.selectPreferred(selectedCandidates);
         }
         LOGGER.debug(
-                "B站音频流选择摘要: id={} cid={} preference={} allowDolby={} dolbyConfig={} nativeDolby={} dashDolby={} qualities={} selected={}({}) candidateCount={} host={}",
-                id.asInputText(), cid, audioPreference, allowDolby, BiliConfig.dolbyEnabled, nativeDolbyAvailable,
-                dashHasDolby, streams.keySet(), selectedQuality, audioQualityLabel(selectedQuality),
+                "B站音频流选择摘要: id={} cid={} preference={} effectivePreference={} allowDolby={} dolbyConfig={} nativeDolby={} dashDolby={} qualities={} selected={}({}) candidateCount={} host={}",
+                id.asInputText(), cid, configuredAudioPreference, effectiveAudioPreference, allowDolby,
+                BiliConfig.dolbyEnabled, nativeDolbyAvailable, dashHasDolby, streams.keySet(), selectedQuality,
+                audioQualityLabel(selectedQuality),
                 selectedCandidates.size(), hostOf(selectedUrl));
         CdnUrlFallbacks.registerAlternates(selectedCandidates);
         return selectedUrl;
@@ -443,11 +568,18 @@ public final class BiliApiClient {
 
     private static int[] audioQualityOrder(String preference, boolean allowDolby) {
         return switch (preference) {
-            case "best" -> allowDolby ? BEST_AUDIO_ORDER : LOSSLESS_AUDIO_ORDER;
-            case "dolby", "atmos", "eac3" -> allowDolby ? DOLBY_AUDIO_ORDER : STANDARD_AUDIO_ORDER;
+            case "auto", "best" -> allowDolby ? BEST_AUDIO_ORDER : LOSSLESS_AUDIO_ORDER;
+            case "dolby", "atmos", "eac3" -> allowDolby ? DOLBY_AUDIO_ORDER : LOSSLESS_AUDIO_ORDER;
             case "flac", "lossless", "hires" -> LOSSLESS_AUDIO_ORDER;
             default -> STANDARD_AUDIO_ORDER;
         };
+    }
+
+    private static String effectiveAudioPreference(String configuredPreference) {
+        if (configuredPreference == null || configuredPreference.isBlank() || "auto".equals(configuredPreference)) {
+            return "auto";
+        }
+        return configuredPreference;
     }
 
     private static void registerAudioSegmentBase(String baseUrl, JsonObject stream) {
@@ -487,12 +619,8 @@ public final class BiliApiClient {
 
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
-                .header("User-Agent", USER_AGENT)
-                .header("Referer", "https://www.bilibili.com/")
                 .timeout(Duration.ofSeconds(15));
-        if (!sessdata.isBlank()) {
-            builder.header("Cookie", "SESSDATA=" + sessdata);
-        }
+        BiliRequestHeaders.applyWebApiHeaders(builder);
         HttpRequest req = builder.GET().build();
 
         HttpResponse<String> resp = BiliWbiSigner.HTTP.send(req,
@@ -517,6 +645,10 @@ public final class BiliApiClient {
             int qid = v.get("id").getAsInt();
             int codecId = v.has("codecid") ? v.get("codecid").getAsInt() : 0;
             String baseUrl = v.get("baseUrl").getAsString();
+            List<String> cdnCandidates = extractStreamUrls(v);
+            if (cdnCandidates.isEmpty() && baseUrl != null && !baseUrl.isBlank()) {
+                cdnCandidates = List.of(baseUrl);
+            }
             int width = v.has("width") && !v.get("width").isJsonNull() ? v.get("width").getAsInt() : 0;
             int height = v.has("height") && !v.get("height").isJsonNull() ? v.get("height").getAsInt() : 0;
             String frameRate = v.has("frameRate") && !v.get("frameRate").isJsonNull()
@@ -528,7 +660,7 @@ public final class BiliApiClient {
             long[] initRange = parseSegmentBaseRange(v, "initialization");
             long[] indexRange = parseSegmentBaseRange(v, "index_range");
             streams.add(new VideoStream(qid, codecId, width, height, frameRate, codecs, baseUrl,
-                    initRange[0], initRange[1], indexRange[0], indexRange[1]));
+                    initRange[0], initRange[1], indexRange[0], indexRange[1], cdnCandidates));
         }
 
         boolean requestedSpecial = isSpecialVideoQuality(preferredQuality);
@@ -567,11 +699,25 @@ public final class BiliApiClient {
                 qualityLabel(selected.quality()),
                 selected.codecId(), selected.width(), selected.height(), selected.frameRate(), reason,
                 hostOf(selected.baseUrl()));
-        if (selected.hasSegmentBase()) {
-            Fmp4NativeVideoDecoder.registerSegmentBase(selected.baseUrl(), selected.initStart(), selected.initEnd(),
-                    selected.indexStart(), selected.indexEnd());
+        List<String> orderedCdnCandidates = BiliCdnSelector.orderCandidates(selected.cdnCandidates());
+        String preferredBaseUrl = BiliCdnSelector.selectPreferred(orderedCdnCandidates);
+        VideoStream preferred = selected;
+        if (!preferredBaseUrl.isBlank() && !preferredBaseUrl.equals(selected.baseUrl())) {
+            preferred = new VideoStream(selected.quality(), selected.codecId(), selected.width(), selected.height(),
+                    selected.frameRate(), selected.codecs(), preferredBaseUrl, selected.initStart(), selected.initEnd(),
+                    selected.indexStart(), selected.indexEnd(), orderedCdnCandidates);
+        } else if (!orderedCdnCandidates.equals(selected.cdnCandidates())) {
+            preferred = new VideoStream(selected.quality(), selected.codecId(), selected.width(), selected.height(),
+                    selected.frameRate(), selected.codecs(), selected.baseUrl(), selected.initStart(),
+                    selected.initEnd(),
+                    selected.indexStart(), selected.indexEnd(), orderedCdnCandidates);
         }
-        return selected;
+        if (preferred.hasSegmentBase()) {
+            Fmp4NativeVideoDecoder.registerSegmentBase(preferred.baseUrl(), preferred.initStart(), preferred.initEnd(),
+                    preferred.indexStart(), preferred.indexEnd());
+        }
+        CdnUrlFallbacks.registerAlternates(preferred.cdnCandidates());
+        return preferred;
     }
 
     private static long[] parseSegmentBaseRange(JsonObject stream, String key) {
@@ -798,13 +944,9 @@ public final class BiliApiClient {
 
     private static JsonObject getJson(String url) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
-                .header("User-Agent", USER_AGENT)
-                .header("Referer", "https://www.bilibili.com/")
                 .timeout(Duration.ofSeconds(15))
                 .GET();
-        if (!sessdata.isBlank()) {
-            builder.header("Cookie", "SESSDATA=" + sessdata);
-        }
+        BiliRequestHeaders.applyWebApiHeaders(builder);
         HttpResponse<String> response = BiliWbiSigner.HTTP.send(builder.build(),
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         return JsonParser.parseString(response.body()).getAsJsonObject();
@@ -812,13 +954,9 @@ public final class BiliApiClient {
 
     private static String getText(String url) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
-                .header("User-Agent", USER_AGENT)
-                .header("Referer", "https://www.bilibili.com/")
                 .timeout(Duration.ofSeconds(15))
                 .GET();
-        if (!sessdata.isBlank()) {
-            builder.header("Cookie", "SESSDATA=" + sessdata);
-        }
+        BiliRequestHeaders.applyWebApiHeaders(builder);
         HttpResponse<String> response = BiliWbiSigner.HTTP.send(builder.build(),
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         return response.body();

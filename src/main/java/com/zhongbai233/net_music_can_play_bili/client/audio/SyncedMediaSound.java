@@ -5,6 +5,7 @@ import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.github.tartaricacid.netmusic.client.audio.NetMusicAudioStream;
 import com.github.tartaricacid.netmusic.init.InitSounds;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
+import com.mojang.logging.LogUtils;
 import net.minecraft.client.resources.sounds.AbstractTickableSoundInstance;
 import net.minecraft.client.resources.sounds.Sound;
 import net.minecraft.client.resources.sounds.SoundInstance;
@@ -17,6 +18,7 @@ import java.net.URL;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import org.slf4j.Logger;
 
 /**
  * 共享的 NetMusic 同步媒体 Sound 基类。
@@ -27,6 +29,7 @@ import java.util.concurrent.CompletionException;
  * </p>
  */
 public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
+    private static final Logger LOGGER = LogUtils.getLogger();
     protected final URL songUrl;
     protected final int tickTimes;
     protected final LyricRecord lyricRecord;
@@ -47,6 +50,7 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
     @Override
     public CompletableFuture<AudioStream> getStream(SoundBufferLibrary soundBuffers, Sound sound, boolean looping) {
         onStreamStarting();
+        long started = System.currentTimeMillis();
         return CompletableFuture.supplyAsync(() -> {
             try {
                 if (isStopped()) {
@@ -57,6 +61,9 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
                     stream.close();
                     throw stoppedBeforeStreamReady();
                 }
+                LOGGER.debug("{} audio stream ready: cost={}ms host={}", streamDebugName(),
+                        System.currentTimeMillis() - started, songUrl.getHost());
+                onStreamReady();
                 return stream;
             } catch (CancellationException e) {
                 throw e;
@@ -80,6 +87,9 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
     }
 
     protected void onStreamStarting() {
+    }
+
+    protected void onStreamReady() {
     }
 
     protected void onStreamFailure(Exception error) {

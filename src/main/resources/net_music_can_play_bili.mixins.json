@@ -4,6 +4,8 @@
   "package": "com.zhongbai233.net_music_can_play_bili.mixin",
   "compatibilityLevel": "JAVA_25",
   "mixins": [
+    "SetMusicIDMessageMixin",
+    "TileEntityMusicPlayerMixin"
   ],
   "client": [
     "AbstractContainerScreenMixin",
@@ -14,6 +16,8 @@
     "ClientTooltipComponentMixin",
     "ComputerMenuScreenMixin",
     "GlDeviceYuvShaderSkipMixin",
+    "GuiGraphicsExtractorAccessor",
+    "GuiRendererTargetMixin",
     "ItemInHandRendererMixin",
     "LibraryAccessor",
     "MusicToClientMessageClientMixin",

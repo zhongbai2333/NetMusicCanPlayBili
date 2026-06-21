@@ -1,11 +1,9 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
-import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
@@ -15,8 +13,9 @@ import java.util.UUID;
 
 public record MP4StatePacket(boolean playing, boolean shuffle, boolean videoEnabled, boolean landscape,
         int qualityIndex, int selectedQueueIndex, int volumePerMille, int repeatMode,
-    boolean playlistOpen, int queueScrollOffset, boolean lyricsEnabled, int progressPerMille,
-    boolean rotationHintShown, int subtitleMode, boolean subtitleAiEnabled, UUID deviceId) implements CustomPacketPayload {
+        boolean playlistOpen, int queueScrollOffset, boolean lyricsEnabled, int progressPerMille,
+        boolean rotationHintShown, int subtitleMode, boolean subtitleAiEnabled, UUID deviceId)
+        implements CustomPacketPayload {
 
     public MP4StatePacket(boolean playing, boolean shuffle, boolean videoEnabled, boolean landscape,
             int qualityIndex, int selectedQueueIndex, int volumePerMille, int repeatMode,
@@ -28,14 +27,15 @@ public record MP4StatePacket(boolean playing, boolean shuffle, boolean videoEnab
     }
 
     public static final Type<MP4StatePacket> TYPE = new Type<>(
-            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID, "mp4_state"));
+            NetworkPayloadIds.id("mp4_state"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, MP4StatePacket> STREAM_CODEC = new StreamCodec<>() {
         @Override
         public MP4StatePacket decode(RegistryFriendlyByteBuf buffer) {
             return new MP4StatePacket(buffer.readBoolean(), buffer.readBoolean(), buffer.readBoolean(),
                     buffer.readBoolean(), buffer.readInt(), buffer.readInt(), buffer.readInt(), buffer.readInt(),
-                    buffer.readBoolean(), buffer.readInt(), buffer.readBoolean(), buffer.readInt(), buffer.readBoolean(),
+                    buffer.readBoolean(), buffer.readInt(), buffer.readBoolean(), buffer.readInt(),
+                    buffer.readBoolean(),
                     buffer.readInt(), buffer.readBoolean(), buffer.readBoolean() ? buffer.readUUID() : null);
         }
 
@@ -71,34 +71,40 @@ public record MP4StatePacket(boolean playing, boolean shuffle, boolean videoEnab
     public static MP4StatePacket fromState(MP4Item.State state) {
         return new MP4StatePacket(state.playing(), state.shuffle(), state.videoEnabled(), state.landscape(),
                 state.qualityIndex(), state.selectedQueueIndex(), state.volumePerMille(), state.repeatMode(),
-            state.playlistOpen(), state.queueScrollOffset(), state.lyricsEnabled(), state.progressPerMille(),
+                state.playlistOpen(), state.queueScrollOffset(), state.lyricsEnabled(), state.progressPerMille(),
                 state.rotationHintShown(), state.subtitleMode(), state.subtitleAiEnabled());
     }
 
     public static MP4StatePacket fromState(MP4Item.State state, UUID deviceId) {
         return new MP4StatePacket(state.playing(), state.shuffle(), state.videoEnabled(), state.landscape(),
                 state.qualityIndex(), state.selectedQueueIndex(), state.volumePerMille(), state.repeatMode(),
-            state.playlistOpen(), state.queueScrollOffset(), state.lyricsEnabled(), state.progressPerMille(),
+                state.playlistOpen(), state.queueScrollOffset(), state.lyricsEnabled(), state.progressPerMille(),
                 state.rotationHintShown(), state.subtitleMode(), state.subtitleAiEnabled(), deviceId);
     }
 
     public MP4Item.State toState() {
         return new MP4Item.State(playing, shuffle, videoEnabled, landscape, qualityIndex, selectedQueueIndex,
-            queueScrollOffset, volumePerMille, repeatMode, playlistOpen, lyricsEnabled, subtitleMode,
-            subtitleAiEnabled, progressPerMille, rotationHintShown);
+                queueScrollOffset, volumePerMille, repeatMode, playlistOpen, lyricsEnabled, subtitleMode,
+                subtitleAiEnabled, progressPerMille, rotationHintShown);
     }
 
     public static void handle(MP4StatePacket payload, IPayloadContext context) {
         if (!(context.player() instanceof ServerPlayer player)) {
             return;
         }
+        if (!NetworkRateLimiter.allow(player.getUUID(), "mp4_state", 6)) {
+            return;
+        }
         ItemStack stack = payload.deviceId() != null ? MP4Item.findByDeviceId(player, payload.deviceId())
-            : MP4Item.findAnyInInventory(player);
+                : MP4Item.findAnyInInventory(player);
         if (!(stack.getItem() instanceof MP4Item)) {
             return;
         }
-        UUID deviceId = payload.deviceId() != null ? payload.deviceId() : MP4Item.getOrCreateDeviceId(stack);
         ServerLevel level = (ServerLevel) player.level();
+        UUID deviceId = MP4DeviceIdentity.getOrCreateUnique(level, player, stack);
+        if (deviceId == null) {
+            return;
+        }
         MP4DeviceStateStore.DeviceEntry current = MP4DeviceStateStore.getOrCreate(level, deviceId, stack);
         MP4Item.State state = payload.toState();
         MP4DeviceStateStore.update(level, deviceId, current.withState(state));

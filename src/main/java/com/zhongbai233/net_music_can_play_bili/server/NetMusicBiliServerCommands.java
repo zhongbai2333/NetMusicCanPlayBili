@@ -1,15 +1,21 @@
 package com.zhongbai233.net_music_can_play_bili.server;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.network.WhitelistCsvExportPacket;
+import com.zhongbai233.net_music_can_play_bili.network.WhitelistReviewPacket;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.permissions.PermissionLevel;
 import net.minecraft.server.players.NameAndId;
+import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import org.slf4j.Logger;
 
+import java.io.IOException;
 import java.util.List;
 
 import static com.mojang.brigadier.arguments.IntegerArgumentType.getInteger;
@@ -29,18 +35,41 @@ public final class NetMusicBiliServerCommands {
         CommandDispatcher<CommandSourceStack> dispatcher = event.getDispatcher();
         dispatcher.register(literal(ROOT_COMMAND)
                 .then(literal("audit")
-                .then(literal("sources")
-                    .then(literal("limit")
-                        .then(argument("count", integer(1, 100))
-                            .executes(ctx -> listSources(ctx.getSource(), getInteger(ctx, "count")))))
-                    .executes(ctx -> listSources(ctx.getSource())))
+                        .then(literal("sources")
+                                .then(literal("limit")
+                                        .then(argument("count", integer(1, 100))
+                                                .executes(
+                                                        ctx -> listSources(ctx.getSource(), getInteger(ctx, "count")))))
+                                .executes(ctx -> listSources(ctx.getSource())))
                         .executes(ctx -> listSources(ctx.getSource())))
                 .then(literal("sources")
-                .then(literal("limit")
-                    .then(argument("count", integer(1, 100))
-                        .executes(ctx -> listSources(ctx.getSource(), getInteger(ctx, "count")))))
-                        .executes(ctx -> listSources(ctx.getSource()))));
-            LOGGER.info("Registered server audit command /{}", ROOT_COMMAND);
+                        .then(literal("limit")
+                                .then(argument("count", integer(1, 100))
+                                        .executes(ctx -> listSources(ctx.getSource(), getInteger(ctx, "count")))))
+                        .executes(ctx -> listSources(ctx.getSource())))
+                .then(literal("whitelist")
+                        .requires(NetMusicBiliServerCommands::isOpLevelFourOrConsole)
+                        .then(literal("add")
+                                .then(argument("idOrLink", StringArgumentType.greedyString())
+                                        .executes(ctx -> addWhitelist(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "idOrLink")))))
+                        .then(literal("list")
+                                .executes(ctx -> listWhitelist(ctx.getSource())))
+                        .then(literal("remove")
+                                .then(argument("idOrLink", StringArgumentType.greedyString())
+                                        .executes(ctx -> removeWhitelist(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "idOrLink")))))
+                        .then(literal("delete")
+                                .then(argument("idOrLink", StringArgumentType.greedyString())
+                                        .executes(ctx -> removeWhitelist(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "idOrLink")))))
+                        .then(literal("export")
+                                .executes(ctx -> exportWhitelist(ctx.getSource())))
+                        .then(literal("gui")
+                                .executes(ctx -> openWhitelistReview(ctx.getSource())))
+                        .then(literal("review")
+                                .executes(ctx -> openWhitelistReview(ctx.getSource())))));
+        LOGGER.info("Registered server audit command /{}", ROOT_COMMAND);
     }
 
     private static boolean isOpOrConsole(CommandSourceStack source) {
@@ -64,6 +93,27 @@ public final class NetMusicBiliServerCommands {
         return level == PermissionLevel.GAMEMASTERS
                 || level == PermissionLevel.ADMINS
                 || level == PermissionLevel.OWNERS;
+    }
+
+    private static boolean isOpLevelFourOrConsole(CommandSourceStack source) {
+        return canManageWhitelist(source);
+    }
+
+    public static boolean canManageWhitelist(CommandSourceStack source) {
+        if (source == null) {
+            return false;
+        }
+        try {
+            var player = source.getPlayer();
+            if (player == null) {
+                return true;
+            }
+            NameAndId profile = new NameAndId(player.getGameProfile());
+            return source.getServer().isSingleplayerOwner(profile)
+                    || source.getServer().getProfilePermissions(profile).level() == PermissionLevel.OWNERS;
+        } catch (Exception ignored) {
+            return true;
+        }
     }
 
     private static int listSources(CommandSourceStack source) {
@@ -100,5 +150,117 @@ public final class NetMusicBiliServerCommands {
                     .withStyle(ChatFormatting.DARK_GRAY), false);
         }
         return sources.size();
+    }
+
+    private static int addWhitelist(CommandSourceStack source, String raw) {
+        try {
+            BiliWhitelistManager.AddResult result = BiliWhitelistManager.add(source.getServer(), raw,
+                    source.getPlayer());
+            return switch (result.status()) {
+                case ADDED -> {
+                    BiliWhitelistManager.Entry entry = result.entry();
+                    source.sendSuccess(() -> Component.literal("已添加链接白名单：")
+                            .withStyle(ChatFormatting.GREEN)
+                            .append(Component.literal(entry.id).withStyle(ChatFormatting.YELLOW))
+                            .append(Component.literal("  添加者：" + entry.addedByName).withStyle(ChatFormatting.GRAY)),
+                            true);
+                    yield 1;
+                }
+                case DUPLICATE -> {
+                    BiliWhitelistManager.Entry entry = result.entry();
+                    source.sendFailure(Component.literal("该条目已在白名单：" + entry.id
+                            + "（添加者：" + entry.addedByName + "，时间：" + entry.addedAt + "）")
+                            .withStyle(ChatFormatting.YELLOW));
+                    yield 0;
+                }
+                case INVALID -> {
+                    source.sendFailure(Component.literal("请输入 BV号、av号，或 NetMusic 电脑使用的第三方链接/URL。")
+                            .withStyle(ChatFormatting.RED));
+                    yield 0;
+                }
+            };
+        } catch (IOException e) {
+            LOGGER.warn("保存链接白名单失败", e);
+            source.sendFailure(Component.literal("保存白名单失败：" + e.getMessage()).withStyle(ChatFormatting.RED));
+            return 0;
+        }
+    }
+
+    private static int listWhitelist(CommandSourceStack source) {
+        List<BiliWhitelistManager.Entry> entries = BiliWhitelistManager.entries(source.getServer());
+        if (entries.isEmpty()) {
+            source.sendSuccess(() -> Component.literal("链接白名单为空。启用配置后，未加入白名单的 BV/第三方链接不能创建唱片或音源头。")
+                    .withStyle(ChatFormatting.GRAY), false);
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal("链接白名单：")
+                .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)
+                .append(Component.literal(String.valueOf(entries.size())).withStyle(ChatFormatting.YELLOW))
+                .append(Component.literal(" 条").withStyle(ChatFormatting.GRAY)), false);
+        for (int i = 0; i < entries.size(); i++) {
+            int index = i + 1;
+            BiliWhitelistManager.Entry entry = entries.get(i);
+            source.sendSuccess(() -> Component.literal(index + ". ").withStyle(ChatFormatting.DARK_GRAY)
+                    .append(Component.literal("[" + entry.type + "] ").withStyle(ChatFormatting.AQUA))
+                    .append(Component.literal(entry.id).withStyle(ChatFormatting.YELLOW))
+                    .append(Component.literal("  by " + entry.addedByName).withStyle(ChatFormatting.GRAY))
+                    .append(Component.literal("  " + entry.addedAt).withStyle(ChatFormatting.DARK_GRAY)), false);
+        }
+        return entries.size();
+    }
+
+    private static int removeWhitelist(CommandSourceStack source, String raw) {
+        try {
+            BiliWhitelistManager.RemoveResult result = BiliWhitelistManager.remove(source.getServer(), raw);
+            return switch (result.status()) {
+                case REMOVED -> {
+                    source.sendSuccess(() -> Component.literal("已删除链接白名单：")
+                            .withStyle(ChatFormatting.GREEN)
+                            .append(Component.literal(result.entry().id).withStyle(ChatFormatting.YELLOW)), true);
+                    yield 1;
+                }
+                case MISSING -> {
+                    source.sendFailure(Component.literal("白名单中没有：" + result.requestedId())
+                            .withStyle(ChatFormatting.YELLOW));
+                    yield 0;
+                }
+                case INVALID -> {
+                    source.sendFailure(Component.literal("请输入 BV号、av号，或 NetMusic 电脑使用的第三方链接/URL。")
+                            .withStyle(ChatFormatting.RED));
+                    yield 0;
+                }
+            };
+        } catch (IOException e) {
+            LOGGER.warn("保存链接白名单失败", e);
+            source.sendFailure(Component.literal("保存白名单失败：" + e.getMessage()).withStyle(ChatFormatting.RED));
+            return 0;
+        }
+    }
+
+    private static int exportWhitelist(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("CSV 导出需要由玩家执行，才能下载到本地客户端。")
+                    .withStyle(ChatFormatting.RED));
+            return 0;
+        }
+        String csv = BiliWhitelistManager.exportCsv(source.getServer());
+        PacketDistributor.sendToPlayer(player, WhitelistCsvExportPacket.create(csv));
+        source.sendSuccess(() -> Component.literal("已发送白名单 CSV 到你的客户端，将保存到本地游戏目录。")
+                .withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int openWhitelistReview(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("白名单审核 GUI 需要由玩家执行。")
+                    .withStyle(ChatFormatting.RED));
+            return 0;
+        }
+        WhitelistReviewPacket.sendTo(player);
+        source.sendSuccess(() -> Component.literal("已打开白名单审核界面。")
+                .withStyle(ChatFormatting.GREEN), false);
+        return 1;
     }
 }

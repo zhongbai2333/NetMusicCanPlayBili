@@ -85,7 +85,7 @@ public abstract class CDBurnerMenuScreenMixin {
     @Inject(method = "handleCraftButton", at = @At("HEAD"), cancellable = true)
     private void onHandleCraftButton(CallbackInfo ci) {
         String text = this.textField.getValue().trim();
-        if (!BiliApiClient.isBiliVideoId(text)) {
+        if (!BiliApiClient.containsBiliVideoId(text)) {
             return;
         }
 

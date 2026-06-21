@@ -97,6 +97,16 @@ public final class MediaTimelineClock {
         }
     }
 
+    public synchronized void reanchor(long mediaMillis, long newTotalMillis) {
+        totalMillis = Math.max(0L, newTotalMillis);
+        long media = clamp(mediaMillis, totalMillis);
+        anchorNanos = System.nanoTime();
+        anchorMillis = media;
+        lastLocalMillis = media;
+        pauseStartedNanos = 0L;
+        lastObservedServerMillis = media;
+    }
+
     public synchronized long mediaMillis() {
         return localMillis();
     }

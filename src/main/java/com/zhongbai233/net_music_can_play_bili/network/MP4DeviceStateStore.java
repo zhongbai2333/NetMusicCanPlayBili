@@ -32,8 +32,9 @@ public final class MP4DeviceStateStore {
         }
         DeviceEntry saved = level != null ? MP4PlaybackSavedData.get(level).device(deviceId).orElse(null) : null;
         if (saved != null) {
-            RUNTIME.put(deviceId, saved.normalized());
-            return saved.normalized();
+            DeviceEntry restored = withStackQueue(saved, stack).normalized();
+            RUNTIME.put(deviceId, restored);
+            return restored;
         }
         DeviceEntry created = fromStackContents(stack).normalized();
         RUNTIME.put(deviceId, created);
@@ -134,6 +135,18 @@ public final class MP4DeviceStateStore {
         return new DeviceEntry(MP4Item.State.DEFAULT, MP4Item.readQueue(stack), 0L, 0, "", 0L);
     }
 
+    private static DeviceEntry withStackQueue(DeviceEntry entry, ItemStack stack) {
+        if (entry == null || stack.isEmpty() || !(stack.getItem() instanceof MP4Item)) {
+            return entry == null ? DeviceEntry.EMPTY : entry;
+        }
+        List<ItemStack> queue = MP4Item.readQueue(stack);
+        if (queue.isEmpty()) {
+            return entry;
+        }
+        return new DeviceEntry(entry.state(), queue, entry.elapsedMillis(), entry.durationSeconds(),
+                entry.sessionId(), entry.updatedGameTime());
+    }
+
     private static int progressPerMille(long elapsedMillis, int durationSeconds, int fallback) {
         if (durationSeconds <= 0) {
             return clamp(fallback, 0, 1000);
@@ -157,11 +170,12 @@ public final class MP4DeviceStateStore {
         }
 
         public DeviceEntry normalized() {
-            List<ItemStack> cleanQueue = queue == null ? List.of() : queue.stream()
-                    .filter(MP4Item::isNetMusicDisc)
-                    .limit(MP4Item.MAX_QUEUE_SIZE)
-                    .map(stack -> stack.copyWithCount(1))
-                    .toList();
+            List<ItemStack> cleanQueue = queue == null ? List.of()
+                    : queue.stream()
+                            .filter(MP4Item::isNetMusicDisc)
+                            .limit(MP4Item.MAX_QUEUE_SIZE)
+                            .map(stack -> stack.copyWithCount(1))
+                            .toList();
             MP4Item.State safeState = state == null ? MP4Item.State.DEFAULT : state;
             int maxIndex = Math.max(0, cleanQueue.size() - 1);
             MP4Item.State normalizedState = new MP4Item.State(
@@ -182,22 +196,22 @@ public final class MP4DeviceStateStore {
                     safeState.rotationHintShown());
             int duration = Math.max(0, durationSeconds);
             long maxElapsed = duration > 0 ? Math.max(0L, duration * 1000L - 50L) : Long.MAX_VALUE;
-                return new DeviceEntry(normalizedState, cleanQueue, Math.max(0L, Math.min(maxElapsed, elapsedMillis)),
+            return new DeviceEntry(normalizedState, cleanQueue, Math.max(0L, Math.min(maxElapsed, elapsedMillis)),
                     duration, sessionId == null ? "" : sessionId, Math.max(0L, updatedGameTime));
         }
 
         public DeviceEntry withState(MP4Item.State newState) {
-                return new DeviceEntry(newState, queue, elapsedMillis, durationSeconds, sessionId, updatedGameTime)
+            return new DeviceEntry(newState, queue, elapsedMillis, durationSeconds, sessionId, updatedGameTime)
                     .normalized();
         }
 
         public DeviceEntry withQueue(List<ItemStack> newQueue) {
-                return new DeviceEntry(state, newQueue, elapsedMillis, durationSeconds, sessionId, updatedGameTime)
+            return new DeviceEntry(state, newQueue, elapsedMillis, durationSeconds, sessionId, updatedGameTime)
                     .normalized();
-            }
+        }
 
-            public DeviceEntry withUpdatedGameTime(long newUpdatedGameTime) {
-                return new DeviceEntry(state, queue, elapsedMillis, durationSeconds, sessionId, newUpdatedGameTime)
+        public DeviceEntry withUpdatedGameTime(long newUpdatedGameTime) {
+            return new DeviceEntry(state, queue, elapsedMillis, durationSeconds, sessionId, newUpdatedGameTime)
                     .normalized();
         }
 

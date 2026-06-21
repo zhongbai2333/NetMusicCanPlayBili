@@ -2,8 +2,11 @@ package com.zhongbai233.net_music_can_play_bili.init;
 
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.link.HeadphoneAbility;
+import com.zhongbai233.net_music_can_play_bili.link.HolographicGlassesAbility;
+import com.zhongbai233.net_music_can_play_bili.item.HolographicGlassesItem;
 import com.zhongbai233.net_music_can_play_bili.item.InvisibleHeadphonesItem;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
+import com.zhongbai233.net_music_can_play_bili.item.MediaManagementToolItem;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.core.component.DataComponents;
@@ -45,6 +48,11 @@ public final class ModItems {
             MP4Item::new,
             Item.Properties::new);
 
+    public static final DeferredItem<MediaManagementToolItem> MEDIA_MANAGEMENT_TOOL = ITEMS.registerItem(
+            "media_management_tool",
+            MediaManagementToolItem::new,
+            properties -> properties.stacksTo(1));
+
     public static final DeferredItem<InvisibleHeadphonesItem> INVISIBLE_HEADPHONES = ITEMS.registerItem(
             "invisible_headphones",
             InvisibleHeadphonesItem::new,
@@ -55,8 +63,21 @@ public final class ModItems {
             InvisibleHeadphonesItem::new,
             ModItems::headphoneItemProperties);
 
+    public static final DeferredItem<HolographicGlassesItem> HOLOGRAPHIC_GLASSES = ITEMS.registerItem(
+            "holographic_glasses",
+            HolographicGlassesItem::new,
+            ModItems::holographicGlassesItemProperties);
+
     private static Item.Properties headphoneItemProperties(Item.Properties properties) {
         return properties.attributes(headphoneAttributeModifiers())
+                .component(DataComponents.EQUIPPABLE, Equippable.builder(EquipmentSlot.HEAD)
+                        .setEquipSound(SoundEvents.ARMOR_EQUIP_GENERIC)
+                        .setSwappable(false)
+                        .build());
+    }
+
+    private static Item.Properties holographicGlassesItemProperties(Item.Properties properties) {
+        return properties.attributes(holographicGlassesAttributeModifiers())
                 .component(DataComponents.EQUIPPABLE, Equippable.builder(EquipmentSlot.HEAD)
                         .setEquipSound(SoundEvents.ARMOR_EQUIP_GENERIC)
                         .setSwappable(false)
@@ -72,6 +93,15 @@ public final class ModItems {
                 .build();
     }
 
+    private static ItemAttributeModifiers holographicGlassesAttributeModifiers() {
+        return ItemAttributeModifiers.builder()
+                .add(ModAttributes.HOLOGRAPHIC_GLASSES,
+                        new AttributeModifier(Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
+                                "holographic_glasses"), 1.0D, AttributeModifier.Operation.ADD_VALUE),
+                        EquipmentSlotGroup.HEAD)
+                .build();
+    }
+
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> MAIN_TAB = TABS.register(
             "main",
             () -> CreativeModeTab.builder()
@@ -83,10 +113,16 @@ public final class ModItems {
                         output.accept(VIDEO_PROJECTOR.get());
                         output.accept(SPEAKER.get());
                         output.accept(MP4.get());
+                        output.accept(MEDIA_MANAGEMENT_TOOL.get());
                         output.accept(INVISIBLE_HEADPHONES.get());
                         output.accept(CAT_HEADPHONES.get());
+                        output.accept(HOLOGRAPHIC_GLASSES.get());
                         parameters.holders().lookupOrThrow(Registries.ENCHANTMENT)
                                 .get(HeadphoneAbility.HEADPHONES_KEY)
+                                .ifPresent(enchantment -> output.accept(EnchantmentHelper.createBook(
+                                        new EnchantmentInstance(enchantment, 1))));
+                        parameters.holders().lookupOrThrow(Registries.ENCHANTMENT)
+                                .get(HolographicGlassesAbility.HOLOGRAPHIC_GLASSES_KEY)
                                 .ifPresent(enchantment -> output.accept(EnchantmentHelper.createBook(
                                         new EnchantmentInstance(enchantment, 1))));
                     })

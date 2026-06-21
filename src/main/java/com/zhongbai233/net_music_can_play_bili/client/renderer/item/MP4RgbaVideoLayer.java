@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.client.renderer.item;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient;
+import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldVideoFrame;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
@@ -41,8 +42,18 @@ final class MP4RgbaVideoLayer implements AutoCloseable {
         LAYERS.clear();
     }
 
+    static void release(UUID deviceId) {
+        if (deviceId == null) {
+            return;
+        }
+        MP4RgbaVideoLayer layer = LAYERS.remove(deviceId);
+        if (layer != null) {
+            layer.close();
+        }
+    }
+
     boolean uploadLatest(UUID deviceId) {
-        MP4HandheldVideoClient.VideoFrame frame = MP4HandheldVideoClient.latestFrame(deviceId);
+        HandheldVideoFrame frame = MP4HandheldVideoClient.latestFrame(deviceId);
         if (frame == null || frame.format() != Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA) {
             return false;
         }
@@ -82,7 +93,7 @@ final class MP4RgbaVideoLayer implements AutoCloseable {
         uploadedHeight = height;
     }
 
-    private static void uploadPixels(NativeImage image, MP4HandheldVideoClient.VideoFrame frame) {
+    private static void uploadPixels(NativeImage image, HandheldVideoFrame frame) {
         byte[] data = frame.data();
         ByteBuffer buffer = frame.buffer();
         int width = frame.width();

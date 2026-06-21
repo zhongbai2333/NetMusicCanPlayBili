@@ -11,6 +11,7 @@ import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
 import org.slf4j.Logger;
 
 import java.net.URI;
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -34,6 +35,14 @@ public final class ClientMediaPreparer {
         String preparedUrl = resolvePlayableUrl(rawUrl, playUrl, songName, allowDolby);
         LyricRecord lyricRecord = enableLyrics ? buildLyric(rawUrl, songName) : null;
         return new PreparedMedia(preparedUrl, lyricRecord);
+    }
+
+    public static PreparedMedia prepareAudioOnly(String rawUrl, String playUrl, String songName, boolean allowDolby) {
+        return new PreparedMedia(resolvePlayableUrl(rawUrl, playUrl, songName, allowDolby), null);
+    }
+
+    public static CompletableFuture<LyricRecord> buildLyricAsync(String rawUrl, String songName) {
+        return CompletableFuture.supplyAsync(() -> buildLyric(rawUrl, songName));
     }
 
     public static boolean hasStoredBiliSelection(String rawUrl, String playUrl) {

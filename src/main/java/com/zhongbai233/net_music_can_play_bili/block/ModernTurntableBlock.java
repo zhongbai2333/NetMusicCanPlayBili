@@ -5,9 +5,6 @@ import com.mojang.serialization.MapCodec;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableClientHooks;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
-import com.zhongbai233.net_music_can_play_bili.link.AudioLinkData;
-import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
-import com.zhongbai233.net_music_can_play_bili.link.HeadphoneAbility;
 import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
@@ -17,7 +14,6 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
@@ -123,22 +119,6 @@ public class ModernTurntableBlock extends HorizontalDirectionalBlock implements 
                     pos.getX(), pos.getY(), pos.getZ()).withStyle(ChatFormatting.GOLD));
             return InteractionResult.SUCCESS;
         }
-        if (HeadphoneAbility.has(stack)) {
-            if (level.isClientSide()) {
-                return InteractionResult.SUCCESS;
-            }
-            if (hasLinkedSpeaker(level, pos)) {
-                player.sendSystemMessage(Component.translatable(
-                        "message.net_music_can_play_bili.headphones.turntable_has_speaker")
-                        .withStyle(ChatFormatting.RED));
-                return InteractionResult.FAIL;
-            }
-            AudioLinkData.writeHeadphoneTurntable(stack, pos);
-            player.sendSystemMessage(Component.translatable(
-                    "message.net_music_can_play_bili.headphones.turntable_linked",
-                    pos.getX(), pos.getY(), pos.getZ()).withStyle(ChatFormatting.GOLD));
-            return InteractionResult.SUCCESS;
-        }
         if (level.isClientSide()) {
             return InteractionResult.SUCCESS;
         }
@@ -219,10 +199,6 @@ public class ModernTurntableBlock extends HorizontalDirectionalBlock implements 
                     .setValue(HAS_DISC, turntable.hasDisc())
                     .setValue(PLAYING, turntable.isPlaying()), 3);
         }
-    }
-
-    private static boolean hasLinkedSpeaker(Level level, BlockPos turntablePos) {
-        return level instanceof ServerLevel serverLevel && AudioLinkIndex.hasSpeakerLinkedTo(serverLevel, turntablePos);
     }
 
     @Override

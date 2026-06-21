@@ -6,7 +6,6 @@ import java.net.URL;
 
 public final class PlaybackSync {
     private static final String SESSION_KEY = "nmb_session=";
-    private static final String ELAPSED_KEY = "nmb_elapsed=";
     private static final String ELAPSED_MS_KEY = "nmb_elapsed_ms=";
     private static final String TOTAL_MS_KEY = "nmb_total_ms=";
 
@@ -35,7 +34,8 @@ public final class PlaybackSync {
 
     public static String transferSync(String source, String target) {
         Metadata sync = parse(source);
-        return sync.hasSession() ? withSync(target, sync.sessionId(), sync.elapsedMillis(), sync.totalMillis()) : target;
+        return sync.hasSession() ? withSync(target, sync.sessionId(), sync.elapsedMillis(), sync.totalMillis())
+                : target;
     }
 
     public static Metadata parse(String value) {
@@ -55,13 +55,6 @@ public final class PlaybackSync {
             } else if (part.startsWith(ELAPSED_MS_KEY)) {
                 try {
                     elapsedMillis = Math.max(0L, Long.parseLong(part.substring(ELAPSED_MS_KEY.length())));
-                } catch (NumberFormatException ignored) {
-                    elapsedMillis = 0L;
-                }
-            } else if (part.startsWith(ELAPSED_KEY)) {
-                try {
-                    // 兼容旧版整数秒格式
-                    elapsedMillis = Math.max(0L, Long.parseLong(part.substring(ELAPSED_KEY.length()))) * 1000L;
                 } catch (NumberFormatException ignored) {
                     elapsedMillis = 0L;
                 }
@@ -85,10 +78,9 @@ public final class PlaybackSync {
             return value;
         }
         String fragment = value.substring(hash + 1);
-        return fragment.contains(SESSION_KEY) || fragment.contains(ELAPSED_KEY)
-            || fragment.contains(ELAPSED_MS_KEY) || fragment.contains(TOTAL_MS_KEY)
-            ? value.substring(0, hash)
-            : value;
+        return fragment.contains(SESSION_KEY) || fragment.contains(ELAPSED_MS_KEY) || fragment.contains(TOTAL_MS_KEY)
+                ? value.substring(0, hash)
+                : value;
     }
 
     public static URL strip(URL url) throws MalformedURLException {

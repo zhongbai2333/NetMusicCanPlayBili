@@ -28,6 +28,8 @@ public final class DolbyClientTickHandler {
 
     @SubscribeEvent
     public static void onRenderFrame(RenderFrameEvent.Pre event) {
+        com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer
+                .renderHeldOffscreenGuiFrameStart();
         if (!DolbyAudioRegistry.isActive()) {
             return;
         }

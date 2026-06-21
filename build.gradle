@@ -27,14 +27,13 @@ base {
 java.toolchain.languageVersion = JavaLanguageVersion.of(25)
 
 neoForge {
-    // Specify the version of NeoForge to use.
+    // NeoForge 版本。
     version = project.neo_version
 
-    // This line is optional. Access Transformers are automatically detected
+    // Access Transformer 会自动检测；通常无需手动添加。
     // accessTransformers.add('src/main/resources/META-INF/accesstransformer.cfg')
 
-    // Default run configurations.
-    // These can be tweaked, removed, or duplicated as needed.
+    // 本地运行配置。
     runs {
         client {
             client()
@@ -42,7 +41,7 @@ neoForge {
             def prop = { name, defaultValue -> providers.gradleProperty(name).orElse(defaultValue).get() }
             def jvmProp = { key, value -> jvmArgument "-D${key}=${value}" }
 
-            // Limit GameTest discovery to this mod namespace when running the development client.
+            // 限定 GameTest 命名空间，减少开发客户端扫描量。
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
             // 正式播放默认走 NV12 direct-buffer + PBO + shader；Bench 均默认关闭，按需用 -P... 显式打开。
             jvmProp 'bili.video.advanced_features', prop('biliAdvancedVideoFeatures', 'false')
@@ -99,6 +98,10 @@ neoForge {
 
             // MP4 手持 GUI 输入校准：开发调试用，默认关闭；启用后显示校准贴图并采集九点映射。
             jvmProp 'netmusic.mp4.calibration', prop('netmusicMp4Calibration', 'false')
+            // MP4 手持 GUI 输入命中：默认使用渲染层投影出的真实四角；排查时可用 -PnetmusicMp4ProjectedInput=false 回退旧估算。
+            jvmProp 'netmusic.mp4.projected_input', prop('netmusicMp4ProjectedInput', 'true')
+            // MP4 手持 GUI 主路径：使用 Minecraft GuiRenderer 离屏渲染，保留原版字体/控件渲染质量。
+            jvmProp 'netmusic.mp4.offscreen_gui', prop('netmusicMp4OffscreenGui', 'true')
         }
 
         server {
@@ -107,7 +110,7 @@ neoForge {
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
         }
 
-        // Dedicated GameTest runner for development validation.
+        // 开发用 GameTest 服务端。
         gameTestServer {
             type = "gameTestServer"
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
@@ -116,33 +119,75 @@ neoForge {
         data {
             clientData()
 
-            // Optional: use a separate working directory when generating data.
+            // 如需隔离数据生成目录，可打开下面一行。
             // gameDirectory = project.file('run-data')
 
-            // Generate this mod's resources while reusing existing assets as input.
+            // 生成本模组资源，并复用现有资源作为输入。
             programArguments.addAll '--mod', project.mod_id, '--all', '--output', file('src/generated/resources/').getAbsolutePath(), '--existing', file('src/main/resources/').getAbsolutePath()
         }
 
-        // Shared logging setup for local NeoForge run configurations.
+        // 本地运行日志设置。
         configureEach {
-            // Keep registry lifecycle logs visible during local development.
+            // 开发期保留注册表生命周期日志。
             systemProperty 'forge.logging.markers', 'REGISTRIES'
 
-            // Local run configs stay verbose; release logging is controlled by the packaged runtime.
+            // 本地保持 DEBUG，正式包由运行环境控制日志级别。
             logLevel = org.slf4j.event.Level.DEBUG
         }
     }
 
     mods {
-        // Bind the main source set to this mod id for NeoForge userdev.
+        // 将 main sourceSet 绑定到本模组 ID。
         "${mod_id}" {
             sourceSet(sourceSets.main)
         }
     }
 }
 
-// Include resources emitted by the data generator.
+// 加入数据生成输出资源。
 sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+
+tasks.register("runWithRenderDoc", Exec) {
+    def javaExecTask = tasks.withType(JavaExec).named("runClient").get()
+    def javaHome = javaExecTask.javaLauncher.get().metadata.installationPath.asFile.absolutePath
+    def renderDocCmd = providers.gradleProperty('renderDocCmd')
+            .orElse('E:\\Program Files\\RenderDoc\\renderdoccmd.exe')
+            .get()
+    def wrapperJar = layout.projectDirectory.file('gradle/wrapper/gradle-wrapper.jar').asFile
+    def workingDirPath = layout.projectDirectory.asFile.absolutePath
+    def runClientArgs = ["runClient"]
+    def renderDocOffscreenGui = providers.gradleProperty('renderDocOffscreenGui')
+    if (renderDocOffscreenGui.isPresent()) {
+        runClientArgs.add("-PnetmusicMp4OffscreenGui=${renderDocOffscreenGui.get()}")
+    }
+
+    doFirst {
+        if (!new File(renderDocCmd).exists()) {
+            throw new GradleException("RenderDoc command not found: ${renderDocCmd}. Override with -PrenderDocCmd=...")
+        }
+        if (!wrapperJar.exists()) {
+            throw new GradleException("Gradle wrapper jar not found: ${wrapperJar.absolutePath}")
+        }
+    }
+
+    commandLine = [
+            renderDocCmd,
+            "capture",
+            "--opt-hook-children",
+            "--wait-for-exit",
+            "--working-dir",
+            workingDirPath,
+            "$javaHome/bin/java.exe",
+            "-Xmx64m",
+            "-Xms64m",
+            "-Dorg.gradle.appname=gradlew",
+            "-Dorg.gradle.java.home=$javaHome",
+            "-classpath",
+            wrapperJar.absolutePath,
+            "org.gradle.wrapper.GradleWrapperMain"
+    ] + runClientArgs
+}
 
 
 dependencies {
@@ -150,7 +195,7 @@ dependencies {
     compileOnly "maven.modrinth:iris:YEGDGnJM"
 }
 
-// Expand mod metadata templates from Gradle properties.
+// 用 Gradle 属性展开模组元数据模板。
 var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
     var replaceProperties = [minecraft_version      : minecraft_version,
                              minecraft_version_range: minecraft_version_range,
@@ -169,12 +214,12 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
     into "build/generated/sources/modMetadata"
 }
 
-// Add generated metadata to both Gradle and IDE builds.
+// Gradle 和 IDE 构建都包含生成的元数据。
 sourceSets.main.resources.srcDir generateModMetadata
-// Keep IDE metadata fresh on project reload.
+// IDE 重载时刷新元数据。
 neoForge.ideSyncTask generateModMetadata
 
-// Local Maven publication target for development artifacts.
+// 本地 Maven 发布目标，供开发调试使用。
 publishing {
     publications {
         register('mavenJava', MavenPublication) {
@@ -188,7 +233,7 @@ publishing {
     }
 }
 
-// Ensure IDE navigation has dependency sources and Javadocs available.
+// 让 IDE 可下载依赖源码和 Javadoc，便于跳转。
 idea {
     module {
         downloadSources = true

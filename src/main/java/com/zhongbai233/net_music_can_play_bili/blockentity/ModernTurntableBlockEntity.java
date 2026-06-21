@@ -6,9 +6,11 @@ import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import com.github.tartaricacid.netmusic.network.NetworkHandler;
 import com.github.tartaricacid.netmusic.network.message.MusicToClientMessage;
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliSongInfoSanitizer;
 import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.block.ModernTurntableBlock;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.server.BiliWhitelistManager;
 import com.zhongbai233.net_music_can_play_bili.server.PlaybackAuditManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -118,7 +120,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
             if (ItemMusicCD.getSongInfo(resource.toStack()) == null)
                 return 0;
             int inserted = Math.min(1, amount);
-            setDisc(resource.toStack(1));
+            setDisc(BiliSongInfoSanitizer.sanitizeDisc(resource.toStack(1)));
             syncBlockState();
             return inserted;
         }
@@ -178,6 +180,10 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     }
 
     private void resolveAndResume(ServerLevel serverLevel) {
+        if (!isPlaybackAllowed(serverLevel, rawUrl, null)) {
+            stopPlayback();
+            return;
+        }
         long elapsedTicks = snapshotElapsedTicks(serverLevel.getGameTime());
         if (!(rawUrl.startsWith("BV") || rawUrl.startsWith("bv") || rawUrl.startsWith("av") || rawUrl.startsWith("AV"))
                 || !rawUrl.contains("|p=")) {
@@ -198,7 +204,8 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         MusicPlayResolverManager.resolve(resumeInfo)
                 .thenAcceptAsync(resolved -> {
                     if (!playing || !Objects.equals(rawUrl, resolved.songUrl != null ? resolved.songUrl : rawUrl)) {
-                        String newUrl = resolved.songUrl != null ? resolved.songUrl : playUrl;
+                        String newUrl = playbackUrlForStorage(rawUrl,
+                                resolved.songUrl != null ? resolved.songUrl : playUrl);
                         if (!newUrl.isBlank()) {
                             playUrl = newUrl;
                             playing = true;
@@ -293,7 +300,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     }
 
     public void setDisc(ItemStack stack) {
-        disc = stack.isEmpty() ? ItemStack.EMPTY : stack.copyWithCount(1);
+        disc = stack.isEmpty() ? ItemStack.EMPTY : BiliSongInfoSanitizer.sanitizeDisc(stack);
         stopPlayback();
         markDirty();
     }
@@ -336,6 +343,9 @@ public class ModernTurntableBlockEntity extends BlockEntity {
                     "message.net_music_can_play_bili.modern_turntable.need_vip"));
             return;
         }
+        if (!isPlaybackAllowed(serverLevel, songInfo.songUrl, triggerPlayer)) {
+            return;
+        }
 
         ItemMusicCD.SongInfo original = songInfo.clone();
         playbackOwnerId = triggerPlayer.getUUID();
@@ -355,9 +365,13 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         if (current == null || !Objects.equals(current.songUrl, original.songUrl)) {
             return;
         }
+        if (!isPlaybackAllowed(serverLevel, original.songUrl, null)) {
+            stopPlayback();
+            return;
+        }
 
         rawUrl = original.songUrl != null ? original.songUrl : "";
-        playUrl = resolved.songUrl != null ? resolved.songUrl : rawUrl;
+        playUrl = playbackUrlForStorage(rawUrl, resolved.songUrl != null ? resolved.songUrl : rawUrl);
         songName = resolved.songName != null && !resolved.songName.isBlank()
                 ? resolved.songName
                 : original.songName;
@@ -370,6 +384,10 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         syncedPlayers.clear();
         markDirty();
         syncNearbyPlayers(serverLevel, durationSeconds);
+    }
+
+    private static String playbackUrlForStorage(String rawUrl, String resolvedUrl) {
+        return isStoredBiliSelection(rawUrl) ? rawUrl : (resolvedUrl != null ? resolvedUrl : "");
     }
 
     public void stopPlayback() {
@@ -431,6 +449,9 @@ public class ModernTurntableBlockEntity extends BlockEntity {
             return;
         }
         playbackOwnerId = player.getUUID();
+        if (!isPlaybackAllowed(serverLevel, rawUrl, player)) {
+            return;
+        }
         long elapsedTicks = targetMillis >= 0L
                 ? saveElapsedTicks(Math.round(Math.max(0L, targetMillis) / 50.0D))
                 : saveElapsedTicks(storedElapsedTicks());
@@ -502,6 +523,10 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         if (playUrl.isBlank()) {
             return;
         }
+        if (!isPlaybackAllowed(serverLevel, rawUrl.isBlank() ? playUrl : rawUrl, null)) {
+            stopPlayback();
+            return;
+        }
         // 剩余秒数 <= 0 时不跳过同步：仍需要通知客户端歌曲已结束并停止播放
         // 传入 Math.max(1, remainingSeconds) 保证客户端 MusicToClientMessage 收到
         // 有效的 timeSecond 值，触发 ModernTurntableSound 的结束逻辑
@@ -532,6 +557,25 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         PlaybackAuditManager.recordModernTurntable(serverLevel, worldPosition, songName,
                 rawUrl.isBlank() ? playUrl : rawUrl, durationSeconds,
                 getPlaybackElapsedMillis(serverLevel.getGameTime()), playbackOwnerId);
+    }
+
+    private boolean isPlaybackAllowed(ServerLevel serverLevel, String sourceUrl, ServerPlayer actor) {
+        if (BiliSongInfoSanitizer.isForbiddenBiliDirectUrl(sourceUrl)) {
+            if (actor != null) {
+                actor.sendSystemMessage(BiliWhitelistManager.denialMessage(actor, sourceUrl, "播放"));
+            }
+            return false;
+        }
+        if (!BiliWhitelistManager.enabled() || BiliWhitelistManager.canonicalResource(sourceUrl).isEmpty()) {
+            return true;
+        }
+        if (BiliWhitelistManager.isAllowed(serverLevel.getServer(), sourceUrl)) {
+            return true;
+        }
+        if (actor != null) {
+            actor.sendSystemMessage(BiliWhitelistManager.denialMessage(actor, sourceUrl, "播放"));
+        }
+        return false;
     }
 
     private String playbackSessionId() {
@@ -586,7 +630,8 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     @Override
     protected void loadAdditional(ValueInput input) {
         super.loadAdditional(input);
-        disc = input.read(DISC_TAG, ItemStack.OPTIONAL_CODEC).orElse(ItemStack.EMPTY);
+        disc = BiliSongInfoSanitizer
+                .sanitizeDisc(input.read(DISC_TAG, ItemStack.OPTIONAL_CODEC).orElse(ItemStack.EMPTY));
         playing = input.getBooleanOr(PLAYING_TAG, false);
         rawUrl = input.getStringOr(RAW_URL_TAG, "");
         playUrl = input.getStringOr(PLAY_URL_TAG, "");

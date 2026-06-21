@@ -42,7 +42,8 @@ public final class ClientMP4QueueTooltip implements ClientTooltipComponent {
         graphics.fill(x, y, x + width, y + componentHeight, 0xF0100715);
         graphics.outline(x, y, width, componentHeight, 0xFF6D4AA2);
         graphics.text(font, "MP4 播放队列", x + PADDING_X, y + PADDING_Y, 0xFFBBD8FF);
-        graphics.text(font, tooltip.titles().size() + " 首", x + width - PADDING_X - font.width(tooltip.titles().size() + " 首"),
+        graphics.text(font, tooltip.titles().size() + " 首",
+                x + width - PADDING_X - font.width(tooltip.titles().size() + " 首"),
                 y + PADDING_Y, 0xFF8B94AA);
 
         int selected = Math.max(0, Math.min(Math.max(0, tooltip.titles().size() - 1), tooltip.selectedIndex()));

@@ -1,10 +1,10 @@
 package com.zhongbai233.net_music_can_play_bili.client;
 
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkData;
+import com.zhongbai233.net_music_can_play_bili.link.EquippedMediaItems;
 import com.zhongbai233.net_music_can_play_bili.link.HeadphoneAbility;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.UUID;
@@ -21,7 +21,7 @@ public final class HeadphoneClientState {
         if (minecraft.player == null) {
             return false;
         }
-        return HeadphoneAbility.has(minecraft.player.getItemBySlot(EquipmentSlot.HEAD));
+        return HeadphoneAbility.has(EquippedMediaItems.firstHeadphones(minecraft.player));
     }
 
     public static boolean handlesTurntable(BlockPos turntablePos) {
@@ -73,6 +73,6 @@ public final class HeadphoneClientState {
         if (minecraft.player == null) {
             return ItemStack.EMPTY;
         }
-        return minecraft.player.getItemBySlot(EquipmentSlot.HEAD);
+        return EquippedMediaItems.firstHeadphones(minecraft.player);
     }
 }

@@ -6,12 +6,6 @@ import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.HolderLookup;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.network.protocol.Packet;
-import net.minecraft.network.protocol.game.ClientGamePacketListener;
-import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
@@ -22,7 +16,7 @@ import javax.annotation.Nullable;
 /**
  * 音响方块实体 — 将唱片机音频重定向到本方块位置输出，支持 7.1.4 声道选择
  */
-public class SpeakerBlockEntity extends BlockEntity {
+public class SpeakerBlockEntity extends SyncedBlockEntity {
     private static final String LINK_KEY = "LinkedTarget";
     private static final String CHANNEL_INDEX = "ChannelIndex";
     private static final String VOLUME = "Volume";
@@ -61,11 +55,10 @@ public class SpeakerBlockEntity extends BlockEntity {
 
     public void linkTo(BlockPos turntablePos) {
         this.linkedTurntablePos = turntablePos.immutable();
-        setChanged();
         if (level != null && !level.isClientSide()) {
             AudioLinkIndex.registerSpeaker((ServerLevel) level, worldPosition, linkedTurntablePos);
-            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
         }
+        markDirtyAndSync();
     }
 
     public void unlink() {
@@ -73,10 +66,7 @@ public class SpeakerBlockEntity extends BlockEntity {
             AudioLinkIndex.unregisterSpeaker(serverLevel, worldPosition);
         }
         this.linkedTurntablePos = null;
-        setChanged();
-        if (level != null && !level.isClientSide()) {
-            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
-        }
+        markDirtyAndSync();
     }
 
     @Nullable
@@ -113,13 +103,6 @@ public class SpeakerBlockEntity extends BlockEntity {
     public void setAutoMixJoc(boolean v) {
         this.autoMixJoc = v;
         setChanged();
-    }
-
-    public void markDirtyAndSync() {
-        setChanged();
-        if (level != null && !level.isClientSide()) {
-            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
-        }
     }
 
     @Override
@@ -191,14 +174,4 @@ public class SpeakerBlockEntity extends BlockEntity {
         }
     }
 
-    @Override
-    public CompoundTag getUpdateTag(HolderLookup.Provider registries) {
-        return saveWithoutMetadata(registries);
-    }
-
-    @Override
-    @Nullable
-    public Packet<ClientGamePacketListener> getUpdatePacket() {
-        return ClientboundBlockEntityDataPacket.create(this);
-    }
 }
