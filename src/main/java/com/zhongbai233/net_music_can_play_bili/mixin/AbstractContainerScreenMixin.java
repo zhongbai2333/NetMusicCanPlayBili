@@ -2,8 +2,6 @@ package com.zhongbai233.net_music_can_play_bili.mixin;
 
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import com.zhongbai233.net_music_can_play_bili.client.MP4Client;
-import com.zhongbai233.net_music_can_play_bili.network.MP4QueueSelectionPacket;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.Slot;
@@ -43,9 +41,6 @@ public abstract class AbstractContainerScreenMixin<T extends AbstractContainerMe
             return;
         }
         MP4Client.selectQueueIndexLocally(stack, selected);
-        if (Minecraft.getInstance().getConnection() != null) {
-            Minecraft.getInstance().getConnection().send(new MP4QueueSelectionPacket(menuSlotIndex, selected));
-        }
         cir.setReturnValue(true);
     }
 }

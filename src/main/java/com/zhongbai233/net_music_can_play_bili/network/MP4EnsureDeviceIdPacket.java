@@ -55,6 +55,9 @@ public record MP4EnsureDeviceIdPacket(InteractionHand hand) implements CustomPac
             return;
         }
         PacketDistributor.sendToPlayer(player, new MP4DeviceIdPacket(payload.hand(), deviceId));
-        PacketDistributor.sendToPlayer(player, MP4OpenStatePacket.fromStack(level, payload.hand(), deviceId, stack));
+        MP4DeviceStateStore.syncQueueCopy(level, deviceId, stack);
+        PacketDistributor.sendToPlayer(player, MP4DeviceStateMirrorPacket.fromEntry(deviceId,
+                MP4DeviceStateStore.getOrCreate(level, deviceId, stack),
+                com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex.hasHeadphoneLinkedToMp4(deviceId)));
     }
 }

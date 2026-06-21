@@ -112,8 +112,6 @@ public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, in
                 MP4DeviceStateStore.updateState(level, deviceId,
                         withPlayback(state, state.playing(), index, volume, state.progressPerMille()));
                 MP4PlaybackSyncManager.updateVolume(deviceId, volume);
-                PacketDistributor.sendToPlayersTrackingEntityAndSelf(player,
-                        new MP4PlaybackVolumePacket(deviceId, volume));
             }
             case START -> {
                 long requestedMillis = selectedTrackChanged ? 0L : Math.max(0L, payload.targetMillis());
@@ -176,6 +174,26 @@ public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, in
                     LOGGER.error("MP4 解析播放失败: {}", original.songName, error);
                     return null;
                 });
+    }
+
+    public static void restartSelected(ServerPlayer player, ItemStack stack, UUID deviceId, int index,
+            int volumePerMille) {
+        if (player == null || deviceId == null || !(stack.getItem() instanceof MP4Item)
+                || !(player.level() instanceof ServerLevel level)) {
+            return;
+        }
+        MP4DeviceStateStore.DeviceEntry entry = MP4DeviceStateStore.getOrCreate(level, deviceId, stack);
+        List<ItemStack> queue = queueForPlayback(entry, stack);
+        int safeIndex = queue.isEmpty() ? 0 : clamp(index, 0, queue.size() - 1);
+        MP4PlaybackSyncManager.stop(player, deviceId);
+        broadcastStop(player, deviceId, safeIndex);
+        if (queue.isEmpty() || !PENDING_STARTS.add(deviceId)) {
+            return;
+        }
+        MP4Item.State state = MP4DeviceStateStore.getOrCreate(level, deviceId, stack).state();
+        MP4DeviceStateStore.update(level, deviceId, new MP4DeviceStateStore.DeviceEntry(
+                withPlayback(state, true, safeIndex, volumePerMille, 0), queue, 0L, 0, ""));
+        startPlayback(player, stack, queue, safeIndex, clamp(volumePerMille, 0, 1000), 0L, deviceId);
     }
 
     private static void applyResolvedPlayback(ServerPlayer player, ItemStack stack, int index, int volumePerMille,

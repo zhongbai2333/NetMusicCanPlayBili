@@ -193,7 +193,64 @@ public final class MP4PlaybackSyncManager {
         if (deviceId == null) {
             return;
         }
-        SESSIONS.computeIfPresent(deviceId, (ignored, session) -> session.withVolume(volumePerMille));
+        SESSIONS.computeIfPresent(deviceId, (ignored, session) -> {
+            Session updated = session.withVolume(volumePerMille);
+            MinecraftServer server = net.neoforged.neoforge.server.ServerLifecycleHooks.getCurrentServer();
+            if (server != null) {
+                ServerLevel level = server.getLevel(updated.levelKey());
+                if (level != null) {
+                    sendTimeline(level, updated, level.getGameTime());
+                }
+            }
+            return updated;
+        });
+    }
+
+    public static int activeQueueIndex(UUID deviceId) {
+        Session session = deviceId == null ? null : SESSIONS.get(deviceId);
+        return session != null ? session.queueIndex() : -1;
+    }
+
+    public static void reconcileQueueChange(ServerPlayer owner, UUID deviceId, List<ItemStack> newQueue) {
+        if (owner == null || deviceId == null || !(owner.level() instanceof ServerLevel level)) {
+            return;
+        }
+        Session session = SESSIONS.get(deviceId);
+        if (session == null) {
+            return;
+        }
+        List<ItemStack> safeNewQueue = newQueue == null ? List.of() : newQueue;
+        int newIndex = indexOfSongUrl(safeNewQueue, session.rawUrl());
+        long gameTime = level.getGameTime();
+        long elapsedMillis = session.elapsedMillis(gameTime);
+        if (newIndex >= 0) {
+            if (newIndex != session.queueIndex()) {
+                Session remapped = session.withQueueIndex(newIndex, gameTime);
+                SESSIONS.put(deviceId, remapped);
+                recordRuntimeProgress(deviceId, newIndex, elapsedMillis, remapped.durationSeconds(),
+                        remapped.volumePerMille(), remapped.sessionId(), true);
+                MP4DeviceStateStore.recordPlayback(level, deviceId, newIndex, elapsedMillis,
+                        remapped.durationSeconds(), remapped.volumePerMille(), remapped.sessionId(), true);
+                send(level, remapped, gameTime);
+            }
+            return;
+        }
+        SESSIONS.remove(deviceId);
+        MISSING_SINCE.remove(deviceId);
+        sendStop(level, session);
+        int selectedIndex = safeNewQueue.isEmpty() ? 0 : Math.max(0, Math.min(safeNewQueue.size() - 1,
+                Math.min(session.queueIndex(), safeNewQueue.size() - 1)));
+        int durationSeconds = durationSeconds(safeNewQueue, selectedIndex);
+        recordRuntimeProgress(deviceId, selectedIndex, 0L, durationSeconds, session.volumePerMille(), "", false);
+        flushRuntimeProgress(level, deviceId);
+        MP4DeviceStateStore.DeviceEntry entry = MP4DeviceStateStore.getOrCreate(level, deviceId, ItemStack.EMPTY);
+        MP4Item.State state = entry.state();
+        MP4DeviceStateStore.update(level, deviceId, new MP4DeviceStateStore.DeviceEntry(
+                new MP4Item.State(false, state.shuffle(), state.videoEnabled(), state.landscape(),
+                        state.qualityIndex(), selectedIndex, state.queueScrollOffset(), session.volumePerMille(),
+                        state.repeatMode(), state.playlistOpen(), state.lyricsEnabled(), state.subtitleMode(),
+                        state.subtitleAiEnabled(), 0, state.rotationHintShown()),
+                safeNewQueue, 0L, durationSeconds, ""));
     }
 
     public static int unlinkAllHeadphones(ServerPlayer actor, UUID deviceId) {
@@ -1152,6 +1209,29 @@ public final class MP4PlaybackSyncManager {
         return Math.max(0, Math.min(1000, (int) Math.round(elapsed * 1000.0D / durationMillis)));
     }
 
+    private static int durationSeconds(List<ItemStack> queue, int queueIndex) {
+        if (queueIndex < 0 || queueIndex >= queue.size()) {
+            return 0;
+        }
+        @SuppressWarnings("null")
+        ItemMusicCD.SongInfo songInfo = ItemMusicCD.getSongInfo(queue.get(queueIndex));
+        return songInfo != null ? Math.max(0, songInfo.songTime) : 0;
+    }
+
+    private static int indexOfSongUrl(List<ItemStack> queue, String songUrl) {
+        if (songUrl == null || songUrl.isBlank()) {
+            return -1;
+        }
+        for (int index = 0; index < queue.size(); index++) {
+            @SuppressWarnings("null")
+            ItemMusicCD.SongInfo songInfo = ItemMusicCD.getSongInfo(queue.get(index));
+            if (songInfo != null && Objects.equals(songUrl, songInfo.songUrl)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
     private static MP4Item.State deviceState(ServerLevel level, ItemStack stack, UUID deviceId) {
         if (deviceId == null) {
             return MP4Item.State.DEFAULT;
@@ -1200,6 +1280,12 @@ public final class MP4PlaybackSyncManager {
             return new Session(levelKey, ownerId, sourceId, sourceType, sourceEntityId, sourcePos, containerSlot,
                     queueIndex, playUrl, rawUrl, songName, durationSeconds, volumePerMille, sessionId,
                     newStartedGameTime, gameTime, gameTime);
+        }
+
+        Session withQueueIndex(int newQueueIndex, long gameTime) {
+            return new Session(levelKey, ownerId, sourceId, sourceType, sourceEntityId, sourcePos, containerSlot,
+                Math.max(0, newQueueIndex), playUrl, rawUrl, songName, durationSeconds, volumePerMille,
+                sessionId, startedGameTime, gameTime, gameTime);
         }
 
         Session resetToStart(long gameTime) {

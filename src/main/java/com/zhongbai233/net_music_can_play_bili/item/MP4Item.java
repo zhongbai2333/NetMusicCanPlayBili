@@ -6,6 +6,7 @@ import com.zhongbai233.net_music_can_play_bili.client.tooltip.MP4QueueTooltip;
 import com.zhongbai233.net_music_can_play_bili.client.MP4ClientHooks;
 import com.zhongbai233.net_music_can_play_bili.network.MP4DeviceIdentity;
 import com.zhongbai233.net_music_can_play_bili.network.MP4DeviceStateStore;
+import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackSyncManager;
 import net.minecraft.core.NonNullList;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
@@ -205,7 +206,7 @@ public class MP4Item extends Item {
             return false;
         }
         if (action == ClickAction.SECONDARY && !slot.hasItem()) {
-            ItemStack removed = removeSelectedOrLastDisc(mp4Stack);
+            ItemStack removed = removeSelectedOrLastDisc(mp4Stack, player);
             if (!removed.isEmpty()) {
                 syncQueueCopy(player, mp4Stack);
                 slot.set(removed);
@@ -225,7 +226,7 @@ public class MP4Item extends Item {
             return true;
         }
         if (action == ClickAction.SECONDARY && carriedStack.isEmpty()) {
-            ItemStack removed = removeSelectedOrLastDisc(mp4Stack);
+            ItemStack removed = removeSelectedOrLastDisc(mp4Stack, player);
             if (!removed.isEmpty()) {
                 syncQueueCopy(player, mp4Stack);
                 carriedAccess.set(removed);
@@ -274,14 +275,34 @@ public class MP4Item extends Item {
     }
 
     public static ItemStack removeSelectedOrLastDisc(ItemStack mp4Stack) {
+        return removeQueueDisc(mp4Stack, -1);
+    }
+
+    private static ItemStack removeSelectedOrLastDisc(ItemStack mp4Stack, Player player) {
+        int selectedIndex = selectedQueueIndexFor(player, mp4Stack);
+        return removeQueueDisc(mp4Stack, selectedIndex);
+    }
+
+    private static ItemStack removeQueueDisc(ItemStack mp4Stack, int preferredIndex) {
         List<ItemStack> queue = readQueue(mp4Stack);
         if (queue.isEmpty()) {
             return ItemStack.EMPTY;
         }
-        int index = queue.size() - 1;
+        int index = preferredIndex >= 0 && preferredIndex < queue.size() ? preferredIndex : queue.size() - 1;
         ItemStack removed = queue.remove(index).copyWithCount(1);
         writeQueue(mp4Stack, queue);
         return removed;
+    }
+
+    private static int selectedQueueIndexFor(Player player, ItemStack mp4Stack) {
+        UUID deviceId = readDeviceId(mp4Stack);
+        if (deviceId == null) {
+            return MP4ClientHooks.selectedQueueIndex(mp4Stack);
+        }
+        if (player instanceof ServerPlayer serverPlayer && serverPlayer.level() instanceof ServerLevel level) {
+            return MP4DeviceStateStore.getOrCreate(level, deviceId, mp4Stack).state().selectedQueueIndex();
+        }
+        return MP4ClientHooks.selectedQueueIndex(mp4Stack);
     }
 
     private static void writeQueue(ItemStack stack, List<ItemStack> queue) {
@@ -310,6 +331,7 @@ public class MP4Item extends Item {
             return;
         }
         MP4DeviceStateStore.syncQueueCopy(level, deviceId, mp4Stack);
+        MP4PlaybackSyncManager.reconcileQueueChange(serverPlayer, deviceId, MP4Item.readQueue(mp4Stack));
     }
 
     public record State(boolean playing, boolean shuffle, boolean videoEnabled, boolean landscape, int qualityIndex,

@@ -54,10 +54,6 @@ public final class ModernTurntableNetwork {
                 MP4StatePacket.STREAM_CODEC,
                 MP4StatePacket::handle);
         registrar.playToServer(
-                MP4QueueSelectionPacket.TYPE,
-                MP4QueueSelectionPacket.STREAM_CODEC,
-                MP4QueueSelectionPacket::handle);
-        registrar.playToServer(
                 MP4PlaybackControlPacket.TYPE,
                 MP4PlaybackControlPacket.STREAM_CODEC,
                 MP4PlaybackControlPacket::handle);
@@ -82,10 +78,6 @@ public final class ModernTurntableNetwork {
                 MP4ContainerDeviceIdPacket.STREAM_CODEC,
                 MP4ContainerDeviceIdPacket::handle);
         registrar.playToClient(
-                MP4OpenStatePacket.TYPE,
-                MP4OpenStatePacket.STREAM_CODEC,
-                MP4OpenStatePacket::handle);
-        registrar.playToClient(
                 MP4DeviceStateMirrorPacket.TYPE,
                 MP4DeviceStateMirrorPacket.STREAM_CODEC,
                 MP4DeviceStateMirrorPacket::handle);
@@ -97,10 +89,6 @@ public final class ModernTurntableNetwork {
                 MP4PlaybackTimelinePacket.TYPE,
                 MP4PlaybackTimelinePacket.STREAM_CODEC,
                 MP4PlaybackTimelinePacket::handle);
-        registrar.playToClient(
-                MP4PlaybackVolumePacket.TYPE,
-                MP4PlaybackVolumePacket.STREAM_CODEC,
-                MP4PlaybackVolumePacket::handle);
         registrar.playToClient(
                 WhitelistCsvExportPacket.TYPE,
                 WhitelistCsvExportPacket.STREAM_CODEC,

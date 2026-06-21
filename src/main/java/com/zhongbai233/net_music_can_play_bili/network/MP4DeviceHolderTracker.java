@@ -19,7 +19,9 @@ import java.util.concurrent.ConcurrentHashMap;
 /** 跟踪当前持有 MP4 设备的玩家，并向他们镜像服务端权威配置。 */
 public final class MP4DeviceHolderTracker {
     private static final int HELD_SYNC_INTERVAL_TICKS = 5;
+    private static final int FORCED_SYNC_INTERVAL_TICKS = 300;
     private static final Map<HolderKey, Integer> LAST_SENT = new ConcurrentHashMap<>();
+    private static final Map<HolderKey, Long> LAST_FORCED_SYNC = new ConcurrentHashMap<>();
 
     private MP4DeviceHolderTracker() {
     }
@@ -38,6 +40,7 @@ public final class MP4DeviceHolderTracker {
             }
         }
         LAST_SENT.keySet().removeIf(key -> !active.contains(key));
+        LAST_FORCED_SYNC.keySet().removeIf(key -> !active.contains(key));
     }
 
     public static void invalidate(UUID deviceId) {
@@ -64,10 +67,14 @@ public final class MP4DeviceHolderTracker {
         HolderKey key = new HolderKey(player.getUUID(), deviceId);
         active.add(key);
         int fingerprint = fingerprint(entry, headphoneLinked);
-        if (Objects.equals(LAST_SENT.get(key), fingerprint)) {
+        long gameTime = level.getGameTime();
+        Long lastForcedSync = LAST_FORCED_SYNC.get(key);
+        boolean force = lastForcedSync == null || gameTime - lastForcedSync.longValue() >= FORCED_SYNC_INTERVAL_TICKS;
+        if (!force && Objects.equals(LAST_SENT.get(key), fingerprint)) {
             return;
         }
         LAST_SENT.put(key, fingerprint);
+        LAST_FORCED_SYNC.put(key, gameTime);
         PacketDistributor.sendToPlayer(player, MP4DeviceStateMirrorPacket.fromEntry(deviceId, entry, headphoneLinked));
     }
 
