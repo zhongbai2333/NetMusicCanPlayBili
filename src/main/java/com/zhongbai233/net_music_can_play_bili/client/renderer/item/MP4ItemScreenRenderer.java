@@ -31,7 +31,7 @@ import org.joml.Vector4f;
 
 /** 通过 submitCustomGeometry 渲染的 MP4 贴图屏幕表面。 */
 public final class MP4ItemScreenRenderer {
-    private static final String PROJECTED_INPUT_PROPERTY = "netmusic.mp4.projected_input";
+    private static final String PROJECTED_INPUT_PROPERTY = "ncpb.mp4.projected_input";
     private static final int FULL_BRIGHT = 0x00F000F0;
     private static final float HOVER_TILT_DEGREES = 4.0F;
     private static final float HOVER_HAND_FOLLOW_DEPTH = 0.055F;

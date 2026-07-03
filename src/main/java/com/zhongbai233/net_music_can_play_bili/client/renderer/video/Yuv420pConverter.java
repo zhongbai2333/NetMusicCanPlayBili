@@ -11,7 +11,7 @@ import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecode
  * </p>
  */
 public final class Yuv420pConverter {
-    private static final String MATRIX = System.getProperty("bili.video.yuv.matrix", "bt709_limited")
+    private static final String MATRIX = System.getProperty("ncpb.video.yuv.matrix", "bt709_limited")
             .trim().toLowerCase(java.util.Locale.ROOT);
 
     private Yuv420pConverter() {

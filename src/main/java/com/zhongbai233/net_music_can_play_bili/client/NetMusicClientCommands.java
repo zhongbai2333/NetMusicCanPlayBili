@@ -8,6 +8,7 @@ import com.mojang.brigadier.context.CommandContext;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliConfig;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapClientCache;
 import com.zhongbai233.net_music_can_play_bili.gui.HolographicScreenConfigTestScreen;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.CommandSourceStack;
@@ -20,9 +21,11 @@ import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 import static net.minecraft.commands.Commands.argument;
 import static net.minecraft.commands.Commands.literal;
 
-/** 客户端命令：/netmusicbili status、/netmusicbili dolby ... */
+/** 客户端命令：/netmusicbiliclient status、/ncpbc dolby ... */
 @EventBusSubscriber(value = Dist.CLIENT)
 public final class NetMusicClientCommands {
+    public static final String ROOT_COMMAND = "netmusicbiliclient";
+    public static final String SHORT_ROOT_COMMAND = "ncpbc";
 
     private NetMusicClientCommands() {
     }
@@ -30,6 +33,34 @@ public final class NetMusicClientCommands {
     @SubscribeEvent
     public static void onRegisterClientCommands(RegisterClientCommandsEvent event) {
         CommandDispatcher<CommandSourceStack> dispatcher = event.getDispatcher();
+        dispatcher.register(clientRoot(ROOT_COMMAND));
+        dispatcher.register(clientRoot(SHORT_ROOT_COMMAND));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> clientRoot(String name) {
+        return literal(name)
+                .then(literal("status").executes(NetMusicClientCommands::showPlaybackStatus))
+                .then(hologlassCommands())
+                .then(padCommands())
+                .then(benchCommands())
+                .then(dolbyCommands());
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> hologlassCommands() {
+        return literal("hologlass")
+                .then(literal("config").executes(NetMusicClientCommands::openHolographicGlassesConfig))
+                .then(literal("test").executes(NetMusicClientCommands::openHolographicScreenConfigTest));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> padCommands() {
+        return literal("pad")
+                .then(literal("cache")
+                        .then(literal("status").executes(NetMusicClientCommands::showPadMapCacheStatus))
+                        .then(literal("save").executes(NetMusicClientCommands::savePadMapCache))
+                        .then(literal("refresh").executes(NetMusicClientCommands::refreshPadMapCache)));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> benchCommands() {
         LiteralArgumentBuilder<CommandSourceStack> bench = literal("bench")
                 .then(literal("status").executes(NetMusicClientCommands::showBenchStatus))
                 .then(literal("reset").executes(NetMusicClientCommands::resetBench))
@@ -46,7 +77,20 @@ public final class NetMusicClientCommands {
                                 .executes(ctx -> perceivedBench(ctx,
                                         IntegerArgumentType.getInteger(ctx, "delayMs"), ""))));
 
-        LiteralArgumentBuilder<CommandSourceStack> dolby = literal("dolby")
+        LiteralArgumentBuilder<CommandSourceStack> videoBench = literal("video")
+                .then(literal("cpu-bars")
+                        .executes(ctx -> startCpuBarsBench(ctx, false))
+                        .then(literal("ignoreSlowFrames")
+                                .executes(ctx -> startCpuBarsBench(ctx, true))))
+                .then(literal("bili-real")
+                        .executes(ctx -> startBiliRealBench(ctx, false))
+                        .then(literal("ignoreSlowFrames")
+                                .executes(ctx -> startBiliRealBench(ctx, true))));
+        return bench.then(videoBench);
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> dolbyCommands() {
+        return literal("dolby")
                 .then(literal("joc")
                         .then(literal("on").executes(ctx -> setJoc(ctx, true)))
                         .then(literal("off").executes(ctx -> setJoc(ctx, false)))
@@ -59,14 +103,6 @@ public final class NetMusicClientCommands {
                                         IntegerArgumentType.getInteger(ctx, "count")))))
                 .then(literal("source")
                         .then(literal("status").executes(NetMusicClientCommands::showSourceStatus)));
-
-        dispatcher.register(literal("netmusicbili")
-                .then(literal("status").executes(NetMusicClientCommands::showPlaybackStatus))
-                .then(literal("hologlass")
-                        .then(literal("config").executes(NetMusicClientCommands::openHolographicGlassesConfig))
-                        .then(literal("gui").executes(NetMusicClientCommands::openHolographicScreenConfigTest)))
-                .then(bench)
-                .then(dolby));
     }
 
     private static int openHolographicGlassesConfig(CommandContext<CommandSourceStack> ctx) {
@@ -134,7 +170,7 @@ public final class NetMusicClientCommands {
         PlaybackLatencyBench.logNow();
         feedback(Component.literal(PlaybackLatencyBench.enabled()
                 ? "播放延迟Bench已开启，详细数据已输出到日志"
-                : "播放延迟Bench未开启；runClient 加 -PbiliPlaybackLatencyBench=true"));
+                : "播放延迟Bench未开启；runClient 加 -PncpbPlaybackLatencyBench=true"));
         return 1;
     }
 
@@ -153,6 +189,44 @@ public final class NetMusicClientCommands {
     private static int perceivedBench(CommandContext<CommandSourceStack> ctx, int delayMs, String note) {
         PlaybackLatencyBench.recordPerceivedDelay(delayMs, note);
         feedback(Component.literal("播放延迟Bench听感记录: " + delayMs + "ms"));
+        return 1;
+    }
+
+    private static int startCpuBarsBench(CommandContext<CommandSourceStack> ctx, boolean ignoreSlowFrames) {
+        boolean started = VideoRenderStressBench.startCommand(ignoreSlowFrames);
+        feedback(Component.literal(started
+                ? "CPU彩条视频Bench已启动；" + slowFramePolicy(ignoreSlowFrames)
+                : "CPU彩条视频Bench已在运行"));
+        return started ? 1 : 0;
+    }
+
+    private static int startBiliRealBench(CommandContext<CommandSourceStack> ctx, boolean ignoreSlowFrames) {
+        boolean started = BiliRealVideoPlaybackBench.startCommand(ignoreSlowFrames);
+        feedback(Component.literal(started
+                ? "B站真实解析视频Bench已启动；" + slowFramePolicy(ignoreSlowFrames)
+                : "B站真实解析视频Bench已在运行"));
+        return started ? 1 : 0;
+    }
+
+    private static String slowFramePolicy(boolean ignoreSlowFrames) {
+        return ignoreSlowFrames ? "将无视过慢帧继续跑完更高分辨率" : "遇到过慢帧会停止后续更高分辨率";
+    }
+
+    private static int showPadMapCacheStatus(CommandContext<CommandSourceStack> ctx) {
+        feedback(Component.literal("Pad地图缓存: memoryCells=" + PadMapClientCache.memoryCacheSize()
+                + ", disk=" + PadMapClientCache.diskCachePath()));
+        return 1;
+    }
+
+    private static int savePadMapCache(CommandContext<CommandSourceStack> ctx) {
+        PadMapClientCache.flushDiskCache();
+        feedback(Component.literal("Pad地图缓存已尝试落盘: " + PadMapClientCache.diskCachePath()));
+        return 1;
+    }
+
+    private static int refreshPadMapCache(CommandContext<CommandSourceStack> ctx) {
+        int cleared = PadMapClientCache.clearAllCaches(true);
+        feedback(Component.literal("Pad地图缓存已刷新: clearedMemoryCells=" + cleared));
         return 1;
     }
 

@@ -35,18 +35,18 @@ final class VideoPlaybackInstance {
      */
     private static final long AUDIO_OUTPUT_LATENCY_COMPENSATION_MILLIS = Long.getLong(
             "bili.video.pipeline.audio_latency_compensation_ms", 0L);
-    private static final long CHASE_WINDOW_MILLIS = Long.getLong("bili.video.pipeline.chase_window_ms", 10_000L);
-    private static final long SLOWDOWN_WINDOW_MILLIS = Long.getLong("bili.video.pipeline.slowdown_window_ms", 2_500L);
+    private static final long CHASE_WINDOW_MILLIS = Long.getLong("ncpb.video.pipeline.chase_window_ms", 10_000L);
+    private static final long SLOWDOWN_WINDOW_MILLIS = Long.getLong("ncpb.video.pipeline.slowdown_window_ms", 2_500L);
     private static final boolean OFFSCREEN_PAUSE_DECODE = Boolean.parseBoolean(
-            System.getProperty("bili.video.offscreen.pause_decode", "true"));
-    private static final long OFFSCREEN_GRACE_NANOS = Long.getLong("bili.video.offscreen.grace_ms", 500L)
+            System.getProperty("ncpb.video.offscreen.pause_decode", "true"));
+    private static final long OFFSCREEN_GRACE_NANOS = Long.getLong("ncpb.video.offscreen.grace_ms", 500L)
             * 1_000_000L;
     private static final long OFFSCREEN_RESUME_RESTART_LAG_NANOS = Long.getLong(
             "bili.video.offscreen.resume_restart_lag_ms", 1_500L) * 1_000_000L;
     private static final double OFFSCREEN_PREWARM_DOT_THRESHOLD = Double.parseDouble(
-            System.getProperty("bili.video.offscreen.prewarm_dot_threshold", "-0.20"));
+            System.getProperty("ncpb.video.offscreen.prewarm_dot_threshold", "-0.20"));
     private static final double IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET = Double.parseDouble(
-            System.getProperty("bili.video.pipeline.iris_warning_placeholder_view_depth_offset", "0.03"));
+            System.getProperty("ncpb.video.pipeline.iris_warning_placeholder_view_depth_offset", "0.03"));
 
     private final String videoUrl;
     private int targetWidth;
@@ -66,7 +66,7 @@ final class VideoPlaybackInstance {
     private final Identifier vTextureId;
     private final VideoPlaybackAnchor anchor;
     private final VideoFrameQueue frameQueue = new VideoFrameQueue(
-            Integer.getInteger("bili.video.pipeline.queue_capacity", 3));
+            Integer.getInteger("ncpb.video.pipeline.queue_capacity", 3));
     private final AtomicLong generation = new AtomicLong();
     private final Set<BlockPos> projectorPositions = new CopyOnWriteArraySet<>();
     private volatile boolean running;
@@ -232,7 +232,7 @@ final class VideoPlaybackInstance {
     }
 
     private boolean shouldDropStaleStartupFrame(long ptsNanos) {
-        long maxStartupLagNs = Long.getLong("bili.video.pipeline.startup_drop_lag_ms", 750L) * 1_000_000L;
+        long maxStartupLagNs = Long.getLong("ncpb.video.pipeline.startup_drop_lag_ms", 750L) * 1_000_000L;
         if (maxStartupLagNs <= 0L) {
             return false;
         }
@@ -243,7 +243,7 @@ final class VideoPlaybackInstance {
 
     private void waitForDecodeLead(long frameIntervalNs, long gen) throws InterruptedException {
         long maxLeadNs = Math.max(frameIntervalNs * frameQueue.capacity(),
-                Long.getLong("bili.video.pipeline.max_decode_lead_ms", 250L) * 1_000_000L);
+                Long.getLong("ncpb.video.pipeline.max_decode_lead_ms", 250L) * 1_000_000L);
         while (running && gen == generation.get() && frameQueue.isFull()
                 && frameQueue.latestPtsNanos() - playbackNanos() > maxLeadNs) {
             warnIfUploadPumpStalled();
@@ -252,7 +252,7 @@ final class VideoPlaybackInstance {
     }
 
     private void warnIfUploadPumpStalled() {
-        long thresholdNs = Long.getLong("bili.video.pipeline.upload_pump_warn_ms", 1000L) * 1_000_000L;
+        long thresholdNs = Long.getLong("ncpb.video.pipeline.upload_pump_warn_ms", 1000L) * 1_000_000L;
         long idleNs = System.nanoTime() - lastUploadPumpNanoTime;
         if (thresholdNs > 0L && frameQueue.isFull() && idleNs > thresholdNs) {
             lastUploadPumpNanoTime = System.nanoTime();
@@ -371,11 +371,11 @@ final class VideoPlaybackInstance {
         startupBufferReady = true;
         long playbackNs = playbackNanos();
         DecodedVideoFrame frame = frameQueue.pollBestFrame(playbackNs,
-                Long.getLong("bili.video.pipeline.early_tolerance_ms", 12L) * 1_000_000L);
+                Long.getLong("ncpb.video.pipeline.early_tolerance_ms", 12L) * 1_000_000L);
         if (frame == null) {
             return;
         }
-        long maxVisibleLagNs = Long.getLong("bili.video.pipeline.max_visible_lag_ms", 250L) * 1_000_000L;
+        long maxVisibleLagNs = Long.getLong("ncpb.video.pipeline.max_visible_lag_ms", 250L) * 1_000_000L;
         if (maxVisibleLagNs > 0L && playbackNs - frame.ptsNanos() > maxVisibleLagNs) {
             DecodedVideoFrame chase = frameQueue.pollBestFrame(playbackNs, 0L);
             if (chase != null) {
@@ -502,7 +502,7 @@ final class VideoPlaybackInstance {
     }
 
     private boolean shouldWaitForStartupBuffer() {
-        int requiredFrames = Integer.getInteger("bili.video.pipeline.startup_prebuffer_frames", 2);
+        int requiredFrames = Integer.getInteger("ncpb.video.pipeline.startup_prebuffer_frames", 2);
         if (requiredFrames <= 1 || hasFrame) {
             return false;
         }
@@ -513,7 +513,7 @@ final class VideoPlaybackInstance {
         if (firstDecodedNs <= 0L) {
             return false;
         }
-        long maxWaitNs = Long.getLong("bili.video.pipeline.startup_prebuffer_max_wait_ms", 250L) * 1_000_000L;
+        long maxWaitNs = Long.getLong("ncpb.video.pipeline.startup_prebuffer_max_wait_ms", 250L) * 1_000_000L;
         boolean wait = System.nanoTime() - firstDecodedNs < maxWaitNs;
         if (!wait) {
             return false;
@@ -723,7 +723,7 @@ final class VideoPlaybackInstance {
             } else if (hasFrame && yuvTextureSet != null && VideoBillboardPreview.isCustomYuvShaderAvailable()
                     && !VideoBillboardPreview.shouldDrawYuvImmediateWithIris()) {
                 VideoBillboardPreview.submitProjectorYuvGeometry(event, minecraft, camera, projector, yuvTextureSet);
-            } else if (Boolean.parseBoolean(System.getProperty("bili.video.pipeline.loading_placeholder", "true"))) {
+            } else if (Boolean.parseBoolean(System.getProperty("ncpb.video.pipeline.loading_placeholder", "true"))) {
                 ensureLoadingTexture();
                 boolean irisWarning = shouldShowIrisTranslucencyWarning();
                 updateLoadingTexture(irisWarning);

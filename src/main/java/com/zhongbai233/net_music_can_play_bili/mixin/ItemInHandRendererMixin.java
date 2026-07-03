@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.mixin;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer;
 import com.zhongbai233.net_music_can_play_bili.init.ModItems;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.renderer.SubmitNodeCollector;
@@ -27,6 +28,25 @@ public abstract class ItemInHandRendererMixin {
         if (stack.is(ModItems.MP4.get())) {
             MP4ItemScreenRenderer.renderMapLike(player, partialTick, pitch, hand, stack, swingProgress, equipProgress,
                     poseStack, collector, light, new MP4ItemScreenRenderer.ArmRenderer() {
+                        @Override
+                        public void renderMapHand(PoseStack poseStack, SubmitNodeCollector collector, int light,
+                                HumanoidArm arm) {
+                            net_music_can_play_bili$renderMapHand(poseStack, collector, light, arm);
+                        }
+
+                        @Override
+                        public void renderPlayerArm(PoseStack poseStack, SubmitNodeCollector collector, int light,
+                                float equipProgress, float swingProgress, HumanoidArm arm) {
+                            net_music_can_play_bili$renderPlayerArm(poseStack, collector, light, equipProgress,
+                                    swingProgress, arm);
+                        }
+                    });
+            ci.cancel();
+            return;
+        }
+        if (stack.is(ModItems.PAD.get())) {
+            PadItemScreenRenderer.renderMapLike(player, partialTick, pitch, hand, stack, swingProgress, equipProgress,
+                    poseStack, collector, light, new PadItemScreenRenderer.ArmRenderer() {
                         @Override
                         public void renderMapHand(PoseStack poseStack, SubmitNodeCollector collector, int light,
                                 HumanoidArm arm) {

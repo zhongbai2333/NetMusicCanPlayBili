@@ -12,9 +12,9 @@ import java.nio.ByteBuffer;
  */
 final class VideoFrameUploader {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final String PIXEL_MODE = System.getProperty("bili.video.pixel.mode", "normal");
+    private static final String PIXEL_MODE = System.getProperty("ncpb.video.pixel.mode", "normal");
     private static final boolean FAST_NATIVE_UPLOAD = Boolean.parseBoolean(
-            System.getProperty("bili.video.fast_native_upload", "true"));
+            System.getProperty("ncpb.video.fast_native_upload", "true"));
 
     private VideoFrameUploader() {
     }
@@ -156,7 +156,7 @@ final class VideoFrameUploader {
                 yield (a << 24) | (rr << 16) | (gg << 8) | bb;
             }
             default -> {
-                LOGGER.warn("未知 bili.video.pixel.mode={}，回退到 swap_rb", PIXEL_MODE);
+                LOGGER.warn("未知 ncpb.video.pixel.mode={}，回退到 swap_rb", PIXEL_MODE);
                 yield (a << 24) | (b << 16) | (g << 8) | r;
             }
         };

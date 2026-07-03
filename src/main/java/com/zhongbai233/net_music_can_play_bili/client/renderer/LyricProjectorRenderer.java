@@ -42,12 +42,12 @@ public class LyricProjectorRenderer
     private static final float TEXT_SCALE = 0.025F;
     private static final float TRANSLATED_LINE_OFFSET = 12.0F;
     private static final long SCROLL_DURATION_MS = 500;
-    private static final long SCROLL_MIN_DURATION_MS = Long.getLong("bili.lyric.scroll.min_duration_ms", 120L);
-    private static final long SCROLL_FAST_GAP_MS = Long.getLong("bili.lyric.scroll.fast_gap_ms", 850L);
+    private static final long SCROLL_MIN_DURATION_MS = Long.getLong("ncpb.lyric.scroll.min_duration_ms", 120L);
+    private static final long SCROLL_FAST_GAP_MS = Long.getLong("ncpb.lyric.scroll.fast_gap_ms", 850L);
     private static final long SCROLL_INTERPOLATION_HALF_LIFE_MS = Long.getLong(
             "bili.lyric.scroll.interpolation_half_life_ms", 35L);
     private static final float SCROLL_MAX_INTERPOLATION_LAG = 0.18F;
-    private static final long LYRIC_AUDIO_DELAY_MS = Long.getLong("bili.lyric.audio_delay_ms", 0L);
+    private static final long LYRIC_AUDIO_DELAY_MS = Long.getLong("ncpb.lyric.audio_delay_ms", 0L);
     private static final float LINE_STEP = 14.0F;
     private static final int VISIBLE_LINES_ABOVE = 2;
     private static final int VISIBLE_LINES_BELOW = 2;

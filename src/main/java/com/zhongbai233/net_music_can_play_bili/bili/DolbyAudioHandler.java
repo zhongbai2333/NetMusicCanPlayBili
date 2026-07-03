@@ -3,6 +3,8 @@ package com.zhongbai233.net_music_can_play_bili.bili;
 import com.zhongbai233.net_music_can_play_bili.client.PlaybackLatencyBench;
 import com.zhongbai233.net_music_can_play_bili.media.audio.OpenALSpatialAudio;
 import com.zhongbai233.net_music_can_play_bili.media.codec.*;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.LifecycleClose;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
@@ -24,9 +26,9 @@ public class DolbyAudioHandler {
     private static final boolean ENABLE_JOC_OBJECTS = true;
     private static final double EC3_FRAMES_PER_SECOND = 48000.0 / 1536.0;
     private static final int MAX_FRAMES_PER_TICK = 8;
-    private static final int PREBUFFER_FRAMES = Integer.getInteger("bili.audio.openal.dolby_prebuffer_frames", 8);
+    private static final int PREBUFFER_FRAMES = Integer.getInteger("ncpb.bili.audio.openal.dolby_prebuffer_frames", 8);
     private static final boolean MUTE_MAIN_WHEN_RELAYS_STARTED = Boolean.parseBoolean(
-            System.getProperty("bili.audio.relay.mute_main_when_started", "true"));
+            System.getProperty("ncpb.bili.audio.relay.mute_main_when_started", "true"));
     private static final long AUDIO_CATCH_UP_START_TICKS = Long.getLong(
             "bili.audio.sync.catch_up_start_ticks", 8L);
     private static final long AUDIO_CATCH_UP_FULL_TICKS = Long.getLong(
@@ -81,8 +83,7 @@ public class DolbyAudioHandler {
         // 预加载 FFmpeg native 库（~1s），在 mdat 数据到达前完成，
         // 避免 worker 线程被初始化阻塞导致 rawQueue 溢出丢帧
         Eac3NativeDecoder.preload();
-        worker = new Thread(this::workerLoop, "DolbyDecodeWorker");
-        worker.setDaemon(true);
+        worker = NetMusicThreadFactory.daemonThread("DolbyDecodeWorker", this::workerLoop);
         worker.start();
     }
 
@@ -192,7 +193,7 @@ public class DolbyAudioHandler {
         if (targetRelativeTicks == Long.MAX_VALUE || !playbackStarted || spatialAudio == null) {
             return false;
         }
-        long toleranceTicks = Long.getLong("bili.audio.timeline.flush_ahead_ticks", 12L);
+        long toleranceTicks = Long.getLong("ncpb.bili.audio.timeline.flush_ahead_ticks", 12L);
         long fedTicks = getFedPositionTicks();
         long audibleTicks = getPositionTicks();
         if ((fedTicks >= 0L && fedTicks - targetRelativeTicks > toleranceTicks)
@@ -399,12 +400,7 @@ public class DolbyAudioHandler {
         playbackStarted = false;
         lastFrameFeedNanos = 0L;
         frameBudget = 0.0;
-        worker.interrupt();
-        try {
-            worker.join(2000);
-        } catch (InterruptedException ignored) {
-            Thread.currentThread().interrupt();
-        }
+        LifecycleClose.interruptAndJoin(worker);
         if (spatialAudio != null) {
             spatialAudio.cleanup();
             spatialAudio = null;

@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class CdnHealthTracker {
     private static final boolean ENABLED = Boolean.parseBoolean(
-            System.getProperty("bili.cdn_health.enabled", "true"));
+            System.getProperty("ncpb.bili.cdn_health.enabled", "true"));
     private static final long STALE_AFTER_MILLIS = Math.max(10_000L, Long.getLong(
             "bili.cdn_health.stale_after_ms", 10L * 60L * 1000L));
     private static final double SUCCESS_DECAY = clamp01(parseDouble("bili.cdn_health.success_decay", 0.72D));

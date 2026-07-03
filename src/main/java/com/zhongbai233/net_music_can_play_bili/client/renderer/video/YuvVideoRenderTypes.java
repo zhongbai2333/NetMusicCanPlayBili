@@ -34,9 +34,9 @@ public final class YuvVideoRenderTypes {
             "core/nv12_entity");
     private static final Identifier TEXTURED_PROBE_FRAGMENT_SHADER = Identifier.fromNamespaceAndPath(
             NetMusicCanPlayBili.MODID, "core/yuv420p_textured_probe_entity");
-    private static final String YUV_SHADER_DEBUG = System.getProperty("bili.video.yuv.shader_debug", "")
+    private static final String YUV_SHADER_DEBUG = System.getProperty("ncpb.video.yuv.shader_debug", "")
             .trim().toUpperCase(Locale.ROOT);
-    private static final boolean YUV_NO_DEPTH_WRITE = Boolean.getBoolean("bili.video.yuv.no_depth_write");
+    private static final boolean YUV_NO_DEPTH_WRITE = Boolean.getBoolean("ncpb.video.yuv.no_depth_write");
 
     static final RenderPipeline YUV420P_ENTITY = buildYuv420pEntityPipeline();
     static final RenderPipeline NV12_ENTITY = buildYuvEntityPipeline(NV12_PIPELINE_ID, NV12_FRAGMENT_SHADER);
@@ -48,7 +48,7 @@ public final class YuvVideoRenderTypes {
             .withShaderDefine("NO_OVERLAY")
             .build();
 
-    private static final Map<Identifier, RenderType> RGBA_ENTITY_CACHE = new ConcurrentHashMap<>();
+        private static final Map<Identifier, RenderType> RGBA_ENTITY_CACHE = new ConcurrentHashMap<>();
 
     private YuvVideoRenderTypes() {
     }
@@ -99,7 +99,7 @@ public final class YuvVideoRenderTypes {
             case "V" -> builder.withShaderDefine("BILI_YUV_DEBUG_V_ONLY");
             case "" -> {
             }
-            default -> LOGGER.warn("未知 bili.video.yuv.shader_debug='{}'，将按正常 YUV→RGB shader 编译", YUV_SHADER_DEBUG);
+            default -> LOGGER.warn("未知 ncpb.video.yuv.shader_debug='{}'，将按正常 YUV→RGB shader 编译", YUV_SHADER_DEBUG);
         }
         return builder.build();
     }
@@ -161,4 +161,5 @@ public final class YuvVideoRenderTypes {
                             .createRenderSetup());
         });
     }
+
 }

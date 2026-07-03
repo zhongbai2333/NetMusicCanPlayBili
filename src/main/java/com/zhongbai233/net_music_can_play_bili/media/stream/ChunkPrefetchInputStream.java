@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.media.stream;
 
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import org.slf4j.Logger;
 
 import java.io.IOException;
@@ -81,8 +82,7 @@ public final class ChunkPrefetchInputStream extends InputStream {
         this.highWater = Math.max(this.lowWater, highWater);
         this.startByteOffset = Math.max(0L, startByteOffset);
         this.spool = new TempFileByteSpool("http-prefetch-");
-        this.downloader = new Thread(this::downloadLoop, "HttpPrefetch");
-        this.downloader.setDaemon(true);
+        this.downloader = NetMusicThreadFactory.daemonThread("HttpPrefetch", this::downloadLoop);
         this.downloader.start();
     }
 

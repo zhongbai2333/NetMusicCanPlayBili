@@ -38,10 +38,10 @@ public class OpenALSpatialAudio {
     private static final int SAMPLE_RATE = 48000;
     private static final float[] ZERO_LOCAL_POSITION = new float[] { 0f, 0f, 0f };
     private int actualSampleRate = SAMPLE_RATE;
-    private static final boolean FORCE_HRTF = Boolean.getBoolean("netmusicbili.dolby.forceHrtf")
-            && !Boolean.getBoolean("netmusicbili.dolby.disableHrtf");
+    private static final boolean FORCE_HRTF = Boolean.getBoolean("ncpb.dolby.forceHrtf")
+            && !Boolean.getBoolean("ncpb.dolby.disableHrtf");
     private static final boolean FORCE_HRTF_WITH_CHANNEL = Boolean
-            .getBoolean("netmusicbili.dolby.forceHrtfWithChannel");
+            .getBoolean("ncpb.dolby.forceHrtfWithChannel");
 
     /** 是否支持 AL_EXT_FLOAT32（浮点 PCM，无量化损失） */
     private static final ThreadLocal<Long> CAPABILITIES_CONTEXT = ThreadLocal.withInitial(() -> 0L);
@@ -844,7 +844,7 @@ public class OpenALSpatialAudio {
             return;
         if (isChannelLoaded() && !FORCE_HRTF_WITH_CHANNEL) {
             LOGGER.warn(
-                    "OpenAL HRTF: Channel mod detected; skip alcResetDeviceSOFT to avoid disrupting voice EFX sources. Set -Dnetmusicbili.dolby.forceHrtfWithChannel=true to override.");
+                    "OpenAL HRTF: Channel mod detected; skip alcResetDeviceSOFT to avoid disrupting voice EFX sources. Set -Dncpb.dolby.forceHrtfWithChannel=true to override.");
             hrtfAttempted = true;
             return;
         }

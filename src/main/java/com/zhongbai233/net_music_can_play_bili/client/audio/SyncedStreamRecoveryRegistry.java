@@ -17,8 +17,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public final class SyncedStreamRecoveryRegistry {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int MAX_ATTEMPTS = Integer.getInteger("bili.media.stream_recovery.max_attempts", 3);
-    private static final long MIN_INTERVAL_MILLIS = Long.getLong("bili.media.stream_recovery.min_interval_ms", 1_000L);
+    private static final int MAX_ATTEMPTS = Integer.getInteger("ncpb.bili.media.stream_recovery.max_attempts", 3);
+    private static final long MIN_INTERVAL_MILLIS = Long.getLong("ncpb.bili.media.stream_recovery.min_interval_ms", 1_000L);
 
     private static final ConcurrentHashMap<String, Entry> ENTRIES = new ConcurrentHashMap<>();
 

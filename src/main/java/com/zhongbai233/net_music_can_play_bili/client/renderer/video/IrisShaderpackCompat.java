@@ -21,12 +21,12 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class IrisShaderpackCompat {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final String FORCE_YUV_SHADER_WITH_IRIS = "bili.video.iris.force_yuv_shader";
+    private static final String FORCE_YUV_SHADER_WITH_IRIS = "ncpb.video.iris.force_yuv_shader";
     private static final String DISABLE_CUSTOM_YUV_SHADER = "bili.video.iris.disable_yuv_shader";
-    private static final String ALLOW_THREE_PLANE_IRIS_YUV = "bili.video.iris.allow_three_plane";
-    private static final String ENABLE_YUV_SHADERPACK_BYPASS = "bili.video.iris.yuv_bypass";
-    private static final String IRIS_YUV_PROGRAM = "bili.video.iris.program";
-    private static final String IRIS_YUV_SHADER_KEY = "bili.video.iris.shader_key";
+    private static final String ALLOW_THREE_PLANE_IRIS_YUV = "ncpb.video.iris.allow_three_plane";
+    private static final String ENABLE_YUV_SHADERPACK_BYPASS = "ncpb.video.iris.yuv_bypass";
+    private static final String IRIS_YUV_PROGRAM = "ncpb.video.iris.program";
+    private static final String IRIS_YUV_SHADER_KEY = "ncpb.video.iris.shader_key";
     private static final String DEFAULT_IRIS_YUV_PROGRAM = "ENTITIES_TRANSLUCENT";
 
     private static volatile boolean initialized;

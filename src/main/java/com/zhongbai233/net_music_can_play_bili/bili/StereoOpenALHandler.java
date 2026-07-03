@@ -1,6 +1,8 @@
 package com.zhongbai233.net_music_can_play_bili.bili;
 
 import com.zhongbai233.net_music_can_play_bili.media.audio.OpenALSpatialAudio;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.LifecycleClose;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
 
@@ -59,8 +61,7 @@ public class StereoOpenALHandler {
     private final java.util.concurrent.CopyOnWriteArrayList<SpeakerAudioRelay> relays = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     public StereoOpenALHandler() {
-        worker = new Thread(this::workerLoop, "StereoOpenALWorker");
-        worker.setDaemon(true);
+        worker = NetMusicThreadFactory.daemonThread("StereoOpenALWorker", this::workerLoop);
         worker.start();
     }
 
@@ -246,7 +247,7 @@ public class StereoOpenALHandler {
         if (targetRelativeTicks == Long.MAX_VALUE || !started || spatialAudio == null) {
             return false;
         }
-        long toleranceTicks = Long.getLong("bili.audio.timeline.flush_ahead_ticks", 12L);
+        long toleranceTicks = Long.getLong("ncpb.bili.audio.timeline.flush_ahead_ticks", 12L);
         long fedTicks = getFedPositionTicks();
         long audibleTicks = getPositionTicks();
         if ((fedTicks >= 0L && fedTicks - targetRelativeTicks > toleranceTicks)
@@ -465,12 +466,7 @@ public class StereoOpenALHandler {
         pcmQueue.clear();
         pendingBlock = new float[2][SAMPLES_PER_BLOCK];
         pendingSamples = 0;
-        worker.interrupt();
-        try {
-            worker.join(2000);
-        } catch (InterruptedException ignored) {
-            Thread.currentThread().interrupt();
-        }
+        LifecycleClose.interruptAndJoin(worker);
         if (spatialAudio != null) {
             spatialAudio.cleanup();
             spatialAudio = null;

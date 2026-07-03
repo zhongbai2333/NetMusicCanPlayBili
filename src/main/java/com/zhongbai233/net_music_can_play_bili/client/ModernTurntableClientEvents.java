@@ -9,6 +9,7 @@ import com.zhongbai233.net_music_can_play_bili.client.renderer.gui.HolographicPr
 import com.zhongbai233.net_music_can_play_bili.client.renderer.gui.HolographicPreviewPipRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.CuriosHeadGearLayer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.HolographicPrivacyOverlay;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.YuvVideoRenderTypes;
 import com.zhongbai233.net_music_can_play_bili.gui.MediaToolBindingScreen;
@@ -65,9 +66,10 @@ public final class ModernTurntableClientEvents {
         Minecraft.getInstance().execute(() -> {
             try {
                 MP4ItemScreenRenderer.warmup();
-                LOGGER.debug("MP4 handheld GUI resources warmed up");
+                PadItemScreenRenderer.warmup();
+                LOGGER.debug("MP4/Pad handheld GUI resources warmed up");
             } catch (Exception e) {
-                LOGGER.warn("MP4 handheld GUI resource warmup failed; falling back to lazy initialization", e);
+                LOGGER.warn("MP4/Pad handheld GUI resource warmup failed; falling back to lazy initialization", e);
             }
         });
     }

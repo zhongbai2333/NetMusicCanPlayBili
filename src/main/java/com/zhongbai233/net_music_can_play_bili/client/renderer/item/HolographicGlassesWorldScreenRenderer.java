@@ -31,7 +31,7 @@ import java.util.UUID;
 @EventBusSubscriber(modid = NetMusicCanPlayBili.MODID, value = Dist.CLIENT)
 public final class HolographicGlassesWorldScreenRenderer {
     private static final boolean ENABLED = Boolean.parseBoolean(
-            System.getProperty("bili.holographic_glasses.screen.enabled", "true"));
+            System.getProperty("ncpb.holographic_glasses.screen.enabled", "true"));
 
     private HolographicGlassesWorldScreenRenderer() {
     }

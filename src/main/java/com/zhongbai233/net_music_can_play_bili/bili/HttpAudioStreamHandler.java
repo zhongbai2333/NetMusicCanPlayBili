@@ -20,6 +20,8 @@ import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeClient;
 import com.zhongbai233.net_music_can_play_bili.media.stream.BlockingAudioPipe;
 import com.zhongbai233.net_music_can_play_bili.media.stream.CdnUrlFallbacks;
 import com.zhongbai233.net_music_can_play_bili.client.audio.SyncedStreamRecoveryRegistry;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.LifecycleClose;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
 
@@ -47,7 +49,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -60,7 +61,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int PIPE_BUFFER_SIZE = 4 * 1024 * 1024;
     private static final int FORMAT_WAIT_SECONDS = Math.max(15,
-            Integer.getInteger("bili.media.format_wait_seconds", 30));
+            Integer.getInteger("ncpb.bili.media.format_wait_seconds", 30));
     private static final long WORKER_JOIN_TIMEOUT_MILLIS = 2_000L;
     private static final int MP3_SYNC_SCAN_BYTES = 512 * 1024;
     private static final int FMP4_INIT_PROBE_BYTES = 4 * 1024 * 1024;
@@ -74,24 +75,11 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     private static final long ALLOWED_URL_TTL_MILLIS = TimeUnit.MINUTES.toMillis(10);
     private static final long SEGMENT_BASE_TTL_MILLIS = TimeUnit.MINUTES.toMillis(30);
     private static final int RANGE_RACE_MAX_CANDIDATES = Math.max(1,
-            Integer.getInteger("bili.audio.range_race.max_candidates", 4));
+            Integer.getInteger("ncpb.bili.audio.range_race.max_candidates", 4));
     private static final long RANGE_RACE_TIMEOUT_MILLIS = Math.max(250L,
-            Long.getLong("bili.audio.range_race.timeout_ms", 2_500L));
+            Long.getLong("ncpb.bili.audio.range_race.timeout_ms", 2_500L));
     private static final int MAX_SEGMENT_BASE_ENTRIES = Integer.getInteger(
             "bili.audio.segment_base_cache.max_entries", 512);
-    private static final int[] MP3_MPEG1_LAYER1_BITRATES = { 0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384,
-            416, 448, 0 };
-    private static final int[] MP3_MPEG1_LAYER2_BITRATES = { 0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256,
-            320, 384, 0 };
-    private static final int[] MP3_MPEG1_LAYER3_BITRATES = { 0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224,
-            256, 320, 0 };
-    private static final int[] MP3_MPEG2_LAYER1_BITRATES = { 0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192,
-            224, 256, 0 };
-    private static final int[] MP3_MPEG2_LAYER23_BITRATES = { 0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144,
-            160, 0 };
-    private static final int[] MP3_MPEG1_SAMPLE_RATES = { 44100, 48000, 32000, 0 };
-    private static final int[] MP3_MPEG2_SAMPLE_RATES = { 22050, 24000, 16000, 0 };
-    private static final int[] MP3_MPEG25_SAMPLE_RATES = { 11025, 12000, 8000, 0 };
     private static final Pattern CONTENT_RANGE_TOTAL = Pattern.compile("bytes\\s+\\d+-\\d+/(\\d+|\\*)",
             Pattern.CASE_INSENSITIVE);
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
@@ -99,16 +87,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             .connectTimeout(java.time.Duration.ofSeconds(10))
             .build();
     private static final ExecutorService RANGE_RACE_EXECUTOR = Executors.newFixedThreadPool(
-            RANGE_RACE_MAX_CANDIDATES, new ThreadFactory() {
-                private final AtomicInteger next = new AtomicInteger(1);
-
-                @Override
-                public Thread newThread(Runnable runnable) {
-                    Thread thread = new Thread(runnable, "bili-audio-range-race-" + next.getAndIncrement());
-                    thread.setDaemon(true);
-                    return thread;
-                }
-            });
+            RANGE_RACE_MAX_CANDIDATES, NetMusicThreadFactory.daemon("bili-audio-range-race"));
     private static final ConcurrentHashMap<String, PlaybackContextQueue> ALLOWED_URLS = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, SegmentBaseInfo> SEGMENT_BASE_BY_URL = new ConcurrentHashMap<>();
     private static final Set<ActiveStreamControl> ACTIVE_MODERN_STREAMS = ConcurrentHashMap.newKeySet();
@@ -244,11 +223,10 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         AtomicBoolean closed = new AtomicBoolean(false);
         CountDownLatch formatReady = new CountDownLatch(1);
 
-        Thread worker = new Thread(
+        Thread worker = NetMusicThreadFactory.daemonThread(
+            modernTurntable ? "AudioStreamWorker" : "BiliCompatAudioStreamWorker",
                 () -> streamDecode(url, fallbackPipe, pipelineRef, errorRef, bodyRef, closed, formatReady,
-                        playbackContext, startOffsetSeconds),
-                modernTurntable ? "AudioStreamWorker" : "BiliCompatAudioStreamWorker");
-        worker.setDaemon(true);
+                playbackContext, startOffsetSeconds));
         worker.start();
         ActiveStreamControl streamControl = null;
         if (modernTurntable && playbackContext != null) {
@@ -538,111 +516,13 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             return stream;
         }
         byte[] probe = stream.readNBytes(MP3_SYNC_SCAN_BYTES);
-        int sync = findMp3FrameSync(probe, probe.length);
+        int sync = Mp3FrameSync.findFrameSync(probe, probe.length);
         if (sync < 0) {
             stream.close();
             throw new UnsupportedAudioFileException("unable to find MP3 frame after range seek");
         }
         LOGGER.debug("MP3 range aligned: byte={} frameOffset={}", rangeOffset, sync);
         return new SequenceInputStream(new ByteArrayInputStream(probe, sync, probe.length - sync), stream);
-    }
-
-    private static int findMp3FrameSync(byte[] bytes, int length) {
-        for (int i = 0; i + 3 < length; i++) {
-            Mp3Frame first = parseMp3Frame(bytes, i, length);
-            if (first == null) {
-                continue;
-            }
-
-            int pos = i;
-            int validFrames = 0;
-            while (validFrames < 4) {
-                Mp3Frame frame = parseMp3Frame(bytes, pos, length);
-                if (frame == null || !frame.isCompatibleWith(first)) {
-                    break;
-                }
-                validFrames++;
-                pos += frame.frameLength();
-            }
-            if (validFrames >= 3) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private static Mp3Frame parseMp3Frame(byte[] bytes, int offset, int length) {
-        if (offset < 0 || offset + 4 > length) {
-            return null;
-        }
-        int b0 = bytes[offset] & 0xFF;
-        int b1 = bytes[offset + 1] & 0xFF;
-        int b2 = bytes[offset + 2] & 0xFF;
-        if (b0 != 0xFF || (b1 & 0xE0) != 0xE0) {
-            return null;
-        }
-
-        int version = (b1 >> 3) & 0x03;
-        int layer = (b1 >> 1) & 0x03;
-        int bitrateIndex = (b2 >> 4) & 0x0F;
-        int sampleRateIndex = (b2 >> 2) & 0x03;
-        int padding = (b2 >> 1) & 0x01;
-        if (version == 0x01 || layer == 0x00 || bitrateIndex == 0x00 || bitrateIndex == 0x0F
-                || sampleRateIndex == 0x03) {
-            return null;
-        }
-
-        int bitrateKbps = mp3BitrateKbps(version, layer, bitrateIndex);
-        int sampleRate = mp3SampleRate(version, sampleRateIndex);
-        if (bitrateKbps <= 0 || sampleRate <= 0) {
-            return null;
-        }
-
-        int frameLength;
-        if (layer == 0x03) {
-            frameLength = ((12 * bitrateKbps * 1000) / sampleRate + padding) * 4;
-        } else if (layer == 0x02) {
-            frameLength = (144 * bitrateKbps * 1000) / sampleRate + padding;
-        } else {
-            int coefficient = version == 0x03 ? 144 : 72;
-            frameLength = (coefficient * bitrateKbps * 1000) / sampleRate + padding;
-        }
-        if (frameLength < 4 || offset + frameLength > length) {
-            return null;
-        }
-        return new Mp3Frame(version, layer, sampleRate, frameLength);
-    }
-
-    private static int mp3BitrateKbps(int version, int layer, int index) {
-        if (version == 0x03) {
-            if (layer == 0x03) {
-                return MP3_MPEG1_LAYER1_BITRATES[index];
-            }
-            if (layer == 0x02) {
-                return MP3_MPEG1_LAYER2_BITRATES[index];
-            }
-            return MP3_MPEG1_LAYER3_BITRATES[index];
-        }
-        if (layer == 0x03) {
-            return MP3_MPEG2_LAYER1_BITRATES[index];
-        }
-        return MP3_MPEG2_LAYER23_BITRATES[index];
-    }
-
-    private static int mp3SampleRate(int version, int index) {
-        if (version == 0x03) {
-            return MP3_MPEG1_SAMPLE_RATES[index];
-        }
-        if (version == 0x02) {
-            return MP3_MPEG2_SAMPLE_RATES[index];
-        }
-        return MP3_MPEG25_SAMPLE_RATES[index];
-    }
-
-    private record Mp3Frame(int version, int layer, int sampleRate, int frameLength) {
-        boolean isCompatibleWith(Mp3Frame other) {
-            return version == other.version && layer == other.layer && sampleRate == other.sampleRate;
-        }
     }
 
     private static AudioInputStream openModernFallbackStream(AudioInputStream stream, PlaybackContext playbackContext,
@@ -1096,13 +976,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     }
 
     private static void closeQuietly(InputStream stream) {
-        if (stream == null) {
-            return;
-        }
-        try {
-            stream.close();
-        } catch (IOException ignored) {
-        }
+        LifecycleClose.closeQuietly(stream);
     }
 
     private static void streamDecode(
@@ -1430,31 +1304,15 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         if (pipeline != null) {
             pipeline.close();
         }
-        joinWorker(worker);
+        LifecycleClose.join(worker, WORKER_JOIN_TIMEOUT_MILLIS);
         if (streamControl != null) {
             streamControl.unregister();
         }
     }
 
-    private static void joinWorker(Thread worker) {
-        if (worker == null || worker == Thread.currentThread() || !worker.isAlive()) {
-            return;
-        }
-        try {
-            worker.join(WORKER_JOIN_TIMEOUT_MILLIS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
     private static void closeBody(AtomicReference<InputStream> bodyRef) {
         InputStream body = bodyRef.getAndSet(null);
-        if (body != null) {
-            try {
-                body.close();
-            } catch (IOException ignored) {
-            }
-        }
+        LifecycleClose.closeQuietly(body);
     }
 
     private static boolean isStreamEndException(IOException e) {

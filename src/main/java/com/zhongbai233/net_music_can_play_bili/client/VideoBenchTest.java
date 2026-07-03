@@ -23,7 +23,7 @@ public final class VideoBenchTest {
     private static final int TARGET_W = 854;
     private static final int TARGET_H = 480;
     private static final int TARGET_FPS = 30;
-    private static final boolean CPU_BARS = VideoFeatureFlags.advancedBoolean("bili.video.cpu_bars", false);
+    private static final boolean CPU_BARS = VideoFeatureFlags.advancedBoolean("ncpb.video.cpu_bars", false);
 
     private VideoBenchTest() {
     }
@@ -50,7 +50,7 @@ public final class VideoBenchTest {
         }
 
         if (hasRun.compareAndSet(false, true)) {
-            LOGGER.info("bili.video.cpu_bars=true，跳过 B站解析/下载，直接启动 CPU 彩条渲染诊断");
+            LOGGER.info("ncpb.video.cpu_bars=true，跳过 B站解析/下载，直接启动 CPU 彩条渲染诊断");
             VideoBillboardPreview.startTestPattern(TARGET_W, TARGET_H, TARGET_FPS);
         }
     }

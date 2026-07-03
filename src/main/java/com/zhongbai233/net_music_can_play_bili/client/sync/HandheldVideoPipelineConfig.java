@@ -18,7 +18,7 @@ public record HandheldVideoPipelineConfig(
         long offscreenResumeRestartLagNanos,
         long rgbaConsumerGraceNanos) {
     public static HandheldVideoPipelineConfig fromSystemProperties(String prefix) {
-        String keyPrefix = prefix == null || prefix.isBlank() ? "netmusic.handheld.video" : prefix;
+        String keyPrefix = prefix == null || prefix.isBlank() ? "ncpb.handheld.video" : prefix;
         return new HandheldVideoPipelineConfig(
                 8192,
                 4320,

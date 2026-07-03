@@ -2,9 +2,22 @@ package com.zhongbai233.net_music_can_play_bili.media.codec;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.JarURLConnection;
+import java.net.URISyntaxException;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.CodeSource;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
+import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.regex.Pattern;
 
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
@@ -15,6 +28,12 @@ import org.slf4j.Logger;
 public class Eac3NativeDecoder implements AutoCloseable {
 
     private static final Logger LOGGER = LogUtils.getLogger();
+    private static final Pattern WINDOWS_FFMPEG_LIB = Pattern
+            .compile("^(avutil|swresample|swscale|avcodec)-(\\d+)\\.dll$");
+    private static final Pattern MACOS_FFMPEG_LIB = Pattern
+            .compile("^lib(avutil|swresample|swscale|avcodec)\\.(\\d+)\\.dylib$");
+    private static final Pattern LINUX_FFMPEG_LIB = Pattern
+            .compile("^lib(avutil|swresample|swscale|avcodec)\\.so\\.(\\d+)$");
 
     private static volatile boolean loaderInitialized;
     private static volatile boolean nativeAvailable;
@@ -151,10 +170,7 @@ public class Eac3NativeDecoder implements AutoCloseable {
             isWindows = false;
         }
 
-        // FFmpeg 核心库，按依赖顺序: avutil → swresample → swscale → avcodec
-        String[] ffmpegLibs = { "avutil", "swresample", "swscale", "avcodec" };
-        // 自研薄 JNI 层
-        String[] jniLibs = { "eac3_jni", "video_jni" };
+        NativeLibrarySet libraries = discoverNativeLibraries(platformDir, os, isWindows);
         // Windows 工具链运行时依赖原则上应由 FFmpeg 构建端消除；这里保留可选预加载兜底。
         String[] runtimeLibs = isWindows ? new String[] { "libwinpthread-1" } : new String[0];
         boolean[] runtimeLibPresent = new boolean[runtimeLibs.length];
@@ -169,12 +185,10 @@ public class Eac3NativeDecoder implements AutoCloseable {
             String fileName = nativeFileName(runtimeLibs[i], os, isWindows);
             runtimeLibPresent[i] = extractEmbeddedNative(platformDir, fileName, nativeDir.resolve(fileName), false);
         }
-        for (String baseName : ffmpegLibs) {
-            String fileName = nativeFileName(baseName, os, isWindows);
+        for (String fileName : libraries.ffmpegLibraries()) {
             extractEmbeddedNative(platformDir, fileName, nativeDir.resolve(fileName), true);
         }
-        for (String baseName : jniLibs) {
-            String fileName = nativeFileName(baseName, os, isWindows);
+        for (String fileName : libraries.jniLibraries()) {
             extractEmbeddedNative(platformDir, fileName, nativeDir.resolve(fileName), true);
         }
 
@@ -186,12 +200,10 @@ public class Eac3NativeDecoder implements AutoCloseable {
                 System.load(nativeDir.resolve(fn).toAbsolutePath().toString());
             }
         }
-        for (String baseName : ffmpegLibs) {
-            String fn = nativeFileName(baseName, os, isWindows);
+        for (String fn : libraries.ffmpegLibraries()) {
             System.load(nativeDir.resolve(fn).toAbsolutePath().toString());
         }
-        for (String baseName : jniLibs) {
-            String fn = nativeFileName(baseName, os, isWindows);
+        for (String fn : libraries.jniLibraries()) {
             System.load(nativeDir.resolve(fn).toAbsolutePath().toString());
         }
 
@@ -217,47 +229,137 @@ public class Eac3NativeDecoder implements AutoCloseable {
         }
     }
 
-    private static boolean isFfmpegLib(String name) {
-        return name.equals("avutil") || name.equals("swresample") || name.equals("swscale")
-                || name.equals("avcodec");
+    private static NativeLibrarySet discoverNativeLibraries(String platformDir, String os, boolean isWindows)
+            throws IOException {
+        Set<String> resourceNames = listNativeResourceFileNames(platformDir);
+        boolean isMac = os.contains("mac") || os.contains("darwin");
+        Pattern ffmpegPattern = isWindows ? WINDOWS_FFMPEG_LIB : (isMac ? MACOS_FFMPEG_LIB : LINUX_FFMPEG_LIB);
+        List<String> ffmpeg = new ArrayList<>();
+        for (String base : List.of("avutil", "swresample", "swscale", "avcodec")) {
+            ffmpeg.add(selectVersionedLibrary(resourceNames, ffmpegPattern, base, platformDir));
+        }
+
+        List<String> jni = List.of(
+                nativeFileName("eac3_jni", os, isWindows),
+                nativeFileName("video_jni", os, isWindows));
+        for (String fileName : jni) {
+            if (!resourceNames.contains(fileName)) {
+                throw new IOException("内嵌 JNI native 库缺失: /native/" + platformDir + "/" + fileName);
+            }
+        }
+        return new NativeLibrarySet(List.copyOf(ffmpeg), jni);
     }
 
-    private static String ffmpegFileName(String base) {
-        switch (base) {
-            case "avutil":
-                return "avutil-60";
-            case "swresample":
-                return "swresample-6";
-            case "swscale":
-                return "swscale-9";
-            case "avcodec":
-                return "avcodec-62";
-            default:
-                return base;
+    private static String selectVersionedLibrary(Set<String> resourceNames, Pattern pattern, String base,
+            String platformDir) throws IOException {
+        return resourceNames.stream()
+                .map(pattern::matcher)
+                .filter(matcher -> matcher.matches())
+                .filter(matcher -> matcher.group(1).equals(base))
+                .max(Comparator.comparingInt(matcher -> Integer.parseInt(matcher.group(2))))
+                .map(matcher -> matcher.group())
+                .orElseThrow(() -> new IOException("内嵌 FFmpeg native 库缺失: /native/" + platformDir
+                        + "/" + base + " (versioned)"));
+    }
+
+    private static Set<String> listNativeResourceFileNames(String platformDir) throws IOException {
+        String resourceDir = "native/" + platformDir;
+        ClassLoader loader = Eac3NativeDecoder.class.getClassLoader();
+        Set<String> names = new HashSet<>();
+        Enumeration<URL> urls = loader.getResources(resourceDir);
+        while (urls.hasMoreElements()) {
+            URL url = urls.nextElement();
+            String protocol = url.getProtocol();
+            if ("file".equals(protocol)) {
+                listFileResourceNames(url, names);
+            } else if ("jar".equals(protocol)) {
+                listJarResourceNames(url, resourceDir, names);
+            }
+        }
+        if (names.isEmpty()) {
+            listCodeSourceResourceNames(resourceDir, names);
+        }
+        return names;
+    }
+
+    private static void listFileResourceNames(URL url, Set<String> names) throws IOException {
+        try {
+            Path dir = Path.of(url.toURI());
+            if (!Files.isDirectory(dir)) {
+                return;
+            }
+            try (var stream = Files.list(dir)) {
+                stream.filter(Files::isRegularFile)
+                        .map(path -> path.getFileName().toString())
+                        .forEach(names::add);
+            }
+        } catch (URISyntaxException e) {
+            throw new IOException("native 资源目录 URI 无效: " + url, e);
+        }
+    }
+
+    private static void listJarResourceNames(URL url, String resourceDir, Set<String> names) throws IOException {
+        JarURLConnection connection = (JarURLConnection) url.openConnection();
+        String prefix = resourceDir.endsWith("/") ? resourceDir : resourceDir + "/";
+        try (JarFile jar = connection.getJarFile()) {
+            listJarEntries(jar, prefix, names);
+        }
+    }
+
+    private static void listCodeSourceResourceNames(String resourceDir, Set<String> names) throws IOException {
+        CodeSource codeSource = Eac3NativeDecoder.class.getProtectionDomain().getCodeSource();
+        if (codeSource == null || codeSource.getLocation() == null) {
+            return;
+        }
+        try {
+            Path location = Path.of(codeSource.getLocation().toURI());
+            if (Files.isDirectory(location)) {
+                Path dir = location.resolve(resourceDir.replace('/', java.io.File.separatorChar));
+                if (Files.isDirectory(dir)) {
+                    try (var stream = Files.list(dir)) {
+                        stream.filter(Files::isRegularFile)
+                                .map(path -> path.getFileName().toString())
+                                .forEach(names::add);
+                    }
+                }
+            } else if (Files.isRegularFile(location) && location.getFileName().toString().endsWith(".jar")) {
+                String prefix = resourceDir.endsWith("/") ? resourceDir : resourceDir + "/";
+                try (JarFile jar = new JarFile(location.toFile())) {
+                    listJarEntries(jar, prefix, names);
+                }
+            }
+        } catch (URISyntaxException e) {
+            throw new IOException("native 资源 code source URI 无效", e);
+        }
+    }
+
+    private static void listJarEntries(JarFile jar, String prefix, Set<String> names) {
+        Enumeration<JarEntry> entries = jar.entries();
+        while (entries.hasMoreElements()) {
+            JarEntry entry = entries.nextElement();
+            if (entry.isDirectory()) {
+                continue;
+            }
+            String name = entry.getName();
+            if (!name.startsWith(prefix)) {
+                continue;
+            }
+            String fileName = name.substring(prefix.length());
+            if (!fileName.isEmpty() && !fileName.contains("/")) {
+                names.add(fileName);
+            }
         }
     }
 
     private static String nativeFileName(String base, String os, boolean isWindows) {
         if (isWindows) {
-            return isFfmpegLib(base) ? ffmpegFileName(base) + ".dll" : base + ".dll";
+            return base + ".dll";
         }
         boolean isMac = os.contains("mac") || os.contains("darwin");
-        if (!isFfmpegLib(base)) {
-            return "lib" + base + (isMac ? ".dylib" : ".so");
-        }
+        return "lib" + base + (isMac ? ".dylib" : ".so");
+    }
 
-        switch (base) {
-            case "avutil":
-                return isMac ? "libavutil.60.dylib" : "libavutil.so.60";
-            case "swresample":
-                return isMac ? "libswresample.6.dylib" : "libswresample.so.6";
-            case "swscale":
-                return isMac ? "libswscale.9.dylib" : "libswscale.so.9";
-            case "avcodec":
-                return isMac ? "libavcodec.62.dylib" : "libavcodec.so.62";
-            default:
-                return "lib" + base + (isMac ? ".dylib" : ".so");
-        }
+    private record NativeLibrarySet(List<String> ffmpegLibraries, List<String> jniLibraries) {
     }
 
     private boolean ensureOpen() {

@@ -36,33 +36,33 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int CODEC_H264 = 7;
     private static final int CODEC_HEVC = 12;
-    private static final int MAX_PENDING_FRAMES = Integer.getInteger("bili.video.native.max_pending_frames", 8);
-    private static final int FMP4_INIT_PROBE_BYTES = Integer.getInteger("bili.video.native.seek.init_probe_bytes",
+    private static final int MAX_PENDING_FRAMES = Integer.getInteger("ncpb.video.native.max_pending_frames", 8);
+    private static final int FMP4_INIT_PROBE_BYTES = Integer.getInteger("ncpb.video.native.seek.init_probe_bytes",
             4 * 1024 * 1024);
-    private static final int FMP4_MOOF_SCAN_BYTES = Integer.getInteger("bili.video.native.seek.moof_scan_bytes",
+    private static final int FMP4_MOOF_SCAN_BYTES = Integer.getInteger("ncpb.video.native.seek.moof_scan_bytes",
             8 * 1024 * 1024);
-    private static final int FMP4_SEEK_MAX_ATTEMPTS = Integer.getInteger("bili.video.native.seek.max_attempts", 12);
-    private static final long FMP4_SEEK_PREROLL_BYTES = Long.getLong("bili.video.native.seek.preroll_bytes",
+    private static final int FMP4_SEEK_MAX_ATTEMPTS = Integer.getInteger("ncpb.video.native.seek.max_attempts", 12);
+    private static final long FMP4_SEEK_PREROLL_BYTES = Long.getLong("ncpb.video.native.seek.preroll_bytes",
             1L * 1024L * 1024L);
     private static final double FMP4_CLOSE_FRAGMENT_SECONDS = Double.parseDouble(
-            System.getProperty("bili.video.native.seek.close_fragment_seconds", "3.0"));
+            System.getProperty("ncpb.video.native.seek.close_fragment_seconds", "3.0"));
     private static final double FMP4_TARGET_EPSILON_SECONDS = Double.parseDouble(
-            System.getProperty("bili.video.native.seek.target_epsilon_seconds", "0.25"));
+            System.getProperty("ncpb.video.native.seek.target_epsilon_seconds", "0.25"));
     private static final double FMP4_SEEK_LEAD_SECONDS = Double.parseDouble(
-            System.getProperty("bili.video.native.seek.lead_seconds", "0.0"));
+            System.getProperty("ncpb.video.native.seek.lead_seconds", "0.0"));
     private static final boolean FMP4_RANGE_SEEK_ENABLED = Boolean.parseBoolean(
-            System.getProperty("bili.video.native.seek.enabled", "false"));
+            System.getProperty("ncpb.video.native.seek.enabled", "false"));
     private static final long FMP4_RANGE_SEEK_AUTO_OFFSET_MILLIS = Long.getLong(
             "bili.video.native.seek.auto_offset_ms", 5_000L);
     private static final double FMP4_FALLBACK_MAX_RESIDUAL_SECONDS = Double.parseDouble(
-            System.getProperty("bili.video.native.seek.fallback_max_residual_seconds", "-1.0"));
+            System.getProperty("ncpb.video.native.seek.fallback_max_residual_seconds", "-1.0"));
     private static final int FMP4_STREAM_RECOVERY_ATTEMPTS = Integer.getInteger(
             "bili.video.native.stream_recovery_attempts", 3);
     private static final byte[] DECODE_ONLY_FRAME = new byte[0];
     private static final boolean REUSE_OUTPUT_BUFFERS = Boolean.parseBoolean(
-            System.getProperty("bili.video.native.reuse_output_buffers", "true"));
+            System.getProperty("ncpb.video.native.reuse_output_buffers", "true"));
     private static final boolean DIRECT_NV12_BUFFERS = Boolean.parseBoolean(
-            System.getProperty("bili.video.native.direct_nv12_buffers", "true"));
+            System.getProperty("ncpb.video.native.direct_nv12_buffers", "true"));
     private static final long SEGMENT_BASE_TTL_MILLIS = TimeUnit.MINUTES.toMillis(30);
     private static final int MAX_SEGMENT_BASE_ENTRIES = Integer.getInteger(
             "bili.video.segment_base_cache.max_entries", 512);

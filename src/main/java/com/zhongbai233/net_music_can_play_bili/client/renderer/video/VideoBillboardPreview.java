@@ -18,6 +18,7 @@ import com.zhongbai233.net_music_can_play_bili.client.renderer.RenderVertexUtils
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.player.Player;
@@ -121,32 +122,32 @@ public final class VideoBillboardPreview {
             "bili.video.sync.max_drop_frames", 12);
     private static final double DISTANCE = 3.0D;
     private static final float HEIGHT = 1.35F;
-    private static final boolean CPU_BARS = VideoFeatureFlags.advancedBoolean("bili.video.cpu_bars", false);
+    private static final boolean CPU_BARS = VideoFeatureFlags.advancedBoolean("ncpb.video.cpu_bars", false);
     private static final boolean WORLD_ANCHORED = Boolean.parseBoolean(
-            System.getProperty("bili.video.world_anchor", "true"));
+            System.getProperty("ncpb.video.world_anchor", "true"));
     private static final String YUV_IMMEDIATE_STAGE = System.getProperty(
-            "bili.video.yuv.immediate_stage", "after_level").trim().toLowerCase(java.util.Locale.ROOT);
+            "ncpb.video.yuv.immediate_stage", "after_level").trim().toLowerCase(java.util.Locale.ROOT);
     private static final String YUV_IMMEDIATE_COORDS = System.getProperty(
-            "bili.video.yuv.immediate_coords", "camera_relative").trim().toLowerCase(java.util.Locale.ROOT);
+            "ncpb.video.yuv.immediate_coords", "camera_relative").trim().toLowerCase(java.util.Locale.ROOT);
     private static final String YUV_IMMEDIATE_POSE = System.getProperty(
-            "bili.video.yuv.immediate_pose", "identity").trim().toLowerCase(java.util.Locale.ROOT);
+            "ncpb.video.yuv.immediate_pose", "identity").trim().toLowerCase(java.util.Locale.ROOT);
     private static final boolean YUV_DEBUG_LOG = Boolean.getBoolean(
-            "bili.video.yuv.debug_log");
+            "ncpb.video.yuv.debug_log");
     private static final double WORLD_ANCHOR_DISTANCE = Double.parseDouble(
-            System.getProperty("bili.video.world_anchor.distance", "6.0"));
+            System.getProperty("ncpb.video.world_anchor.distance", "6.0"));
     static final double AUDIO_SYNC_RANGE_SQR = Math.pow(Double.parseDouble(
-            System.getProperty("bili.video.turntable.sync_range", "96.0")), 2.0);
+            System.getProperty("ncpb.video.turntable.sync_range", "96.0")), 2.0);
     private static final double VIEW_DOT_THRESHOLD = Double.parseDouble(
-            System.getProperty("bili.video.render.view_dot_threshold", "0.12"));
+            System.getProperty("ncpb.video.render.view_dot_threshold", "0.12"));
     private static final boolean VIEW_OCCLUSION_CHECK = Boolean.parseBoolean(
-            System.getProperty("bili.video.render.occlusion_check", "true"));
+            System.getProperty("ncpb.video.render.occlusion_check", "true"));
     private static final long VIEW_OCCLUSION_CACHE_NANOS = Long.getLong(
             "bili.video.render.occlusion_cache_ms", 150L) * 1_000_000L;
     private static final double VIEW_SAMPLE_EDGE_SCALE = Double.parseDouble(
-            System.getProperty("bili.video.render.visibility_sample_edge_scale", "0.86"));
+            System.getProperty("ncpb.video.render.visibility_sample_edge_scale", "0.86"));
     private static final double MAX_RENDER_DISTANCE_SQR = Math.pow(Double.parseDouble(
-            System.getProperty("bili.video.max_render_distance", "64.0")), 2.0);
-    static final String RENDER_BACKEND = System.getProperty("bili.video.render.backend", "nv12")
+            System.getProperty("ncpb.video.max_render_distance", "64.0")), 2.0);
+    static final String RENDER_BACKEND = System.getProperty("ncpb.video.render.backend", "nv12")
             .trim().toLowerCase(java.util.Locale.ROOT);
     static final boolean NV12_DECODE_BACKEND = RENDER_BACKEND.equals("nv12")
             || RENDER_BACKEND.equals("nv12_shader")
@@ -161,7 +162,7 @@ public final class VideoBillboardPreview {
             || RENDER_BACKEND.equals("nv12")
             || RENDER_BACKEND.equals("nv12_shader");
     private static final boolean YUV_UPLOAD_PLANES = Boolean.parseBoolean(
-            System.getProperty("bili.video.yuv.upload_planes", "true"));
+            System.getProperty("ncpb.video.yuv.upload_planes", "true"));
 
     private static final Map<String, VideoPlaybackInstance> INSTANCES = new ConcurrentHashMap<>();
 
@@ -667,7 +668,7 @@ public final class VideoBillboardPreview {
             return instance.canChaseToOffset(Math.max(0L, requestedOffsetMillis));
         }
         return isSessionRunningAtOffset(sessionId, requestedOffsetMillis,
-                Long.getLong("bili.video.pipeline.chase_window_ms", 10_000L));
+                Long.getLong("ncpb.video.pipeline.chase_window_ms", 10_000L));
     }
 
     public static boolean isSessionWaitingForFirstFrame(String sessionId) {
@@ -1464,7 +1465,7 @@ public final class VideoBillboardPreview {
             return false;
         }
         if (!YUV_UPLOAD_PLANES) {
-            LOGGER.warn("YUV420P bench 诊断：bili.video.yuv.upload_planes=false，跳过 RED8 三平面纹理创建，临时 CPU 转 RGBA 上传");
+            LOGGER.warn("YUV420P bench 诊断：ncpb.video.yuv.upload_planes=false，跳过 RED8 三平面纹理创建，临时 CPU 转 RGBA 上传");
             return uploadFrameOnRenderThread(Yuv420pConverter.yuv420pToRgba(yuv420p, frameWidth, frameHeight),
                     frameWidth, frameHeight);
         }
@@ -1562,7 +1563,7 @@ public final class VideoBillboardPreview {
             return false;
         }
         if (!YUV_UPLOAD_PLANES) {
-            LOGGER.warn("YUV preview 诊断：bili.video.yuv.upload_planes=false，跳过多平面纹理创建，临时 CPU 转 RGBA 上传");
+            LOGGER.warn("YUV preview 诊断：ncpb.video.yuv.upload_planes=false，跳过多平面纹理创建，临时 CPU 转 RGBA 上传");
             return uploadFrameOnRenderThread(Yuv420pConverter.toUploadRgba(frame, frameWidth, frameHeight), frameWidth,
                     frameHeight);
         }
@@ -2168,7 +2169,7 @@ public final class VideoBillboardPreview {
     static void submitProjectorEmissiveGeometry(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera,
             VideoProjectorBlockEntity projector, Identifier renderTextureId, int textureWidth, int textureHeight) {
         submitProjectorGeometry(event, minecraft, camera, projector, renderTextureId, textureWidth, textureHeight,
-                0.0D, YuvVideoRenderTypes.videoRgbaEntity(renderTextureId), "projector-rgba-placeholder");
+            0.0D, RenderTypes.itemCutout(renderTextureId), "projector-rgba-placeholder");
     }
 
     static void submitProjectorPrivacyOverlay(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera,

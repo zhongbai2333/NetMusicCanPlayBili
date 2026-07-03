@@ -101,5 +101,9 @@ public final class ModernTurntableNetwork {
                 WhitelistPreviewPacket.TYPE,
                 WhitelistPreviewPacket.STREAM_CODEC,
                 WhitelistPreviewPacket::handle);
+        registrar.playToClient(
+                PadMapWorldScopePacket.TYPE,
+                PadMapWorldScopePacket.STREAM_CODEC,
+                PadMapWorldScopePacket::handle);
     }
 }

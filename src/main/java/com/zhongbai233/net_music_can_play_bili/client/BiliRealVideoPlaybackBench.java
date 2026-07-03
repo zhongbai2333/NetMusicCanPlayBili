@@ -5,6 +5,7 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
 import org.slf4j.Logger;
 
 import java.util.Arrays;
@@ -12,6 +13,7 @@ import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /**
  * B站视频播放链路诊断工具：DASH URL → FFmpeg/native 解码 → DynamicTexture 上传 → 世界 billboard
@@ -21,42 +23,42 @@ public final class BiliRealVideoPlaybackBench {
     private static final AtomicBoolean started = new AtomicBoolean(false);
 
     private static final boolean BENCH_FEATURES_ENABLED = VideoFeatureFlags.benchFeaturesEnabled();
-    private static final boolean ENABLED = VideoFeatureFlags.advancedBoolean("bili.video.real_bench", false);
-    private static final String VIDEO_ID = VideoFeatureFlags.advancedString("bili.video.real_bench.bv",
+    private static final boolean ENABLED = VideoFeatureFlags.advancedBoolean("ncpb.video.real_bench", false);
+    private static final String VIDEO_ID = VideoFeatureFlags.advancedString("ncpb.video.real_bench.bv",
             "BV1qM4y1w716");
-    private static final int MAX_OUTPUT_FPS = VideoFeatureFlags.advancedInt("bili.video.real_bench.max_fps", 30);
-    private static final int MIN_1080P_FPS = VideoFeatureFlags.advancedInt("bili.video.real_bench.min_1080p_fps", 8);
-    private static final int CAP_1080P_FPS = VideoFeatureFlags.advancedInt("bili.video.real_bench.cap_1080p_fps", 10);
-    private static final int CAP_4K_FPS = VideoFeatureFlags.advancedInt("bili.video.real_bench.cap_4k_fps", 3);
-    private static final int CAP_8K_FPS = VideoFeatureFlags.advancedInt("bili.video.real_bench.cap_8k_fps", 1);
-    private static final int FRAMES_PER_STAGE = VideoFeatureFlags.advancedInt("bili.video.real_bench.frames", 120);
-    private static final int WARMUP_FRAMES = VideoFeatureFlags.advancedInt("bili.video.real_bench.warmup_frames", 10);
+    private static final int MAX_OUTPUT_FPS = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.max_fps", 30);
+    private static final int MIN_1080P_FPS = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.min_1080p_fps", 8);
+    private static final int CAP_1080P_FPS = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.cap_1080p_fps", 10);
+    private static final int CAP_4K_FPS = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.cap_4k_fps", 3);
+    private static final int CAP_8K_FPS = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.cap_8k_fps", 1);
+    private static final int FRAMES_PER_STAGE = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.frames", 120);
+    private static final int WARMUP_FRAMES = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.warmup_frames", 10);
     private static final int[] QUALITY_STEPS = parseIntSteps(
-            VideoFeatureFlags.advancedString("bili.video.real_bench.qualities", "16,32,64,80,112,116,120,127"));
+            VideoFeatureFlags.advancedString("ncpb.video.real_bench.qualities", "16,32,64,80,112,116,120,127"));
     private static final boolean REALTIME_PLAYBACK = Boolean.parseBoolean(
-            VideoFeatureFlags.advancedString("bili.video.real_bench.realtime", "true"));
+            VideoFeatureFlags.advancedString("ncpb.video.real_bench.realtime", "true"));
     private static final boolean DECODE_ONLY = Boolean.parseBoolean(
-            VideoFeatureFlags.advancedString("bili.video.real_bench.decode_only", "false"));
+            VideoFeatureFlags.advancedString("ncpb.video.real_bench.decode_only", "false"));
     private static final boolean DECODE_NO_OUTPUT = Boolean.parseBoolean(
-            VideoFeatureFlags.advancedString("bili.video.real_bench.decode_no_output", "false"));
+            VideoFeatureFlags.advancedString("ncpb.video.real_bench.decode_no_output", "false"));
     private static final boolean ADAPTIVE_FPS_CAP = Boolean.parseBoolean(
-            VideoFeatureFlags.advancedString("bili.video.real_bench.adaptive_fps_cap", "false"));
+            VideoFeatureFlags.advancedString("ncpb.video.real_bench.adaptive_fps_cap", "false"));
     private static final boolean STOP_ON_THRESHOLD = Boolean.parseBoolean(
-            VideoFeatureFlags.advancedString("bili.video.real_bench.stop_on_threshold", "false"));
+            VideoFeatureFlags.advancedString("ncpb.video.real_bench.stop_on_threshold", "false"));
     private static final double STOP_AVG_STAGE_MS = Double.parseDouble(
-            VideoFeatureFlags.advancedString("bili.video.real_bench.stop_avg_stage_ms", "45"));
+            VideoFeatureFlags.advancedString("ncpb.video.real_bench.stop_avg_stage_ms", "45"));
     private static final double STOP_MAX_UPLOAD_MS = Double.parseDouble(
-            VideoFeatureFlags.advancedString("bili.video.real_bench.stop_max_upload_ms", "60"));
+            VideoFeatureFlags.advancedString("ncpb.video.real_bench.stop_max_upload_ms", "60"));
     private static final boolean START_PREVIEW_AFTER_BENCH = Boolean.parseBoolean(
-            VideoFeatureFlags.advancedString("bili.video.real_bench.preview", "true"));
+            VideoFeatureFlags.advancedString("ncpb.video.real_bench.preview", "true"));
     private static final boolean PREVIEW_PREFER_DEMO = Boolean.parseBoolean(
-            VideoFeatureFlags.advancedString("bili.video.real_bench.preview.prefer_demo", "false"));
+            VideoFeatureFlags.advancedString("ncpb.video.real_bench.preview.prefer_demo", "false"));
     private static final boolean PREFER_NATIVE = Boolean.parseBoolean(
-            VideoFeatureFlags.advancedString("bili.video.real_bench.native", "true"));
-    private static final String NATIVE_HWACCEL = VideoFeatureFlags.advancedString("bili.video.native.hwaccel", "auto")
+            VideoFeatureFlags.advancedString("ncpb.video.real_bench.native", "true"));
+    private static final String NATIVE_HWACCEL = VideoFeatureFlags.advancedString("ncpb.video.native.hwaccel", "auto")
             .trim();
     private static final String OUTPUT_FORMAT = VideoFeatureFlags
-            .advancedString("bili.video.real_bench.output_format", "nv12")
+            .advancedString("ncpb.video.real_bench.output_format", "nv12")
             .trim().toLowerCase(Locale.ROOT);
 
     private BiliRealVideoPlaybackBench() {
@@ -82,14 +84,33 @@ public final class BiliRealVideoPlaybackBench {
         return true;
     }
 
+    public static boolean startCommand(boolean ignoreSlowFrames) {
+        if (!started.compareAndSet(false, true)) {
+            return false;
+        }
+        CompletableFuture.runAsync(() -> runBench(ignoreSlowFrames, true, BiliRealVideoPlaybackBench::chat))
+                .orTimeout(180, TimeUnit.SECONDS)
+                .exceptionally(e -> {
+                    LOGGER.error("真实视频播放 Bench 命令超时/失败", e);
+                    chat("B站真实解析Bench失败/超时，详细错误见 latest.log");
+                    return null;
+                });
+        return true;
+    }
+
     private static void runBench() {
+        runBench(!STOP_ON_THRESHOLD, false, null);
+    }
+
+    private static void runBench(boolean ignoreSlowFrames, boolean commandMode, Consumer<String> reporter) {
         LOGGER.info("══════════════════════════════════════════");
         LOGGER.info("  真实 B站视频播放 Bench 开始");
+        report(reporter, "B站真实解析Bench开始：" + slowFramePolicy(ignoreSlowFrames) + "；命令模式不启动持续预览");
         LOGGER.info("  videoId={}, maxOutputFps={}, frames/stage={}, warmupFrames={}, qualitySteps={}",
                 VIDEO_ID, MAX_OUTPUT_FPS, FRAMES_PER_STAGE, WARMUP_FRAMES, Arrays.toString(QUALITY_STEPS));
         LOGGER.info(
                 "  realtimePlayback={}, decodeOnly={}, decodeNoOutput={}, adaptiveFpsCap={}, stopOnThreshold={}, previewPreferDemo={}, preferNative={}",
-                REALTIME_PLAYBACK, DECODE_ONLY, DECODE_NO_OUTPUT, ADAPTIVE_FPS_CAP, STOP_ON_THRESHOLD,
+                REALTIME_PLAYBACK, DECODE_ONLY, DECODE_NO_OUTPUT, ADAPTIVE_FPS_CAP, !ignoreSlowFrames,
                 PREVIEW_PREFER_DEMO, PREFER_NATIVE);
         LOGGER.info("  outputFormat={}", OUTPUT_FORMAT);
         LOGGER.info("  画质阶梯说明: 125=HDR、126=杜比视界、129=HDR Vivid，属于特性格式；默认压测只跑分辨率/fps阶梯 {}",
@@ -101,6 +122,7 @@ public final class BiliRealVideoPlaybackBench {
         BiliApiClient.VideoId vid = BiliApiClient.extractVideoId(VIDEO_ID);
         if (vid == null) {
             LOGGER.warn("真实视频 Bench 的 B站视频 ID 无效: {}", VIDEO_ID);
+            report(reporter, "B站真实解析Bench失败：视频 ID 无效 " + VIDEO_ID);
             return;
         }
 
@@ -111,8 +133,10 @@ public final class BiliRealVideoPlaybackBench {
             LOGGER.info("  视频信息: title='{}', cid={}, duration={}s, page={}/{}, 耗时={}ms",
                     info.displayTitle(), info.cid(), info.duration(), info.page(), info.totalPages(),
                     System.currentTimeMillis() - startMs);
+            report(reporter, "B站真实解析Bench视频：" + info.displayTitle() + "，duration=" + info.duration() + "s");
         } catch (Exception e) {
             LOGGER.error("真实视频 Bench 获取视频信息失败", e);
+            report(reporter, "B站真实解析Bench获取视频信息失败，详见 latest.log");
             return;
         }
 
@@ -120,11 +144,17 @@ public final class BiliRealVideoPlaybackBench {
         StageResult highestPlayableResult = null;
         StageResult demoResult = null;
         for (int quality : QUALITY_STEPS) {
-            StageResult result = runQualityStage(vid, info.cid(), quality);
+            report(reporter, "B站真实解析Bench阶段：" + BiliApiClient.qualityLabel(quality));
+            StageResult result = runQualityStage(vid, info.cid(), quality, reporter);
             if (result == null) {
                 continue;
             }
             logResult(result);
+            report(reporter, "B站真实解析Bench结果 " + BiliApiClient.qualityLabel(quality)
+                    + " → actual=" + BiliApiClient.qualityLabel(result.stream().quality()) + " "
+                    + result.stream().displaySize() + ", avgDecode=" + formatMs(result.avgDecodeMs())
+                    + "ms, avgUpload=" + formatMs(result.avgUploadMs()) + "ms, fps="
+                    + String.format(Locale.ROOT, "%.1f", result.actualLoopFps()));
             if (isUsableForRequestedMode(result)) {
                 lastUsableResult = result;
                 if (isSmoothPlaybackResult(result)) {
@@ -134,9 +164,11 @@ public final class BiliRealVideoPlaybackBench {
                     demoResult = result;
                 }
             }
-            if (STOP_ON_THRESHOLD && shouldStopAfter(result)) {
+            if (!ignoreSlowFrames && shouldStopAfter(result)) {
                 LOGGER.warn("  达到停止阈值，终止后续更高质量真实视频测试。quality={}, stream={} {}",
                         quality, result.stream().quality(), result.stream().displaySize());
+                report(reporter, "B站真实解析Bench遇到过慢帧，停止后续更高画质："
+                        + BiliApiClient.qualityLabel(quality));
                 break;
             }
         }
@@ -144,7 +176,7 @@ public final class BiliRealVideoPlaybackBench {
         StageResult previewResult = PREVIEW_PREFER_DEMO && demoResult != null ? demoResult
                 : highestPlayableResult != null ? highestPlayableResult
                         : lastUsableNonDemoResult(lastUsableResult, demoResult);
-        if (!DECODE_ONLY && START_PREVIEW_AFTER_BENCH && previewResult != null) {
+        if (!commandMode && !DECODE_ONLY && START_PREVIEW_AFTER_BENCH && previewResult != null) {
             BiliApiClient.VideoStream stream = previewResult.stream();
             int previewFps = previewResult.outputFps();
             LOGGER.info("  Bench 后启动真实视频预览: quality={}, {}, {}, {}, fps={}, mode={}",
@@ -156,14 +188,19 @@ public final class BiliRealVideoPlaybackBench {
                         stream.baseUrl(), Math.max(1, stream.width()), Math.max(1, stream.height()), previewFps,
                         stream.codecId(), PREFER_NATIVE, decoderOverrideFor(stream));
             });
+        } else if (commandMode) {
+            Minecraft.getInstance().execute(VideoBillboardPreview::stop);
+            report(reporter, "B站真实解析Bench命令模式：已关闭/跳过持续预览");
         }
 
         LOGGER.info("══════════════════════════════════════════");
         LOGGER.info("  真实 B站视频播放 Bench 结束");
         LOGGER.info("══════════════════════════════════════════");
+        report(reporter, "B站真实解析Bench结束，详细报告见 latest.log");
     }
 
-    private static StageResult runQualityStage(BiliApiClient.VideoId vid, long cid, int quality) {
+    private static StageResult runQualityStage(BiliApiClient.VideoId vid, long cid, int quality,
+            Consumer<String> reporter) {
         BiliApiClient.VideoStream stream;
         try {
             long startMs = System.currentTimeMillis();
@@ -177,8 +214,12 @@ public final class BiliRealVideoPlaybackBench {
             LOGGER.info("  DASH URL 获取完成: urlPrefix={}, 耗时={}ms",
                     stream.baseUrl().substring(0, Math.min(120, stream.baseUrl().length())),
                     System.currentTimeMillis() - startMs);
+            report(reporter, "B站真实解析Bench DASH完成：" + BiliApiClient.qualityLabel(stream.quality())
+                    + " " + stream.displaySize() + " " + stream.codecName());
         } catch (Exception e) {
             LOGGER.error("  Real Stage q{} 获取 DASH 视频流失败", quality, e);
+            report(reporter, "B站真实解析Bench阶段失败：" + BiliApiClient.qualityLabel(quality)
+                    + " 获取 DASH 失败");
             return null;
         }
 
@@ -273,6 +314,11 @@ public final class BiliRealVideoPlaybackBench {
                             formatMs(totalNativeGetNs / 1_000_000.0 / Math.max(1, measuredFrames)),
                             formatMs(totalDecodeOtherNs / 1_000_000.0 / Math.max(1, measuredFrames)),
                             formatMs(totalUploadNs / 1_000_000.0 / Math.max(1, measuredFrames)));
+                    report(reporter, "B站真实解析Bench进度 " + BiliApiClient.qualityLabel(quality) + ": frames="
+                            + (i + 1) + "/" + FRAMES_PER_STAGE + ", avgDecode="
+                            + formatMs(totalDecodeNs / 1_000_000.0 / Math.max(1, measuredFrames))
+                            + "ms, avgUpload="
+                            + formatMs(totalUploadNs / 1_000_000.0 / Math.max(1, measuredFrames)) + "ms");
                 }
             }
         } catch (Exception e) {
@@ -354,6 +400,24 @@ public final class BiliRealVideoPlaybackBench {
         return String.format(Locale.ROOT, "%.2f", ms);
     }
 
+    private static String slowFramePolicy(boolean ignoreSlowFrames) {
+        return ignoreSlowFrames ? "忽略过慢帧" : "遇到过慢帧停止";
+    }
+
+    private static void report(Consumer<String> reporter, String message) {
+        if (reporter != null) {
+            reporter.accept(message);
+        }
+    }
+
+    private static void chat(String message) {
+        Minecraft.getInstance().execute(() -> {
+            if (Minecraft.getInstance().player != null) {
+                Minecraft.getInstance().player.sendSystemMessage(Component.literal(message));
+            }
+        });
+    }
+
     private static boolean isYuv420OutputRequested() {
         return OUTPUT_FORMAT.equals("yuv")
                 || OUTPUT_FORMAT.equals("yuv420")
@@ -411,7 +475,7 @@ public final class BiliRealVideoPlaybackBench {
     }
 
     private static boolean isNv12UvRg8Enabled() {
-        return Boolean.parseBoolean(System.getProperty("bili.video.nv12.uv_rg8", "true"));
+        return Boolean.parseBoolean(System.getProperty("ncpb.video.nv12.uv_rg8", "true"));
     }
 
     private static int outputFpsFor(BiliApiClient.VideoStream stream) {
@@ -475,7 +539,7 @@ public final class BiliRealVideoPlaybackBench {
             return lastUsableResult;
         }
         LOGGER.warn("  Bench 后预览跳过 4K/8K muscle demo，避免高分辨率上传拖慢游戏 FPS。"
-                + "如需强行预览，请设置 -Dbili.video.real_bench.preview.prefer_demo=true");
+                + "如需强行预览，请设置 -Dncpb.video.real_bench.preview.prefer_demo=true");
         return null;
     }
 
@@ -519,7 +583,7 @@ public final class BiliRealVideoPlaybackBench {
     }
 
     private static String decoderOverrideFor(BiliApiClient.VideoStream stream) {
-        String configured = System.getProperty("bili.video.ffmpeg.decoder", "").trim();
+        String configured = System.getProperty("ncpb.video.ffmpeg.decoder", "").trim();
         if (configured.isBlank()) {
             return null;
         }

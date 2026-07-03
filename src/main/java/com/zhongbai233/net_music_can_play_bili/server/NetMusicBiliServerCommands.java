@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.server;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistCsvExportPacket;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistReviewPacket;
@@ -9,10 +10,8 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.permissions.PermissionLevel;
-import net.minecraft.server.players.NameAndId;
-import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import net.neoforged.neoforge.network.PacketDistributor;
 import org.slf4j.Logger;
 
 import java.io.IOException;
@@ -26,29 +25,33 @@ import static net.minecraft.commands.Commands.argument;
 /** 用于管理/审计当前模组播放源的服务端命令。 */
 public final class NetMusicBiliServerCommands {
     private static final Logger LOGGER = LogUtils.getLogger();
-    public static final String ROOT_COMMAND = "netmusicbiliaudit";
+    public static final String ROOT_COMMAND = "netmusicbiliserver";
+    public static final String SHORT_ROOT_COMMAND = "ncpbs";
 
     private NetMusicBiliServerCommands() {
     }
 
     public static void onRegisterCommands(RegisterCommandsEvent event) {
         CommandDispatcher<CommandSourceStack> dispatcher = event.getDispatcher();
-        dispatcher.register(literal(ROOT_COMMAND)
-                .then(literal("audit")
-                        .then(literal("sources")
-                                .then(literal("limit")
-                                        .then(argument("count", integer(1, 100))
-                                                .executes(
-                                                        ctx -> listSources(ctx.getSource(), getInteger(ctx, "count")))))
-                                .executes(ctx -> listSources(ctx.getSource())))
-                        .executes(ctx -> listSources(ctx.getSource())))
+        dispatcher.register(serverRoot(ROOT_COMMAND));
+        dispatcher.register(serverRoot(SHORT_ROOT_COMMAND));
+        LOGGER.info("Registered server commands /{} and /{}", ROOT_COMMAND, SHORT_ROOT_COMMAND);
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> serverRoot(String name) {
+        return literal(name)
                 .then(literal("sources")
+                .requires(NetMusicBiliServerCommands::canAuditSources)
                         .then(literal("limit")
                                 .then(argument("count", integer(1, 100))
                                         .executes(ctx -> listSources(ctx.getSource(), getInteger(ctx, "count")))))
                         .executes(ctx -> listSources(ctx.getSource())))
+                .then(literal("pad")
+                .requires(NetMusicBiliServerCommands::canRefreshPad)
+                .then(literal("refresh")
+                    .executes(ctx -> refreshPadServerState(ctx.getSource()))))
                 .then(literal("whitelist")
-                        .requires(NetMusicBiliServerCommands::isOpLevelFourOrConsole)
+                .requires(NetMusicBiliServerCommands::canManageWhitelist)
                         .then(literal("add")
                                 .then(argument("idOrLink", StringArgumentType.greedyString())
                                         .executes(ctx -> addWhitelist(ctx.getSource(),
@@ -59,61 +62,28 @@ public final class NetMusicBiliServerCommands {
                                 .then(argument("idOrLink", StringArgumentType.greedyString())
                                         .executes(ctx -> removeWhitelist(ctx.getSource(),
                                                 StringArgumentType.getString(ctx, "idOrLink")))))
-                        .then(literal("delete")
-                                .then(argument("idOrLink", StringArgumentType.greedyString())
-                                        .executes(ctx -> removeWhitelist(ctx.getSource(),
-                                                StringArgumentType.getString(ctx, "idOrLink")))))
                         .then(literal("export")
                                 .executes(ctx -> exportWhitelist(ctx.getSource())))
-                        .then(literal("gui")
-                                .executes(ctx -> openWhitelistReview(ctx.getSource())))
                         .then(literal("review")
-                                .executes(ctx -> openWhitelistReview(ctx.getSource())))));
-        LOGGER.info("Registered server audit command /{}", ROOT_COMMAND);
+                                .executes(ctx -> openWhitelistReview(ctx.getSource()))));
     }
 
-    private static boolean isOpOrConsole(CommandSourceStack source) {
-        if (source == null) {
-            return false;
-        }
-        try {
-            var player = source.getPlayer();
-            if (player == null) {
-                return true;
-            }
-            NameAndId profile = new NameAndId(player.getGameProfile());
-            return source.getServer().isSingleplayerOwner(profile)
-                    || isOpLevelTwoOrHigher(source.getServer().getProfilePermissions(profile).level());
-        } catch (Exception ignored) {
-            return true;
-        }
+    private static int refreshPadServerState(CommandSourceStack source) {
+        source.sendSuccess(() -> Component.literal("Pad服务端临时状态已刷新。客户端地图缓存请使用 /ncpbc pad cache refresh。")
+                .withStyle(ChatFormatting.GREEN), true);
+        return 1;
     }
 
-    private static boolean isOpLevelTwoOrHigher(PermissionLevel level) {
-        return level == PermissionLevel.GAMEMASTERS
-                || level == PermissionLevel.ADMINS
-                || level == PermissionLevel.OWNERS;
+    private static boolean canAuditSources(CommandSourceStack source) {
+        return NetMusicPermissions.has(source, NetMusicPermissions.AUDIT_SOURCES);
     }
 
-    private static boolean isOpLevelFourOrConsole(CommandSourceStack source) {
-        return canManageWhitelist(source);
+    private static boolean canRefreshPad(CommandSourceStack source) {
+        return NetMusicPermissions.has(source, NetMusicPermissions.PAD_REFRESH);
     }
 
     public static boolean canManageWhitelist(CommandSourceStack source) {
-        if (source == null) {
-            return false;
-        }
-        try {
-            var player = source.getPlayer();
-            if (player == null) {
-                return true;
-            }
-            NameAndId profile = new NameAndId(player.getGameProfile());
-            return source.getServer().isSingleplayerOwner(profile)
-                    || source.getServer().getProfilePermissions(profile).level() == PermissionLevel.OWNERS;
-        } catch (Exception ignored) {
-            return true;
-        }
+        return NetMusicPermissions.has(source, NetMusicPermissions.WHITELIST_MANAGE);
     }
 
     private static int listSources(CommandSourceStack source) {
@@ -121,7 +91,7 @@ public final class NetMusicBiliServerCommands {
     }
 
     private static int listSources(CommandSourceStack source, int limit) {
-        if (!isOpOrConsole(source)) {
+        if (!canAuditSources(source)) {
             source.sendFailure(Component.literal("需要 OP2 权限才能查询正在播放的音源。")
                     .withStyle(ChatFormatting.RED));
             return 0;

@@ -46,9 +46,9 @@ public final class BiliApiClient {
     private static final int[] BEST_AUDIO_ORDER = { 30250, 30251, 30280, 30232, 30216 };
     private static final Duration SHORT_LINK_TIMEOUT = Duration.ofSeconds(5);
     // B站 SESSDATA Cookie，扫码登录后自动获取
-    public static volatile String sessdata = System.getProperty("bili.sessdata", "");
+    public static volatile String sessdata = System.getProperty("ncpb.bili.sessdata", "");
     // 扫码登录返回的完整 Web Cookie，可包含 buvid/bili_jct/DedeUserID 等降低风控概率的字段。
-    public static volatile String webCookie = System.getProperty("bili.cookie", "");
+    public static volatile String webCookie = System.getProperty("ncpb.bili.cookie", "");
 
     private BiliApiClient() {
     }
@@ -465,7 +465,7 @@ public final class BiliApiClient {
             }
         }
 
-        String configuredAudioPreference = System.getProperty("bili.audio.preference", "auto")
+        String configuredAudioPreference = System.getProperty("ncpb.bili.audio.preference", "auto")
                 .trim().toLowerCase(java.util.Locale.ROOT);
         boolean allowFlac = configuredAudioPreference.equals("auto")
                 || configuredAudioPreference.equals("dolby")

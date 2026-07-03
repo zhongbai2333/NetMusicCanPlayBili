@@ -20,13 +20,13 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class ModernTurntableTimeline {
     private static final boolean AUDIO_ANCHORED_LOCAL_TIMELINE = Boolean.parseBoolean(
-            System.getProperty("bili.turntable.timeline.audio_anchor", "true"));
+            System.getProperty("ncpb.turntable.timeline.audio_anchor", "true"));
     private static final long AUDIO_ANCHOR_MAX_LAG_MILLIS = Long.getLong(
-            "bili.turntable.timeline.audio_anchor_max_lag_ms", 2_000L);
+            "ncpb.turntable.timeline.audio_anchor_max_lag_ms", 2_000L);
     private static final long AUDIO_ANCHOR_MAX_LEAD_MILLIS = Long.getLong(
-            "bili.turntable.timeline.audio_anchor_max_lead_ms", 500L);
+            "ncpb.turntable.timeline.audio_anchor_max_lead_ms", 500L);
     private static final long CLOCK_PRUNE_INTERVAL_NANOS = Math.max(1_000L,
-            Long.getLong("bili.turntable.timeline.clock_prune_interval_ms", 30_000L)) * 1_000_000L;
+            Long.getLong("ncpb.turntable.timeline.clock_prune_interval_ms", 30_000L)) * 1_000_000L;
     private static final ConcurrentHashMap<BlockPos, MediaTimelineClock> CLOCKS = new ConcurrentHashMap<>();
     private static volatile long lastClockPruneNanos;
 

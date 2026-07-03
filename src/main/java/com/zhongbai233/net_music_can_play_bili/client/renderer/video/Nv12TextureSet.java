@@ -11,7 +11,7 @@ import java.nio.ByteBuffer;
  */
 public final class Nv12TextureSet implements VideoYuvTextureSet {
     private static final boolean PBO_UPLOAD = Boolean.parseBoolean(
-            System.getProperty("bili.video.nv12.pbo", "true"));
+            System.getProperty("ncpb.video.nv12.pbo", "true"));
     private final Identifier yId;
     private final Identifier uvId;
     private final Identifier placeholderId;

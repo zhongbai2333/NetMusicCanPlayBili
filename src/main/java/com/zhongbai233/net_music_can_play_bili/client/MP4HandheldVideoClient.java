@@ -46,9 +46,9 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class MP4HandheldVideoClient {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final HandheldVideoPipelineConfig CONFIG = HandheldVideoPipelineConfig.fromSystemProperties(
-            "netmusic.mp4.video");
+            "ncpb.mp4.video");
     private static final int MAX_VIDEO_THREADS = Math.max(2,
-            Integer.getInteger("netmusic.mp4.video.max_threads", 4));
+            Integer.getInteger("ncpb.mp4.video.max_threads", 4));
     private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(MAX_VIDEO_THREADS,
             new Mp4VideoThreadFactory());
     private static final Map<UUID, DeviceVideoState> STATES = new ConcurrentHashMap<>();

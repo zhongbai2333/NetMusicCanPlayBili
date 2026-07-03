@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class CdnUrlFallbacks {
     private static final long TTL_MILLIS = TimeUnit.MINUTES.toMillis(30);
-    private static final int MAX_GROUPS = Integer.getInteger("bili.cdn_fallback.max_groups", 512);
+    private static final int MAX_GROUPS = Integer.getInteger("ncpb.bili.cdn_fallback.max_groups", 512);
     private static final ConcurrentHashMap<String, UrlGroup> GROUPS_BY_URL = new ConcurrentHashMap<>();
 
     private CdnUrlFallbacks() {

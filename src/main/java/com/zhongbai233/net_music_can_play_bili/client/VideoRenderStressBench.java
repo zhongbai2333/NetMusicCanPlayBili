@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.client;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -10,6 +11,7 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 import org.slf4j.Logger;
 
 import java.util.Locale;
+import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -19,18 +21,18 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class VideoRenderStressBench {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final boolean BENCH_FEATURES_ENABLED = VideoFeatureFlags.benchFeaturesEnabled();
-    private static final boolean ENABLED = VideoFeatureFlags.advancedBoolean("bili.video.render_bench", false);
-    private static final int TARGET_FPS = VideoFeatureFlags.advancedInt("bili.video.render_bench.fps", 30);
+    private static final boolean ENABLED = VideoFeatureFlags.advancedBoolean("ncpb.video.render_bench", false);
+    private static final int TARGET_FPS = VideoFeatureFlags.advancedInt("ncpb.video.render_bench.fps", 30);
     private static final int[] UPLOAD_FPS_STEPS = parseUploadFpsSteps(
-            VideoFeatureFlags.advancedString("bili.video.render_bench.upload_fps_steps", "30,24,15"));
-    private static final int FRAMES_PER_STAGE = VideoFeatureFlags.advancedInt("bili.video.render_bench.frames", 120);
+            VideoFeatureFlags.advancedString("ncpb.video.render_bench.upload_fps_steps", "30,24,15"));
+    private static final int FRAMES_PER_STAGE = VideoFeatureFlags.advancedInt("ncpb.video.render_bench.frames", 120);
     private static final String UPLOAD_MODE = VideoFeatureFlags
-            .advancedString("bili.video.render_bench.upload_mode", "nv12")
+            .advancedString("ncpb.video.render_bench.upload_mode", "nv12")
             .trim().toLowerCase(Locale.ROOT);
     private static final double STOP_AVG_UPLOAD_MS = Double.parseDouble(
-            VideoFeatureFlags.advancedString("bili.video.render_bench.stop_avg_upload_ms", "45"));
+            VideoFeatureFlags.advancedString("ncpb.video.render_bench.stop_avg_upload_ms", "45"));
     private static final double STOP_MAX_UPLOAD_MS = Double.parseDouble(
-            VideoFeatureFlags.advancedString("bili.video.render_bench.stop_max_upload_ms", "120"));
+            VideoFeatureFlags.advancedString("ncpb.video.render_bench.stop_max_upload_ms", "120"));
 
     private static final Stage[] STAGES = {
             new Stage("480p", 854, 480),
@@ -55,7 +57,7 @@ public final class VideoRenderStressBench {
         if (!ENABLED) {
             return;
         }
-        if (VideoFeatureFlags.advancedBoolean("bili.video.real_bench", false)) {
+        if (VideoFeatureFlags.advancedBoolean("ncpb.video.real_bench", false)) {
             return;
         }
         Minecraft mc = Minecraft.getInstance();
@@ -65,18 +67,34 @@ public final class VideoRenderStressBench {
         if (!started.compareAndSet(false, true)) {
             return;
         }
-        Thread thread = new Thread(VideoRenderStressBench::runBench, "bili-video-render-stress-bench");
+        Thread thread = new Thread(() -> runBench(false), "bili-video-render-stress-bench");
         thread.setDaemon(true);
         thread.start();
     }
 
-    private static void runBench() {
+    public static boolean startCommand(boolean ignoreSlowFrames) {
+        if (!started.compareAndSet(false, true)) {
+            return false;
+        }
+        Thread thread = new Thread(() -> runBench(ignoreSlowFrames, VideoRenderStressBench::chat),
+                "bili-video-render-stress-bench-command");
+        thread.setDaemon(true);
+        thread.start();
+        return true;
+    }
+
+    private static void runBench(boolean ignoreSlowFrames) {
+        runBench(ignoreSlowFrames, null);
+    }
+
+    private static void runBench(boolean ignoreSlowFrames, Consumer<String> reporter) {
         LOGGER.info("══════════════════════════════════════════");
         LOGGER.info("  视频渲染/上传压力 Bench 开始");
+        report(reporter, "CPU彩条Bench开始：" + slowFramePolicy(ignoreSlowFrames));
         LOGGER.info(
-                "  gameLoopFps={}, uploadFpsSteps={}, frames/stage={}, uploadMode={}, stopAvgUpload={}ms, stopMaxUpload={}ms",
+                "  gameLoopFps={}, uploadFpsSteps={}, frames/stage={}, uploadMode={}, stopAvgUpload={}ms, stopMaxUpload={}ms, ignoreSlowFrames={}",
                 TARGET_FPS, java.util.Arrays.toString(UPLOAD_FPS_STEPS), FRAMES_PER_STAGE,
-                UPLOAD_MODE, STOP_AVG_UPLOAD_MS, STOP_MAX_UPLOAD_MS);
+                UPLOAD_MODE, STOP_AVG_UPLOAD_MS, STOP_MAX_UPLOAD_MS, ignoreSlowFrames);
         LOGGER.info("  路线: CPU 测试帧 → GPU texture upload → SubmitCustomGeometry");
         LOGGER.info("  模式: rgba=真实 RGBA 全帧上传；yuv420=YUV420P 三平面 RED8；nv12=NV12 双平面上传（默认走 PBO）");
         LOGGER.info("══════════════════════════════════════════");
@@ -84,14 +102,21 @@ public final class VideoRenderStressBench {
         try {
             for (int uploadFps : UPLOAD_FPS_STEPS) {
                 LOGGER.info("════════════ Upload FPS Strategy: {} fps ════════════", uploadFps);
+                report(reporter, "CPU彩条Bench：上传策略 " + uploadFps + "fps");
                 for (UploadKind kind : UploadKind.enabledKinds(UPLOAD_MODE)) {
                     LOGGER.info("════════════ Upload Mode: {} ════════════", kind.displayName());
+                    report(reporter, "CPU彩条Bench：模式 " + kind.displayName());
                     for (Stage stage : STAGES) {
-                        StageResult result = runStage(stage, uploadFps, kind);
+                        StageResult result = runStage(stage, uploadFps, kind, reporter);
                         logResult(stage, uploadFps, kind, result);
-                        if (result.avgUploadMs() >= STOP_AVG_UPLOAD_MS || result.maxUploadMs() >= STOP_MAX_UPLOAD_MS) {
+                        report(reporter, "CPU彩条Bench结果 " + stage.name() + " " + kind.displayName()
+                                + ": avgUpload=" + formatMs(result.avgUploadMs()) + "ms, maxUpload="
+                                + formatMs(result.maxUploadMs()) + "ms, uploads=" + result.uploads());
+                        if (!ignoreSlowFrames && (result.avgUploadMs() >= STOP_AVG_UPLOAD_MS
+                            || result.maxUploadMs() >= STOP_MAX_UPLOAD_MS)) {
                             LOGGER.warn("  达到停止阈值，终止当前 uploadFps={} mode={} 后续更高分辨率测试。stage={}",
                                     uploadFps, kind.displayName(), stage.name());
+                            report(reporter, "CPU彩条Bench遇到过慢帧，停止后续更高分辨率：" + stage.name());
                             break;
                         }
                     }
@@ -101,10 +126,11 @@ public final class VideoRenderStressBench {
             LOGGER.info("══════════════════════════════════════════");
             LOGGER.info("  视频渲染/上传压力 Bench 结束");
             LOGGER.info("══════════════════════════════════════════");
+            report(reporter, "CPU彩条Bench结束，详细日志见 latest.log");
         }
     }
 
-    private static StageResult runStage(Stage stage, int uploadFps, UploadKind kind) {
+    private static StageResult runStage(Stage stage, int uploadFps, UploadKind kind, Consumer<String> reporter) {
         UploadShape uploadShape = kind.uploadShape(stage.width(), stage.height());
         int frameSize = uploadShape.byteCount();
         byte[] frame = new byte[frameSize];
@@ -120,6 +146,8 @@ public final class VideoRenderStressBench {
         LOGGER.info("─────────────── Stage {} {}x{} @ upload {}fps mode={} uploadTexture={}x{} ───────────────",
                 stage.name(), stage.width(), stage.height(), uploadFps, kind.displayName(),
                 uploadShape.textureWidth(), uploadShape.textureHeight());
+        report(reporter, "CPU彩条Bench阶段：" + stage.name() + " " + stage.width() + "x" + stage.height()
+            + " @ upload " + uploadFps + "fps / " + kind.displayName());
         long stageStartNs = System.nanoTime();
         for (int i = 0; i < FRAMES_PER_STAGE; i++) {
             long frameStartNs = System.nanoTime();
@@ -144,6 +172,8 @@ public final class VideoRenderStressBench {
             if ((i + 1) % Math.max(1, FRAMES_PER_STAGE / 4) == 0) {
                 LOGGER.info("  Stage {} 进度: loopFrames={}/{}, uploads={}",
                         stage.name(), i + 1, FRAMES_PER_STAGE, uploaded);
+                report(reporter, "CPU彩条Bench进度 " + stage.name() + ": " + (i + 1) + "/"
+                    + FRAMES_PER_STAGE + ", uploads=" + uploaded);
             }
 
             long elapsedMs = (System.nanoTime() - frameStartNs) / 1_000_000L;
@@ -402,6 +432,24 @@ public final class VideoRenderStressBench {
         return String.format(Locale.ROOT, "%.2f", ms);
     }
 
+    private static String slowFramePolicy(boolean ignoreSlowFrames) {
+        return ignoreSlowFrames ? "忽略过慢帧" : "遇到过慢帧停止";
+    }
+
+    private static void report(Consumer<String> reporter, String message) {
+        if (reporter != null) {
+            reporter.accept(message);
+        }
+    }
+
+    private static void chat(String message) {
+        Minecraft.getInstance().execute(() -> {
+            if (Minecraft.getInstance().player != null) {
+                Minecraft.getInstance().player.sendSystemMessage(Component.literal(message));
+            }
+        });
+    }
+
     private record Stage(String name, int width, int height) {
     }
 
@@ -502,7 +550,7 @@ public final class VideoRenderStressBench {
         }
 
         private static boolean isNv12UvRg8Enabled() {
-            return Boolean.parseBoolean(System.getProperty("bili.video.nv12.uv_rg8", "true"));
+            return Boolean.parseBoolean(System.getProperty("ncpb.video.nv12.uv_rg8", "true"));
         }
     }
 

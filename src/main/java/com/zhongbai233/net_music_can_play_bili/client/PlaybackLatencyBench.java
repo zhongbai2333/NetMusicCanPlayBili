@@ -12,20 +12,20 @@ import java.util.concurrent.atomic.AtomicLong;
  * 端到端播放延迟 bench
  *
  * <p>
- * 默认关闭。需同时启用 {@code -Dbili.video.advanced_features=true}
- * 与 {@code -Dbili.video.enable_bench_features=true}，再用
- * {@code -Dbili.playback.bench=true}
+ * 默认关闭。需同时启用 {@code -Dncpb.video.advanced_features=true}
+ * 与 {@code -Dncpb.video.enable_bench_features=true}，再用
+ * {@code -Dncpb.playback.bench=true}
  * 打开后，才会做低频采样日志；不参与同步决策。
  * </p>
  */
 public final class PlaybackLatencyBench {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final boolean ENABLED = VideoFeatureFlags.benchFeaturesEnabled()
-            && VideoFeatureFlags.advancedBoolean("bili.playback.bench", false);
+            && VideoFeatureFlags.advancedBoolean("ncpb.playback.bench", false);
     private static final boolean PASSIVE_SUMMARY_LOGS = VideoFeatureFlags.benchFeaturesEnabled()
-            && VideoFeatureFlags.advancedBoolean("bili.playback.bench.passive_log", false);
+            && VideoFeatureFlags.advancedBoolean("ncpb.playback.bench.passive_log", false);
     private static final long LOG_INTERVAL_NANOS = Math.max(250L,
-            VideoFeatureFlags.advancedLong("bili.playback.bench.interval_ms", 3_000L)) * 1_000_000L;
+            VideoFeatureFlags.advancedLong("ncpb.playback.bench.interval_ms", 3_000L)) * 1_000_000L;
 
     private static final Map<String, VideoProbe> VIDEO = new ConcurrentHashMap<>();
     private static final Map<Integer, AudioProbe> AUDIO = new ConcurrentHashMap<>();
@@ -257,7 +257,7 @@ public final class PlaybackLatencyBench {
             return;
         }
         if (VIDEO.isEmpty() && AUDIO.isEmpty()) {
-            LOGGER.info("播放延迟Bench: 暂无采样；确认已加 -Dbili.playback.bench=true 并开始播放");
+            LOGGER.info("播放延迟Bench: 暂无采样；确认已加 -Dncpb.playback.bench=true 并开始播放");
             return;
         }
         for (VideoProbe v : VIDEO.values()) {

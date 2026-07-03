@@ -21,9 +21,9 @@ public final class BiliConfig {
     public static volatile int dolbyMaxObjectSources = 64;
     public static volatile double stereoCrossfeed = 0.16;
     /** 可手动粘贴浏览器 navigator.userAgent，用于规避 B站 CDN 对旧 UA/异常 UA 的风控。 */
-    public static volatile String userAgent = System.getProperty("bili.user_agent", "");
+    public static volatile String userAgent = System.getProperty("ncpb.bili.user_agent", "");
     /** 诊断开关：为空 userAgent 时进程启动随机选一个桌面 UA；B站 CDN 频繁 403 后切换到下一个。 */
-    public static volatile boolean rotateUserAgent = Boolean.getBoolean("bili.rotate_user_agent");
+    public static volatile boolean rotateUserAgent = Boolean.getBoolean("ncpb.bili.rotate_user_agent");
 
     private BiliConfig() {
     }

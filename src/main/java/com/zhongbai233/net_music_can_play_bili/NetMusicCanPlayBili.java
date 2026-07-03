@@ -14,6 +14,9 @@ import com.zhongbai233.net_music_can_play_bili.init.ModMenus;
 import com.zhongbai233.net_music_can_play_bili.network.ModernTurntableNetwork;
 import com.zhongbai233.net_music_can_play_bili.media.stream.TempFileByteSpool;
 import com.zhongbai233.net_music_can_play_bili.server.NetMusicBiliServerCommands;
+import com.zhongbai233.net_music_can_play_bili.server.NetMusicPermissions;
+import com.zhongbai233.net_music_can_play_bili.server.PadMapScopeSync;
+import com.zhongbai233.net_music_can_play_bili.server.PadMapSamplerServerSelfTest;
 import com.zhongbai233.net_music_can_play_bili.server.PlaybackAuditManager;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
@@ -40,7 +43,10 @@ public class NetMusicCanPlayBili {
         ModMenus.MENU_TYPES.register(modEventBus);
         modEventBus.addListener(ModernTurntableNetwork::register);
         modEventBus.addListener(RegisterCapabilitiesEvent.class, this::registerCapabilities);
+        NeoForge.EVENT_BUS.addListener(NetMusicPermissions::onPermissionGather);
         NeoForge.EVENT_BUS.addListener(NetMusicBiliServerCommands::onRegisterCommands);
+        NeoForge.EVENT_BUS.addListener(PadMapScopeSync::onPlayerLoggedIn);
+        NeoForge.EVENT_BUS.addListener(PadMapSamplerServerSelfTest::onServerStarted);
         NeoForge.EVENT_BUS.addListener(PlaybackAuditManager::onServerTick);
         NeoForge.EVENT_BUS.addListener(PlaybackAuditManager::onPlayerLoggedIn);
 
@@ -63,4 +69,5 @@ public class NetMusicCanPlayBili {
                 ModBlockEntities.MODERN_TURNTABLE.get(),
                 (turntable, side) -> turntable.getItemHandler());
     }
+
 }

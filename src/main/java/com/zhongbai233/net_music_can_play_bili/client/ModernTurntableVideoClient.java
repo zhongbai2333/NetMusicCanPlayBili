@@ -37,14 +37,14 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class ModernTurntableVideoClient {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final boolean ENABLED = Boolean.parseBoolean(
-            System.getProperty("bili.video.turntable.enabled", "true"));
+            System.getProperty("ncpb.video.turntable.enabled", "true"));
     private static final int DEFAULT_PREFERRED_QUALITY = VideoFeatureFlags.advancedInt("bili.video.turntable.quality",
             116);
     private static final int DEFAULT_FPS = VideoFeatureFlags.advancedInt("bili.video.turntable.default_fps", 60);
     private static final boolean PREFER_NATIVE = VideoFeatureFlags.advancedBoolean("bili.video.projector.native", true);
     private static final boolean LOG_SYNC_DECISIONS = VideoFeatureFlags.advancedBoolean(
             "bili.video.turntable.log_sync_decisions", false);
-    private static final String DECODER_OVERRIDE = VideoFeatureFlags.advancedString("bili.video.ffmpeg.decoder", "")
+    private static final String DECODER_OVERRIDE = VideoFeatureFlags.advancedString("ncpb.video.ffmpeg.decoder", "")
             .trim();
     private static final int VIDEO_RESOLVE_THREADS = Math.max(1, Integer.getInteger(
             "bili.video.turntable.resolve_threads", 2));
@@ -161,12 +161,6 @@ public final class ModernTurntableVideoClient {
         }
         String sessionId = sync.sessionId();
         BlockPos immutableTurntablePos = turntablePos != null ? turntablePos.immutable() : null;
-        String currentSessionId = currentSessionForTurntable(immutableTurntablePos);
-        if (currentSessionId != null && !sessionId.equals(currentSessionId)) {
-            logDecision(sessionId, "drop-stale-session", turntablePos, sync.elapsedMillis(), 0, 0, 0L,
-                    "currentSession=" + currentSessionId);
-            return;
-        }
         if (immutableTurntablePos != null) {
             LATEST_SESSION_BY_TURNTABLE.put(immutableTurntablePos, sessionId);
         }
@@ -350,23 +344,6 @@ public final class ModernTurntableVideoClient {
             ACTIVE_SESSION_BY_TURNTABLE.put(turntablePos, sessionId);
             LATEST_SESSION_BY_TURNTABLE.put(turntablePos, sessionId);
         }
-    }
-
-    private static String currentSessionForTurntable(BlockPos turntablePos) {
-        if (turntablePos == null) {
-            return null;
-        }
-        Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.level != null) {
-            BlockEntity blockEntity = minecraft.level.getBlockEntity(turntablePos);
-            if (blockEntity instanceof ModernTurntableBlockEntity turntable && turntable.isPlaying()) {
-                PlaybackSync.Metadata current = turntable.getPlaybackSyncMetadata(turntable.getLevel().getGameTime());
-                if (current.hasSession()) {
-                    return current.sessionId();
-                }
-            }
-        }
-        return LATEST_SESSION_BY_TURNTABLE.get(turntablePos);
     }
 
     private static int qualityCeiling(List<VideoProjectorBlockEntity> projectors) {

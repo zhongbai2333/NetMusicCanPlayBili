@@ -22,10 +22,10 @@ import net.minecraft.client.Minecraft;
 public final class MediaTimelineClock {
     public static final long DEFAULT_HARD_SYNC_THRESHOLD_MILLIS = Long.getLong(
             "bili.media.timeline.hard_sync_ms",
-            Long.getLong("bili.turntable.timeline.hard_sync_ms", 1_500L));
+            Long.getLong("ncpb.turntable.timeline.hard_sync_ms", 1_500L));
     public static final long DEFAULT_MAX_SMOOTH_CORRECTION_MILLIS = Long.getLong(
             "bili.media.timeline.max_smooth_correction_ms",
-            Long.getLong("bili.turntable.timeline.max_smooth_correction_ms", 80L));
+            Long.getLong("ncpb.turntable.timeline.max_smooth_correction_ms", 80L));
     public static final double DEFAULT_SMOOTH_CORRECTION_RATIO = parseSmoothCorrectionRatio();
 
     private final String sessionId;
@@ -190,8 +190,8 @@ public final class MediaTimelineClock {
     }
 
     private static double parseSmoothCorrectionRatio() {
-        String raw = System.getProperty("bili.media.timeline.smooth_correction_ratio",
-                System.getProperty("bili.turntable.timeline.smooth_correction_ratio", "0.12"));
+        String raw = System.getProperty("ncpb.media.timeline.smooth_correction_ratio",
+                System.getProperty("ncpb.turntable.timeline.smooth_correction_ratio", "0.12"));
         try {
             double parsed = Double.parseDouble(raw);
             if (!Double.isFinite(parsed)) {

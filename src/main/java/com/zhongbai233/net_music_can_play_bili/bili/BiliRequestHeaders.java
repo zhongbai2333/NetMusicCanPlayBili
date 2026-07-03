@@ -30,7 +30,7 @@ public final class BiliRequestHeaders {
             ThreadLocalRandom.current().nextInt(DESKTOP_USER_AGENT_PRESETS.length));
     private static final AtomicInteger BILI_CDN_403_COUNT = new AtomicInteger();
     private static final int UA_SWITCH_403_THRESHOLD = Math.max(1,
-            Integer.getInteger("bili.user_agent.switch_403_threshold", 3));
+            Integer.getInteger("ncpb.ncpb.bili.user_agent.switch_403_threshold", 3));
 
     private BiliRequestHeaders() {
     }

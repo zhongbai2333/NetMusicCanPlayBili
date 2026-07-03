@@ -6,13 +6,13 @@ import java.util.Locale;
  * 视频播放功能开关与可选诊断参数入口
  */
 public final class VideoFeatureFlags {
-    public static final boolean ADVANCED_FEATURES = Boolean.getBoolean("bili.video.advanced_features");
+    public static final boolean ADVANCED_FEATURES = Boolean.getBoolean("ncpb.video.advanced_features");
 
     private VideoFeatureFlags() {
     }
 
     public static boolean benchFeaturesEnabled() {
-        return ADVANCED_FEATURES && Boolean.getBoolean("bili.video.enable_bench_features");
+        return ADVANCED_FEATURES && Boolean.getBoolean("ncpb.video.enable_bench_features");
     }
 
     public static boolean advancedBoolean(String key, boolean defaultValue) {
@@ -47,7 +47,7 @@ public final class VideoFeatureFlags {
         if (!ADVANCED_FEATURES) {
             return autoHwaccelCandidates();
         }
-        String raw = System.getProperty("bili.video.native.hwaccel", "auto").trim();
+        String raw = System.getProperty("ncpb.video.native.hwaccel", "auto").trim();
         if (raw.isBlank() || "auto".equalsIgnoreCase(raw)) {
             return autoHwaccelCandidates();
         }

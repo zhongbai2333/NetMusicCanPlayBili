@@ -44,70 +44,80 @@ neoForge {
             // 限定 GameTest 命名空间，减少开发客户端扫描量。
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
             // 正式播放默认走 NV12 direct-buffer + PBO + shader；Bench 均默认关闭，按需用 -P... 显式打开。
-            jvmProp 'bili.video.advanced_features', prop('biliAdvancedVideoFeatures', 'false')
-            jvmProp 'bili.video.enable_bench_features', prop('biliBenchFeatures', 'false')
-            jvmProp 'bili.video.render.backend', prop('biliVideoRenderBackend', 'nv12')
+            jvmProp 'ncpb.video.advanced_features', prop('ncpbVideoAdvancedFeatures', 'false')
+            jvmProp 'ncpb.video.enable_bench_features', prop('ncpbVideoBenchFeatures', 'false')
+            jvmProp 'ncpb.video.render.backend', prop('ncpbVideoRenderBackend', 'nv12')
 
-            // 默认播放器优先使用已验证的 NV12 双平面路径；需要排查时可通过 -PbiliVideoRenderBackend=rgba/yuv420 回退。
-            jvmProp 'bili.video.iris.force_yuv_shader', prop('biliIrisForceYuvShader', 'true')
-            jvmProp 'bili.video.iris.allow_three_plane', prop('biliIrisAllowThreePlane', 'true')
-            jvmProp 'bili.video.iris.program', prop('biliIrisYuvProgram', 'ENTITIES_TRANSLUCENT')
-            jvmProp 'bili.video.iris.yuv_bypass', prop('biliIrisYuvBypass', 'true')
-            jvmArgument '-Dbili.video.yuv.upload_planes=true'
-            jvmProp 'bili.video.yuv.no_depth_write', prop('biliYuvNoDepthWrite', 'false')
-            jvmProp 'bili.video.yuv.immediate_stage', prop('biliYuvImmediateStage', 'after_level')
-            jvmProp 'bili.video.yuv.immediate_coords', prop('biliYuvImmediateCoords', 'camera_relative')
-            jvmProp 'bili.video.yuv.immediate_pose', prop('biliYuvImmediatePose', 'identity')
-            jvmProp 'bili.video.yuv.visibility_probe', prop('biliYuvVisibilityProbe', 'false')
-            jvmProp 'bili.video.yuv.debug_log', prop('biliYuvDebugLog', 'false')
-            def irisShaderKey = providers.gradleProperty('biliIrisShaderKey')
+            // 默认播放器优先使用已验证的 NV12 双平面路径；需要排查时可通过 -PncpbVideoRenderBackend=rgba/yuv420 回退。
+            jvmProp 'ncpb.video.iris.force_yuv_shader', prop('ncpbIrisForceYuvShader', 'true')
+            jvmProp 'ncpb.video.iris.allow_three_plane', prop('ncpbIrisAllowThreePlane', 'true')
+            jvmProp 'ncpb.video.iris.program', prop('ncpbIrisYuvProgram', 'ENTITIES_TRANSLUCENT')
+            jvmProp 'ncpb.video.iris.yuv_bypass', prop('ncpbIrisYuvBypass', 'true')
+            jvmArgument '-Dncpb.video.yuv.upload_planes=true'
+            jvmProp 'ncpb.video.yuv.no_depth_write', prop('ncpbYuvNoDepthWrite', 'false')
+            jvmProp 'ncpb.video.yuv.immediate_stage', prop('ncpbYuvImmediateStage', 'after_level')
+            jvmProp 'ncpb.video.yuv.immediate_coords', prop('ncpbYuvImmediateCoords', 'camera_relative')
+            jvmProp 'ncpb.video.yuv.immediate_pose', prop('ncpbYuvImmediatePose', 'identity')
+            jvmProp 'ncpb.video.yuv.visibility_probe', prop('ncpbYuvVisibilityProbe', 'false')
+            jvmProp 'ncpb.video.yuv.debug_log', prop('ncpbYuvDebugLog', 'false')
+            def irisShaderKey = providers.gradleProperty('ncpbIrisShaderKey')
             if (irisShaderKey.isPresent()) {
-                jvmProp 'bili.video.iris.shader_key', irisShaderKey.get()
+                jvmProp 'ncpb.video.iris.shader_key', irisShaderKey.get()
             }
-            def yuvShaderDebug = providers.gradleProperty('biliYuvShaderDebug')
+            def yuvShaderDebug = providers.gradleProperty('ncpbYuvShaderDebug')
             if (yuvShaderDebug.isPresent()) {
-                jvmProp 'bili.video.yuv.shader_debug', yuvShaderDebug.get()
+                jvmProp 'ncpb.video.yuv.shader_debug', yuvShaderDebug.get()
             }
 
             // 延迟测试 Bench：低频采样视频队列/上传/提交与 OpenAL 消费，不参与同步决策。
-            jvmProp 'bili.playback.bench', prop('biliPlaybackLatencyBench', 'false')
-            jvmProp 'bili.playback.bench.interval_ms', prop('biliPlaybackLatencyIntervalMs', '3000')
+            jvmProp 'ncpb.playback.bench', prop('ncpbPlaybackLatencyBench', 'false')
+            jvmProp 'ncpb.playback.bench.interval_ms', prop('ncpbPlaybackLatencyIntervalMs', '3000')
 
             // B站真实压力 Bench：按画质阶梯获取真实 DASH，测解码 + 上传 + 可选预览。
-            jvmProp 'bili.video.real_bench', prop('biliRealBench', 'false')
-            jvmProp 'bili.video.real_bench.bv', prop('biliBenchVideo', 'BV1qM4y1w716')
-            jvmProp 'bili.video.real_bench.frames', prop('biliRealBenchFrames', '12')
-            jvmProp 'bili.video.real_bench.warmup_frames', prop('biliRealBenchWarmupFrames', '2')
-            jvmProp 'bili.video.real_bench.output_format', prop('biliRealBenchOutputFormat', 'nv12')
-            jvmProp 'bili.video.real_bench.preview', prop('biliRealBenchPreview', 'false')
-            jvmProp 'bili.video.real_bench.realtime', prop('biliRealBenchRealtime', 'false')
-            jvmProp 'bili.video.real_bench.max_fps', prop('biliRealBenchMaxFps', '30')
-            jvmProp 'bili.video.real_bench.qualities', prop('biliRealBenchQualities', '16')
+            jvmProp 'ncpb.video.real_bench', prop('ncpbRealBench', 'false')
+            jvmProp 'ncpb.video.real_bench.bv', prop('ncpbBenchVideo', 'BV1qM4y1w716')
+            jvmProp 'ncpb.video.real_bench.frames', prop('ncpbRealBenchFrames', '12')
+            jvmProp 'ncpb.video.real_bench.warmup_frames', prop('ncpbRealBenchWarmupFrames', '2')
+            jvmProp 'ncpb.video.real_bench.output_format', prop('ncpbRealBenchOutputFormat', 'nv12')
+            jvmProp 'ncpb.video.real_bench.preview', prop('ncpbRealBenchPreview', 'false')
+            jvmProp 'ncpb.video.real_bench.realtime', prop('ncpbRealBenchRealtime', 'false')
+            jvmProp 'ncpb.video.real_bench.max_fps', prop('ncpbRealBenchMaxFps', '30')
+            jvmProp 'ncpb.video.real_bench.qualities', prop('ncpbRealBenchQualities', '16')
 
-            // FFmpeg/native 解码默认参数；普通播放走平台 auto，必要时可用 -PbiliNativeHwaccel=d3d11va/vaapi/none 覆盖。
-            jvmProp 'bili.video.native.hwaccel', prop('biliNativeHwaccel', 'auto')
+            // FFmpeg/native 解码默认参数；普通播放走平台 auto，必要时可用 -PncpbNativeHwaccel=d3d11va/vaapi/none 覆盖。
+            jvmProp 'ncpb.video.native.hwaccel', prop('ncpbNativeHwaccel', 'auto')
 
             // CPU 彩条测试：跳过网络/FFmpeg，只验证渲染、上传、YUV shader 路径。
-            jvmProp 'bili.video.cpu_bars', prop('biliCpuBars', 'false')
+            jvmProp 'ncpb.video.cpu_bars', prop('ncpbCpuBars', 'false')
 
             // 多分辨率彩条压力 Bench：不走网络/FFmpeg，逐档验证 480p→8K 上传压力。
-            jvmProp 'bili.video.render_bench', prop('biliRenderBench', 'false')
-            jvmProp 'bili.video.render_bench.upload_mode', prop('biliRenderBenchUploadMode', 'nv12')
-            jvmProp 'bili.video.render_bench.frames', prop('biliRenderBenchFrames', '120')
-            jvmProp 'bili.video.render_bench.upload_fps_steps', prop('biliRenderBenchUploadFpsSteps', '30,24,15')
+            jvmProp 'ncpb.video.render_bench', prop('ncpbRenderBench', 'false')
+            jvmProp 'ncpb.video.render_bench.upload_mode', prop('ncpbRenderBenchUploadMode', 'nv12')
+            jvmProp 'ncpb.video.render_bench.frames', prop('ncpbRenderBenchFrames', '120')
+            jvmProp 'ncpb.video.render_bench.upload_fps_steps', prop('ncpbRenderBenchUploadFpsSteps', '30,24,15')
 
             // MP4 手持 GUI 输入校准：开发调试用，默认关闭；启用后显示校准贴图并采集九点映射。
-            jvmProp 'netmusic.mp4.calibration', prop('netmusicMp4Calibration', 'false')
-            // MP4 手持 GUI 输入命中：默认使用渲染层投影出的真实四角；排查时可用 -PnetmusicMp4ProjectedInput=false 回退旧估算。
-            jvmProp 'netmusic.mp4.projected_input', prop('netmusicMp4ProjectedInput', 'true')
+            jvmProp 'ncpb.mp4.calibration', prop('ncpbMp4Calibration', 'false')
+            // MP4 手持 GUI 输入命中：默认使用渲染层投影出的真实四角；排查时可用 -PncpbMp4ProjectedInput=false 回退旧估算。
+            jvmProp 'ncpb.mp4.projected_input', prop('ncpbMp4ProjectedInput', 'true')
             // MP4 手持 GUI 主路径：使用 Minecraft GuiRenderer 离屏渲染，保留原版字体/控件渲染质量。
-            jvmProp 'netmusic.mp4.offscreen_gui', prop('netmusicMp4OffscreenGui', 'true')
+            jvmProp 'ncpb.mp4.offscreen_gui', prop('ncpbMp4OffscreenGui', 'true')
+
+            // Pad 地图道路生成调试：输出服务端懒采样、节点、线段、Overlay 分发/接收日志。
+            jvmProp 'ncpb.pad.road.debug_log', prop('ncpbPadRoadDebugLog', 'false')
         }
 
         server {
             server()
             programArgument '--nogui'
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        padMapSamplerServerSelfTest {
+            server()
+            programArgument '--nogui'
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            systemProperty 'ncpb.pad.map.server_self_test', 'true'
         }
 
         // 开发用 GameTest 服务端。
@@ -147,6 +157,24 @@ neoForge {
 // 加入数据生成输出资源。
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
+tasks.register('runPadMapStyleSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map style post-processing self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.tools.PadMapStyleSelfTest'
+}
+
+tasks.register('runPureLogicSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight pure logic self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.tools.PureLogicSelfTest'
+}
+
+tasks.named('check') {
+    dependsOn 'runPadMapStyleSelfTest', 'runPureLogicSelfTest'
+}
+
 
 tasks.register("runWithRenderDoc", Exec) {
     def javaExecTask = tasks.withType(JavaExec).named("runClient").get()
@@ -159,7 +187,7 @@ tasks.register("runWithRenderDoc", Exec) {
     def runClientArgs = ["runClient"]
     def renderDocOffscreenGui = providers.gradleProperty('renderDocOffscreenGui')
     if (renderDocOffscreenGui.isPresent()) {
-        runClientArgs.add("-PnetmusicMp4OffscreenGui=${renderDocOffscreenGui.get()}")
+        runClientArgs.add("-PncpbMp4OffscreenGui=${renderDocOffscreenGui.get()}")
     }
 
     doFirst {
@@ -223,12 +251,12 @@ neoForge.ideSyncTask generateModMetadata
 publishing {
     publications {
         register('mavenJava', MavenPublication) {
-            from components.java
+            from(components.java)
         }
     }
     repositories {
         maven {
-            url "file://${project.projectDir}/repo"
+            url = layout.projectDirectory.dir('repo').asFile.toURI()
         }
     }
 }

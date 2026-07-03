@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class ModernTurntablePlaybackDiagnostics {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final long LOG_INTERVAL_MILLIS = 3_000L;
-    private static final long WARN_DRIFT_MILLIS = Long.getLong("bili.playback.diagnostics.warn_drift_ms", 2_000L);
+    private static final long WARN_DRIFT_MILLIS = Long.getLong("ncpb.playback.diagnostics.warn_drift_ms", 2_000L);
     private static final long DEBUG_AV_DRIFT_MILLIS = Long.getLong(
             "bili.playback.diagnostics.debug_av_drift_ms", 250L);
     private static final ConcurrentHashMap<String, Long> LAST_LOG_MILLIS_BY_SESSION = new ConcurrentHashMap<>();

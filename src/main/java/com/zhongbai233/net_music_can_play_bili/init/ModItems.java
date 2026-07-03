@@ -6,6 +6,7 @@ import com.zhongbai233.net_music_can_play_bili.link.HolographicGlassesAbility;
 import com.zhongbai233.net_music_can_play_bili.item.HolographicGlassesItem;
 import com.zhongbai233.net_music_can_play_bili.item.InvisibleHeadphonesItem;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
+import com.zhongbai233.net_music_can_play_bili.item.PadItem;
 import com.zhongbai233.net_music_can_play_bili.item.MediaManagementToolItem;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
@@ -46,6 +47,10 @@ public final class ModItems {
 
     public static final DeferredItem<MP4Item> MP4 = ITEMS.registerItem("mp4",
             MP4Item::new,
+            Item.Properties::new);
+
+    public static final DeferredItem<PadItem> PAD = ITEMS.registerItem("pad",
+            PadItem::new,
             Item.Properties::new);
 
     public static final DeferredItem<MediaManagementToolItem> MEDIA_MANAGEMENT_TOOL = ITEMS.registerItem(
@@ -113,6 +118,7 @@ public final class ModItems {
                         output.accept(VIDEO_PROJECTOR.get());
                         output.accept(SPEAKER.get());
                         output.accept(MP4.get());
+                        output.accept(PAD.get());
                         output.accept(MEDIA_MANAGEMENT_TOOL.get());
                         output.accept(INVISIBLE_HEADPHONES.get());
                         output.accept(CAT_HEADPHONES.get());

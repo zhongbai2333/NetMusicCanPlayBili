@@ -33,7 +33,7 @@ public final class MP4ClientPlayback {
     private static final Set<String> STARTED_SOUND_SESSIONS = ConcurrentHashMap.newKeySet();
     private static final long STREAM_RETRY_DELAY_MILLIS = 750L;
     private static final long PREPARE_TIMEOUT_SECONDS = Math.max(3L,
-            Long.getLong("bili.mp4.client_prepare_timeout_seconds", 12L));
+            Long.getLong("ncpb.mp4.client_prepare_timeout_seconds", 12L));
 
     private MP4ClientPlayback() {
     }
