@@ -242,7 +242,7 @@ public final class MP4Client {
         if (baseState == null) {
             baseState = MP4Item.State.DEFAULT;
         }
-        return MP4ClientPlayback.overlayPlaybackState(deviceId, baseState);
+        return MP4PlaybackUiState.overlayPlaybackState(deviceId, baseState);
     }
 
     public static MP4Item.State cachedStateFor(ItemStack stack) {

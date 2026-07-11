@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.client.audio;
 
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeHeaders;
 import org.slf4j.Logger;
 
 import java.io.IOException;
@@ -13,16 +14,12 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /** 客户端纯音频预览的轻量时长兜底探测器。 */
 public final class AudioDurationProbe {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int PROBE_BYTES = 128 * 1024;
     private static final int MAX_REDIRECTS = 5;
-    private static final Pattern CONTENT_RANGE_TOTAL = Pattern.compile("bytes\\s+\\d+-\\d+/(\\d+|\\*)",
-            Pattern.CASE_INSENSITIVE);
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NEVER)
             .connectTimeout(Duration.ofSeconds(8))
@@ -75,7 +72,7 @@ public final class AudioDurationProbe {
         HttpResponse<InputStream> response = HTTP_CLIENT.send(request(url), HttpResponse.BodyHandlers.ofInputStream());
         try (InputStream body = response.body()) {
             int status = response.statusCode();
-            if (isRedirect(status)) {
+            if (HttpRangeHeaders.isRedirectStatus(status)) {
                 if (redirects >= MAX_REDIRECTS) {
                     throw new IOException("too many redirects while probing audio duration");
                 }
@@ -87,7 +84,7 @@ public final class AudioDurationProbe {
                 throw new IOException("HTTP " + status + " while probing audio duration");
             }
             long totalBytes = response.headers().firstValue("Content-Range")
-                    .flatMap(AudioDurationProbe::parseContentRangeTotal)
+                    .flatMap(HttpRangeHeaders::parseContentRangeTotal)
                     .orElseGet(() -> response.headers().firstValueAsLong("Content-Length").orElse(-1L));
             byte[] bytes = body == null ? new byte[0] : body.readNBytes(PROBE_BYTES);
             return new ProbeResponse(response.uri(), bytes, totalBytes);
@@ -101,23 +98,6 @@ public final class AudioDurationProbe {
                 .header("Range", "bytes=0-" + (PROBE_BYTES - 1))
                 .header("User-Agent", "Mozilla/5.0 NetMusicCanPlayBili")
                 .build();
-    }
-
-    private static java.util.Optional<Long> parseContentRangeTotal(String value) {
-        Matcher matcher = CONTENT_RANGE_TOTAL.matcher(value);
-        if (!matcher.find() || "*".equals(matcher.group(1))) {
-            return java.util.Optional.empty();
-        }
-        try {
-            return java.util.Optional.of(Long.parseLong(matcher.group(1)));
-        } catch (NumberFormatException ignored) {
-            return java.util.Optional.empty();
-        }
-    }
-
-    private static boolean isRedirect(int statusCode) {
-        return statusCode == 301 || statusCode == 302 || statusCode == 303
-                || statusCode == 307 || statusCode == 308;
     }
 
     private static Mp3Frame findMp3Frame(byte[] bytes) {

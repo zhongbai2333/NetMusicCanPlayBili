@@ -8,7 +8,7 @@ import net.minecraft.world.phys.Vec3;
 import java.util.Collection;
 import java.util.UUID;
 
-/** 审核 GUI 预览专用锚点：视频直接跟随同一条 MP4 音频时间线。 */
+/** 审核 GUI 预览专用锚点：视频直接跟随同一条公共媒体音频时间线。 */
 final class PreviewVideoPlaybackAnchor implements VideoPlaybackAnchor {
     private final UUID sourceId;
     private final String sessionId;
@@ -24,7 +24,7 @@ final class PreviewVideoPlaybackAnchor implements VideoPlaybackAnchor {
 
     @Override
     public MediaVideoTimeline timeline() {
-        ClientMediaTimelineView view = ClientMediaTimelineView.forMp4Owner(sourceId, sessionId, startOffsetMillis,
+        ClientMediaTimelineView view = ClientMediaTimelineView.forMediaOwner(sourceId, sessionId, startOffsetMillis,
                 totalMillis);
         if (!sessionId.equals(view.sessionId()) || !view.hasTimeline()) {
             return MediaVideoTimeline.EMPTY;

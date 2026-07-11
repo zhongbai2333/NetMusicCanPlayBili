@@ -121,6 +121,10 @@ public final class MediaBindingCleanupService {
         return MediaSource.mp4(deviceId);
     }
 
+    public static MediaSource padSource(UUID deviceId) {
+        return MediaSource.pad(deviceId);
+    }
+
     public static MediaSource turntableSource(Level level, BlockPos pos) {
         return level != null && pos != null ? MediaSource.turntable(level.dimension(), pos) : null;
     }
@@ -129,8 +133,8 @@ public final class MediaBindingCleanupService {
         if (!HeadphoneAbility.has(stack) || source == null) {
             return false;
         }
-        if (source.isMp4()) {
-            return AudioLinkData.headphoneLinkedToMp4(stack, source.mp4DeviceId());
+        if (source.isMediaDevice()) {
+            return AudioLinkData.headphoneLinkedToMediaDevice(stack, source.deviceId());
         }
         if (source.isTurntable()) {
             return source.pos() != null && source.pos().equals(AudioLinkData.readHeadphoneTurntable(stack));
@@ -142,8 +146,8 @@ public final class MediaBindingCleanupService {
         if (!isHeadphoneBoundTo(stack, source)) {
             return false;
         }
-        if (source.isMp4()) {
-            AudioLinkData.clearHeadphoneMp4(stack);
+        if (source.isMediaDevice()) {
+            AudioLinkData.clearHeadphoneMediaDevice(stack);
         } else {
             AudioLinkData.clearHeadphoneTurntable(stack);
         }

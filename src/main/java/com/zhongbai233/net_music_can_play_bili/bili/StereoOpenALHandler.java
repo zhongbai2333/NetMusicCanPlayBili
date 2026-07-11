@@ -566,8 +566,13 @@ public class StereoOpenALHandler {
                 break;
             }
             if (!initialized && !pcmQueue.isEmpty()) {
-                spatialAudio = new OpenALSpatialAudio();
-                spatialAudio.init(2, 0, sampleRate);
+                OpenALSpatialAudio next = new OpenALSpatialAudio();
+                if (!next.init(2, 0, sampleRate)) {
+                    next.cleanup();
+                    spatialAudio = null;
+                    continue;
+                }
+                spatialAudio = next;
                 initialized = true;
                 LOGGER.debug("Stereo OpenAL 初始化: 2 声道立体声");
                 // 不 break：设备丢失后 initialized 会被重置为 false，需要继续循环等待重建

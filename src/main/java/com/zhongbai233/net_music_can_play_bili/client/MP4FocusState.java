@@ -254,7 +254,7 @@ public final class MP4FocusState {
         previousDragRotationDegrees = dragRotationDegrees;
         ticks++;
         if (active && playing && !scrubbingProgress) {
-            MP4ClientPlayback.syncFocusedUiProgress();
+            MP4PlaybackUiState.syncFocusedProgress();
         }
         tickHoverAnimation();
         tickRotationAnimation();

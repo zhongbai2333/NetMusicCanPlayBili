@@ -111,6 +111,9 @@ public class LyricProjectorBlock extends Block implements EntityBlock {
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
             BlockHitResult hitResult) {
+        if (!player.mayBuild()) {
+            return InteractionResult.PASS;
+        }
         if (level.isClientSide()) {
             LyricProjectorClient.openScreen(pos);
         }

@@ -22,6 +22,7 @@ public final class AudioLinkData {
     private static final String HEADPHONE_TURNTABLE_Y = "headphones_turntable_y";
     private static final String HEADPHONE_TURNTABLE_Z = "headphones_turntable_z";
     private static final String HEADPHONE_MP4 = "headphones_mp4";
+    private static final String HEADPHONE_MEDIA_DEVICE = "headphones_media_device";
 
     private AudioLinkData() {
     }
@@ -49,17 +50,31 @@ public final class AudioLinkData {
     }
 
     public static void writeHeadphoneMp4(ItemStack stack, UUID deviceId) {
+        writeHeadphoneMediaDevice(stack, deviceId);
+    }
+
+    public static void writeHeadphoneMediaDevice(ItemStack stack, UUID deviceId) {
         if (stack.isEmpty() || deviceId == null) {
             return;
         }
-        stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY,
-                customData -> customData.update(tag -> tag.putString(HEADPHONE_MP4, deviceId.toString())));
+        stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY, customData -> customData.update(tag -> {
+            tag.putString(HEADPHONE_MP4, deviceId.toString());
+            tag.putString(HEADPHONE_MEDIA_DEVICE, deviceId.toString());
+        }));
     }
 
     @Nullable
     public static UUID readHeadphoneMp4(ItemStack stack) {
+        return readHeadphoneMediaDevice(stack);
+    }
+
+    @Nullable
+    public static UUID readHeadphoneMediaDevice(ItemStack stack) {
         CompoundTag tag = customTag(stack);
-        String value = tag != null ? tag.getString(HEADPHONE_MP4).orElse("") : "";
+        String value = tag != null ? tag.getString(HEADPHONE_MEDIA_DEVICE).orElse("") : "";
+        if (value.isBlank() && tag != null) {
+            value = tag.getString(HEADPHONE_MP4).orElse("");
+        }
         if (value.isBlank()) {
             return null;
         }
@@ -71,11 +86,17 @@ public final class AudioLinkData {
     }
 
     public static void clearHeadphoneMp4(ItemStack stack) {
+        clearHeadphoneMediaDevice(stack);
+    }
+
+    public static void clearHeadphoneMediaDevice(ItemStack stack) {
         if (stack.isEmpty()) {
             return;
         }
-        stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY,
-                customData -> customData.update(tag -> tag.remove(HEADPHONE_MP4)));
+        stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY, customData -> customData.update(tag -> {
+            tag.remove(HEADPHONE_MP4);
+            tag.remove(HEADPHONE_MEDIA_DEVICE);
+        }));
     }
 
     public static void clearHeadphoneTurntable(ItemStack stack) {
@@ -110,12 +131,17 @@ public final class AudioLinkData {
                     tag.remove(HEADPHONE_TURNTABLE_Y);
                     tag.remove(HEADPHONE_TURNTABLE_Z);
                     tag.remove(HEADPHONE_MP4);
+                    tag.remove(HEADPHONE_MEDIA_DEVICE);
                 }));
         return count;
     }
 
     public static boolean headphoneLinkedToMp4(ItemStack stack, UUID deviceId) {
-        return deviceId != null && deviceId.equals(readHeadphoneMp4(stack));
+        return headphoneLinkedToMediaDevice(stack, deviceId);
+    }
+
+    public static boolean headphoneLinkedToMediaDevice(ItemStack stack, UUID deviceId) {
+        return deviceId != null && deviceId.equals(readHeadphoneMediaDevice(stack));
     }
 
     @Nullable

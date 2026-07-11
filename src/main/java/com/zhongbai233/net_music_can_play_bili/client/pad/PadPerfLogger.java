@@ -6,9 +6,14 @@ import org.slf4j.Logger;
 /** 低频 Pad 地图/GUI 性能汇总日志；生产环境默认不在 INFO 打印，DEBUG/TRACE 或显式属性开启时才统计。 */
 public final class PadPerfLogger {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final boolean EXPLICIT_ENABLED = Boolean.parseBoolean(System.getProperty("ncpb.pad.perf_log", "false"));
+    private static final boolean EXPLICIT_ENABLED = Boolean
+            .parseBoolean(System.getProperty("ncpb.pad.perf_log", "false"));
+    private static final long SLOW_WARN_NS = Long.getLong("ncpb.pad.perf_slow_warn_ms", 12L) * 1_000_000L;
+    private static final long SLOW_WARN_COOLDOWN_NS = Long.getLong("ncpb.pad.perf_slow_warn_cooldown_ms", 5000L)
+            * 1_000_000L;
     private static final long REPORT_INTERVAL_NS = 5_000_000_000L;
     private static long nextReportNs = System.nanoTime() + REPORT_INTERVAL_NS;
+    private static long nextSlowWarnNs;
     private static long sampleStepNs;
     private static long sampleStepMaxNs;
     private static int sampleSteps;
@@ -28,6 +33,7 @@ public final class PadPerfLogger {
     }
 
     public static void recordSampleStep(long ns) {
+        maybeWarnSlow("sampleStep", ns);
         if (!enabled()) {
             return;
         }
@@ -62,6 +68,7 @@ public final class PadPerfLogger {
     }
 
     public static void recordMapBake(long ns) {
+        maybeWarnSlow("mapBake", ns);
         if (!enabled()) {
             return;
         }
@@ -72,6 +79,7 @@ public final class PadPerfLogger {
     }
 
     public static void recordGuiFrame(long ns) {
+        maybeWarnSlow("guiFrame", ns);
         if (!enabled()) {
             return;
         }
@@ -89,8 +97,8 @@ public final class PadPerfLogger {
         nextReportNs = now + REPORT_INTERVAL_NS;
         if (LOGGER.isTraceEnabled()) {
             LOGGER.trace(
-                "Pad性能峰值: sampleStepMax={}ms jobStepsMax={} mapBakeMax={}ms guiFrameMax={}ms",
-                millis(sampleStepMaxNs), sampleJobStepsMax, millis(bakeMaxNs), millis(guiMaxNs));
+                    "Pad性能峰值: sampleStepMax={}ms jobStepsMax={} mapBakeMax={}ms guiFrameMax={}ms",
+                    millis(sampleStepMaxNs), sampleJobStepsMax, millis(bakeMaxNs), millis(guiMaxNs));
         }
         LOGGER.debug(
                 "Pad性能: sampleSteps={} avg={}ms max={}ms jobs={} jobStepsAvg={} jobStepsMax={} cacheHit={} cacheMiss={} hitRate={} mapBakes={} avg={}ms max={}ms guiFrames={} avg={}ms max={}ms",
@@ -112,6 +120,18 @@ public final class PadPerfLogger {
         guiFrames = 0;
         cellCacheHits = 0;
         cellCacheMisses = 0;
+    }
+
+    private static void maybeWarnSlow(String phase, long ns) {
+        if (SLOW_WARN_NS <= 0L || ns < SLOW_WARN_NS || !LOGGER.isDebugEnabled()) {
+            return;
+        }
+        long now = System.nanoTime();
+        if (now < nextSlowWarnNs) {
+            return;
+        }
+        nextSlowWarnNs = now + SLOW_WARN_COOLDOWN_NS;
+        LOGGER.debug("Pad慢操作: phase={} cost={}ms", phase, millis(ns));
     }
 
     private static boolean enabled() {

@@ -74,6 +74,22 @@ public record PadDocument(String title, String author, boolean locked, long upda
         return touch(mediaEntries, points);
     }
 
+    public PadDocument withLocked(boolean locked) {
+        if (this.locked == locked) {
+            return this;
+        }
+        return new PadDocument(title, author, locked, System.currentTimeMillis(), sequence + 1, mapSettings,
+                mediaEntries, triggerPoints);
+    }
+
+    public PadDocument copyWithLocked(boolean locked) {
+        if (this.locked == locked) {
+            return this;
+        }
+        return new PadDocument(title, author, locked, updatedAtMillis, sequence, mapSettings, mediaEntries,
+                triggerPoints);
+    }
+
     private PadDocument touch(List<PadMediaEntry> media, List<PadTriggerPoint> points) {
         return new PadDocument(title, author, locked, System.currentTimeMillis(), sequence + 1, mapSettings, media,
                 points);

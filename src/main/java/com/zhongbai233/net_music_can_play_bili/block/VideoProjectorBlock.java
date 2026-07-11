@@ -112,6 +112,9 @@ public class VideoProjectorBlock extends Block implements EntityBlock {
         if (hand == InteractionHand.MAIN_HAND && stack.getItem() instanceof MediaManagementToolItem) {
             return InteractionResult.PASS;
         }
+        if (!player.mayBuild()) {
+            return InteractionResult.PASS;
+        }
         if (level.isClientSide()) {
             openClientScreen(pos);
         }
@@ -121,6 +124,9 @@ public class VideoProjectorBlock extends Block implements EntityBlock {
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
             BlockHitResult hitResult) {
+        if (!player.mayBuild()) {
+            return InteractionResult.PASS;
+        }
         if (level.isClientSide()) {
             openClientScreen(pos);
         }

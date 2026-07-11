@@ -67,6 +67,14 @@ public class MediaManagementToolItem extends Item {
             openBindingMenu(serverPlayer, MediaToolBindingMenu.TargetKind.MP4, null, null);
             return InteractionResult.SUCCESS;
         }
+        if (offhand.getItem() instanceof PadItem) {
+            UUID deviceId = PadItem.getOrCreateDeviceId(offhand);
+            if (deviceId == null) {
+                return InteractionResult.PASS;
+            }
+            openBindingMenu(serverPlayer, MediaToolBindingMenu.TargetKind.PAD, null, deviceId);
+            return InteractionResult.SUCCESS;
+        }
         if (player.isShiftKeyDown()) {
             openReportMenu(serverPlayer, nearbyAudibleSources(serverPlayer));
             return InteractionResult.SUCCESS;
@@ -96,6 +104,9 @@ public class MediaManagementToolItem extends Item {
         }
         BlockEntity be = level.getBlockEntity(pos);
         if (be instanceof ModernTurntableBlockEntity) {
+            if (!player.mayBuild()) {
+                return InteractionResult.PASS;
+            }
             openBindingMenu(serverPlayer, MediaToolBindingMenu.TargetKind.TURNTABLE, pos, null);
             return InteractionResult.CONSUME;
         }

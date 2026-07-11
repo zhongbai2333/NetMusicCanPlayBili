@@ -127,8 +127,15 @@ public class VideoNativeDecoder implements AutoCloseable {
             return false;
         if (!open || handle == 0)
             return false;
+        if (ptsNanos < 0L) {
+            return VideoJni.sendPacket(handle, data, 0, data.length) == 0;
+        }
         try {
-            return VideoJni.sendPacketWithPts(handle, data, 0, data.length, ptsNanos) == 0;
+            int result = VideoJni.sendPacketWithPts(handle, data, 0, data.length, ptsNanos);
+            if (result == 0) {
+                return true;
+            }
+            return VideoJni.sendPacket(handle, data, 0, data.length) == 0;
         } catch (UnsatisfiedLinkError oldNative) {
             return VideoJni.sendPacket(handle, data, 0, data.length) == 0;
         }

@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
+import com.mojang.blaze3d.opengl.GlStateManager;
 import com.mojang.blaze3d.opengl.GlTexture;
 import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.logging.LogUtils;
@@ -140,7 +141,7 @@ final class Nv12PboUploader implements AutoCloseable {
             GL15C.glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
             mappedBuffer = false;
 
-            GL11C.glBindTexture(GL11C.GL_TEXTURE_2D, glTexture.glId());
+            GlStateManager._bindTexture(glTexture.glId());
             GL11C.glPixelStorei(GL11C.GL_UNPACK_ALIGNMENT, 1);
             GL11C.glPixelStorei(GL11C.GL_UNPACK_ROW_LENGTH, 0);
             GL11C.glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
@@ -177,7 +178,7 @@ final class Nv12PboUploader implements AutoCloseable {
             GL11C.glPixelStorei(GL_UNPACK_SKIP_ROWS, previousUnpackSkipRows);
             GL11C.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, previousUnpackImageHeight);
             GL11C.glPixelStorei(GL_UNPACK_SKIP_IMAGES, previousUnpackSkipImages);
-            GL11C.glBindTexture(GL11C.GL_TEXTURE_2D, previousTexture);
+            GlStateManager._bindTexture(previousTexture);
             GL15C.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, previousPbo);
         }
     }

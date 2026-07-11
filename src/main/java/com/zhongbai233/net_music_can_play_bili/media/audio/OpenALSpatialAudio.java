@@ -83,60 +83,74 @@ public class OpenALSpatialAudio {
      * @param numBedChannels    床声道数 (2/6/8)
      * @param numDynamicObjects 动态对象数
      */
-    public void init(int numBedChannels, int numDynamicObjects) {
-        init(numBedChannels, numDynamicObjects, SAMPLE_RATE);
+    public boolean init(int numBedChannels, int numDynamicObjects) {
+        return init(numBedChannels, numDynamicObjects, SAMPLE_RATE);
     }
 
-    public void init(int numBedChannels, int numDynamicObjects, int sampleRate) {
+    public synchronized boolean init(int numBedChannels, int numDynamicObjects, int sampleRate) {
         if (!ensureOpenAlContext("init")) {
-            return;
+            return false;
         }
         cleanup();
-        detectAudioFormat();
-        ensureHrtfEnabled();
-        this.actualSampleRate = sampleRate;
-        this.numBeds = numBedChannels;
-        this.numObjects = numDynamicObjects;
-        this.deviceLost = false;
-        this.mediaConsumedBuffers = 0L;
-        this.primaryQueuedMediaFlags = new ArrayDeque<>(NUM_BUFFERS * 2);
-        this.uploadScratch = BufferUtils.createByteBuffer(SAMPLES_PER_BUFFER * bytesPerSample)
-                .order(ByteOrder.LITTLE_ENDIAN);
+        try {
+            detectAudioFormat();
+            ensureHrtfEnabled();
+            this.actualSampleRate = sampleRate;
+            this.numBeds = Math.max(0, numBedChannels);
+            this.numObjects = Math.max(0, numDynamicObjects);
+            this.deviceLost = false;
+            this.mediaConsumedBuffers = 0L;
+            this.primaryQueuedMediaFlags = new ArrayDeque<>(NUM_BUFFERS * 2);
+            this.uploadScratch = BufferUtils.createByteBuffer(SAMPLES_PER_BUFFER * bytesPerSample)
+                    .order(ByteOrder.LITTLE_ENDIAN);
 
-        // 分配床声道声源
-        bedSources = new int[numBeds];
-        bedBuffers = new int[numBeds][NUM_BUFFERS];
-        bedPending = newPendingQueues(numBeds);
-        bedGains = filledGains(numBeds);
-        if (!initSourceGroup("bed", numBeds, bedSources, bedBuffers))
-            return;
+            // 分配床声道声源
+            bedSources = new int[numBeds];
+            bedBuffers = new int[numBeds][NUM_BUFFERS];
+            bedPending = newPendingQueues(numBeds);
+            bedGains = filledGains(numBeds);
+            if (!initSourceGroup("bed", numBeds, bedSources, bedBuffers))
+                return false;
 
-        // 分配对象声源
-        objectSources = new int[numObjects];
-        objBuffers = new int[numObjects][NUM_BUFFERS];
-        objPending = newPendingQueues(numObjects);
-        objectGains = filledGains(numObjects);
-        if (!initSourceGroup("object", numObjects, objectSources, objBuffers))
-            return;
+            // 分配对象声源
+            objectSources = new int[numObjects];
+            objBuffers = new int[numObjects][NUM_BUFFERS];
+            objPending = newPendingQueues(numObjects);
+            objectGains = filledGains(numObjects);
+            if (!initSourceGroup("object", numObjects, objectSources, objBuffers))
+                return false;
 
-        for (int b = 0; b < NUM_BUFFERS; b++) {
-            primaryQueuedMediaFlags.offerLast(Boolean.FALSE);
+            if (primaryQueuedMediaFlags == null) {
+                LOGGER.warn("OpenAL 空间声初始化期间媒体队列标记被清理，放弃本次初始化: beds={} objects={}", numBeds,
+                        numObjects);
+                cleanup();
+                return false;
+            }
+            for (int b = 0; b < NUM_BUFFERS; b++) {
+                primaryQueuedMediaFlags.offerLast(Boolean.FALSE);
+            }
+
+            // 启动所有声源播放
+            for (int ch = 0; ch < numBeds; ch++) {
+                AL10.alSourcePlay(bedSources[ch]);
+            }
+            for (int obj = 0; obj < numObjects; obj++) {
+                AL10.alSourcePlay(objectSources[obj]);
+            }
+
+            initialized = true;
+            LOGGER.debug(
+                    "OpenAL 空间声初始化摘要: beds={} objects={} format={} sampleRate={}Hz sourceMode=world-follow spatialize=force hrtf={} preloadBuffers={} preload={}ms",
+                    numBeds, numObjects, useFloat32 ? "float32" : "int16", actualSampleRate,
+                    FORCE_HRTF ? "force" : "vanilla", NUM_BUFFERS,
+                    Math.round(NUM_BUFFERS * SAMPLES_PER_BUFFER * 1000.0 / actualSampleRate));
+            return true;
+        } catch (Throwable error) {
+            LOGGER.warn("OpenAL 空间声初始化失败，已跳过本次输出管线: beds={} objects={} sampleRate={} reason={}",
+                    numBedChannels, numDynamicObjects, sampleRate, error.toString());
+            cleanup();
+            return false;
         }
-
-        // 启动所有声源播放
-        for (int ch = 0; ch < numBeds; ch++) {
-            AL10.alSourcePlay(bedSources[ch]);
-        }
-        for (int obj = 0; obj < numObjects; obj++) {
-            AL10.alSourcePlay(objectSources[obj]);
-        }
-
-        initialized = true;
-        LOGGER.debug(
-                "OpenAL 空间声初始化摘要: beds={} objects={} format={} sampleRate={}Hz sourceMode=world-follow spatialize=force hrtf={} preloadBuffers={} preload={}ms",
-                numBeds, numObjects, useFloat32 ? "float32" : "int16", actualSampleRate,
-                FORCE_HRTF ? "force" : "vanilla", NUM_BUFFERS,
-                Math.round(NUM_BUFFERS * SAMPLES_PER_BUFFER * 1000.0 / actualSampleRate));
     }
 
     /** 送入一帧内单个 256-sample block 的床声道 PCM。每帧调用 6 次（6 个 block） */
@@ -373,7 +387,7 @@ public class OpenALSpatialAudio {
         mediaConsumedBuffers = 0L;
     }
 
-    public void cleanup() {
+    public synchronized void cleanup() {
         initialized = false;
         int[] bedSourcesToDelete = bedSources;
         int[] objectSourcesToDelete = objectSources;

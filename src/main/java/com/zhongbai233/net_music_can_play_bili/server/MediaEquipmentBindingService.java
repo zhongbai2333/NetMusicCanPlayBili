@@ -6,7 +6,7 @@ import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import com.zhongbai233.net_music_can_play_bili.link.HeadphoneAbility;
 import com.zhongbai233.net_music_can_play_bili.link.HolographicGlassesAbility;
 import com.zhongbai233.net_music_can_play_bili.link.MediaBindingData.MediaSource;
-import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackSyncManager;
+import com.zhongbai233.net_music_can_play_bili.network.ServerMediaPlayback;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -22,21 +22,24 @@ public final class MediaEquipmentBindingService {
             return BindResult.unhandled();
         }
         return switch (source.kind()) {
-            case MP4 -> bindMp4(player, equipment, source);
+            case MP4, PAD -> bindMediaDevice(player, equipment, source);
             case TURNTABLE -> bindTurntable(player, equipment, source);
             case VIDEO_PROJECTOR -> BindResult.unhandled();
         };
     }
 
-    private static BindResult bindMp4(ServerPlayer player, ItemStack equipment, MediaSource source) {
+    private static BindResult bindMediaDevice(ServerPlayer player, ItemStack equipment, MediaSource source) {
         boolean bound = false;
         boolean handled = false;
         if (HeadphoneAbility.has(equipment)) {
             handled = true;
-            AudioLinkData.writeHeadphoneMp4(equipment, source.mp4DeviceId());
+            AudioLinkData.writeHeadphoneMediaDevice(equipment, source.deviceId());
             AudioLinkIndex.updatePlayerHeadphones(player);
             player.sendSystemMessage(Component.translatable(
-                    "message.net_music_can_play_bili.headphones.mp4_linked").withStyle(ChatFormatting.GOLD));
+                    source.isPad()
+                            ? "message.net_music_can_play_bili.headphones.pad_linked"
+                            : "message.net_music_can_play_bili.headphones.mp4_linked")
+                    .withStyle(ChatFormatting.GOLD));
             bound = true;
         }
         if (HolographicGlassesAbility.has(equipment)) {
@@ -50,7 +53,7 @@ public final class MediaEquipmentBindingService {
                     : Component.translatable("message.net_music_can_play_bili.holographic_glasses.media_slots_full")
                             .withStyle(ChatFormatting.RED));
             if (linked) {
-                MP4PlaybackSyncManager.stopExternalPlaybackForLinkedHeadphones(player, source.mp4DeviceId());
+                ServerMediaPlayback.stopExternalPlaybackForLinkedHeadphones(player, source.deviceId());
                 bound = true;
             }
         }

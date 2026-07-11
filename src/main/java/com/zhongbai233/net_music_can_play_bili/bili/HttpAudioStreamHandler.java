@@ -16,6 +16,7 @@ import com.zhongbai233.net_music_can_play_bili.media.pipeline.OpenALTappedAudioI
 import com.zhongbai233.net_music_can_play_bili.media.stream.ChunkPrefetchInputStream;
 import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4RangeSeekSupport;
 import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4StreamParser;
+import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeHeaders;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeClient;
 import com.zhongbai233.net_music_can_play_bili.media.stream.BlockingAudioPipe;
 import com.zhongbai233.net_music_can_play_bili.media.stream.CdnUrlFallbacks;
@@ -38,7 +39,6 @@ import java.io.SequenceInputStream;
 import java.net.URI;
 import java.net.URL;
 import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayDeque;
 import java.util.Arrays;
@@ -53,8 +53,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.UUID;
 
 public class HttpAudioStreamHandler implements IAudioStreamHandler {
@@ -80,8 +78,6 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             Long.getLong("ncpb.bili.audio.range_race.timeout_ms", 2_500L));
     private static final int MAX_SEGMENT_BASE_ENTRIES = Integer.getInteger(
             "bili.audio.segment_base_cache.max_entries", 512);
-    private static final Pattern CONTENT_RANGE_TOTAL = Pattern.compile("bytes\\s+\\d+-\\d+/(\\d+|\\*)",
-            Pattern.CASE_INSENSITIVE);
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NEVER)
             .connectTimeout(java.time.Duration.ofSeconds(10))
@@ -224,9 +220,9 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         CountDownLatch formatReady = new CountDownLatch(1);
 
         Thread worker = NetMusicThreadFactory.daemonThread(
-            modernTurntable ? "AudioStreamWorker" : "BiliCompatAudioStreamWorker",
+                modernTurntable ? "AudioStreamWorker" : "BiliCompatAudioStreamWorker",
                 () -> streamDecode(url, fallbackPipe, pipelineRef, errorRef, bodyRef, closed, formatReady,
-                playbackContext, startOffsetSeconds));
+                        playbackContext, startOffsetSeconds));
         worker.start();
         ActiveStreamControl streamControl = null;
         if (modernTurntable && playbackContext != null) {
@@ -402,7 +398,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 }
                 URL responseUrl = response.uri().toURL();
                 java.util.Optional<Long> contentRangeTotal = response.headers().firstValue("Content-Range")
-                        .flatMap(HttpAudioStreamHandler::parseContentRangeTotal);
+                        .flatMap(HttpRangeHeaders::parseContentRangeTotal);
                 if (contentRangeTotal.isPresent()) {
                     return new RangedResource(responseUrl, contentRangeTotal.get());
                 }
@@ -423,18 +419,6 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     }
 
     private record RangedResource(URL url, long contentLength) {
-    }
-
-    private static java.util.Optional<Long> parseContentRangeTotal(String value) {
-        Matcher matcher = CONTENT_RANGE_TOTAL.matcher(value);
-        if (!matcher.find() || "*".equals(matcher.group(1))) {
-            return java.util.Optional.empty();
-        }
-        try {
-            return java.util.Optional.of(Long.parseLong(matcher.group(1)));
-        } catch (NumberFormatException ignored) {
-            return java.util.Optional.empty();
-        }
     }
 
     private static InputStream openHttpRangeStream(URL url, long rangeOffset) throws IOException {
@@ -469,7 +453,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 requestBuilder(url, rangeOffset, probe).build(),
                 HttpResponse.BodyHandlers.ofInputStream());
         int status = response.statusCode();
-        if (!isHttpRedirect(status)) {
+        if (!HttpRangeHeaders.isRedirectStatus(status)) {
             if (status == 200 || status == 206) {
                 BiliCdnSelector.recordSuccess(response.uri().toString());
             }
@@ -490,22 +474,15 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         return sendHttpRequest(redirected, rangeOffset, probe, redirects + 1);
     }
 
-    private static boolean isHttpRedirect(int statusCode) {
-        return statusCode == 301 || statusCode == 302 || statusCode == 303
-                || statusCode == 307 || statusCode == 308;
-    }
-
-    private static HttpRequest.Builder requestBuilder(URL url, long rangeOffset, boolean probe) {
+    private static java.net.http.HttpRequest.Builder requestBuilder(URL url, long rangeOffset, boolean probe) {
         URL requestUrl;
         try {
             requestUrl = PlaybackSync.strip(url);
         } catch (java.net.MalformedURLException e) {
             requestUrl = url;
         }
-        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(requestUrl.toString()))
-                .timeout(java.time.Duration.ofSeconds(20))
-                .GET()
-                .header("Range", probe ? "bytes=0-0" : "bytes=%d-".formatted(Math.max(0L, rangeOffset)));
+        java.net.http.HttpRequest.Builder builder = HttpRangeHeaders.rangeRequest(requestUrl, rangeOffset, probe,
+                java.time.Duration.ofSeconds(20));
         BiliRequestHeaders.applyBiliCdnHeaders(builder, requestUrl);
         return builder;
     }

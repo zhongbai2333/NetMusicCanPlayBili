@@ -1,7 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
-import com.zhongbai233.net_music_can_play_bili.client.MP4ClientPlayback;
 
 import java.util.UUID;
 
@@ -34,11 +33,15 @@ public final class ClientMediaTimelineView {
         return new ClientMediaTimelineView("", -1L, -1L, -1L, -1L, 0L, 0L, false, false);
     }
 
-    public static ClientMediaTimelineView forMp4Owner(UUID ownerId, String expectedSessionId, long fallbackMillis,
+    public static ClientMediaTimelineView forMediaOwner(UUID ownerId, String expectedSessionId, long fallbackMillis,
             long fallbackTotalMillis) {
         String expected = expectedSessionId != null ? expectedSessionId : "";
-        MediaTimelineClock.TimelineSnapshot snapshot = MP4ClientPlayback.timelineSnapshot(ownerId);
-        return forHandheldOwner(ownerId, expected, snapshot, MP4ClientPlayback.hasStartedSound(ownerId, expected),
+        ClientMediaPlaybackRegistry.ActivePlayback active = ClientMediaPlaybackRegistry.get(ownerId);
+        MediaTimelineClock.TimelineSnapshot snapshot = active != null
+                ? active.timelineSnapshot()
+                : MediaTimelineClock.TimelineSnapshot.EMPTY;
+        return forHandheldOwner(ownerId, expected, snapshot,
+                ClientMediaPlaybackRegistry.hasAudioStarted(ownerId, expected),
                 fallbackMillis, fallbackTotalMillis);
     }
 

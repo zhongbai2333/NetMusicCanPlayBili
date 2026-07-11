@@ -86,6 +86,8 @@ neoForge {
 
             // FFmpeg/native 解码默认参数；普通播放走平台 auto，必要时可用 -PncpbNativeHwaccel=d3d11va/vaapi/none 覆盖。
             jvmProp 'ncpb.video.native.hwaccel', prop('ncpbNativeHwaccel', 'auto')
+            // 手持 MP4/Pad 视频默认保持原 native auto 行为；排查时可用 d3d11va/none 覆盖。
+            jvmProp 'ncpb.mp4.video.native.hwaccel', prop('ncpbHandheldNativeHwaccel', 'auto')
 
             // CPU 彩条测试：跳过网络/FFmpeg，只验证渲染、上传、YUV shader 路径。
             jvmProp 'ncpb.video.cpu_bars', prop('ncpbCpuBars', 'false')
@@ -105,6 +107,13 @@ neoForge {
 
             // Pad 地图道路生成调试：输出服务端懒采样、节点、线段、Overlay 分发/接收日志。
             jvmProp 'ncpb.pad.road.debug_log', prop('ncpbPadRoadDebugLog', 'false')
+            // Pad 手持视频 RenderDoc 诊断：打印视频层提交/跳过原因，并可叠加洋红 probe 方便抓帧定位。
+            jvmProp 'ncpb.pad.video.debug_log', prop('ncpbPadVideoDebugLog', 'false')
+            jvmProp 'ncpb.pad.video.renderdoc_probe', prop('ncpbPadVideoRenderDocProbe', 'false')
+            // Pad 屏幕较小，默认请求 360P 视频流；需要对比可用 -PncpbPadVideoQuality=64/32/16 覆盖。
+            jvmProp 'ncpb.pad.video.quality', prop('ncpbPadVideoQuality', '16')
+            // Pad 视频 native 后端独立于 MP4；默认先走 CPU，避免影响已正常的 MP4，可用 auto/none/d3d11va 覆盖。
+            jvmProp 'ncpb.pad.video.native.hwaccel', prop('ncpbPadVideoNativeHwaccel', 'none')
         }
 
         server {
@@ -171,8 +180,144 @@ tasks.register('runPureLogicSelfTest', JavaExec) {
     mainClass = 'com.zhongbai233.net_music_can_play_bili.tools.PureLogicSelfTest'
 }
 
+tasks.register('runPadMapBakeSchedulerSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map bake scheduler self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadMapBakeSchedulerSelfTest'
+}
+
+tasks.register('runPadMapRenderReusePlanSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map rendered overlap reuse self tests.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadMapRenderReusePlanSelfTest'
+}
+
+tasks.register('runPadMapViewProfileStabilizerSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map view profile stabilization self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapViewProfileStabilizerSelfTest'
+}
+
+tasks.register('runPadMapViewProfileDetectorSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map indoor evidence detection self tests.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapViewProfileDetectorSelfTest'
+}
+
+tasks.register('runPadMapViewSnapshotCacheSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map profile snapshot cache self tests.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapViewSnapshotCacheSelfTest'
+}
+
+tasks.register('runPadMapJobSchedulerSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map job scheduler self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapJobSchedulerSelfTest'
+}
+
+tasks.register('runPadMapDirtyChunkTrackerSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map dirty chunk tracker self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapDirtyChunkTrackerSelfTest'
+}
+
+tasks.register('runPadMapDirtyInvalidationSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map dirty invalidation self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapDirtyInvalidationSelfTest'
+}
+
+tasks.register('runPadMapDiskCachePathsSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map disk cache path self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapDiskCachePathsSelfTest'
+}
+
+tasks.register('runPadMapDiskCacheFormatSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map disk cache format self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapDiskCacheFormatSelfTest'
+}
+
+tasks.register('runPadMapSnapshotDiskCodecSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map snapshot disk codec self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSnapshotDiskCodecSelfTest'
+}
+
+tasks.register('runPadMapCellDiskCodecSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map cell disk codec self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapCellDiskCodecSelfTest'
+}
+
+tasks.register('runPadMapChunkDiskCodecSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map chunk disk codec self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapChunkDiskCodecSelfTest'
+}
+
+tasks.register('runPadMapSamplePlanSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map sample planning self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSamplePlanSelfTest'
+}
+
+tasks.register('runPadMapSamplerLogicSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map sampler readiness self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSamplerLogicSelfTest'
+}
+
+tasks.register('runPadMapSnapshotSeederSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map snapshot seeder self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSnapshotSeederSelfTest'
+}
+
+tasks.register('runPadMapJobProgressSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map job progress self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapJobProgressSelfTest'
+}
+
+tasks.register('runPadMapSnapshotComposerSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs lightweight Pad map snapshot composer self tests without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSnapshotComposerSelfTest'
+}
+
 tasks.named('check') {
-    dependsOn 'runPadMapStyleSelfTest', 'runPureLogicSelfTest'
+        dependsOn 'runPadMapStyleSelfTest', 'runPureLogicSelfTest', 'runPadMapBakeSchedulerSelfTest',
+            'runPadMapRenderReusePlanSelfTest',
+            'runPadMapViewProfileStabilizerSelfTest', 'runPadMapViewProfileDetectorSelfTest',
+            'runPadMapJobSchedulerSelfTest',
+            'runPadMapViewSnapshotCacheSelfTest',
+            'runPadMapDirtyChunkTrackerSelfTest', 'runPadMapDirtyInvalidationSelfTest',
+            'runPadMapDiskCachePathsSelfTest', 'runPadMapDiskCacheFormatSelfTest',
+            'runPadMapSnapshotDiskCodecSelfTest', 'runPadMapCellDiskCodecSelfTest',
+            'runPadMapChunkDiskCodecSelfTest', 'runPadMapSamplePlanSelfTest', 'runPadMapSamplerLogicSelfTest',
+            'runPadMapSnapshotSeederSelfTest', 'runPadMapJobProgressSelfTest',
+            'runPadMapSnapshotComposerSelfTest'
 }
 
 
@@ -188,6 +333,26 @@ tasks.register("runWithRenderDoc", Exec) {
     def renderDocOffscreenGui = providers.gradleProperty('renderDocOffscreenGui')
     if (renderDocOffscreenGui.isPresent()) {
         runClientArgs.add("-PncpbMp4OffscreenGui=${renderDocOffscreenGui.get()}")
+    }
+    def renderDocPadVideoDebugLog = providers.gradleProperty('renderDocPadVideoDebugLog')
+    if (renderDocPadVideoDebugLog.isPresent()) {
+        runClientArgs.add("-PncpbPadVideoDebugLog=${renderDocPadVideoDebugLog.get()}")
+    }
+    def renderDocPadVideoProbe = providers.gradleProperty('renderDocPadVideoProbe')
+    if (renderDocPadVideoProbe.isPresent()) {
+        runClientArgs.add("-PncpbPadVideoRenderDocProbe=${renderDocPadVideoProbe.get()}")
+    }
+    def renderDocPadVideoQuality = providers.gradleProperty('renderDocPadVideoQuality')
+    if (renderDocPadVideoQuality.isPresent()) {
+        runClientArgs.add("-PncpbPadVideoQuality=${renderDocPadVideoQuality.get()}")
+    }
+    def renderDocPadVideoNativeHwaccel = providers.gradleProperty('renderDocPadVideoNativeHwaccel')
+    if (renderDocPadVideoNativeHwaccel.isPresent()) {
+        runClientArgs.add("-PncpbPadVideoNativeHwaccel=${renderDocPadVideoNativeHwaccel.get()}")
+    }
+    def handheldNativeHwaccel = providers.gradleProperty('ncpbHandheldNativeHwaccel')
+    if (handheldNativeHwaccel.isPresent()) {
+        runClientArgs.add("-PncpbHandheldNativeHwaccel=${handheldNativeHwaccel.get()}")
     }
 
     doFirst {

@@ -3,7 +3,6 @@ package com.zhongbai233.net_music_can_play_bili.server;
 import com.zhongbai233.net_music_can_play_bili.network.PadMapWorldScopePacket;
 import com.zhongbai233.net_music_can_play_bili.network.PadMapScopeSavedData;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
@@ -18,10 +17,10 @@ public final class PadMapScopeSync {
             return;
         }
         MinecraftServer server = player.level().getServer();
-        if (server == null || !(player.level() instanceof ServerLevel level)) {
+        if (server == null) {
             return;
         }
-        String worldScopeId = PadMapScopeSavedData.get(level).worldScopeId();
+        String worldScopeId = PadMapScopeSavedData.get(server.overworld()).worldScopeId();
         String worldName = server.getWorldData().getLevelName();
         PacketDistributor.sendToPlayer(player, new PadMapWorldScopePacket(worldScopeId, worldName));
     }

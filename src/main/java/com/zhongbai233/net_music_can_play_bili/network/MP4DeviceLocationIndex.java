@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -153,7 +154,7 @@ public final class MP4DeviceLocationIndex {
             return Optional.empty();
         }
         recordPlayer(level, player, deviceId);
-        return Optional.of(new ResolvedLocation(stack, MP4PlaybackSyncPacket.SOURCE_PLAYER, player.getId(),
+        return Optional.of(new ResolvedLocation(stack, ClientMediaSyncPayload.SOURCE_PLAYER, player.getId(),
                 player.blockPosition(), -1, player.getUUID()));
     }
 
@@ -164,7 +165,7 @@ public final class MP4DeviceLocationIndex {
             return Optional.empty();
         }
         recordItemEntity(level, itemEntity, deviceId);
-        return Optional.of(new ResolvedLocation(itemEntity.getItem(), MP4PlaybackSyncPacket.SOURCE_ITEM,
+        return Optional.of(new ResolvedLocation(itemEntity.getItem(), ClientMediaSyncPayload.SOURCE_ITEM,
                 itemEntity.getId(), itemEntity.blockPosition(), -1, deviceId));
     }
 
@@ -183,7 +184,7 @@ public final class MP4DeviceLocationIndex {
         }
         int slot = match.get().slot();
         recordBlockContainer(level, ref.pos(), slot, deviceId);
-        return Optional.of(new ResolvedLocation(match.get().stack(), MP4PlaybackSyncPacket.SOURCE_BLOCK, -1,
+        return Optional.of(new ResolvedLocation(match.get().stack(), ClientMediaSyncPayload.SOURCE_BLOCK, -1,
                 ref.pos(), slot, deviceId));
     }
 
@@ -199,7 +200,7 @@ public final class MP4DeviceLocationIndex {
         }
         int slot = match.get().slot();
         recordContainerEntity(level, entity, slot, deviceId);
-        return Optional.of(new ResolvedLocation(match.get().stack(), MP4PlaybackSyncPacket.SOURCE_CONTAINER_ENTITY,
+        return Optional.of(new ResolvedLocation(match.get().stack(), ClientMediaSyncPayload.SOURCE_CONTAINER_ENTITY,
                 entity.getId(), entity.blockPosition(), slot, deviceId));
     }
 
@@ -248,7 +249,7 @@ public final class MP4DeviceLocationIndex {
             Optional<SlotMatch> match = findInContainer(container, deviceId, -1);
             if (match.isPresent()) {
                 recordBlockContainer(level, pos, match.get().slot(), deviceId);
-                return Optional.of(new ResolvedLocation(match.get().stack(), MP4PlaybackSyncPacket.SOURCE_BLOCK, -1,
+                return Optional.of(new ResolvedLocation(match.get().stack(), ClientMediaSyncPayload.SOURCE_BLOCK, -1,
                         pos.immutable(), match.get().slot(), deviceId));
             }
         }
@@ -265,7 +266,7 @@ public final class MP4DeviceLocationIndex {
             ItemStack stack = resource.toStack(handler.getAmountAsInt(slot));
             if (isMp4(stack, deviceId)) {
                 recordBlockContainer(level, pos, slot, deviceId);
-                return Optional.of(new ResolvedLocation(stack, MP4PlaybackSyncPacket.SOURCE_BLOCK, -1,
+                return Optional.of(new ResolvedLocation(stack, ClientMediaSyncPayload.SOURCE_BLOCK, -1,
                         pos.immutable(), slot, deviceId));
             }
         }
@@ -277,7 +278,7 @@ public final class MP4DeviceLocationIndex {
         for (ItemEntity itemEntity : level.getEntitiesOfClass(ItemEntity.class, area)) {
             if (isMp4(itemEntity.getItem(), deviceId)) {
                 recordItemEntity(level, itemEntity, deviceId);
-                return Optional.of(new ResolvedLocation(itemEntity.getItem(), MP4PlaybackSyncPacket.SOURCE_ITEM,
+                return Optional.of(new ResolvedLocation(itemEntity.getItem(), ClientMediaSyncPayload.SOURCE_ITEM,
                         itemEntity.getId(), itemEntity.blockPosition(), -1, deviceId));
             }
         }
@@ -295,7 +296,7 @@ public final class MP4DeviceLocationIndex {
             if (match.isPresent()) {
                 recordContainerEntity(level, entity, match.get().slot(), deviceId);
                 return Optional.of(new ResolvedLocation(match.get().stack(),
-                        MP4PlaybackSyncPacket.SOURCE_CONTAINER_ENTITY, entity.getId(), entity.blockPosition(),
+                        ClientMediaSyncPayload.SOURCE_CONTAINER_ENTITY, entity.getId(), entity.blockPosition(),
                         match.get().slot(), deviceId));
             }
         }

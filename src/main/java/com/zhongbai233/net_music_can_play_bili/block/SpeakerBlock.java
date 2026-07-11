@@ -121,6 +121,9 @@ public class SpeakerBlock extends Block implements EntityBlock {
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
             BlockHitResult hitResult) {
+        if (!player.mayBuild()) {
+            return InteractionResult.PASS;
+        }
         if (level.isClientSide()) {
             com.zhongbai233.net_music_can_play_bili.client.SpeakerClient.openScreen(pos);
         }

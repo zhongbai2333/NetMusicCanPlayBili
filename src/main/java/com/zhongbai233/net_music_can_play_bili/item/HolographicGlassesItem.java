@@ -85,6 +85,10 @@ public class HolographicGlassesItem extends Item {
     }
 
     public static List<UUID> readBoundMp4s(ItemStack stack) {
+        return readBoundMediaDevices(stack);
+    }
+
+    public static List<UUID> readBoundMediaDevices(ItemStack stack) {
         List<UUID> result = new ArrayList<>();
         for (ScreenBinding binding : readScreenBindings(stack)) {
             UUID deviceId = binding.deviceId();
@@ -96,7 +100,11 @@ public class HolographicGlassesItem extends Item {
     }
 
     public static boolean boundToMp4(ItemStack stack, UUID deviceId) {
-        return deviceId != null && readBoundMp4s(stack).contains(deviceId);
+        return boundToMediaDevice(stack, deviceId);
+    }
+
+    public static boolean boundToMediaDevice(ItemStack stack, UUID deviceId) {
+        return deviceId != null && readBoundMediaDevices(stack).contains(deviceId);
     }
 
     public static boolean boundToMedia(ItemStack stack, MediaSource source) {
@@ -122,6 +130,10 @@ public class HolographicGlassesItem extends Item {
     }
 
     public static boolean clearBoundMp4(ItemStack stack, UUID deviceId) {
+        return clearBoundMediaDevice(stack, deviceId);
+    }
+
+    public static boolean clearBoundMediaDevice(ItemStack stack, UUID deviceId) {
         if (stack.isEmpty() || !HolographicGlassesAbility.has(stack) || deviceId == null) {
             return false;
         }
@@ -137,8 +149,8 @@ public class HolographicGlassesItem extends Item {
         if (stack.isEmpty() || !HolographicGlassesAbility.has(stack) || source == null) {
             return false;
         }
-        if (source.isMp4()) {
-            return clearBoundMp4(stack, source.mp4DeviceId());
+        if (source.isMediaDevice()) {
+            return clearBoundMediaDevice(stack, source.deviceId());
         }
         List<ScreenBinding> bindings = new ArrayList<>(readScreenBindings(stack));
         boolean removed = bindings.removeIf(binding -> source.equals(binding.source()));
@@ -284,7 +296,7 @@ public class HolographicGlassesItem extends Item {
 
     public record ScreenBinding(MediaSource source, ScreenConfig config) {
         public UUID deviceId() {
-            return source != null && source.isMp4() ? source.mp4DeviceId() : null;
+            return source != null && source.isMediaDevice() ? source.deviceId() : null;
         }
     }
 

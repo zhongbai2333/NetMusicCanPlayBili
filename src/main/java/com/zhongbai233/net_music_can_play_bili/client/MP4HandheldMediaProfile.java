@@ -4,6 +4,7 @@ import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldMediaDevicePr
 import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldMediaPlayback;
 import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldMediaRenderState;
 import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldMediaScreenSpec;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.item.ItemStack;
@@ -26,7 +27,7 @@ public final class MP4HandheldMediaProfile implements HandheldMediaDeviceProfile
 
     @Override
     public HandheldMediaPlayback playback(UUID deviceId) {
-        return MP4ClientPlayback.localVideoPlayback(deviceId);
+        return ClientMediaPlayback.videoPlayback(deviceId, stateForDevice(deviceId).subtitleAiEnabled());
     }
 
     @Override
@@ -38,7 +39,7 @@ public final class MP4HandheldMediaProfile implements HandheldMediaDeviceProfile
 
     @Override
     public boolean hasStartedSound(UUID deviceId, String sessionId) {
-        return MP4ClientPlayback.hasStartedSound(deviceId, sessionId);
+        return ClientMediaPlayback.hasAudioStarted(deviceId, sessionId);
     }
 
     @Override

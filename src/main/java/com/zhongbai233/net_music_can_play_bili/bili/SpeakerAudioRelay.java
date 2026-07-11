@@ -70,8 +70,14 @@ public class SpeakerAudioRelay {
             OpenALSpatialAudio old = spatialAudio;
             if (old != null)
                 old.cleanup();
-            spatialAudio = new OpenALSpatialAudio();
-            spatialAudio.init(1, 0, sampleRate); // 必须用正确采样率，否则播速偏差
+            OpenALSpatialAudio next = new OpenALSpatialAudio();
+            if (!next.init(1, 0, sampleRate)) { // 必须用正确采样率，否则播速偏差
+                next.cleanup();
+                spatialAudio = null;
+                initialized = false;
+                return;
+            }
+            spatialAudio = next;
             pendingFed = 0;
             totalSamplesFed = 0L;
             started = false;
@@ -109,7 +115,7 @@ public class SpeakerAudioRelay {
         }
         sa.updatePositions(new float[][] { MONO_POS }, new float[0][0], listenerPos,
                 forward(speakerPos, listenerPos));
-        float g = gainForDistance(distance(listenerPos, speakerPos)) * userVolume * gameVol();
+        float g = gainForDistance(distance(listenerPos, speakerPos), userVolume) * gameVol();
         sa.setBedGain(0, g);
         if (sa.isDeviceLost()) {
             sa.cleanup();
@@ -192,9 +198,9 @@ public class SpeakerAudioRelay {
         return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
 
-    /** 使用与主 handler 一致的距离衰减曲线 */
-    private static float gainForDistance(float d) {
-        return AudioUtils.gainForDistance(d);
+    /** 音响音量会同步收缩最大传播距离，避免低音量仍能被远处听到。 */
+    private static float gainForDistance(float d, float volume) {
+        return AudioUtils.speakerGainForDistance(d, volume);
     }
 
     private static float gameVol() {

@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
 import com.mojang.blaze3d.opengl.GlTexture;
+import com.mojang.blaze3d.opengl.GlStateManager;
 import com.mojang.blaze3d.textures.TextureFormat;
 import org.lwjgl.opengl.GL11C;
 import org.lwjgl.opengl.GL30C;
@@ -22,7 +23,7 @@ final class RawRg8GlTexture extends GlTexture {
         int previousUnpackAlignment = GL11C.glGetInteger(GL11C.GL_UNPACK_ALIGNMENT);
         int id = GL11C.glGenTextures();
         try {
-            GL11C.glBindTexture(GL11C.GL_TEXTURE_2D, id);
+            GlStateManager._bindTexture(id);
             GL11C.glTexParameteri(GL11C.GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
             GL11C.glTexParameteri(GL11C.GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
             GL11C.glTexParameteri(GL11C.GL_TEXTURE_2D, GL11C.GL_TEXTURE_MIN_FILTER, GL11C.GL_LINEAR);
@@ -41,7 +42,7 @@ final class RawRg8GlTexture extends GlTexture {
             return new RawRg8GlTexture(usage, label, Math.max(1, width), Math.max(1, height), id);
         } finally {
             GL11C.glPixelStorei(GL11C.GL_UNPACK_ALIGNMENT, previousUnpackAlignment);
-            GL11C.glBindTexture(GL11C.GL_TEXTURE_2D, previousTexture);
+            GlStateManager._bindTexture(previousTexture);
         }
     }
 }

@@ -6,6 +6,7 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSongInfoSanitizer;
 import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import com.zhongbai233.net_music_can_play_bili.server.BiliWhitelistManager;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -250,7 +251,7 @@ public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, in
                 clamp(volumePerMille, 0, 1000), sessionId, true);
 
         MP4PlaybackSyncManager.start(player, new MP4PlaybackSyncPacket(
-                player.getUUID(), deviceId, MP4PlaybackSyncPacket.SOURCE_PLAYER, player.getId(),
+                player.getUUID(), deviceId, ClientMediaSyncPayload.SOURCE_PLAYER, player.getId(),
                 player.getX(), player.getY() + 1.2D, player.getZ(), true, index, syncedPlayUrl, rawUrl,
                 songName == null ? "" : songName,
                 durationSeconds, clamp(volumePerMille, 0, 1000), sessionId, elapsedMillis, false));

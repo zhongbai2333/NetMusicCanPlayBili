@@ -2,10 +2,16 @@ package com.zhongbai233.net_music_can_play_bili.client.renderer.item;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.mojang.math.Axis;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.logging.LogUtils;
+import com.mojang.math.Axis;
+import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient;
+import com.zhongbai233.net_music_can_play_bili.client.PadClient;
 import com.zhongbai233.net_music_can_play_bili.client.PadFocusState;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.RenderVertexUtils;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.YuvVideoRenderTypes;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
 import com.zhongbai233.net_music_can_play_bili.item.PadItem;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.AbstractClientPlayer;
@@ -20,23 +26,35 @@ import net.minecraft.world.item.ItemStack;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+
 import org.joml.Matrix4f;
 import org.joml.Vector4f;
+import org.slf4j.Logger;
 
 /** 通过离屏 GUI 纹理渲染第一人称手持 Pad。 */
 public final class PadItemScreenRenderer {
+    private static final Logger LOGGER = LogUtils.getLogger();
     private static final int FULL_BRIGHT = 0x00F000F0;
+    private static final boolean VIDEO_DEBUG_LOG = Boolean.getBoolean("ncpb.pad.video.debug_log");
+    private static final boolean VIDEO_RENDERDOC_PROBE = Boolean.getBoolean("ncpb.pad.video.renderdoc_probe");
     private static final float HELD_SURFACE_X = 0.53F;
     private static final float HELD_SURFACE_Y = 0.08F;
     private static final float HELD_SURFACE_Z = -1.08F;
     private static final float HELD_SURFACE_SCALE = 1.56F;
+    private static final float HELD_SURFACE_LEFT_SHIFT = Float.parseFloat(
+            System.getProperty("ncpb.pad.handheld_left_shift", "0.05"));
     private static final float HOVER_TILT_DEGREES = 3.0F;
     private static final float DEVICE_BORDER = 0.040F;
     private static final float DEVICE_THICKNESS = 0.060F;
     private static final float SCREEN_FACE_Z_OFFSET = 0.020F;
     private static final float SCREEN_TEXTURE_Z_OFFSET = 0.024F;
+    private static final float VIDEO_UNDERLAY_Z_OFFSET = SCREEN_TEXTURE_Z_OFFSET - 0.001F;
+    private static final float VIDEO_TEXTURE_Z_OFFSET = SCREEN_TEXTURE_Z_OFFSET + 0.002F;
+    private static final int MAP_LAYER_TICK_INTERVAL_TICKS = Math.max(1,
+            Integer.getInteger("ncpb.pad.map_layer_tick_interval_ticks", 5));
     private static final UUID FALLBACK_DEVICE_ID = new UUID(0L, 0L);
     private static final Map<UUID, PadGuiTexture> GUI_TEXTURES = new ConcurrentHashMap<>();
+    private static int mapLayerTickCountdown;
 
     private PadItemScreenRenderer() {
     }
@@ -48,6 +66,21 @@ public final class PadItemScreenRenderer {
     public static void releaseAll() {
         GUI_TEXTURES.values().forEach(texture -> texture.close());
         GUI_TEXTURES.clear();
+        MP4Nv12VideoLayer.releaseAllHandheld();
+        MP4RgbaVideoLayer.releaseAllHandheld();
+    }
+
+    public static void releaseVideoLayers(UUID deviceId) {
+        MP4Nv12VideoLayer.releaseHandheld(deviceId);
+        MP4RgbaVideoLayer.releaseHandheld(deviceId);
+    }
+
+    private static boolean isLockedPad(UUID deviceId) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.player == null || deviceId == null) {
+            return false;
+        }
+        return PadClient.hasLockedIndexedPad(deviceId);
     }
 
     public static void renderHeldOffscreenGuiFrameStart() {
@@ -62,8 +95,14 @@ public final class PadItemScreenRenderer {
     public static void tickHeldMapLayers() {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.player == null) {
+            mapLayerTickCountdown = 0;
             return;
         }
+        if (mapLayerTickCountdown > 0) {
+            mapLayerTickCountdown--;
+            return;
+        }
+        mapLayerTickCountdown = MAP_LAYER_TICK_INTERVAL_TICKS - 1;
         tickHeldMapLayer(minecraft.player.getMainHandItem());
         tickHeldMapLayer(minecraft.player.getOffhandItem());
     }
@@ -73,9 +112,6 @@ public final class PadItemScreenRenderer {
             return;
         }
         UUID deviceId = PadItem.readDeviceId(stack);
-        if (deviceId == null) {
-            return;
-        }
         textureFor(deviceId).tickMapLayer(deviceId);
     }
 
@@ -84,9 +120,7 @@ public final class PadItemScreenRenderer {
             return;
         }
         UUID deviceId = PadItem.readDeviceId(stack);
-        if (deviceId == null) {
-            return;
-        }
+        markVideoSurfaceVisible(deviceId);
         textureFor(deviceId).renderFrameStart(deviceId);
     }
 
@@ -104,6 +138,7 @@ public final class PadItemScreenRenderer {
         HumanoidArm arm = mainHand ? player.getMainArm() : player.getMainArm().getOpposite();
         UUID deviceId = stack.getItem() instanceof PadItem ? PadItem.readDeviceId(stack) : null;
         if (deviceId != null) {
+            markVideoSurfaceVisible(deviceId);
             textureFor(deviceId).renderFrameStart(deviceId, partialTick);
         }
 
@@ -114,6 +149,7 @@ public final class PadItemScreenRenderer {
         } else {
             applyOneHandedMapPose(arm, swingProgress, equipProgress, poseStack, collector, light, armRenderer);
         }
+        poseStack.translate(-HELD_SURFACE_LEFT_SHIFT, 0.0F, 0.0F);
         submitTexturedSurface(poseStack, collector, deviceId);
         poseStack.popPose();
     }
@@ -158,6 +194,9 @@ public final class PadItemScreenRenderer {
         PadGuiTexture guiTexture = textureFor(deviceId);
         Identifier textureId = guiTexture.textureId(deviceId);
         Identifier bodyTextureId = guiTexture.whiteTextureId();
+        boolean locked = isLockedPad(deviceId);
+        markVideoSurfaceVisible(deviceId);
+        boolean videoUnderlay = locked && hasVideoFrame(deviceId);
         float aspect = PadGuiTexture.WIDTH / (float) PadGuiTexture.HEIGHT;
         float halfHeight = 0.39F;
         float halfWidth = halfHeight * aspect;
@@ -197,12 +236,102 @@ public final class PadItemScreenRenderer {
             emitSideButton(buffer, pose, bx1 + 0.012F, halfHeight * 0.50F, 0.040F, 0.130F, 0xFF6B7588);
             emitSideButton(buffer, pose, bx1 + 0.012F, halfHeight * 0.22F, 0.040F, 0.130F, 0xFF5E687B);
         });
-        collector.submitCustomGeometry(poseStack, RenderTypes.itemCutout(textureId), (pose, buffer) -> {
-            emitTexturedQuad(buffer, pose, -halfWidth, halfHeight, screenTextureZ, -halfWidth, -halfHeight,
-                    screenTextureZ, halfWidth, -halfHeight, screenTextureZ, halfWidth, halfHeight, screenTextureZ,
-                    true);
-        });
+        if (videoUnderlay) {
+            submitVideoLayer(poseStack, collector, deviceId, -halfWidth, halfHeight, halfWidth, -halfHeight,
+                    VIDEO_UNDERLAY_Z_OFFSET, true, bodyTextureId);
+        } else {
+            logVideoSkip(deviceId, locked, "underlay-disabled");
+        }
+        collector.submitCustomGeometry(poseStack,
+                videoUnderlay ? RenderTypes.itemTranslucent(textureId) : RenderTypes.itemCutout(textureId),
+                (pose, buffer) -> {
+                    emitTexturedQuad(buffer, pose, -halfWidth, halfHeight, screenTextureZ, -halfWidth, -halfHeight,
+                            screenTextureZ, halfWidth, -halfHeight, screenTextureZ, halfWidth, halfHeight,
+                            screenTextureZ,
+                            true);
+                });
+        if (!videoUnderlay) {
+            submitVideoLayer(poseStack, collector, deviceId, -halfWidth, halfHeight, halfWidth, -halfHeight,
+                    VIDEO_TEXTURE_Z_OFFSET, locked, bodyTextureId);
+        }
+        if (VIDEO_RENDERDOC_PROBE && !hasVideoFrame(deviceId)) {
+            submitRenderDocProbe(poseStack, collector, bodyTextureId, -halfWidth, halfHeight, halfWidth, -halfHeight,
+                    VIDEO_TEXTURE_Z_OFFSET + 0.006F, 0x99FF00FF);
+        }
         poseStack.popPose();
+    }
+
+    private static void markVideoSurfaceVisible(UUID deviceId) {
+        if (deviceId != null && ClientMediaPlayback.hasPlayback(deviceId)) {
+            MP4HandheldVideoClient.markVisible(deviceId);
+        }
+    }
+
+    private static boolean hasVideoFrame(UUID deviceId) {
+        return deviceId != null && ClientMediaPlayback.hasPlayback(deviceId)
+                && MP4HandheldVideoClient.latestFrame(deviceId) != null;
+    }
+
+    private static void submitVideoLayer(PoseStack poseStack, SubmitNodeCollector collector, UUID deviceId,
+            float x0, float y0, float x1, float y1, float z, boolean fullSurface, Identifier probeTextureId) {
+        if (deviceId == null) {
+            logVideoSkip(null, fullSurface, "missing-device-id");
+            return;
+        }
+        if (!ClientMediaPlayback.hasPlayback(deviceId)) {
+            logVideoSkip(deviceId, fullSurface, "no-local-playback");
+            return;
+        }
+        if (MP4HandheldVideoClient.latestFrame(deviceId) == null) {
+            logVideoSkip(deviceId, fullSurface, "no-latest-frame");
+            return;
+        }
+        MP4HandheldVideoClient.markVisible(deviceId);
+        float insetX = fullSurface ? 0.0F : (x1 - x0) * 0.025F;
+        float insetY = fullSurface ? 0.0F : (y0 - y1) * 0.045F;
+        float vx0 = x0 + insetX;
+        float vy0 = y0 - insetY;
+        float vx1 = x1 - insetX;
+        float vy1 = y1 + insetY;
+        boolean useRgbaFallback = IrisShaderpackCompat.isShaderPackInUse();
+        MP4RgbaVideoLayer rgbaLayer = MP4RgbaVideoLayer.forHandheldDevice(deviceId);
+        boolean rgba = useRgbaFallback && rgbaLayer.uploadLatest(deviceId);
+        MP4Nv12VideoLayer nv12Layer = MP4Nv12VideoLayer.forHandheldDevice(deviceId);
+        if (!rgba && (!nv12Layer.uploadLatest(deviceId) || nv12Layer.textureSet() == null)) {
+            logVideoSkip(deviceId, fullSurface, "upload-failed");
+            return;
+        }
+        logVideoSubmit(deviceId, fullSurface, rgba ? "rgba" : "nv12");
+        collector.submitCustomGeometry(poseStack,
+                rgba ? YuvVideoRenderTypes.padVideoRgbaEntity(rgbaLayer.textureId())
+                        : YuvVideoRenderTypes.padNv12Entity(nv12Layer.textureSet().yId(), nv12Layer.textureSet().uId(),
+                                nv12Layer.textureSet().vId()),
+                (pose, buffer) -> emitTexturedQuad(buffer, pose, vx0, vy0, z, vx0, vy1, z, vx1, vy1, z, vx1,
+                    vy0, z, false));
+        if (VIDEO_RENDERDOC_PROBE) {
+            submitRenderDocProbe(poseStack, collector, probeTextureId, vx0, vy0, vx1, vy1, z + 0.004F,
+                    0x99FF00FF);
+        }
+    }
+
+    private static void submitRenderDocProbe(PoseStack poseStack, SubmitNodeCollector collector,
+            Identifier probeTextureId, float x0, float y0, float x1, float y1, float z, int color) {
+        collector.submitCustomGeometry(poseStack, RenderTypes.itemTranslucent(probeTextureId),
+                (pose, buffer) -> emitSolidQuad(buffer, pose, x0, y0, z, x0, y1, z, x1, y1, z, x1, y0, z, color));
+    }
+
+    private static void logVideoSkip(UUID deviceId, boolean fullSurface, String reason) {
+        if (VIDEO_DEBUG_LOG) {
+            LOGGER.info("Pad video layer skipped: reason={} device={} fullSurface={} hasPlayback={} hasFrame={}",
+                    reason, deviceId, fullSurface, deviceId != null && ClientMediaPlayback.hasPlayback(deviceId),
+                    deviceId != null && MP4HandheldVideoClient.latestFrame(deviceId) != null);
+        }
+    }
+
+    private static void logVideoSubmit(UUID deviceId, boolean fullSurface, String mode) {
+        if (VIDEO_DEBUG_LOG) {
+            LOGGER.info("Pad video layer submitted: mode={} device={} fullSurface={}", mode, deviceId, fullSurface);
+        }
     }
 
     private static void publishProjectedQuad(Matrix4f modelMatrix, float x0, float y0, float z0, float x1, float y1,

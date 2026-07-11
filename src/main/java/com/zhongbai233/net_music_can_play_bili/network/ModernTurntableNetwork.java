@@ -65,6 +65,18 @@ public final class ModernTurntableNetwork {
                 MP4EnsureInventoryDeviceIdPacket.TYPE,
                 MP4EnsureInventoryDeviceIdPacket.STREAM_CODEC,
                 MP4EnsureInventoryDeviceIdPacket::handle);
+        registrar.playToServer(
+                PadStatePacket.TYPE,
+                PadStatePacket.STREAM_CODEC,
+                PadStatePacket::handle);
+        registrar.playToServer(
+                PadPublishPacket.TYPE,
+                PadPublishPacket.STREAM_CODEC,
+                PadPublishPacket::handle);
+        registrar.playToServer(
+                PadPlaybackControlPacket.TYPE,
+                PadPlaybackControlPacket.STREAM_CODEC,
+                PadPlaybackControlPacket::handle);
         registrar.playToClient(
                 MP4DeviceIdPacket.TYPE,
                 MP4DeviceIdPacket.STREAM_CODEC,
@@ -89,6 +101,10 @@ public final class ModernTurntableNetwork {
                 MP4PlaybackTimelinePacket.TYPE,
                 MP4PlaybackTimelinePacket.STREAM_CODEC,
                 MP4PlaybackTimelinePacket::handle);
+        registrar.playToClient(
+                PadStateMirrorPacket.TYPE,
+                PadStateMirrorPacket.STREAM_CODEC,
+                PadStateMirrorPacket::handle);
         registrar.playToClient(
                 WhitelistCsvExportPacket.TYPE,
                 WhitelistCsvExportPacket.STREAM_CODEC,

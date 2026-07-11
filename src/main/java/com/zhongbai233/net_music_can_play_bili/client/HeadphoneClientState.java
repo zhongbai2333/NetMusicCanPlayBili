@@ -53,11 +53,15 @@ public final class HeadphoneClientState {
     }
 
     public static boolean handlesMp4(UUID deviceId) {
+        return handlesMediaDevice(deviceId);
+    }
+
+    public static boolean handlesMediaDevice(UUID deviceId) {
         if (!equipped() || deviceId == null) {
             return false;
         }
         ItemStack stack = equippedStack();
-        return !stack.isEmpty() && deviceId.equals(AudioLinkData.readHeadphoneMp4(stack));
+        return !stack.isEmpty() && deviceId.equals(AudioLinkData.readHeadphoneMediaDevice(stack));
     }
 
     private static boolean withinDecodeRange(BlockPos turntablePos) {

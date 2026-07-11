@@ -104,13 +104,11 @@ public final class HttpRangeClient {
 
     private CdnResponse send(URL url, Long start, Long endInclusive, int redirects) throws IOException {
         URL requestUrl = PlaybackSync.strip(url);
-        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(requestUrl.toString()))
-                .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS))
-                .GET();
+        Duration timeout = Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS);
+        HttpRequest.Builder builder = start != null && endInclusive != null
+                ? HttpRangeHeaders.boundedRangeRequest(requestUrl, start, endInclusive, timeout)
+                : HttpRequest.newBuilder(URI.create(requestUrl.toString())).timeout(timeout).GET();
         BiliRequestHeaders.applyBiliCdnHeaders(builder, requestUrl);
-        if (start != null && endInclusive != null) {
-            builder.header("Range", "bytes=" + start + "-" + endInclusive);
-        }
 
         HttpResponse<InputStream> response;
         try {
@@ -120,7 +118,7 @@ public final class HttpRangeClient {
             throw new IOException("CDN request interrupted", e);
         }
 
-        if (isRedirect(response.statusCode())) {
+        if (HttpRangeHeaders.isRedirectStatus(response.statusCode())) {
             Optional<String> location = response.headers().firstValue("Location");
             response.body().close();
             if (location.isEmpty()) {
@@ -134,7 +132,9 @@ public final class HttpRangeClient {
         }
 
         long contentLength = parseLong(response.headers().firstValue("Content-Length"));
-        RangeInfo contentRange = parseContentRange(response.headers().firstValue("Content-Range"));
+        HttpRangeHeaders.ContentRange contentRange = response.headers().firstValue("Content-Range")
+                .map(HttpRangeHeaders::parseContentRange)
+                .orElseGet(HttpRangeHeaders.ContentRange::unknown);
         return new CdnResponse(
                 response.statusCode(),
                 response.body(),
@@ -143,11 +143,6 @@ public final class HttpRangeClient {
                 contentRange.endInclusive(),
                 contentRange.totalLength(),
                 start != null);
-    }
-
-    private static boolean isRedirect(int statusCode) {
-        return statusCode == 301 || statusCode == 302 || statusCode == 303
-                || statusCode == 307 || statusCode == 308;
     }
 
     private static boolean isRetryableStatus(int statusCode) {
@@ -177,29 +172,6 @@ public final class HttpRangeClient {
         }
     }
 
-    private static RangeInfo parseContentRange(Optional<String> value) {
-        if (value.isEmpty()) {
-            return RangeInfo.unknown();
-        }
-        String range = value.get().trim();
-        if (!range.startsWith("bytes ")) {
-            return RangeInfo.unknown();
-        }
-        int dash = range.indexOf('-');
-        int slash = range.indexOf('/');
-        if (dash < 6 || slash <= dash) {
-            return RangeInfo.unknown();
-        }
-        try {
-            long start = Long.parseLong(range.substring(6, dash));
-            long end = Long.parseLong(range.substring(dash + 1, slash));
-            long total = "*".equals(range.substring(slash + 1)) ? -1L : Long.parseLong(range.substring(slash + 1));
-            return new RangeInfo(start, end, total);
-        } catch (NumberFormatException ignored) {
-            return RangeInfo.unknown();
-        }
-    }
-
     public record CdnResponse(
             int statusCode,
             InputStream body,
@@ -219,9 +191,4 @@ public final class HttpRangeClient {
         }
     }
 
-    private record RangeInfo(long start, long endInclusive, long totalLength) {
-        static RangeInfo unknown() {
-            return new RangeInfo(-1L, -1L, -1L);
-        }
-    }
 }

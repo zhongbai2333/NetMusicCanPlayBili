@@ -197,21 +197,21 @@ pad_map_settings
 - ✅ 点位拖拽微调位置（拖动中 pin 跟随鼠标预览，松手后提交世界坐标）
 - ✅ 锁定状态下隐藏 `visible=false` 点位的用户视图过滤
 
-### Phase 3：同步 ❌ 未开始
+### Phase 3：同步 ✅ 已完成
 
-- ❌ `PadStatePacket`
-- ❌ `PadStateMirrorPacket`
-- ❌ 10t dirty 小同步
-- ❌ 300t 权威大同步
-- ✅ 数据字段已预留（`updatedAtMillis` + `sequence`），无实际同步逻辑
+- ✅ `PadStatePacket`（客户端编辑后的 PadDocument 上传）
+- ✅ `PadStateMirrorPacket`（服务端权威 PadDocument 镜像下发）
+- ✅ 10t dirty 小同步（客户端合并 Pad 表面编辑操作，只上传最后文档）
+- ✅ 300t 权威大同步（服务端对当前持有 Pad 的玩家强制镜像）
+- ✅ 数据字段已接入冲突判定（`updatedAtMillis + sequence`，拒绝旧同步）
 
-### Phase 4：触发播放 ❌ 未开始
+### Phase 4：触发播放 🟢 视频闭环完成
 
-- ❌ `PadPlaybackControlPacket`
-- ❌ 点击点位 → 解析媒体 → 播放管线
-- ❌ 视频全屏渲染到 Pad 表面、手动退出全屏
-- ❌ 纯音频进度条 + 播放控制
-- ⚠️ 耳机/全息眼镜绑定框架已存在（`MediaBindingData` / `AudioLinkIndex`），未接入 Pad
+- ✅ `PadPlaybackControlPacket`
+- ✅ 点击点位 → 解析媒体 → 播放管线
+- ✅ 视频全屏渲染到 Pad 表面（复用 MP4 横屏的 profile/update/visible/pump 控制逻辑，新增 Pad profile）
+- ✅ 纯音频进度条 + 播放状态卡片（点击播放卡片可停止当前 Pad 播放）
+- ✅ 耳机/全息眼镜绑定入口已接入 Pad（媒体管理工具副手持 Pad 打开绑定，复用 MP4 的媒体设备 sourceId 路由）
 
 ### Phase 5：启发式地图 🟢 基本完成
 
@@ -230,6 +230,10 @@ pad_map_settings
 ### 最近实现进度（2026-07-04）
 
 - ✅ Pad 表面编辑入口完成第一版闭环：右侧媒体库显示歌曲，拖拽歌曲到地图即可创建绑定点位。
+- ✅ Pad 发布入口：草稿 Pad 底部按钮会在背包生成一个共享同一 `deviceId` 的锁定副本；草稿继续保留可编辑，锁定副本无解锁按钮。
+- ✅ Pad 文档持久化改为世界 `SavedData` 权威模型：物品 NBT 仅保留 `pad_device_id` 与本地 `pad_locked`，媒体/点位/标题/版本等可变内容以 `deviceId` 为 key 存入 `PadDocumentSavedData`。
+- ✅ 同 `deviceId` 多 Pad 模型：未锁定草稿的内容更新会写入 `PadDocumentStore`，同 ID 的锁定 Pad 从同一 SavedData 文档镜像内容，锁定副本仅保持本物品 `locked=true`。
+- ✅ 已发布 Pad 进入全屏地图模式：隐藏右侧媒体库/编辑控制，靠近 `ENTER_RADIUS` Pin 自动触发播放，手动 Pin 仍可点击播放。
 - ✅ `PadTriggerPoint` 已加入 `visible` 字段，NBT 读写兼容旧数据（缺省为 `true`）。
 - ✅ 地图点位渲染已按 `visible` 使用两种颜色，支持隐藏/明确点位的编辑态管理。
 - ✅ 独立地图 GUI 入口已从 `PadFocusScreen` 移除，交互统一留在 Pad 3D 表面。
@@ -240,6 +244,11 @@ pad_map_settings
 - ✅ 媒体库拖放体验增强：从媒体库拖歌曲到地图时，现在会在地图上显示跟随鼠标的半透明 pin 预览。
 - ✅ 过渡版性能清理：地图 profile 探测改为轻量人工方块判定，快照合成减少 chunk key/数组 clone 开销，降低地图刷新时的轻微卡顿。
 - ✅ 移动掉帧优化：地图快照新增预计算签名，渲染层不再为判重反复扫描整张 tile 数组；地图采样改为按 chunk 数限制单 tick 预算，降低玩家移动时的采样尖峰。
+- ✅ Phase 3 同步闭环：Pad 表面编辑会进入 10t dirty 合并队列，通过 `PadStatePacket` 上传；服务端按当前持有者镜像 `PadStateMirrorPacket`，并每 300t 强制下发权威文档。
+- ✅ Phase 4 播放第一版：锁定状态下点击 MANUAL 点位会通过 `PadPlaybackControlPacket` 按 `pointId -> mediaId -> disc` 解析并复用同步播放管线；Pad 播放卡片显示曲名、进度和停止入口。
+- ✅ Phase 4 视频贴面：`MP4HandheldVideoClient` 已支持按 `HandheldMediaDeviceProfile` 更新，Pad 通过 `PadHandheldMediaProfile` 复用 MP4 横屏的“音频开始后解码、可见性标记、按时间线泵帧、NV12/RGBA fallback 上传”控制模型，并在 Pad 3D 表面覆盖视频层。
+- ✅ Phase 4 设备绑定：`MediaBindingData` 新增 Pad 媒体源；媒体管理工具可在副手持 Pad 时打开绑定入口，耳机通过通用媒体设备 UUID 私有路由， 全息眼镜可把 Pad 作为 screen binding 并复用 handheld 视频层渲染。
+- ✅ Pad 地图缓存刷新改为事件驱动 dirty chunk：客户端方块变更只标记对应 chunk，下一个 Pad tick 仅失效并重采样 dirty chunk，移除旧的定时滚动刷新。
 - ✅ 编译验证通过：`./gradlew.bat compileJava --console=plain -q`。
 
 ---

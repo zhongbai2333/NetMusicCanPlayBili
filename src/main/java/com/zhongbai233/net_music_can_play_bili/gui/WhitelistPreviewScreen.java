@@ -1,8 +1,9 @@
 package com.zhongbai233.net_music_can_play_bili.gui;
 
-import com.zhongbai233.net_music_can_play_bili.client.MP4ClientPlayback;
+import com.zhongbai233.net_music_can_play_bili.client.MP4ClientMediaSync;
 import com.zhongbai233.net_music_can_play_bili.client.audio.AudioDurationProbe;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTimelineView;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistPreviewPacket;
@@ -239,13 +240,13 @@ public class WhitelistPreviewScreen extends Screen {
         if (locallyPaused || !packet.playing()) {
             return;
         }
-        MP4ClientPlayback.handleSync(toLocalAudioSync(packet));
+        MP4ClientMediaSync.handleSync(toLocalAudioSync(packet));
         if (!hasVideo(packet)) {
             return;
         }
         String sessionId = WhitelistPreviewPacket.sessionId(packet.previewId(), packet.elapsedMillis());
         pendingVideoSessionId = sessionId;
-        if (!MP4ClientPlayback.hasStartedSound(packet.previewId(), sessionId)) {
+        if (!MP4ClientMediaSync.hasStartedSound(packet.previewId(), sessionId)) {
             return;
         }
         startPreviewVideo(packet, sessionId);
@@ -258,7 +259,7 @@ public class WhitelistPreviewScreen extends Screen {
         }
         String sessionId = WhitelistPreviewPacket.sessionId(payload.previewId(), payload.elapsedMillis());
         if (!sessionId.equals(pendingVideoSessionId)
-                || !MP4ClientPlayback.hasStartedSound(payload.previewId(), sessionId)) {
+                || !MP4ClientMediaSync.hasStartedSound(payload.previewId(), sessionId)) {
             return;
         }
         startPreviewVideo(payload, sessionId);
@@ -314,7 +315,7 @@ public class WhitelistPreviewScreen extends Screen {
 
     private MP4PlaybackSyncPacket toLocalAudioSync(WhitelistPreviewPacket packet) {
         int playerEntityId = Minecraft.getInstance().player != null ? Minecraft.getInstance().player.getId() : -1;
-        return new MP4PlaybackSyncPacket(packet.previewId(), packet.previewId(), MP4PlaybackSyncPacket.SOURCE_PLAYER,
+        return new MP4PlaybackSyncPacket(packet.previewId(), packet.previewId(), ClientMediaSyncPayload.SOURCE_PLAYER,
                 playerEntityId, 0.0D, 0.0D, 0.0D, packet.playing(), 0, packet.audioUrl(), packet.rawUrl(),
                 packet.title(), packet.durationSeconds(), 850,
                 WhitelistPreviewPacket.sessionId(packet.previewId(), packet.elapsedMillis()),
@@ -326,7 +327,7 @@ public class WhitelistPreviewScreen extends Screen {
         if (previewId != null) {
             String sessionId = WhitelistPreviewPacket.sessionId(previewId, payload.elapsedMillis());
             pendingVideoSessionId = "";
-            MP4ClientPlayback.handleSync(WhitelistPreviewPacket.stopAudio(previewId));
+            MP4ClientMediaSync.handleSync(WhitelistPreviewPacket.stopAudio(previewId));
             VideoBillboardPreview.stopIfSession(sessionId);
         }
     }
@@ -367,7 +368,7 @@ public class WhitelistPreviewScreen extends Screen {
     }
 
     private ClientMediaTimelineView timelineView(String sessionId) {
-        return ClientMediaTimelineView.forMp4Owner(payload.previewId(), sessionId, payload.elapsedMillis(),
+        return ClientMediaTimelineView.forMediaOwner(payload.previewId(), sessionId, payload.elapsedMillis(),
                 totalMillis());
     }
 

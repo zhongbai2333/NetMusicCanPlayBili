@@ -1,8 +1,12 @@
 package com.zhongbai233.net_music_can_play_bili.gui;
 
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
+import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient;
+import com.zhongbai233.net_music_can_play_bili.client.PadClient;
 import com.zhongbai233.net_music_can_play_bili.client.PadFocusState;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
 import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapClientCache;
+import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapProjection;
 import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSampler;
 import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSnapshot;
 import com.zhongbai233.net_music_can_play_bili.item.PadItem;
@@ -10,11 +14,14 @@ import com.zhongbai233.net_music_can_play_bili.item.pad.PadDocument;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadMediaEntry;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadTriggerMode;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadTriggerPoint;
+import com.zhongbai233.net_music_can_play_bili.network.PadPlaybackControlPacket;
+import com.zhongbai233.net_music_can_play_bili.network.PadPublishPacket;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
+import net.neoforged.neoforge.client.network.ClientPacketDistributor;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 
@@ -29,6 +36,10 @@ public class PadFocusScreen extends Screen {
     private static final int MAP_Y = 44;
     private static final int MAP_W = 270;
     private static final int MAP_H = 198;
+    private static final int LOCKED_MAP_X = 0;
+    private static final int LOCKED_MAP_Y = 0;
+    private static final int LOCKED_MAP_W = TEXTURE_W;
+    private static final int LOCKED_MAP_H = TEXTURE_H;
     private static final int MEDIA_X = 300;
     private static final int MEDIA_Y = 48;
     private static final int MEDIA_W = 132;
@@ -37,7 +48,12 @@ public class PadFocusScreen extends Screen {
     private static final int EDITOR_Y = 130;
     private static final int EDITOR_W = 132;
     private static final int EDITOR_H = 86;
+    private static final int PUBLISH_X = 300;
+    private static final int PUBLISH_Y = 220;
+    private static final int PUBLISH_W = 132;
+    private static final int PUBLISH_H = 18;
     private final InteractionHand hand;
+    private boolean draggingProgress;
 
     public PadFocusScreen(InteractionHand hand) {
         super(Component.translatable("gui.net_music_can_play_bili.pad.focus"));
@@ -84,9 +100,9 @@ public class PadFocusScreen extends Screen {
         updateHover((int) event.x(), (int) event.y());
         if (event.button() == 1) {
             TexturePoint point = toTexturePoint((int) event.x(), (int) event.y());
-            if (point != null && inside(point, MAP_X, MAP_Y, MAP_W, MAP_H)) {
+            if (point != null && insideMap(point, PadClient.cachedDocumentFor(heldPadStack()))) {
                 PadTriggerPoint hitPoint = pointAt(point);
-                PadDocument document = PadItem.readDocument(heldPadStack());
+                PadDocument document = PadClient.cachedDocumentFor(heldPadStack());
                 if (hitPoint != null && !document.locked()) {
                     removePoint(hitPoint.pointId());
                     return true;
@@ -105,9 +121,19 @@ public class PadFocusScreen extends Screen {
     @Override
     public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
         updateHover((int) event.x(), (int) event.y());
+        if (event.button() == 0 && draggingProgress) {
+            TexturePoint point = toTexturePoint((int) event.x(), (int) event.y());
+            if (point != null) {
+                UUID deviceId = PadItem.readDeviceId(heldPadStack());
+                boolean video = PadFocusState.pausedVideo()
+                        || (deviceId != null && MP4HandheldVideoClient.latestFrame(deviceId) != null);
+                PadFocusState.setMediaProgress(video ? videoProgressAt(point) : audioProgressAt(point));
+            }
+            return true;
+        }
         if (event.button() == 0 && PadFocusState.draggingPoint()) {
             TexturePoint point = toTexturePoint((int) event.x(), (int) event.y());
-            if (point != null && inside(point, MAP_X, MAP_Y, MAP_W, MAP_H)) {
+            if (point != null && insideMap(point, PadClient.cachedDocumentFor(heldPadStack()))) {
                 PadFocusState.updatePointDragPreview(point.x(), point.y());
             }
             return true;
@@ -120,10 +146,16 @@ public class PadFocusScreen extends Screen {
         updateHover((int) event.x(), (int) event.y());
         if (event.button() == 0 && PadFocusState.draggingMedia()) {
             TexturePoint point = toTexturePoint((int) event.x(), (int) event.y());
-            if (point != null && inside(point, MAP_X, MAP_Y, MAP_W, MAP_H)) {
+            if (point != null && insideMap(point, PadClient.cachedDocumentFor(heldPadStack()))) {
                 createPointFromDrag(point, PadFocusState.draggingMediaId(), PadFocusState.draggingMediaName());
             }
             PadFocusState.endMediaDrag();
+            return true;
+        }
+        if (event.button() == 0 && draggingProgress) {
+            draggingProgress = false;
+            PadFocusState.setScrubbingProgress(false);
+            seekPlayback(currentProgressMillis());
             return true;
         }
         if (event.button() == 0 && PadFocusState.draggingPoint()) {
@@ -162,6 +194,12 @@ public class PadFocusScreen extends Screen {
         }
         String control = hit(point);
         PadFocusState.pressFeedback(point.x(), point.y(), control);
+        if (handleLockedVideoControl(point, control)) {
+            return;
+        }
+        if (handleLockedAudioControl(point, control)) {
+            return;
+        }
         if ("MEDIA".equals(control)) {
             PadMediaEntry entry = mediaEntryAt(point);
             if (entry != null) {
@@ -172,7 +210,12 @@ public class PadFocusScreen extends Screen {
         if ("MAP".equals(control)) {
             PadTriggerPoint hitPoint = pointAt(point);
             if (hitPoint != null) {
-                PadFocusState.beginPointDrag(hitPoint.pointId());
+                PadDocument document = PadClient.cachedDocumentFor(heldPadStack());
+                if (document.locked()) {
+                    playPoint(hitPoint);
+                } else {
+                    PadFocusState.beginPointDrag(hitPoint.pointId());
+                }
             } else {
                 PadFocusState.selectPoint(null);
             }
@@ -180,11 +223,138 @@ public class PadFocusScreen extends Screen {
         }
         if ("EDITOR".equals(control)) {
             handleEditorClick(point);
+            return;
+        }
+        if ("PLAYBACK".equals(control)) {
+            stopPlayback();
+            return;
+        }
+        if ("PUBLISH".equals(control)) {
+            publishLockedCopy();
         }
     }
 
+    private boolean handleLockedVideoControl(TexturePoint point, String control) {
+        PadDocument document = PadClient.cachedDocumentFor(heldPadStack());
+        UUID deviceId = PadItem.readDeviceId(heldPadStack());
+        if (!document.locked() || deviceId == null
+            || (!ClientMediaPlayback.hasPlayback(deviceId) && !PadFocusState.pausedPlaybackAvailable())) {
+            return false;
+        }
+        switch (control) {
+            case "VIDEO_PROGRESS" -> {
+                draggingProgress = true;
+                PadFocusState.setScrubbingProgress(true);
+                PadFocusState.setMediaProgress(videoProgressAt(point));
+                return true;
+            }
+            case "VIDEO_PLAY" -> {
+                togglePlayback();
+                PadFocusState.showControlsTemporarily();
+                return true;
+            }
+            case "VIDEO_STOP" -> {
+                stopPlayback();
+                PadFocusState.showControlsTemporarily();
+                return true;
+            }
+            case "VIDEO_QUALITY" -> {
+                PadFocusState.toggleQualityMenu();
+                return true;
+            }
+            case "VIDEO_SUBTITLE" -> {
+                PadFocusState.toggleSubtitleMenu();
+                return true;
+            }
+            case "SUBTITLE_OFF" -> {
+                PadFocusState.disableSubtitle();
+                return true;
+            }
+            case "SUBTITLE_PRIMARY" -> {
+                PadFocusState.selectSubtitleMode(0);
+                return true;
+            }
+            case "SUBTITLE_SECONDARY" -> {
+                PadFocusState.selectSubtitleMode(1);
+                return true;
+            }
+            case "SUBTITLE_AI" -> {
+                PadFocusState.toggleSubtitleAi();
+                return true;
+            }
+            case "QUALITY_0", "QUALITY_1", "QUALITY_2", "QUALITY_3", "QUALITY_4", "QUALITY_5", "QUALITY_6",
+                    "QUALITY_7" -> {
+                PadFocusState.selectQualityIndex(control.charAt(control.length() - 1) - '0');
+                return true;
+            }
+            case "MAP" -> {
+                PadFocusState.toggleControls();
+                return true;
+            }
+            default -> {
+                if (PadFocusState.controlsVisible()) {
+                    PadFocusState.showControlsTemporarily();
+                }
+                return false;
+            }
+        }
+    }
+
+    private boolean handleLockedAudioControl(TexturePoint point, String control) {
+        PadDocument document = PadClient.cachedDocumentFor(heldPadStack());
+        UUID deviceId = PadItem.readDeviceId(heldPadStack());
+        boolean audioPaused = PadFocusState.pausedPlaybackAvailable() && !PadFocusState.pausedVideo();
+        if (!document.locked() || deviceId == null
+                || (!ClientMediaPlayback.hasPlayback(deviceId) && !audioPaused)) {
+            return false;
+        }
+        switch (control) {
+            case "AUDIO_PROGRESS" -> {
+                draggingProgress = true;
+                PadFocusState.setScrubbingProgress(true);
+                PadFocusState.setMediaProgress(audioProgressAt(point));
+                return true;
+            }
+            case "AUDIO_PLAY" -> {
+                togglePlayback();
+                return true;
+            }
+            case "AUDIO_STOP" -> {
+                stopPlayback();
+                return true;
+            }
+            case "AUDIO_SUBTITLE" -> {
+                PadFocusState.toggleSubtitleMenu();
+                return true;
+            }
+            default -> {
+                return false;
+            }
+        }
+    }
+
+    private void publishLockedCopy() {
+        ItemStack stack = heldPadStack();
+        if (!PadItem.isPad(stack)) {
+            return;
+        }
+        PadDocument document = PadClient.cachedDocumentFor(stack);
+        if (document.locked()) {
+            return;
+        }
+        UUID deviceId = PadItem.readDeviceId(stack);
+        if (deviceId == null) {
+            return;
+        }
+        writeDocument(stack, document.withLocked(false));
+        ClientPacketDistributor.sendToServer(new PadPublishPacket(deviceId));
+        PadFocusState.selectPoint(null);
+        PadFocusState.endMediaDrag();
+        PadFocusState.endPointDrag();
+    }
+
     private void handleEditorClick(TexturePoint point) {
-        PadDocument document = PadItem.readDocument(heldPadStack());
+        PadDocument document = PadClient.cachedDocumentFor(heldPadStack());
         if (document.locked()) {
             return;
         }
@@ -241,7 +411,7 @@ public class PadFocusScreen extends Screen {
         if (!PadItem.isPad(stack)) {
             return;
         }
-        PadDocument document = PadItem.readDocument(stack);
+        PadDocument document = PadClient.cachedDocumentFor(stack);
         if (document.locked() || document.triggerPoints().size() >= PadDocument.MAX_TRIGGER_POINTS) {
             return;
         }
@@ -251,20 +421,21 @@ public class PadFocusScreen extends Screen {
         }
         PadMapSnapshot map = PadMapClientCache.snapshot(minecraft.player.blockPosition().getX(),
                 minecraft.player.blockPosition().getZ());
-        MapRect mapRect = visibleMapRect();
-        MapViewport viewport = mapViewport(map, mapRect, minecraft.player.getX(), minecraft.player.getZ());
-        float worldX = screenToWorldX(point.x(), map, viewport);
-        float worldZ = screenToWorldZ(point.y(), map, viewport);
+        PadMapProjection.Rect mapRect = visibleMapRect();
+        PadMapProjection.Viewport viewport = PadMapProjection.viewport(map, mapRect,
+                minecraft.player.getX(), minecraft.player.getZ());
+        float worldX = PadMapProjection.screenToWorldX(point.x(), map, viewport);
+        float worldZ = PadMapProjection.screenToWorldZ(point.y(), map, viewport);
         PadTriggerPoint created = PadTriggerPoint.createManual(mediaName, worldX, minecraft.player.getY(), worldZ,
                 mediaId);
-        PadItem.writeDocument(stack, document.withTrigger(created));
+        writeDocument(stack, document.withTrigger(created));
         PadFocusState.selectPoint(created.pointId());
         PadFocusState.pressFeedback(point.x(), point.y(), "MAP");
     }
 
     private void moveSelectedPoint(TexturePoint point) {
         ItemStack stack = heldPadStack();
-        PadDocument document = PadItem.readDocument(stack);
+        PadDocument document = PadClient.cachedDocumentFor(stack);
         if (!PadItem.isPad(stack) || document.locked()) {
             return;
         }
@@ -278,10 +449,12 @@ public class PadFocusScreen extends Screen {
         }
         PadMapSnapshot map = PadMapClientCache.snapshot(minecraft.player.blockPosition().getX(),
                 minecraft.player.blockPosition().getZ());
-        MapViewport viewport = mapViewport(map, visibleMapRect(), minecraft.player.getX(), minecraft.player.getZ());
-        PadItem.writeDocument(stack, document.withTrigger(new PadTriggerPoint(selected.pointId(), selected.name(),
-                screenToWorldX(point.x(), map, viewport), selected.y(), screenToWorldZ(point.y(), map, viewport),
-                selected.radiusBlocks(), selected.mediaId(), selected.triggerMode(), selected.loop(),
+        PadMapProjection.Viewport viewport = PadMapProjection.viewport(map, visibleMapRect(),
+                minecraft.player.getX(), minecraft.player.getZ());
+        writeDocument(stack, document.withTrigger(new PadTriggerPoint(selected.pointId(), selected.name(),
+                PadMapProjection.screenToWorldX(point.x(), map, viewport), selected.y(),
+                PadMapProjection.screenToWorldZ(point.y(), map, viewport), selected.radiusBlocks(), selected.mediaId(),
+                selected.triggerMode(), selected.loop(),
                 selected.volumePerMille(), selected.visible())));
     }
 
@@ -290,17 +463,18 @@ public class PadFocusScreen extends Screen {
         if (minecraft.player == null) {
             return null;
         }
-        PadDocument document = PadItem.readDocument(heldPadStack());
+        PadDocument document = PadClient.cachedDocumentFor(heldPadStack());
         PadMapSnapshot map = PadMapClientCache.snapshot(minecraft.player.blockPosition().getX(),
                 minecraft.player.blockPosition().getZ());
-        MapViewport viewport = mapViewport(map, visibleMapRect(), minecraft.player.getX(), minecraft.player.getZ());
+        PadMapProjection.Viewport viewport = PadMapProjection.viewport(map, visibleMapRect(),
+                minecraft.player.getX(), minecraft.player.getZ());
         for (int i = document.triggerPoints().size() - 1; i >= 0; i--) {
             PadTriggerPoint trigger = document.triggerPoints().get(i);
             if (document.locked() && !trigger.visible()) {
                 continue;
             }
-            int px = Math.round(mapScreenX((float) trigger.x(), map, viewport));
-            int pz = Math.round(mapScreenY((float) trigger.z(), map, viewport));
+            int px = Math.round(PadMapProjection.mapScreenX((float) trigger.x(), map, viewport));
+            int pz = Math.round(PadMapProjection.mapScreenY((float) trigger.z(), map, viewport));
             if (Math.abs(point.x() - px) <= 10 && Math.abs(point.y() - pz) <= 14) {
                 return trigger;
             }
@@ -319,27 +493,136 @@ public class PadFocusScreen extends Screen {
 
     private void updatePoint(PadTriggerPoint point) {
         ItemStack stack = heldPadStack();
-        PadDocument document = PadItem.readDocument(stack);
+        PadDocument document = PadClient.cachedDocumentFor(stack);
         if (!PadItem.isPad(stack) || document.locked()) {
             return;
         }
-        PadItem.writeDocument(stack, document.withTrigger(point));
+        writeDocument(stack, document.withTrigger(point));
         PadFocusState.selectPoint(point.pointId());
     }
 
     private void removePoint(UUID pointId) {
         ItemStack stack = heldPadStack();
-        PadDocument document = PadItem.readDocument(stack);
+        PadDocument document = PadClient.cachedDocumentFor(stack);
         if (!PadItem.isPad(stack) || document.locked() || pointId == null) {
             return;
         }
         ArrayList<PadTriggerPoint> points = new ArrayList<>(document.triggerPoints());
         if (points.removeIf(point -> pointId.equals(point.pointId()))) {
-            PadItem.writeDocument(stack, new PadDocument(document.title(), document.author(), document.locked(),
+            writeDocument(stack, new PadDocument(document.title(), document.author(), document.locked(),
                     System.currentTimeMillis(), document.sequence() + 1, document.mapSettings(),
                     document.mediaEntries(), points));
             PadFocusState.selectPoint(null);
         }
+    }
+
+    private void playPoint(PadTriggerPoint point) {
+        if (point == null || point.triggerMode() != PadTriggerMode.MANUAL) {
+            return;
+        }
+        UUID deviceId = PadItem.readDeviceId(heldPadStack());
+        if (deviceId == null) {
+            return;
+        }
+        ClientPacketDistributor.sendToServer(new PadPlaybackControlPacket(PadPlaybackControlPacket.Action.START,
+                deviceId, point.pointId(), 0L));
+        PadFocusState.selectPoint(point.pointId());
+    }
+
+    private void stopPlayback() {
+        UUID deviceId = PadItem.readDeviceId(heldPadStack());
+        if (deviceId == null || !ClientMediaPlayback.hasPlayback(deviceId)) {
+            PadFocusState.clearPausedPlayback();
+            return;
+        }
+        PadFocusState.clearPausedPlayback();
+        ClientPacketDistributor.sendToServer(new PadPlaybackControlPacket(PadPlaybackControlPacket.Action.STOP,
+                deviceId, null, ClientMediaPlayback.elapsedMillis(deviceId)));
+    }
+
+    private void pausePlayback() {
+        UUID deviceId = PadItem.readDeviceId(heldPadStack());
+        if (deviceId == null || !ClientMediaPlayback.hasPlayback(deviceId)) {
+            return;
+        }
+        UUID pointId = activePlaybackPointId(deviceId);
+        long elapsedMillis = ClientMediaPlayback.elapsedMillis(deviceId);
+        if (pointId != null) {
+            PadFocusState.rememberPausedPlayback(pointId, elapsedMillis,
+                    ClientMediaPlayback.durationMillis(deviceId), MP4HandheldVideoClient.latestFrame(deviceId) != null);
+        }
+        ClientPacketDistributor.sendToServer(new PadPlaybackControlPacket(PadPlaybackControlPacket.Action.PAUSE,
+                deviceId, null, elapsedMillis));
+    }
+
+    private void togglePlayback() {
+        UUID deviceId = PadItem.readDeviceId(heldPadStack());
+        if (deviceId == null) {
+            return;
+        }
+        if (ClientMediaPlayback.hasPlayback(deviceId)) {
+            pausePlayback();
+            return;
+        }
+        UUID pointId = PadFocusState.pausedPointId();
+        if (pointId == null) {
+            return;
+        }
+        ClientPacketDistributor.sendToServer(new PadPlaybackControlPacket(PadPlaybackControlPacket.Action.START,
+                deviceId, pointId, PadFocusState.pausedElapsedMillis()));
+        PadFocusState.clearPausedPlayback();
+    }
+
+    private void seekPlayback(long targetMillis) {
+        UUID deviceId = PadItem.readDeviceId(heldPadStack());
+        if (deviceId == null) {
+            return;
+        }
+        if (!ClientMediaPlayback.hasPlayback(deviceId)) {
+            UUID pointId = PadFocusState.pausedPointId();
+            if (pointId != null) {
+                PadFocusState.rememberPausedPlayback(pointId, targetMillis,
+                        PadFocusState.pausedDurationMillis(), PadFocusState.pausedVideo());
+            }
+            return;
+        }
+        ClientPacketDistributor.sendToServer(new PadPlaybackControlPacket(PadPlaybackControlPacket.Action.SEEK,
+                deviceId, null, Math.max(0L, targetMillis)));
+    }
+
+    private UUID activePlaybackPointId(UUID deviceId) {
+        int mediaId = ClientMediaPlayback.queueIndex(deviceId);
+        if (mediaId < 0) {
+            return null;
+        }
+        PadDocument document = PadClient.cachedDocumentFor(heldPadStack());
+        for (PadTriggerPoint point : document.triggerPoints()) {
+            if (point.mediaId() == mediaId) {
+                return point.pointId();
+            }
+        }
+        return null;
+    }
+
+    private long currentProgressMillis() {
+        UUID deviceId = PadItem.readDeviceId(heldPadStack());
+        long duration = deviceId != null ? ClientMediaPlayback.durationMillis(deviceId) : 0L;
+        if (duration <= 0L && PadFocusState.pausedPlaybackAvailable()) {
+            duration = PadFocusState.pausedDurationMillis();
+        }
+        return Math.round(PadFocusState.mediaProgress() * Math.max(0L, duration));
+    }
+
+    private float videoProgressAt(TexturePoint point) {
+        int x0 = 32;
+        int w = TEXTURE_W - 64;
+        return Math.max(0.0F, Math.min(1.0F, (point.x() - x0) / (float) Math.max(1, w)));
+    }
+
+    private float audioProgressAt(TexturePoint point) {
+        int x0 = 36;
+        int w = TEXTURE_W - 72;
+        return Math.max(0.0F, Math.min(1.0F, (point.x() - x0) / (float) Math.max(1, w)));
     }
 
     private PadTriggerPoint rebuildPoint(PadTriggerPoint point, int radius, boolean visible, int volume, boolean loop) {
@@ -361,8 +644,13 @@ public class PadFocusScreen extends Screen {
         if (row < 0 || row >= 4) {
             return null;
         }
-        PadDocument document = PadItem.readDocument(heldPadStack());
+        PadDocument document = PadClient.cachedDocumentFor(heldPadStack());
         return row < document.mediaEntries().size() ? document.mediaEntries().get(row) : null;
+    }
+
+    private void writeDocument(ItemStack stack, PadDocument document) {
+        PadItem.writeDocument(stack, document);
+        PadClient.markDocumentDirty(stack, document);
     }
 
     private String mediaName(PadMediaEntry entry) {
@@ -382,63 +670,106 @@ public class PadFocusScreen extends Screen {
         return PadItem.isPad(stack) ? stack : ItemStack.EMPTY;
     }
 
-    private MapRect visibleMapRect() {
-        return fitMapRect(MAP_X + 6, MAP_Y + 6, MAP_W - 12, MAP_H - 12);
-    }
-
-    private MapRect fitMapRect(int x, int y, int w, int h) {
-        if (PadMapSampler.DEFAULT_VIEW_WIDTH <= w && PadMapSampler.DEFAULT_VIEW_HEIGHT <= h) {
-            int fittedX = x + (w - PadMapSampler.DEFAULT_VIEW_WIDTH) / 2;
-            int fittedY = y + (h - PadMapSampler.DEFAULT_VIEW_HEIGHT) / 2;
-            return new MapRect(fittedX, fittedY, PadMapSampler.DEFAULT_VIEW_WIDTH, PadMapSampler.DEFAULT_VIEW_HEIGHT);
+    private PadMapProjection.Rect visibleMapRect() {
+        PadDocument document = PadClient.cachedDocumentFor(heldPadStack());
+        int x = document.locked() ? LOCKED_MAP_X : MAP_X;
+        int y = document.locked() ? LOCKED_MAP_Y : MAP_Y;
+        int w = document.locked() ? LOCKED_MAP_W : MAP_W;
+        int h = document.locked() ? LOCKED_MAP_H : MAP_H;
+        int inset = document.locked() ? 0 : 6;
+        if (document.locked()) {
+            return new PadMapProjection.Rect(x, y, w, h);
         }
-        float aspect = TEXTURE_W / (float) TEXTURE_H;
-        int fittedW = w;
-        int fittedH = Math.round(fittedW / aspect);
-        if (fittedH > h) {
-            fittedH = h;
-            fittedW = Math.round(fittedH * aspect);
-        }
-        int fittedX = x + (w - fittedW) / 2;
-        int fittedY = y + (h - fittedH) / 2;
-        return new MapRect(fittedX, fittedY, fittedW, fittedH);
-    }
-
-    private MapViewport mapViewport(PadMapSnapshot map, MapRect rect, double playerX, double playerZ) {
-        float cell = Math.max(1.0F, map.displayScale());
-        float drawW = map.width() * cell;
-        float drawH = map.height() * cell;
-        float centerX = rect.x() + rect.w() / 2.0F;
-        float centerY = rect.y() + rect.h() / 2.0F;
-        float offsetX = ((float) playerX - map.centerX()) / map.cellSizeBlocks() * cell;
-        float offsetY = -((float) playerZ - map.centerZ()) / map.cellSizeBlocks() * cell;
-        return new MapViewport(Math.round(centerX - drawW / 2.0F + offsetX),
-                Math.round(centerY - drawH / 2.0F - offsetY), Math.round(drawW), Math.round(drawH), cell, cell);
-    }
-
-    private float screenToWorldX(float textureX, PadMapSnapshot map, MapViewport viewport) {
-        return map.centerX() - (textureX - viewport.x() - viewport.w() / 2.0F)
-                * map.cellSizeBlocks() / viewport.cellX();
-    }
-
-    private float screenToWorldZ(float textureY, PadMapSnapshot map, MapViewport viewport) {
-        return map.centerZ() - (textureY - viewport.y() - viewport.h() / 2.0F)
-                * map.cellSizeBlocks() / viewport.cellY();
-    }
-
-    private float mapScreenX(float worldX, PadMapSnapshot map, MapViewport viewport) {
-        return viewport.x() + viewport.w() / 2.0F - (worldX - map.centerX())
-                / map.cellSizeBlocks() * viewport.cellX();
-    }
-
-    private float mapScreenY(float worldZ, PadMapSnapshot map, MapViewport viewport) {
-        return viewport.y() + viewport.h() / 2.0F - (worldZ - map.centerZ())
-                / map.cellSizeBlocks() * viewport.cellY();
+        return PadMapProjection.fitRect(x + inset, y + inset, w - inset * 2, h - inset * 2,
+                PadMapSampler.DEFAULT_VIEW_WIDTH, PadMapSampler.DEFAULT_VIEW_HEIGHT, TEXTURE_W / (float) TEXTURE_H);
     }
 
     private String hit(TexturePoint point) {
-        if (inside(point, MAP_X, MAP_Y, MAP_W, MAP_H)) {
+        PadDocument document = PadClient.cachedDocumentFor(heldPadStack());
+        UUID deviceId = PadItem.readDeviceId(heldPadStack());
+        boolean hasPlayback = ClientMediaPlayback.hasPlayback(deviceId);
+        if (document.locked() && (hasPlayback
+                || PadFocusState.pausedPlaybackAvailable())) {
+            boolean videoControls = PadFocusState.pausedVideo()
+                    || (hasPlayback && MP4HandheldVideoClient.latestFrame(deviceId) != null);
+            if (!videoControls) {
+                if (PadFocusState.subtitleMenuOpen()) {
+                    if (inside(point, 244, 72, 52, 14)) {
+                        return "SUBTITLE_OFF";
+                    }
+                    if (inside(point, 244, 94, 52, 14)) {
+                        return "SUBTITLE_PRIMARY";
+                    }
+                    if (inside(point, 244, 116, 52, 14)) {
+                        return "SUBTITLE_SECONDARY";
+                    }
+                    if (inside(point, 244, 138, 82, 14)) {
+                        return "SUBTITLE_AI";
+                    }
+                }
+                if (inside(point, 36, 194, TEXTURE_W - 72, 16)) {
+                    return "AUDIO_PROGRESS";
+                }
+                if (inside(point, 146, 210, 30, 24)) {
+                    return "AUDIO_STOP";
+                }
+                if (inside(point, 200, 206, 46, 32)) {
+                    return "AUDIO_PLAY";
+                }
+                if (inside(point, 270, 210, 54, 24)) {
+                    return "AUDIO_SUBTITLE";
+                }
+            }
+            if (PadFocusState.controlsVisible()) {
+                if (PadFocusState.qualityMenuOpen()) {
+                    for (int i = 0; i < PadFocusState.QUALITIES.length; i++) {
+                        if (inside(point, 330, 65 + i * 13, 70, 11)) {
+                            return "QUALITY_" + i;
+                        }
+                    }
+                }
+                if (PadFocusState.subtitleMenuOpen()) {
+                    if (inside(point, 244, 72, 52, 14)) {
+                        return "SUBTITLE_OFF";
+                    }
+                    if (inside(point, 244, 94, 52, 14)) {
+                        return "SUBTITLE_PRIMARY";
+                    }
+                    if (inside(point, 244, 116, 52, 14)) {
+                        return "SUBTITLE_SECONDARY";
+                    }
+                    if (inside(point, 244, 138, 82, 14)) {
+                        return "SUBTITLE_AI";
+                    }
+                }
+                if (inside(point, 278, 16, 44, 20)) {
+                    return "VIDEO_SUBTITLE";
+                }
+                if (inside(point, 330, 14, 52, 28)) {
+                    return "VIDEO_QUALITY";
+                }
+                if (inside(point, 32, 176, TEXTURE_W - 64, 18)) {
+                    return "VIDEO_PROGRESS";
+                }
+                if (inside(point, 146, 204, 30, 24)) {
+                    return "VIDEO_STOP";
+                }
+                if (inside(point, 200, 198, 46, 34)) {
+                    return "VIDEO_PLAY";
+                }
+                if (inside(point, 270, 204, 54, 24)) {
+                    return "VIDEO_QUALITY";
+                }
+            }
+            if (insideMap(point, document)) {
+                return "MAP";
+            }
+        }
+        if (insideMap(point, document)) {
             return "MAP";
+        }
+        if (document.locked()) {
+            return "NONE";
         }
         if (inside(point, MEDIA_X, MEDIA_Y, MEDIA_W, MEDIA_H)) {
             return "MEDIA";
@@ -449,7 +780,17 @@ public class PadFocusScreen extends Screen {
         if (inside(point, 300, 166, 132, 42)) {
             return "PLAYBACK";
         }
+        if (inside(point, PUBLISH_X, PUBLISH_Y, PUBLISH_W, PUBLISH_H)) {
+            return "PUBLISH";
+        }
         return "NONE";
+    }
+
+    private boolean insideMap(TexturePoint point, PadDocument document) {
+        if (document != null && document.locked()) {
+            return inside(point, LOCKED_MAP_X, LOCKED_MAP_Y, LOCKED_MAP_W, LOCKED_MAP_H);
+        }
+        return inside(point, MAP_X, MAP_Y, MAP_W, MAP_H);
     }
 
     private boolean inside(TexturePoint point, int x, int y, int w, int h) {
@@ -473,12 +814,6 @@ public class PadFocusScreen extends Screen {
     }
 
     private record TexturePoint(int x, int y) {
-    }
-
-    private record MapRect(int x, int y, int w, int h) {
-    }
-
-    private record MapViewport(float x, float y, float w, float h, float cellX, float cellY) {
     }
 
     private record ScreenPoint(float x, float y) {

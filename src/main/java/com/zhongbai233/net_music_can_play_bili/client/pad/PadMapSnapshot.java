@@ -49,6 +49,18 @@ public record PadMapSnapshot(int centerX, int centerY, int centerZ, int cellSize
         return index >= 0 && index < tiles.length ? tiles[index] : PadMapTileKind.UNKNOWN;
     }
 
+    public boolean hasUnknownTiles() {
+        if (tiles == null || tiles.length < width * height) {
+            return true;
+        }
+        for (int i = 0; i < width * height; i++) {
+            if (tiles[i] == null || tiles[i] == PadMapTileKind.UNKNOWN) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static long computeContentSignature(int centerX, int centerY, int centerZ, int cellSizeBlocks, int width,
             int height, PadMapTileKind[] tiles, float displayScale) {
         long signature = baseLayoutSignature(centerX, centerY, centerZ, cellSizeBlocks, width, height, displayScale);

@@ -9,6 +9,8 @@ public final class AudioUtils {
     public static final float DISTANCE_REFERENCE = 8.0f;
     /** 最小有效距离（音响半径），避免进入音响圈内部时增益异常 */
     public static final float SPATIAL_RADIUS = 1.5f;
+    /** 音响满音量时的最大可听距离；音量降低时会按比例收缩 */
+    public static final float SPEAKER_MAX_AUDIBLE_DISTANCE = 64.0f;
 
     private AudioUtils() {
     }
@@ -52,6 +54,19 @@ public final class AudioUtils {
     public static float gainForDistance(float d) {
         float clamped = Math.max(SPATIAL_RADIUS, d);
         return clampGain(DISTANCE_REFERENCE / (DISTANCE_REFERENCE + clamped));
+    }
+
+    /** 音响专用衰减：音量既影响最终响度，也按比例收缩最大传播距离。 */
+    public static float speakerGainForDistance(float d, float volume) {
+        float clampedVolume = clampGain(volume);
+        if (clampedVolume <= 0.0f) {
+            return 0.0f;
+        }
+        float maxAudibleDistance = SPEAKER_MAX_AUDIBLE_DISTANCE * clampedVolume;
+        if (d > maxAudibleDistance) {
+            return 0.0f;
+        }
+        return gainForDistance(d) * clampedVolume;
     }
 
     /** 格式化坐标为可读字符串 */

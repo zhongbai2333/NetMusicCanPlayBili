@@ -52,6 +52,12 @@ public class LyricProjectorRenderer
     private static final int VISIBLE_LINES_ABOVE = 2;
     private static final int VISIBLE_LINES_BELOW = 2;
     private static final long AI_BASE_RESYNC_TICKS = 40L;
+    private static final double PROJECTOR_RENDER_MARGIN = Double.parseDouble(
+            System.getProperty("ncpb.lyric.projector.render_margin", "2.0"));
+    private static final double PROJECTOR_RENDER_MIN_INFLATE = Double.parseDouble(
+            System.getProperty("ncpb.lyric.projector.render_min_inflate", "2.5"));
+    private static final double PROJECTOR_RENDER_MAX_TEXT_WIDTH = Double.parseDouble(
+            System.getProperty("ncpb.lyric.projector.render_max_text_width", "8.0"));
 
     private static final Map<BlockPos, ScrollProgressState> scrollProgressStates = new ConcurrentHashMap<>();
 
@@ -353,7 +359,18 @@ public class LyricProjectorRenderer
 
     @Override
     public AABB getRenderBoundingBox(LyricProjectorBlockEntity blockEntity) {
-        return new AABB(blockEntity.getBlockPos()).inflate(2.0D, 2.5D, 2.0D);
+        double scale = Math.max(0.25D, Math.abs(blockEntity.getProjectionScale()));
+        double textHalfWidth = PROJECTOR_RENDER_MAX_TEXT_WIDTH * scale * 0.5D;
+        double lineHeight = LINE_STEP * TEXT_SCALE * scale;
+        double textHalfHeight = Math.max(lineHeight,
+                lineHeight * (1 + VISIBLE_LINES_ABOVE + VISIBLE_LINES_BELOW) * 0.5D);
+        double textRadius = Math.sqrt(textHalfWidth * textHalfWidth + textHalfHeight * textHalfHeight);
+        double offsetRadius = Math.sqrt(
+                blockEntity.getProjectionDistanceX() * blockEntity.getProjectionDistanceX()
+                        + blockEntity.getProjectionHeight() * blockEntity.getProjectionHeight()
+                        + blockEntity.getProjectionDistanceZ() * blockEntity.getProjectionDistanceZ());
+        double inflate = Math.max(PROJECTOR_RENDER_MIN_INFLATE, offsetRadius + textRadius + PROJECTOR_RENDER_MARGIN);
+        return new AABB(blockEntity.getBlockPos()).inflate(inflate, inflate, inflate);
     }
 
     private void submitCenteredText(MutableComponent text, float y, int color, State state, PoseStack poseStack,

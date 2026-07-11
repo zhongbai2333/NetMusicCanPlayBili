@@ -6,8 +6,10 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSongInfoSanitizer;
 import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import com.zhongbai233.net_music_can_play_bili.item.HolographicGlassesItem;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
+import com.zhongbai233.net_music_can_play_bili.item.PadItem;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkData;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import com.zhongbai233.net_music_can_play_bili.link.EquippedMediaItems;
@@ -238,8 +240,9 @@ public final class MP4PlaybackSyncManager {
         SESSIONS.remove(deviceId);
         MISSING_SINCE.remove(deviceId);
         sendStop(level, session);
-        int selectedIndex = safeNewQueue.isEmpty() ? 0 : Math.max(0, Math.min(safeNewQueue.size() - 1,
-                Math.min(session.queueIndex(), safeNewQueue.size() - 1)));
+        int selectedIndex = safeNewQueue.isEmpty() ? 0
+                : Math.max(0, Math.min(safeNewQueue.size() - 1,
+                        Math.min(session.queueIndex(), safeNewQueue.size() - 1)));
         int durationSeconds = durationSeconds(safeNewQueue, selectedIndex);
         recordRuntimeProgress(deviceId, selectedIndex, 0L, durationSeconds, session.volumePerMille(), "", false);
         flushRuntimeProgress(level, deviceId);
@@ -372,6 +375,7 @@ public final class MP4PlaybackSyncManager {
         AudioLinkIndex.clear();
         MP4DeviceLocationIndex.clear();
         MP4DeviceHolderTracker.clear();
+        PadDeviceHolderTracker.clear();
     }
 
     @SubscribeEvent
@@ -390,6 +394,7 @@ public final class MP4PlaybackSyncManager {
             return;
         }
         MP4DeviceHolderTracker.tick(server);
+        PadDeviceHolderTracker.tick(server);
         if (server.getTickCount() % DISCOVERY_INTERVAL_TICKS == 0) {
             for (ServerLevel level : server.getAllLevels()) {
                 for (ServerPlayer player : level.players()) {
@@ -422,8 +427,7 @@ public final class MP4PlaybackSyncManager {
                 }
             }
             ItemStack stack = session.stack(serverLevel);
-            if (!(stack.getItem() instanceof MP4Item)
-                    || !deviceState(serverLevel, stack, session.sourceId()).playing()) {
+            if (!isActiveMediaStack(serverLevel, stack, session.sourceId())) {
                 Session relocated = relocateSession(server, session, gameTime);
                 if (relocated != null) {
                     entry.setValue(relocated);
@@ -479,7 +483,7 @@ public final class MP4PlaybackSyncManager {
                     UUID deviceId = itemDeviceId;
                     Session existing = SESSIONS.get(deviceId);
                     long gameTime = level.getGameTime();
-                    if (existing != null && (existing.sourceType() != MP4PlaybackSyncPacket.SOURCE_ITEM
+                    if (existing != null && (existing.sourceType() != ClientMediaSyncPayload.SOURCE_ITEM
                             || existing.sourceEntityId() != itemEntity.getId())) {
                         Session migrated = existing.asItemSource(itemEntity.getId(), itemEntity.blockPosition(),
                                 gameTime);
@@ -489,7 +493,7 @@ public final class MP4PlaybackSyncManager {
                         send(level, migrated, gameTime);
                     } else if (existing == null && !hasSessionForItemEntity(itemEntity)) {
                         startDiscovered(level, stack, deviceId, deviceId,
-                                MP4PlaybackSyncPacket.SOURCE_ITEM, itemEntity.getId(), itemEntity.blockPosition(), -1);
+                                ClientMediaSyncPayload.SOURCE_ITEM, itemEntity.getId(), itemEntity.blockPosition(), -1);
                     }
                 }
             }
@@ -518,13 +522,13 @@ public final class MP4PlaybackSyncManager {
         Session existing = SESSIONS.get(deviceId);
         long gameTime = level.getGameTime();
         MP4DeviceLocationIndex.recordPlayer(level, player, deviceId);
-        if (existing != null && existing.sourceType() != MP4PlaybackSyncPacket.SOURCE_PLAYER) {
+        if (existing != null && existing.sourceType() != ClientMediaSyncPayload.SOURCE_PLAYER) {
             Session migrated = existing.asPlayerSource(player, gameTime);
             SESSIONS.put(deviceId, migrated);
             MISSING_SINCE.remove(deviceId);
             send(level, migrated, gameTime);
         } else if (existing == null) {
-            startDiscovered(level, stack, player.getUUID(), deviceId, MP4PlaybackSyncPacket.SOURCE_PLAYER,
+            startDiscovered(level, stack, player.getUUID(), deviceId, ClientMediaSyncPayload.SOURCE_PLAYER,
                     player.getId(), player.blockPosition(), -1);
         }
     }
@@ -533,7 +537,7 @@ public final class MP4PlaybackSyncManager {
         int entityId = itemEntity.getId();
         UUID deviceId = MP4Item.readDeviceId(itemEntity.getItem());
         for (Session session : SESSIONS.values()) {
-            if (session.sourceType() == MP4PlaybackSyncPacket.SOURCE_ITEM
+            if (session.sourceType() == ClientMediaSyncPayload.SOURCE_ITEM
                     && (session.sourceEntityId() == entityId || session.sourceId().equals(deviceId))) {
                 return true;
             }
@@ -580,14 +584,14 @@ public final class MP4PlaybackSyncManager {
         if (container instanceof BlockEntity blockEntity) {
             BlockPos pos = blockEntity.getBlockPos();
             MP4DeviceLocationIndex.recordBlockContainer(level, pos, slot.index, deviceId);
-            if (existing != null && (existing.sourceType() != MP4PlaybackSyncPacket.SOURCE_BLOCK
+            if (existing != null && (existing.sourceType() != ClientMediaSyncPayload.SOURCE_BLOCK
                     || !existing.sourcePos().equals(pos) || existing.containerSlot() != slot.index)) {
                 Session migrated = existing.asBlockSource(pos.immutable(), slot.index, gameTime);
                 SESSIONS.put(deviceId, migrated);
                 MISSING_SINCE.remove(deviceId);
                 send(level, migrated, gameTime);
             } else if (existing == null) {
-                startDiscovered(level, stack, deviceId, deviceId, MP4PlaybackSyncPacket.SOURCE_BLOCK, -1,
+                startDiscovered(level, stack, deviceId, deviceId, ClientMediaSyncPayload.SOURCE_BLOCK, -1,
                         pos.immutable(), slot.index);
             }
             return;
@@ -595,20 +599,20 @@ public final class MP4PlaybackSyncManager {
         Entity entity = containerEntity(container);
         if (entity != null) {
             MP4DeviceLocationIndex.recordContainerEntity(level, entity, slot.index, deviceId);
-            if (existing != null && (existing.sourceType() != MP4PlaybackSyncPacket.SOURCE_CONTAINER_ENTITY
+            if (existing != null && (existing.sourceType() != ClientMediaSyncPayload.SOURCE_CONTAINER_ENTITY
                     || existing.sourceEntityId() != entity.getId() || existing.containerSlot() != slot.index)) {
                 Session migrated = existing.asContainerEntitySource(level, entity, slot.index, gameTime);
                 SESSIONS.put(deviceId, migrated);
                 MISSING_SINCE.remove(deviceId);
                 send(level, migrated, gameTime);
             } else if (existing == null) {
-                startDiscovered(level, stack, deviceId, deviceId, MP4PlaybackSyncPacket.SOURCE_CONTAINER_ENTITY,
+                startDiscovered(level, stack, deviceId, deviceId, ClientMediaSyncPayload.SOURCE_CONTAINER_ENTITY,
                         entity.getId(), entity.blockPosition(), slot.index);
             }
             return;
         }
         if (existing == null) {
-            startDiscovered(level, stack, player.getUUID(), deviceId, MP4PlaybackSyncPacket.SOURCE_PLAYER,
+            startDiscovered(level, stack, player.getUUID(), deviceId, ClientMediaSyncPayload.SOURCE_PLAYER,
                     player.getId(), player.blockPosition(), -1);
         }
     }
@@ -770,6 +774,12 @@ public final class MP4PlaybackSyncManager {
         owner = level.getServer().getPlayerList().getPlayer(session.ownerId());
         boolean headphoneLinked = AudioLinkIndex.hasHeadphoneLinkedToMp4(session.sourceId());
         boolean routedToHeadphones = sendToHeadphoneListeners(level, session, pos, headphonePacket, gameTime);
+        if (session.sourceType() == ClientMediaSyncPayload.SOURCE_PLAYER) {
+            if (owner != null && owner.level() == level) {
+                PacketDistributor.sendToPlayer(owner, packet);
+            }
+            return;
+        }
         if (!headphoneLinked) {
             PacketDistributor.sendToPlayersNear(level, null, pos.x(), pos.y(), pos.z(), SYNC_RANGE, packet);
         }
@@ -788,6 +798,15 @@ public final class MP4PlaybackSyncManager {
                 session.sessionId(), session.elapsedMillis(gameTime), session.volumePerMille(), true);
         boolean headphoneLinked = AudioLinkIndex.hasHeadphoneLinkedToMp4(session.sourceId());
         sendTimelineToHeadphoneListeners(level, session, pos, headphonePacket);
+        if (session.sourceType() == ClientMediaSyncPayload.SOURCE_PLAYER) {
+            ServerPlayer owner = level.getServer().getPlayerList().getPlayer(session.ownerId());
+            if (owner != null && owner.level() == level) {
+                PacketDistributor.sendToPlayer(owner,
+                        new MP4PlaybackTimelinePacket(session.sourceId(), session.sessionId(),
+                                session.elapsedMillis(gameTime), session.volumePerMille(), false));
+            }
+            return;
+        }
         if (!headphoneLinked) {
             PacketDistributor.sendToPlayersNear(level, null, pos.x(), pos.y(), pos.z(), SYNC_RANGE, packet);
         }
@@ -822,6 +841,9 @@ public final class MP4PlaybackSyncManager {
         if (owner != null && owner.level() == level) {
             PacketDistributor.sendToPlayer(owner,
                     MP4PlaybackSyncPacket.stop(session.ownerId(), session.sourceId(), session.queueIndex()));
+        }
+        if (session.sourceType() == ClientMediaSyncPayload.SOURCE_PLAYER) {
+            return;
         }
         PacketDistributor.sendToPlayersNear(level, null, pos.x(), pos.y(), pos.z(), SYNC_RANGE,
                 MP4PlaybackSyncPacket.stop(session.ownerId(), session.sourceId(), session.queueIndex()));
@@ -975,10 +997,10 @@ public final class MP4PlaybackSyncManager {
     }
 
     private static boolean clearHolographicGlassesLink(ItemStack stack, UUID deviceId) {
-        if (!HolographicGlassesItem.boundToMp4(stack, deviceId)) {
+        if (!HolographicGlassesItem.boundToMediaDevice(stack, deviceId)) {
             return false;
         }
-        HolographicGlassesItem.clearBoundMp4(stack, deviceId);
+        HolographicGlassesItem.clearBoundMediaDevice(stack, deviceId);
         return true;
     }
 
@@ -1103,6 +1125,10 @@ public final class MP4PlaybackSyncManager {
                     MP4DeviceLocationIndex.recordPlayer(level, player, session.sourceId());
                     return session.asPlayerSource(player, gameTime);
                 }
+                ItemStack padStack = PadItem.findByDeviceId(player, session.sourceId());
+                if (PadItem.isPad(padStack)) {
+                    return session.asPlayerSource(player, gameTime);
+                }
                 AABB range = player.getBoundingBox().inflate(SYNC_RANGE);
                 for (ItemEntity itemEntity : level.getEntitiesOfClass(ItemEntity.class, range)) {
                     ItemStack itemStack = itemEntity.getItem();
@@ -1137,6 +1163,10 @@ public final class MP4PlaybackSyncManager {
                 return session.fromResolved(indexed, gameTime);
             }
             for (ServerPlayer player : level.players()) {
+                ItemStack padStack = PadItem.findByDeviceId(player, session.sourceId());
+                if (PadItem.isPad(padStack)) {
+                    return session.asPlayerSource(player, gameTime);
+                }
                 Session menuSession = relocateToOpenMenu(level, player, session, gameTime);
                 if (menuSession != null) {
                     return menuSession;
@@ -1239,6 +1269,13 @@ public final class MP4PlaybackSyncManager {
         return MP4DeviceStateStore.getOrCreate(level, deviceId, stack).state();
     }
 
+    private static boolean isActiveMediaStack(ServerLevel level, ItemStack stack, UUID deviceId) {
+        if (stack.getItem() instanceof MP4Item) {
+            return deviceState(level, stack, deviceId).playing();
+        }
+        return PadItem.isPad(stack) && deviceId != null && deviceId.equals(PadItem.readDeviceId(stack));
+    }
+
     private static List<ItemStack> queueForDevice(MP4DeviceStateStore.DeviceEntry entry, ItemStack stack) {
         List<ItemStack> itemQueue = MP4Item.readQueue(stack);
         if (!itemQueue.isEmpty()) {
@@ -1284,8 +1321,8 @@ public final class MP4PlaybackSyncManager {
 
         Session withQueueIndex(int newQueueIndex, long gameTime) {
             return new Session(levelKey, ownerId, sourceId, sourceType, sourceEntityId, sourcePos, containerSlot,
-                Math.max(0, newQueueIndex), playUrl, rawUrl, songName, durationSeconds, volumePerMille,
-                sessionId, startedGameTime, gameTime, gameTime);
+                    Math.max(0, newQueueIndex), playUrl, rawUrl, songName, durationSeconds, volumePerMille,
+                    sessionId, startedGameTime, gameTime, gameTime);
         }
 
         Session resetToStart(long gameTime) {
@@ -1295,34 +1332,34 @@ public final class MP4PlaybackSyncManager {
         }
 
         Session asItemSource(int itemEntityId, BlockPos itemPos, long gameTime) {
-            return new Session(levelKey, ownerId, sourceId, MP4PlaybackSyncPacket.SOURCE_ITEM, itemEntityId,
+            return new Session(levelKey, ownerId, sourceId, ClientMediaSyncPayload.SOURCE_ITEM, itemEntityId,
                     itemPos.immutable(), -1, queueIndex, playUrl, rawUrl, songName, durationSeconds, volumePerMille,
                     sessionId, startedGameTime, gameTime, gameTime);
         }
 
         Session asPlayerSource(ServerPlayer player, long gameTime) {
             return new Session(player.level().dimension(), player.getUUID(), sourceId,
-                    MP4PlaybackSyncPacket.SOURCE_PLAYER,
+                    ClientMediaSyncPayload.SOURCE_PLAYER,
                     player.getId(), player.blockPosition(), -1, queueIndex, playUrl, rawUrl, songName, durationSeconds,
                     volumePerMille, sessionId, startedGameTime, gameTime, gameTime);
         }
 
         Session asBlockSource(BlockPos pos, int slot, long gameTime) {
-            return new Session(levelKey, ownerId, sourceId, MP4PlaybackSyncPacket.SOURCE_BLOCK, -1, pos.immutable(),
+            return new Session(levelKey, ownerId, sourceId, ClientMediaSyncPayload.SOURCE_BLOCK, -1, pos.immutable(),
                     slot,
                     queueIndex, playUrl, rawUrl, songName, durationSeconds, volumePerMille, sessionId, startedGameTime,
                     gameTime, gameTime);
         }
 
         Session asContainerEntitySource(ServerLevel level, Entity entity, int slot, long gameTime) {
-            return new Session(level.dimension(), ownerId, sourceId, MP4PlaybackSyncPacket.SOURCE_CONTAINER_ENTITY,
+            return new Session(level.dimension(), ownerId, sourceId, ClientMediaSyncPayload.SOURCE_CONTAINER_ENTITY,
                     entity.getId(), entity.blockPosition(), slot, queueIndex, playUrl, rawUrl, songName,
                     durationSeconds,
                     volumePerMille, sessionId, startedGameTime, gameTime, gameTime);
         }
 
         Session fromResolved(MP4DeviceLocationIndex.ResolvedLocation resolved, long gameTime) {
-            UUID resolvedOwnerId = resolved.sourceType() == MP4PlaybackSyncPacket.SOURCE_PLAYER
+            UUID resolvedOwnerId = resolved.sourceType() == ClientMediaSyncPayload.SOURCE_PLAYER
                     && resolved.ownerId() != null ? resolved.ownerId() : ownerId;
             return new Session(levelKey, resolvedOwnerId, sourceId, resolved.sourceType(), resolved.sourceEntityId(),
                     resolved.sourcePos().immutable(),
@@ -1335,12 +1372,12 @@ public final class MP4PlaybackSyncManager {
             if (level == null) {
                 return;
             }
-            if (sourceType == MP4PlaybackSyncPacket.SOURCE_BLOCK
+            if (sourceType == ClientMediaSyncPayload.SOURCE_BLOCK
                     && level.getBlockEntity(sourcePos) instanceof Container container) {
                 container.setChanged();
                 return;
             }
-            if (sourceType == MP4PlaybackSyncPacket.SOURCE_CONTAINER_ENTITY
+            if (sourceType == ClientMediaSyncPayload.SOURCE_CONTAINER_ENTITY
                     && level.getEntity(sourceEntityId) instanceof Container container) {
                 container.setChanged();
             }
@@ -1357,19 +1394,19 @@ public final class MP4PlaybackSyncManager {
             if (indexed != null && indexed.stack().getItem() instanceof MP4Item) {
                 return indexed.stack();
             }
-            if (sourceType == MP4PlaybackSyncPacket.SOURCE_ITEM) {
+            if (sourceType == ClientMediaSyncPayload.SOURCE_ITEM) {
                 if (level.getEntity(sourceEntityId) instanceof ItemEntity item) {
                     MP4DeviceLocationIndex.recordItemEntity(level, item, sourceId);
                     return item.getItem();
                 }
             }
-            if (sourceType == MP4PlaybackSyncPacket.SOURCE_BLOCK
+            if (sourceType == ClientMediaSyncPayload.SOURCE_BLOCK
                     && level.getBlockEntity(sourcePos) instanceof Container container
                     && containerSlot >= 0 && containerSlot < container.getContainerSize()) {
                 MP4DeviceLocationIndex.recordBlockContainer(level, sourcePos, containerSlot, sourceId);
                 return container.getItem(containerSlot);
             }
-            if (sourceType == MP4PlaybackSyncPacket.SOURCE_CONTAINER_ENTITY
+            if (sourceType == ClientMediaSyncPayload.SOURCE_CONTAINER_ENTITY
                     && level.getEntity(sourceEntityId) instanceof Entity entity
                     && entity instanceof Container container
                     && containerSlot >= 0 && containerSlot < container.getContainerSize()) {
@@ -1383,24 +1420,32 @@ public final class MP4PlaybackSyncManager {
                     if (stack.getItem() instanceof MP4Item) {
                         return stack;
                     }
+                    ItemStack padStack = PadItem.findByDeviceId(candidate, sourceId);
+                    if (PadItem.isPad(padStack)) {
+                        return padStack;
+                    }
                 }
                 return ItemStack.EMPTY;
             }
-            return MP4Item.findByDeviceId(player, sourceId);
+            ItemStack stack = MP4Item.findByDeviceId(player, sourceId);
+            if (stack.getItem() instanceof MP4Item) {
+                return stack;
+            }
+            return PadItem.findByDeviceId(player, sourceId);
         }
 
         SourcePosition sourcePosition(ServerLevel level) {
-            if (sourceType == MP4PlaybackSyncPacket.SOURCE_ITEM) {
+            if (sourceType == ClientMediaSyncPayload.SOURCE_ITEM) {
                 if (level.getEntity(sourceEntityId) instanceof ItemEntity item) {
                     MP4DeviceLocationIndex.recordItemEntity(level, item, sourceId);
                     return new SourcePosition(item.getId(), item.getX(), item.getY() + 0.25D, item.getZ());
                 }
             }
-            if (sourceType == MP4PlaybackSyncPacket.SOURCE_BLOCK) {
+            if (sourceType == ClientMediaSyncPayload.SOURCE_BLOCK) {
                 return new SourcePosition(-1, sourcePos.getX() + 0.5D, sourcePos.getY() + 0.5D,
                         sourcePos.getZ() + 0.5D);
             }
-            if (sourceType == MP4PlaybackSyncPacket.SOURCE_CONTAINER_ENTITY
+            if (sourceType == ClientMediaSyncPayload.SOURCE_CONTAINER_ENTITY
                     && level.getEntity(sourceEntityId) instanceof Entity entity) {
                 MP4DeviceLocationIndex.recordContainerEntity(level, entity, containerSlot, sourceId);
                 return new SourcePosition(entity.getId(), entity.getX(), entity.getY() + 0.5D, entity.getZ());

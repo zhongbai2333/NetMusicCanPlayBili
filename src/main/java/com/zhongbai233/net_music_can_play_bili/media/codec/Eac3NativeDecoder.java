@@ -214,18 +214,46 @@ public class Eac3NativeDecoder implements AutoCloseable {
             throws IOException {
         String resPath = "/native/" + platformDir + "/" + fileName;
         try (InputStream in = Eac3NativeDecoder.class.getResourceAsStream(resPath)) {
-            if (in == null) {
+            InputStream source = in != null ? in : openFilesystemNativeResource(platformDir, fileName);
+            if (source == null) {
                 if (required) {
                     throw new IOException("内嵌 native 库缺失: " + resPath);
                 }
                 return false;
             }
 
-            byte[] bundled = in.readAllBytes();
+            byte[] bundled;
+            try (source) {
+                bundled = source.readAllBytes();
+            }
             if (!Files.exists(target) || !Arrays.equals(Files.readAllBytes(target), bundled)) {
                 Files.write(target, bundled);
             }
             return true;
+        }
+    }
+
+    private static InputStream openFilesystemNativeResource(String platformDir, String fileName) throws IOException {
+        CodeSource codeSource = Eac3NativeDecoder.class.getProtectionDomain().getCodeSource();
+        if (codeSource == null || codeSource.getLocation() == null) {
+            return null;
+        }
+        try {
+            Path workspace = findWorkspaceRoot(Path.of(codeSource.getLocation().toURI()));
+            if (workspace == null) {
+                return null;
+            }
+            Path relative = Path.of("native", platformDir, fileName);
+            for (Path root : List.of(workspace.resolve("build").resolve("resources").resolve("main"),
+                    workspace.resolve("src").resolve("main").resolve("resources"))) {
+                Path candidate = root.resolve(relative);
+                if (Files.isRegularFile(candidate)) {
+                    return Files.newInputStream(candidate);
+                }
+            }
+            return null;
+        } catch (URISyntaxException e) {
+            throw new IOException("native 资源 code source URI 无效", e);
         }
     }
 
@@ -315,12 +343,13 @@ public class Eac3NativeDecoder implements AutoCloseable {
             Path location = Path.of(codeSource.getLocation().toURI());
             if (Files.isDirectory(location)) {
                 Path dir = location.resolve(resourceDir.replace('/', java.io.File.separatorChar));
-                if (Files.isDirectory(dir)) {
-                    try (var stream = Files.list(dir)) {
-                        stream.filter(Files::isRegularFile)
-                                .map(path -> path.getFileName().toString())
-                                .forEach(names::add);
-                    }
+                listNativeResourceDirectory(dir, names);
+                Path workspace = findWorkspaceRoot(location);
+                if (workspace != null) {
+                    listNativeResourceDirectory(workspace.resolve("build").resolve("resources").resolve("main")
+                            .resolve(resourceDir.replace('/', java.io.File.separatorChar)), names);
+                    listNativeResourceDirectory(workspace.resolve("src").resolve("main").resolve("resources")
+                            .resolve(resourceDir.replace('/', java.io.File.separatorChar)), names);
                 }
             } else if (Files.isRegularFile(location) && location.getFileName().toString().endsWith(".jar")) {
                 String prefix = resourceDir.endsWith("/") ? resourceDir : resourceDir + "/";
@@ -330,6 +359,29 @@ public class Eac3NativeDecoder implements AutoCloseable {
             }
         } catch (URISyntaxException e) {
             throw new IOException("native 资源 code source URI 无效", e);
+        }
+    }
+
+    private static Path findWorkspaceRoot(Path location) {
+        Path current = location.toAbsolutePath().normalize();
+        while (current != null) {
+            if (Files.isRegularFile(current.resolve("build.gradle"))
+                    || Files.isRegularFile(current.resolve("settings.gradle"))) {
+                return current;
+            }
+            current = current.getParent();
+        }
+        return null;
+    }
+
+    private static void listNativeResourceDirectory(Path dir, Set<String> names) throws IOException {
+        if (!Files.isDirectory(dir)) {
+            return;
+        }
+        try (var stream = Files.list(dir)) {
+            stream.filter(Files::isRegularFile)
+                    .map(path -> path.getFileName().toString())
+                    .forEach(names::add);
         }
     }
 

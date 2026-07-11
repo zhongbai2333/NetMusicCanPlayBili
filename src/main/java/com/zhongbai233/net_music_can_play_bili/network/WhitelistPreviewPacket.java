@@ -5,6 +5,7 @@ import com.github.tartaricacid.netmusic.api.resolver.MusicPlayResolverManager;
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
@@ -100,9 +101,9 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
                 String storedSelection = BiliApiClient.formatStoredVideoSelection(finalSelection.videoId(),
                         finalSelection.page());
                 String syncedSelection = PlaybackSync.withSync(storedSelection, sessionId, startMillis,
-                    durationMillis);
+                        durationMillis);
                 return new WhitelistPreviewPacket(previewId, info.displayTitle(), storedSelection, syncedSelection,
-                    storedSelection, 1, 1, 30, 0, Math.max(0, info.duration()), startMillis, playing);
+                        storedSelection, 1, 1, 30, 0, Math.max(0, info.duration()), startMillis, playing);
             } catch (Exception e) {
                 throw new IllegalStateException(e);
             }
@@ -120,7 +121,7 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
 
     public static MP4PlaybackSyncPacket toAudioSync(WhitelistPreviewPacket packet) {
         String sessionId = previewSession(packet.previewId(), packet.elapsedMillis());
-        return new MP4PlaybackSyncPacket(packet.previewId(), packet.previewId(), MP4PlaybackSyncPacket.SOURCE_PLAYER,
+        return new MP4PlaybackSyncPacket(packet.previewId(), packet.previewId(), ClientMediaSyncPayload.SOURCE_PLAYER,
                 -1, 0.0D, 0.0D, 0.0D, packet.playing(), 0, packet.audioUrl(), packet.rawUrl(), packet.title(),
                 packet.durationSeconds(), 850, sessionId, packet.elapsedMillis(), false);
     }

@@ -55,7 +55,9 @@ public class MediaToolBindingScreen extends AbstractContainerScreen<MediaToolBin
         BlackGoldUi.drawSlotFrame(g, lx + 154, ty + 84, 0xFF66AA77);
 
         Component targetLabel = Component.translatable(menu.usesManualMp4TargetSlot()
-                ? "gui.net_music_can_play_bili.media_tool.mp4_input"
+                ? menu.targetKind() == MediaToolBindingMenu.TargetKind.PAD
+                        ? "gui.net_music_can_play_bili.media_tool.pad_input"
+                        : "gui.net_music_can_play_bili.media_tool.mp4_input"
                 : "gui.net_music_can_play_bili.media_tool.target");
         g.centeredText(font, targetLabel, lx + 52, ty + 28, BlackGoldUi.GOLD);
 

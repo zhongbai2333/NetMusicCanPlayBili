@@ -1,6 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
-import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapClientCache;
+import com.zhongbai233.net_music_can_play_bili.client.PadMapClientHooks;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -30,6 +30,6 @@ public record PadMapWorldScopePacket(String worldScopeId, String worldName) impl
     }
 
     public static void handle(PadMapWorldScopePacket payload, IPayloadContext context) {
-        context.enqueueWork(() -> PadMapClientCache.setServerWorldScope(payload.worldScopeId(), payload.worldName()));
+        context.enqueueWork(() -> PadMapClientHooks.setServerWorldScope(payload.worldScopeId(), payload.worldName()));
     }
 }

@@ -2,12 +2,11 @@ package com.zhongbai233.net_music_can_play_bili.client.renderer.item;
 
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.client.MP4BiliLoginOverlay;
-import com.zhongbai233.net_music_can_play_bili.client.MP4ClientPlayback;
 import com.zhongbai233.net_music_can_play_bili.client.MP4FocusState;
 import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldMediaProfile;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTimelineView;
-import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldMediaSystem;
 
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
@@ -103,8 +102,8 @@ record MP4GuiViewState(
                 currentSongSubtitle(queueSize, selectedQueueIndex),
                 timeline.mediaMillis(),
                 durationMillis,
-                stringOrEmpty(MP4ClientPlayback.localLyricLine(deviceId)),
-                stringOrEmpty(MP4ClientPlayback.localTranslatedLyricLine(deviceId)),
+                stringOrEmpty(ClientMediaPlayback.lyricLine(deviceId)),
+                stringOrEmpty(ClientMediaPlayback.translatedLyricLine(deviceId)),
                 MP4HandheldVideoClient.audioOnly(deviceId),
                 stringOrEmpty(MP4HandheldVideoClient.statusText(deviceId)),
                 stringOrEmpty(MP4HandheldVideoClient.currentSubtitle(deviceId)),
@@ -138,7 +137,7 @@ record MP4GuiViewState(
     }
 
     private static String currentSongTitle(UUID deviceId, int selectedQueueIndex) {
-        String active = MP4ClientPlayback.localSongName(deviceId);
+        String active = ClientMediaPlayback.songName(deviceId);
         if (active != null && !active.isBlank()) {
             return active;
         }
@@ -155,7 +154,7 @@ record MP4GuiViewState(
     private static ClientMediaTimelineView currentTimeline(UUID deviceId, float mediaProgress) {
         long fallbackTotalMillis = MP4FocusState.selectedTrackDurationMillis();
         long fallbackMillis = Math.round(mediaProgress * Math.max(0L, fallbackTotalMillis));
-        return HandheldMediaSystem.timeline(deviceId, MP4HandheldMediaProfile.INSTANCE, fallbackMillis,
+        return ClientMediaTimelineView.forHandheldOwner(deviceId, MP4HandheldMediaProfile.INSTANCE, fallbackMillis,
                 fallbackTotalMillis);
     }
 

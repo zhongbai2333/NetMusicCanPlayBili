@@ -12,10 +12,10 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 
 public final class PadMapSampler {
     public static final int DEFAULT_VIEW_WIDTH = Integer.getInteger("ncpb.pad.map_view_width",
-            Integer.getInteger("ncpb.pad.map_size", 320));
+            Integer.getInteger("ncpb.pad.map_size", 384));
     public static final int DEFAULT_VIEW_HEIGHT = Integer.getInteger("ncpb.pad.map_view_height",
             192);
-    public static final int DEFAULT_OVERSCAN = Integer.getInteger("ncpb.pad.map_overscan", 32);
+    public static final int DEFAULT_OVERSCAN = Integer.getInteger("ncpb.pad.map_overscan", 96);
     public static final int DEFAULT_WIDTH = Integer.getInteger("ncpb.pad.map_width",
             DEFAULT_VIEW_WIDTH + DEFAULT_OVERSCAN * 2);
     public static final int DEFAULT_HEIGHT = Integer.getInteger("ncpb.pad.map_height",
@@ -62,18 +62,22 @@ public final class PadMapSampler {
      */
     public static PadMapTileKind classifyInteriorCell(Level level, BlockPos.MutableBlockPos mutable, int worldX,
             int worldZ, int floorY, int cellSize) {
+        if (!isCellReady(level, worldX, worldZ, cellSize)) {
+            return PadMapTileKind.UNKNOWN;
+        }
         int samples = Math.max(1, Math.min(CELL_SAMPLES, cellSize * cellSize));
         int floor = 0;
         int wall = 0;
         int water = 0;
         int outdoor = 0;
+        int loadedSamples = 0;
         for (int sample = 0; sample < samples; sample++) {
             int sx = worldX + sampleOffset(sample, cellSize, true);
             int sz = worldZ + sampleOffset(sample, cellSize, false);
             if (!level.hasChunk(Math.floorDiv(sx, 16), Math.floorDiv(sz, 16))) {
-                outdoor++;
                 continue;
             }
+            loadedSamples++;
             PadMapTileKind kind = classifyInteriorColumn(level, mutable, sx, sz, floorY);
             if (kind == PadMapTileKind.WATER) {
                 water++;
@@ -84,6 +88,9 @@ public final class PadMapSampler {
             } else {
                 outdoor++;
             }
+        }
+        if (loadedSamples == 0) {
+            return PadMapTileKind.UNKNOWN;
         }
         if (water > 0 && water >= floor + wall) {
             return PadMapTileKind.WATER;
@@ -112,6 +119,9 @@ public final class PadMapSampler {
 
     public static PadMapTileKind classifyCell(Level level, BlockPos.MutableBlockPos mutable, int worldX,
             int worldZ, int cellSize) {
+        if (!isCellReady(level, worldX, worldZ, cellSize)) {
+            return PadMapTileKind.UNKNOWN;
+        }
         int samples = Math.max(1, Math.min(CELL_SAMPLES, cellSize * cellSize));
         int grass = 0;
         int building = 0;
@@ -120,15 +130,20 @@ public final class PadMapSampler {
         int farmland = 0;
         int rock = 0;
         int snow = 0;
+        int loadedSamples = 0;
         for (int sample = 0; sample < samples; sample++) {
             int sx = worldX + sampleOffset(sample, cellSize, true);
             int sz = worldZ + sampleOffset(sample, cellSize, false);
             if (!level.hasChunk(Math.floorDiv(sx, 16), Math.floorDiv(sz, 16))) {
-                grass++;
                 continue;
             }
+            loadedSamples++;
             PadMapTileKind kind = classifyColumn(level, mutable, sx, sz);
-            if (kind == PadMapTileKind.GRASS) {
+            if (kind == PadMapTileKind.UNKNOWN) {
+                // 客户端可能已创建区块对象，但高度图/方块数据仍未同步完成。
+                // 任一列不可靠时保留整个 cell 为 UNKNOWN，交给现有重试机制重新采样。
+                return PadMapTileKind.UNKNOWN;
+            } else if (kind == PadMapTileKind.GRASS) {
                 grass++;
             } else if (kind == PadMapTileKind.BUILDING) {
                 building++;
@@ -144,16 +159,19 @@ public final class PadMapSampler {
                 rock++;
             }
         }
-        if (water > 0 && water >= Math.max(1, samples / 3) && water >= building) {
+        if (loadedSamples == 0) {
+            return PadMapTileKind.UNKNOWN;
+        }
+        if (water > 0 && water >= Math.max(1, loadedSamples / 3) && water >= building) {
             return PadMapTileKind.WATER;
         }
-        if (building >= Math.max(2, samples / 2) || building > grass + tree + farmland + rock) {
+        if (building >= Math.max(1, loadedSamples / 2) || building > grass + tree + farmland + rock) {
             return PadMapTileKind.BUILDING;
         }
-        if (tree >= Math.max(2, samples / 3) || tree > grass + farmland) {
+        if (tree >= Math.max(1, loadedSamples / 3) || tree > grass + farmland) {
             return PadMapTileKind.TREE;
         }
-        if (farmland >= Math.max(1, samples / 3)) {
+        if (farmland >= Math.max(1, loadedSamples / 3)) {
             return PadMapTileKind.FARMLAND;
         }
         if (snow > 0) {
@@ -163,6 +181,18 @@ public final class PadMapSampler {
             return PadMapTileKind.GRASS;
         }
         return grass >= rock ? PadMapTileKind.GRASS : PadMapTileKind.ROCK;
+    }
+
+    static boolean isCellReady(Level level, int worldX, int worldZ, int cellSize) {
+        int samples = Math.max(1, Math.min(CELL_SAMPLES, cellSize * cellSize));
+        for (int sample = 0; sample < samples; sample++) {
+            int sx = worldX + sampleOffset(sample, cellSize, true);
+            int sz = worldZ + sampleOffset(sample, cellSize, false);
+            if (!level.hasChunk(Math.floorDiv(sx, 16), Math.floorDiv(sz, 16))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static int sampleOffset(int sample, int cellSize, boolean xAxis) {
@@ -191,8 +221,8 @@ public final class PadMapSampler {
      */
     private static PadMapTileKind classifyColumn(Level level, BlockPos.MutableBlockPos mutable, int x, int z) {
         int y = level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) - 1;
-        if (y < level.getMinY()) {
-            return PadMapTileKind.GRASS;
+        if (!isSurfaceHeightReady(level.getMinY(), y)) {
+            return PadMapTileKind.UNKNOWN;
         }
         mutable.set(x, y, z);
         BlockState top = level.getBlockState(mutable);
@@ -232,6 +262,11 @@ public final class PadMapSampler {
             return PadMapTileKind.BUILDING;
         }
         return PadMapTileKind.GRASS;
+    }
+
+    /** 最低高度以下没有可分类的表面，通常表示客户端列数据尚未同步完成。 */
+    static boolean isSurfaceHeightReady(int minY, int surfaceY) {
+        return surfaceY >= minY;
     }
 
     /** 无碰撞覆盖物的直接归类;返回 null 表示继续向下找实体方块。 */

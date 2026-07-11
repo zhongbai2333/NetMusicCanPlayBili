@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.menu;
 import com.zhongbai233.net_music_can_play_bili.init.ModItems;
 import com.zhongbai233.net_music_can_play_bili.init.ModMenus;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
+import com.zhongbai233.net_music_can_play_bili.item.PadItem;
 import com.zhongbai233.net_music_can_play_bili.link.HeadphoneAbility;
 import com.zhongbai233.net_music_can_play_bili.link.HolographicGlassesAbility;
 import com.zhongbai233.net_music_can_play_bili.link.MediaBindingData.MediaSource;
@@ -29,7 +30,7 @@ public class MediaToolBindingMenu extends AbstractContainerMenu {
     private final SimpleContainer toolContainer = new SimpleContainer(3);
     private final TargetKind targetKind;
     private final BlockPos targetPos;
-    private final UUID mp4DeviceId;
+    private final UUID mediaDeviceId;
     private int headphoneBindingCount;
     private int holographicBindingCount;
     private boolean confirmed;
@@ -37,7 +38,8 @@ public class MediaToolBindingMenu extends AbstractContainerMenu {
 
     public enum TargetKind {
         TURNTABLE,
-        MP4
+        MP4,
+        PAD
     }
 
     public MediaToolBindingMenu(int containerId, Inventory inventory) {
@@ -53,7 +55,7 @@ public class MediaToolBindingMenu extends AbstractContainerMenu {
         super(ModMenus.MEDIA_TOOL_BINDING.get(), containerId);
         this.targetKind = targetKind != null ? targetKind : TargetKind.MP4;
         this.targetPos = targetPos != null ? targetPos.immutable() : null;
-        this.mp4DeviceId = mp4DeviceId;
+        this.mediaDeviceId = mp4DeviceId;
         this.owner = inventory.player;
         if (!usesManualMp4TargetSlot()) {
             toolContainer.setItem(TARGET_SLOT, targetIcon());
@@ -100,11 +102,11 @@ public class MediaToolBindingMenu extends AbstractContainerMenu {
     }
 
     public UUID mp4DeviceId() {
-        return mp4DeviceId;
+        return mediaDeviceId;
     }
 
     public boolean usesManualMp4TargetSlot() {
-        return targetKind == TargetKind.MP4 && mp4DeviceId == null;
+        return (targetKind == TargetKind.MP4 || targetKind == TargetKind.PAD) && mediaDeviceId == null;
     }
 
     public static void writeClientData(RegistryFriendlyByteBuf buffer, TargetKind targetKind, BlockPos targetPos,
@@ -140,16 +142,25 @@ public class MediaToolBindingMenu extends AbstractContainerMenu {
     public MediaSource targetSource(Player player) {
         return switch (targetKind) {
             case MP4 -> {
-                UUID deviceId = mp4DeviceId;
+                UUID deviceId = mediaDeviceId;
                 if (deviceId == null) {
                     ItemStack mp4Stack = manualMp4TargetStack();
                     deviceId = mp4Stack.getItem() instanceof MP4Item
-                        && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer
-                            ? MP4DeviceIdentity.getOrCreateUnique(
-                                (net.minecraft.server.level.ServerLevel) serverPlayer.level(), serverPlayer, mp4Stack)
-                            : null;
+                            && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer
+                                    ? MP4DeviceIdentity.getOrCreateUnique(
+                                            (net.minecraft.server.level.ServerLevel) serverPlayer.level(), serverPlayer,
+                                            mp4Stack)
+                                    : null;
                 }
                 yield MediaBindingCleanupService.mp4Source(deviceId);
+            }
+            case PAD -> {
+                UUID deviceId = mediaDeviceId;
+                if (deviceId == null) {
+                    ItemStack padStack = manualMp4TargetStack();
+                    deviceId = padStack.getItem() instanceof PadItem ? PadItem.getOrCreateDeviceId(padStack) : null;
+                }
+                yield MediaBindingCleanupService.padSource(deviceId);
             }
             case TURNTABLE -> MediaBindingCleanupService.turntableSource(
                     player != null ? player.level() : null, targetPos);
@@ -200,7 +211,7 @@ public class MediaToolBindingMenu extends AbstractContainerMenu {
                 return ItemStack.EMPTY;
             }
         } else if (index >= 3) {
-            int destinationSlot = usesManualMp4TargetSlot() && original.getItem() instanceof MP4Item
+            int destinationSlot = usesManualMp4TargetSlot() && isExpectedTargetItem(original)
                     ? TARGET_SLOT
                     : INPUT_SLOT;
             if (!moveItemStackTo(original, destinationSlot, destinationSlot + 1, false)) {
@@ -274,7 +285,12 @@ public class MediaToolBindingMenu extends AbstractContainerMenu {
         return switch (targetKind) {
             case TURNTABLE -> new ItemStack(ModItems.MODERN_TURNTABLE.get());
             case MP4 -> new ItemStack(ModItems.MP4.get());
+            case PAD -> new ItemStack(ModItems.PAD.get());
         };
+    }
+
+    private boolean isExpectedTargetItem(ItemStack stack) {
+        return targetKind == TargetKind.PAD ? stack.getItem() instanceof PadItem : stack.getItem() instanceof MP4Item;
     }
 
     private static TargetKind readTargetKind(RegistryFriendlyByteBuf buffer) {
@@ -321,7 +337,8 @@ public class MediaToolBindingMenu extends AbstractContainerMenu {
 
         @Override
         public boolean mayPlace(ItemStack stack) {
-            return stack.getItem() instanceof MP4Item;
+            return menu.targetKind == TargetKind.PAD ? stack.getItem() instanceof PadItem
+                    : stack.getItem() instanceof MP4Item;
         }
 
         @Override

@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
 
@@ -45,11 +46,7 @@ public class DolbyAudioRegistry {
     }.getType();
     /** 音量持久化 debounce 专用，单线程复用，避免每次新建线程 */
     private static final ScheduledExecutorService VOLUME_SAVE_EXECUTOR = Executors
-            .newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "VolumeSaveDebounce");
-                t.setDaemon(true);
-                return t;
-            });
+            .newSingleThreadScheduledExecutor(NetMusicThreadFactory.daemon("VolumeSaveDebounce"));
     private static volatile long lastSaveMillis;
     private static volatile boolean pendingSave;
 
@@ -249,8 +246,9 @@ public class DolbyAudioRegistry {
         if (entry == null || entry.ownerId() == null) {
             return false;
         }
-        if (com.zhongbai233.net_music_can_play_bili.client.MP4ClientPlayback.sourcePosition(entry.ownerId()) != null) {
-            return com.zhongbai233.net_music_can_play_bili.client.MP4ClientPlayback
+        if (com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback
+                .sourcePosition(entry.ownerId()) != null) {
+            return com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback
                     .followsLocalPlayerFront(entry.ownerId());
         }
         var mc = net.minecraft.client.Minecraft.getInstance();
@@ -277,7 +275,8 @@ public class DolbyAudioRegistry {
 
     private static float[] resolveMachinePos(BlockPos handlerKey, float[] originalPos, UUID ownerId) {
         if (ownerId != null) {
-            var mp4Pos = com.zhongbai233.net_music_can_play_bili.client.MP4ClientPlayback.sourcePosition(ownerId);
+            var mp4Pos = com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback
+                    .sourcePosition(ownerId);
             if (mp4Pos != null) {
                 return new float[] { (float) mp4Pos.x, (float) mp4Pos.y, (float) mp4Pos.z };
             }
@@ -742,14 +741,13 @@ public class DolbyAudioRegistry {
         List<Thread> threads = new ArrayList<>(cleanupTasks.size());
         for (int i = 0; i < cleanupTasks.size(); i++) {
             Runnable task = cleanupTasks.get(i);
-            Thread thread = new Thread(() -> {
+            Thread thread = NetMusicThreadFactory.daemonThread("DolbyRegistryCleanup-" + i, () -> {
                 try {
                     task.run();
                 } catch (Throwable t) {
                     LOGGER.debug("OpenAL registry cleanup task failed: {}", t.toString());
                 }
-            }, "DolbyRegistryCleanup-" + i);
-            thread.setDaemon(true);
+            });
             thread.start();
             threads.add(thread);
         }

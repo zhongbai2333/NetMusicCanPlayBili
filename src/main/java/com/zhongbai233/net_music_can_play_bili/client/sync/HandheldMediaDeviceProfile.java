@@ -12,6 +12,10 @@ public interface HandheldMediaDeviceProfile {
 
     boolean hasStartedSound(UUID deviceId, String sessionId);
 
+    default boolean canStartVideoDecode(UUID deviceId, HandheldMediaPlayback playback) {
+        return playback != null && hasStartedSound(deviceId, playback.sessionId());
+    }
+
     boolean isDeviceAvailable(UUID deviceId);
 
     String subtitleMode(UUID deviceId);

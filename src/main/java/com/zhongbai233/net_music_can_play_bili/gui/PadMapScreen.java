@@ -346,16 +346,18 @@ public class PadMapScreen extends Screen {
 
     private int worldToMapX(double worldX, int originX, float cellPx) {
         return originX + Math.round((float) ((worldX - snapshot.centerX()) / snapshot.cellSizeBlocks() * cellPx)
-                + snapshot.size() * cellPx / 2.0F);
+                + snapshot.width() * cellPx / 2.0F);
     }
 
     private int worldToMapZ(double worldZ, int originY, float cellPx) {
         return originY + Math.round((float) ((worldZ - snapshot.centerZ()) / snapshot.cellSizeBlocks() * cellPx)
-                + snapshot.size() * cellPx / 2.0F);
+                + snapshot.height() * cellPx / 2.0F);
     }
 
     private float pixelsPerBlock(int cellSize) {
-        return Math.min((float) mapW() / PadMapSampler.DEFAULT_SIZE, (float) mapH() / PadMapSampler.DEFAULT_SIZE)
+        int mapWidth = snapshot != null ? snapshot.width() : PadMapSampler.DEFAULT_WIDTH;
+        int mapHeight = snapshot != null ? snapshot.height() : PadMapSampler.DEFAULT_HEIGHT;
+        return Math.min((float) mapW() / Math.max(1, mapWidth), (float) mapH() / Math.max(1, mapHeight))
                 / Math.max(1, cellSize);
     }
 

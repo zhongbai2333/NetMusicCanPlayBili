@@ -584,8 +584,14 @@ public class DolbyAudioHandler {
             OpenALSpatialAudio oldSA = spatialAudio;
             if (oldSA != null)
                 oldSA.cleanup();
-            spatialAudio = new OpenALSpatialAudio();
-            spatialAudio.init(chs, newObjectCapacity);
+            OpenALSpatialAudio next = new OpenALSpatialAudio();
+            if (!next.init(chs, newObjectCapacity)) {
+                next.cleanup();
+                spatialAudio = null;
+                initialized = false;
+                return;
+            }
+            spatialAudio = next;
             PlaybackLatencyBench.markAudioOpenAlInitialized(this, "dolby", 48000);
             numBedChannels = chs;
             numObjects = newObjectCapacity;

@@ -67,8 +67,8 @@ public final class HolographicGlassesWorldScreenRenderer {
         if (source == null) {
             return;
         }
-        if (source.isMp4()) {
-            submitMp4(collector, source.mp4DeviceId(), quad, rgbaFallback);
+        if (source.isMediaDevice()) {
+            submitMediaDevice(collector, source.deviceId(), quad, rgbaFallback);
         } else if (source.isProjector()) {
             submitProjector(collector, source, quad, rgbaFallback);
         } else if (source.isTurntable()) {
@@ -76,14 +76,15 @@ public final class HolographicGlassesWorldScreenRenderer {
         }
     }
 
-    private static void submitMp4(SubmitNodeCollector collector, UUID deviceId, ScreenQuad quad, boolean rgbaFallback) {
+    private static void submitMediaDevice(SubmitNodeCollector collector, UUID deviceId, ScreenQuad quad,
+            boolean rgbaFallback) {
         if (deviceId == null) {
             return;
         }
         MP4HandheldVideoClient.markVisible(deviceId);
         PoseStack poseStack = new PoseStack();
         if (rgbaFallback) {
-            MP4RgbaVideoLayer rgbaLayer = MP4RgbaVideoLayer.forDevice(deviceId);
+            MP4RgbaVideoLayer rgbaLayer = MP4RgbaVideoLayer.forHandheldDevice(deviceId);
             if (!rgbaLayer.uploadLatest(deviceId)) {
                 return;
             }
@@ -91,7 +92,7 @@ public final class HolographicGlassesWorldScreenRenderer {
             collector.submitCustomGeometry(poseStack, RenderTypes.itemCutout(textureId),
                     (pose, buffer) -> emitDoubleSidedQuad(buffer, pose, quad));
         } else {
-            MP4Nv12VideoLayer nv12Layer = MP4Nv12VideoLayer.forDevice(deviceId);
+            MP4Nv12VideoLayer nv12Layer = MP4Nv12VideoLayer.forHandheldDevice(deviceId);
             if (!nv12Layer.uploadLatest(deviceId) || nv12Layer.textureSet() == null) {
                 return;
             }
@@ -127,7 +128,10 @@ public final class HolographicGlassesWorldScreenRenderer {
                             : YuvVideoRenderTypes.yuv420pEntity(frame.yTexture(), frame.uTexture(), frame.vTexture()),
                     (pose, buffer) -> emitDoubleSidedQuad(buffer, pose, quad));
         } else if (frame.rgbaTexture() != null) {
-            collector.submitCustomGeometry(poseStack, YuvVideoRenderTypes.videoRgbaEntity(frame.rgbaTexture()),
+            collector.submitCustomGeometry(poseStack,
+                    frame.emissiveRgba()
+                            ? RenderTypes.itemCutout(frame.rgbaTexture())
+                            : YuvVideoRenderTypes.videoRgbaEntity(frame.rgbaTexture()),
                     (pose, buffer) -> emitDoubleSidedQuad(buffer, pose, quad));
         }
     }

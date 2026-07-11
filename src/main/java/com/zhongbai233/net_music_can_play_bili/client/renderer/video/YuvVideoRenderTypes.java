@@ -75,14 +75,13 @@ public final class YuvVideoRenderTypes {
         return buildYuvEntityPipeline(PIPELINE_ID, FRAGMENT_SHADER);
     }
 
-    private static RenderPipeline buildYuvEntityPipeline(Identifier pipelineId, Identifier fragmentShader) {
-        RenderPipeline.Builder builder = RenderPipeline.builder(RenderPipelines.ENTITY_SNIPPET)
+        private static RenderPipeline buildYuvEntityPipeline(Identifier pipelineId, Identifier fragmentShader) {
+                RenderPipeline.Builder builder = RenderPipeline.builder(RenderPipelines.ENTITY_EMISSIVE_SNIPPET)
                 .withLocation(pipelineId)
                 .withFragmentShader(fragmentShader)
                 .withShaderDefine("NO_OVERLAY")
                 .withShaderDefine("ALPHA_CUTOUT", 0.1F)
-                .withShaderDefine("PER_FACE_LIGHTING")
-                // 视频面片按全亮不透明表面处理，减少光影包重分类风险。
+                                // 视频面片按全亮不透明表面处理，不声明 lightmap，减少光影/后处理 pass 误读遗留 lightmap。
                 .withColorTargetState(ColorTargetState.DEFAULT)
                 .withDepthStencilState(YUV_NO_DEPTH_WRITE
                         ? new DepthStencilState(CompareOp.LESS_THAN_OR_EQUAL, false)
@@ -119,10 +118,19 @@ public final class YuvVideoRenderTypes {
     }
 
     public static RenderType nv12Entity(Identifier yTexture, Identifier uvTexture, Identifier placeholderTexture) {
+        return nv12Entity("bili_nv12_entity", yTexture, uvTexture, placeholderTexture);
+    }
+
+    public static RenderType padNv12Entity(Identifier yTexture, Identifier uvTexture, Identifier placeholderTexture) {
+        return nv12Entity("ncpb_pad_video_nv12_entity", yTexture, uvTexture, placeholderTexture);
+    }
+
+    private static RenderType nv12Entity(String name, Identifier yTexture, Identifier uvTexture,
+            Identifier placeholderTexture) {
         IrisShaderpackCompat.prepareYuvPipelineForCurrentShaderpackState(NV12_ENTITY,
                 YUV420P_TEXTURED_PROBE_ENTITY);
         return RenderType.create(
-                "bili_nv12_entity",
+                name,
                 RenderSetup.builder(NV12_ENTITY)
                         .withTexture("Sampler0", yTexture)
                         .withTexture("Sampler1", uvTexture)
@@ -148,18 +156,25 @@ public final class YuvVideoRenderTypes {
 
     public static RenderType videoRgbaEntity(Identifier texture) {
         return RGBA_ENTITY_CACHE.computeIfAbsent(texture, key -> {
-            LOGGER.debug("创建视频 RGBA Iris 兼容 RenderType: texture={}, pipeline=ENTITY_SOLID, samplers=Sampler0/1/2",
+            LOGGER.debug("创建视频 RGBA Iris 兼容 RenderType: texture={}, pipeline=ENTITY_SOLID, samplers=Sampler0/1/2, lightmap=off",
                     key);
-            return RenderType.create(
-                    "bili_video_rgba_entity",
-                    RenderSetup.builder(RenderPipelines.ENTITY_SOLID)
-                            .withTexture("Sampler0", key)
-                            // 绑定占位 sampler，避免 Iris 校验 Sampler1/2 时失败。
-                            .withTexture("Sampler1", key)
-                            .withTexture("Sampler2", key)
-                            .useLightmap()
-                            .createRenderSetup());
+                        return videoRgbaEntity("bili_video_rgba_entity", key);
         });
     }
+
+        public static RenderType padVideoRgbaEntity(Identifier texture) {
+                return videoRgbaEntity("ncpb_pad_video_rgba_entity", texture);
+        }
+
+        private static RenderType videoRgbaEntity(String name, Identifier texture) {
+                return RenderType.create(
+                                name,
+                                RenderSetup.builder(RenderPipelines.ENTITY_SOLID)
+                                                .withTexture("Sampler0", texture)
+                                                // 绑定占位 sampler，避免 Iris 校验 Sampler1/2 时失败。
+                                                .withTexture("Sampler1", texture)
+                                                .withTexture("Sampler2", texture)
+                                                .createRenderSetup());
+        }
 
 }

@@ -13,6 +13,7 @@
     "BigMegaphoneStartMessageMixin",
     "ButtonAccessor",
     "CDBurnerMenuScreenMixin",
+    "ClientPacketListenerBlockUpdateMixin",
     "ClientTooltipComponentMixin",
     "ComputerMenuScreenMixin",
     "GlDeviceYuvShaderSkipMixin",

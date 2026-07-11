@@ -16,7 +16,6 @@ import com.zhongbai233.net_music_can_play_bili.media.stream.TempFileByteSpool;
 import com.zhongbai233.net_music_can_play_bili.server.NetMusicBiliServerCommands;
 import com.zhongbai233.net_music_can_play_bili.server.NetMusicPermissions;
 import com.zhongbai233.net_music_can_play_bili.server.PadMapScopeSync;
-import com.zhongbai233.net_music_can_play_bili.server.PadMapSamplerServerSelfTest;
 import com.zhongbai233.net_music_can_play_bili.server.PlaybackAuditManager;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
@@ -46,7 +45,7 @@ public class NetMusicCanPlayBili {
         NeoForge.EVENT_BUS.addListener(NetMusicPermissions::onPermissionGather);
         NeoForge.EVENT_BUS.addListener(NetMusicBiliServerCommands::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener(PadMapScopeSync::onPlayerLoggedIn);
-        NeoForge.EVENT_BUS.addListener(PadMapSamplerServerSelfTest::onServerStarted);
+        registerDevelopmentSelfTests();
         NeoForge.EVENT_BUS.addListener(PlaybackAuditManager::onServerTick);
         NeoForge.EVENT_BUS.addListener(PlaybackAuditManager::onPlayerLoggedIn);
 
@@ -68,6 +67,31 @@ public class NetMusicCanPlayBili {
                 Capabilities.Item.BLOCK,
                 ModBlockEntities.MODERN_TURNTABLE.get(),
                 (turntable, side) -> turntable.getItemHandler());
+    }
+
+    private static void registerDevelopmentSelfTests() {
+        if (!Boolean.getBoolean("ncpb.pad.map.server_self_test")) {
+            return;
+        }
+        try {
+            Class<?> selfTest = Class.forName(
+                    "com.zhongbai233.net_music_can_play_bili.server.PadMapSamplerServerSelfTest");
+            var handler = selfTest.getMethod("onServerStarted",
+                    net.neoforged.neoforge.event.server.ServerStartedEvent.class);
+            NeoForge.EVENT_BUS.addListener(net.neoforged.neoforge.event.server.ServerStartedEvent.class,
+                    event -> invokeDevelopmentSelfTest(handler, event));
+        } catch (ReflectiveOperationException ex) {
+            throw new IllegalStateException("Unable to register Pad map server self-test", ex);
+        }
+    }
+
+    private static void invokeDevelopmentSelfTest(java.lang.reflect.Method handler,
+            net.neoforged.neoforge.event.server.ServerStartedEvent event) {
+        try {
+            handler.invoke(null, event);
+        } catch (ReflectiveOperationException ex) {
+            throw new IllegalStateException("Unable to run Pad map server self-test", ex);
+        }
     }
 
 }

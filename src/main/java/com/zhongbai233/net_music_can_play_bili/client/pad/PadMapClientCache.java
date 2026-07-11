@@ -4,24 +4,13 @@ import com.zhongbai233.net_music_can_play_bili.client.PadFocusState;
 import com.zhongbai233.net_music_can_play_bili.item.PadItem;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
-import net.minecraft.tags.BlockTags;
-import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.Level;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,20 +20,29 @@ import java.util.concurrent.Executors;
 /** 客户端 Pad 地图缓存：分帧采样，禁止在渲染帧里同步扫全图。 */
 public final class PadMapClientCache {
     private static final int RESAMPLE_CHUNK_DISTANCE = Integer.getInteger("ncpb.pad.map_resample_chunks", 2);
-    private static final int CHUNKS_PER_TICK = Integer.getInteger("ncpb.pad.map_chunks_per_tick", 1);
-    private static final int FAST_CHUNKS_PER_TICK = Integer.getInteger("ncpb.pad.map_fast_chunks_per_tick", 3);
-    private static final int MAX_JOB_LAG_CHUNKS = Integer.getInteger("ncpb.pad.map_max_job_lag_chunks", 4);
-    private static final int RECENTER_BLOCKS = Integer.getInteger("ncpb.pad.map_recenter_blocks", 24);
+    private static final int CHUNKS_PER_TICK = Integer.getInteger("ncpb.pad.map_chunks_per_tick", 24);
+    private static final int FAST_CHUNKS_PER_TICK = Integer.getInteger("ncpb.pad.map_fast_chunks_per_tick", 64);
+    private static final int CELLS_PER_CHUNK_BUDGET = Integer.getInteger("ncpb.pad.map_cells_per_chunk_budget", 32);
+    private static final int INITIAL_VISIBLE_BURST_CELLS = Integer.getInteger("ncpb.pad.map_initial_burst_cells",
+            8192);
+    private static final int MAX_JOB_LAG_CHUNKS = Integer.getInteger("ncpb.pad.map_max_job_lag_chunks", 3);
+    private static final int DIRTY_CHUNKS_PER_TICK = Math.max(1,
+            Integer.getInteger("ncpb.pad.map_dirty_chunks_per_tick", 4));
+    private static final int MAP_UPDATE_INTERVAL_TICKS = Math.max(1,
+            Integer.getInteger("ncpb.pad.map_update_interval_ticks", 1));
+    private static final int UNKNOWN_RETRY_INTERVAL_TICKS = Math.max(20,
+            Integer.getInteger("ncpb.pad.map_unknown_retry_ticks", 40));
+    private static final int RECENTER_BLOCKS = Integer.getInteger("ncpb.pad.map_recenter_blocks", 16);
     private static final int INDOOR_RECENTER_BLOCKS = Integer.getInteger("ncpb.pad.map_indoor_recenter_blocks", 8);
     private static final int INDOOR_CEILING_SCAN_BLOCKS = Integer.getInteger("ncpb.pad.map_indoor_ceiling_scan_blocks",
-            32);
+            96);
     private static final int INDOOR_CEILING_MIN_HITS = Integer.getInteger("ncpb.pad.map_indoor_ceiling_min_hits", 5);
     private static final int INDOOR_ARTIFICIAL_MIN_HITS = Integer.getInteger("ncpb.pad.map_indoor_artificial_min_hits",
             5);
     private static final int INDOOR_ENTER_CONFIRM_TICKS = Integer.getInteger("ncpb.pad.map_indoor_enter_confirm_ticks",
             2);
     private static final int INDOOR_EXIT_CONFIRM_TICKS = Integer.getInteger("ncpb.pad.map_indoor_exit_confirm_ticks",
-            10);
+            40);
     private static final int INDOOR_FLOOR_CHANGE_CONFIRM_TICKS = Integer
             .getInteger("ncpb.pad.map_indoor_floor_confirm_ticks", 4);
     private static final int INDOOR_JUMP_TOLERANCE_BLOCKS = Integer
@@ -53,19 +51,13 @@ public final class PadMapClientCache {
     private static final float INDOOR_ZOOM = Float.parseFloat(System.getProperty("ncpb.pad.map_indoor_zoom", "3.0"));
     private static final float INDOOR_DISPLAY_SCALE = Float
             .parseFloat(System.getProperty("ncpb.pad.map_indoor_display_scale", "2.0"));
-    private static final int PREVIEW_CHUNKS = Integer.getInteger("ncpb.pad.map_preview_chunks", 16);
+    private static final int PREVIEW_CHUNKS = Integer.getInteger("ncpb.pad.map_preview_chunks", 1);
     private static final int CELL_CACHE_LIMIT = Integer.getInteger("ncpb.pad.map_cell_cache_limit", 524288);
     private static final int CHUNK_CACHE_LIMIT = Integer.getInteger("ncpb.pad.map_chunk_cache_limit", 8192);
-    private static final int DISK_CACHE_MAGIC = 0x4E504D43;
-    private static final int DISK_CACHE_VERSION = 11;
-    private static final int SNAPSHOT_CACHE_MAGIC = 0x4E504D53;
-    private static final int SNAPSHOT_CACHE_VERSION = 12;
-    private static final int CHUNK_CACHE_MAGIC = 0x4E504B43;
-    private static final int CHUNK_CACHE_VERSION = 12;
     private static final int DISK_FLUSH_INTERVAL_TICKS = Integer.getInteger("ncpb.pad.map_disk_flush_ticks", 200);
     private static final boolean DISK_CACHE_ENABLED = Boolean
             .parseBoolean(System.getProperty("ncpb.pad.map_disk_cache", "true"));
-        private static final ExecutorService DISK_FLUSH_EXECUTOR = Executors.newSingleThreadExecutor(
+    private static final ExecutorService DISK_FLUSH_EXECUTOR = Executors.newSingleThreadExecutor(
             NetMusicThreadFactory.daemon("pad-map-disk-flush"));
     private static final LinkedHashMap<CellKey, PadMapTileKind> CELL_CACHE = new LinkedHashMap<>(1024, 0.75F, true) {
         @Override
@@ -79,10 +71,12 @@ public final class PadMapClientCache {
             return size() > CHUNK_CACHE_LIMIT;
         }
     };
+    private static final PadMapDirtyChunkTracker DIRTY_CHUNKS = new PadMapDirtyChunkTracker(CHUNK_CACHE_LIMIT);
+    private static final PadMapViewSnapshotCache VIEW_SNAPSHOTS = new PadMapViewSnapshotCache();
     private static PadMapSnapshot completed;
     private static PadMapSnapshot placeholder;
     private static Job activeJob;
-    private static ViewProfile completedProfile = ViewProfile.OUTDOOR;
+    private static PadMapViewProfile completedProfile = PadMapViewProfile.OUTDOOR;
     private static boolean manualViewActive;
     private static int manualCenterX;
     private static int manualCenterZ;
@@ -92,14 +86,19 @@ public final class PadMapClientCache {
     private static boolean diskCacheLoaded;
     private static boolean diskCacheDirty;
     private static boolean snapshotCacheDirty;
-    private static boolean chunkCacheDirty;
     private static int diskFlushTicker;
-    private static ViewProfile stableProfile = ViewProfile.OUTDOOR;
-    private static int indoorCandidateTicks;
-    private static int outdoorCandidateTicks;
-    private static int stableIndoorFloorY = outdoorLayerY();
-    private static int candidateIndoorFloorY = outdoorLayerY();
-    private static int candidateIndoorFloorTicks;
+    private static final PadMapViewProfileStabilizer PROFILE_STABILIZER = new PadMapViewProfileStabilizer(
+            INDOOR_ENTER_CONFIRM_TICKS, INDOOR_EXIT_CONFIRM_TICKS, INDOOR_FLOOR_CHANGE_CONFIRM_TICKS,
+            INDOOR_JUMP_TOLERANCE_BLOCKS);
+    private static final PadMapViewProfileDetector PROFILE_DETECTOR = new PadMapViewProfileDetector(
+            INDOOR_CEILING_SCAN_BLOCKS, INDOOR_CEILING_MIN_HITS, INDOOR_ARTIFICIAL_MIN_HITS);
+    private static final PadMapJobScheduler JOB_SCHEDULER = new PadMapJobScheduler(RECENTER_BLOCKS,
+            INDOOR_RECENTER_BLOCKS, MAX_JOB_LAG_CHUNKS, RESAMPLE_CHUNK_DISTANCE, CHUNKS_PER_TICK,
+            FAST_CHUNKS_PER_TICK);
+    private static final PadMapSnapshotComposer SNAPSHOT_COMPOSER = new PadMapSnapshotComposer(INDOOR_DISPLAY_SCALE);
+    private static int mapUpdateCountdown;
+    private static long nextUnknownRetryTick;
+    private static Level activeLevel;
 
     private PadMapClientCache() {
     }
@@ -125,20 +124,31 @@ public final class PadMapClientCache {
     public static void tick() {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.player == null || minecraft.level == null) {
-            activeJob = null;
-            completed = null;
-            placeholder = null;
-            resetProfileStability();
-            flushDiskCache();
+            if (activeLevel != null) {
+                flushDiskCache();
+                clearLevelRuntimeState();
+                activeLevel = null;
+            }
             return;
+        }
+        if (activeLevel != minecraft.level) {
+            clearLevelRuntimeState();
+            activeLevel = minecraft.level;
         }
         updateDiskScope(minecraft);
         loadDiskCacheIfNeeded();
         if (!isPadRelevant(minecraft)) {
             activeJob = null;
+            mapUpdateCountdown = 0;
             maybeFlushDiskCache();
             return;
         }
+        if (mapUpdateCountdown > 0) {
+            mapUpdateCountdown--;
+            maybeFlushDiskCache();
+            return;
+        }
+        mapUpdateCountdown = MAP_UPDATE_INTERVAL_TICKS - 1;
         int playerX = minecraft.player.blockPosition().getX();
         int playerY = minecraft.player.blockPosition().getY();
         int playerZ = minecraft.player.blockPosition().getZ();
@@ -148,15 +158,25 @@ public final class PadMapClientCache {
         BlockPos profilePos = manualViewActive
                 ? new BlockPos(targetX, playerY, targetZ)
                 : minecraft.player.blockPosition();
-        ViewProfile rawProfile = detectViewProfile(minecraft.level, profilePos);
-        int rawFloorY = rawProfile == ViewProfile.INDOOR ? normalizeIndoorFloorY(minecraft.level, profilePos)
-                : outdoorLayerY();
-        ViewProfile profile = stabilizeViewProfile(rawProfile, rawFloorY);
-        int targetY = profile == ViewProfile.INDOOR ? stableIndoorFloorY
-                : outdoorLayerY();
+        PadMapViewProfile rawProfile = PROFILE_DETECTOR.detect(minecraft.level, profilePos);
+        int rawFloorY = rawProfile == PadMapViewProfile.INDOOR
+                ? PROFILE_DETECTOR.normalizeIndoorFloorY(minecraft.level, profilePos)
+                : PROFILE_DETECTOR.outdoorLayerY();
+        PadMapViewProfileStabilizer.Result stableView = PROFILE_STABILIZER.update(rawProfile, rawFloorY);
+        PadMapViewProfile profile = stableView.profile();
+        int targetY = stableView.floorY();
+        if (!manualViewActive) {
+            targetZoom = profile == PadMapViewProfile.INDOOR ? INDOOR_ZOOM : OUTDOOR_ZOOM;
+        }
         cancelStaleJob(targetX, targetY, targetZ, profile, targetZoom);
+        activateViewSnapshot(targetX, targetY, targetZ, profile, targetZoom);
+        PadMapSnapshot dirtySeed = invalidateDirtyChunks(minecraft.level, targetY, profile, targetZoom);
+        if (dirtySeed != null) {
+            activeJob = new Job(minecraft.level, targetX, targetZ, targetY, profile, targetZoom, dirtySeed);
+        }
         maybeStartJob(minecraft.level, targetX, targetY, targetZ, profile, targetZoom);
-        publishProfileTransition(targetX, targetY, targetZ, profile);
+        maybeStartUnknownRetryJob(minecraft.level, targetX, targetY, targetZ, profile, targetZoom);
+        publishTransitionIfMissing(targetX, targetY, targetZ, profile, targetZoom);
         if (activeJob != null) {
             long started = System.nanoTime();
             boolean done = activeJob.step(chunksPerTickFor(playerX, playerZ));
@@ -164,9 +184,9 @@ public final class PadMapClientCache {
             if (done) {
                 completed = activeJob.finish();
                 completedProfile = activeJob.profile;
-                if (completedProfile == ViewProfile.OUTDOOR) {
+                VIEW_SNAPSHOTS.put(completedProfile, completed);
+                if (completedProfile == PadMapViewProfile.OUTDOOR && !completed.hasUnknownTiles()) {
                     snapshotCacheDirty = true;
-                    flushDiskCache();
                 }
                 int steps = activeJob.steps();
                 activeJob = null;
@@ -178,194 +198,126 @@ public final class PadMapClientCache {
         maybeFlushDiskCache();
     }
 
-    private static void publishProfileTransition(int playerX, int playerY, int playerZ, ViewProfile profile) {
-        if (completed == null || (completedProfile == profile && completed.centerY() == playerY)) {
+    private static void activateViewSnapshot(int playerX, int playerY, int playerZ, PadMapViewProfile profile,
+            float zoom) {
+        int cellSize = PadMapSampler.cellSizeForZoom(zoom);
+        if (completed != null && completedProfile == profile && completed.centerY() == playerY
+                && completed.cellSizeBlocks() == cellSize) {
             return;
         }
-        completed = transitionSnapshot(playerX, playerY, playerZ, profile);
+        PadMapSnapshot cached = VIEW_SNAPSHOTS.get(profile, playerY, cellSize);
+        completed = cached;
         completedProfile = profile;
     }
 
-    private static void cancelStaleJob(int playerX, int playerY, int playerZ, ViewProfile profile, float zoom) {
-        if (activeJob == null) {
-            return;
+    private static void publishTransitionIfMissing(int playerX, int playerY, int playerZ,
+            PadMapViewProfile profile, float zoom) {
+        if (completed == null) {
+            completed = transitionSnapshot(playerX, playerY, playerZ, profile, zoom);
+            completedProfile = profile;
         }
-        if (activeJob.profile != profile || activeJob.zoom != zoom || activeJob.floorY != playerY) {
-            activeJob = null;
-            return;
-        }
-        int lagX = chunkDistance(playerX, activeJob.centerX);
-        int lagZ = chunkDistance(playerZ, activeJob.centerZ);
-        if (Math.max(lagX, lagZ) > MAX_JOB_LAG_CHUNKS) {
+    }
+
+    private static void cancelStaleJob(int playerX, int playerY, int playerZ, PadMapViewProfile profile, float zoom) {
+        if (JOB_SCHEDULER.shouldCancel(activeJob, playerX, playerY, playerZ, profile, zoom)) {
             activeJob = null;
         }
     }
 
     private static int chunksPerTickFor(int playerX, int playerZ) {
-        if (activeJob == null) {
-            return CHUNKS_PER_TICK;
-        }
-        int lagX = chunkDistance(playerX, activeJob.centerX);
-        int lagZ = chunkDistance(playerZ, activeJob.centerZ);
-        int lag = Math.max(lagX, lagZ);
-        if (lag >= RESAMPLE_CHUNK_DISTANCE * 2) {
-            return FAST_CHUNKS_PER_TICK;
-        }
-        if (lag >= RESAMPLE_CHUNK_DISTANCE) {
-            return Math.max(CHUNKS_PER_TICK, FAST_CHUNKS_PER_TICK - 1);
-        }
-        return CHUNKS_PER_TICK;
+        return JOB_SCHEDULER.chunksPerTick(activeJob, playerX, playerZ);
     }
 
-    private static void maybeStartJob(ClientLevel level, int playerX, int playerY, int playerZ, ViewProfile profile,
+    private static void maybeStartJob(Level level, int playerX, int playerY, int playerZ,
+            PadMapViewProfile profile,
             float zoom) {
         if (activeJob != null) {
             return;
         }
-        int recenterBlocks = profile == ViewProfile.INDOOR ? INDOOR_RECENTER_BLOCKS : RECENTER_BLOCKS;
-        boolean hasNoMap = completed == null && activeJob == null;
-        boolean profileChanged = completed != null && completedProfile != profile;
-        boolean floorChanged = completed != null && completed.centerY() != playerY;
-        boolean moved = completed != null && (Math.abs(playerX - completed.centerX()) >= recenterBlocks
-                || Math.abs(playerZ - completed.centerZ()) >= recenterBlocks);
-        if (!hasNoMap && !profileChanged && !floorChanged && !moved) {
+        if (!JOB_SCHEDULER.shouldStart(completed, completedProfile, playerX, playerY, playerZ, profile)) {
             return;
         }
         activeJob = new Job(level, playerX, playerZ, playerY, profile, zoom,
-                profile == completedProfile && completed != null
-                        && completed.cellSizeBlocks() == PadMapSampler.cellSizeForZoom(zoom)
-                                ? completed
-                                : null);
+                JOB_SCHEDULER.canSeedPrevious(completed, completedProfile, profile, zoom) ? completed : null);
     }
 
-    private static ViewProfile detectViewProfile(ClientLevel level, BlockPos playerPos) {
-        BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
-        int ceiling = 0;
-        int artificial = 0;
-        for (int dz = -2; dz <= 2; dz++) {
-            for (int dx = -2; dx <= 2; dx++) {
-                int x = playerPos.getX() + dx;
-                int z = playerPos.getZ() + dz;
-                int surfaceY = level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) - 1;
-                if (surfaceY >= playerPos.getY() + 2 && surfaceY <= playerPos.getY() + INDOOR_CEILING_SCAN_BLOCKS) {
-                    ceiling++;
-                }
-                for (int dy = -1; dy <= 5; dy++) {
-                    mutable.set(x, playerPos.getY() + dy, z);
-                    BlockState state = level.getBlockState(mutable);
-                    if (isArtificialProfileBlock(level, mutable, state)) {
-                        artificial++;
-                        break;
+    private static void maybeStartUnknownRetryJob(Level level, int playerX, int playerY, int playerZ,
+            PadMapViewProfile profile, float zoom) {
+        if (activeJob != null || completed == null || completedProfile != profile || !completed.hasUnknownTiles()) {
+            return;
+        }
+        long gameTime = level.getGameTime();
+        if (gameTime < nextUnknownRetryTick) {
+            return;
+        }
+        nextUnknownRetryTick = gameTime + UNKNOWN_RETRY_INTERVAL_TICKS;
+        activeJob = new Job(level, playerX, playerZ, playerY, profile, zoom,
+                JOB_SCHEDULER.canSeedPrevious(completed, completedProfile, profile, zoom) ? completed : null);
+    }
+
+    public static void markChunkDirty(Level level, int chunkX, int chunkZ) {
+        if (level == null) {
+            return;
+        }
+        DIRTY_CHUNKS.mark(level.dimension().identifier().toString(), chunkX, chunkZ);
+    }
+
+    public static void markBlockDirty(Level level, BlockPos pos) {
+        if (pos != null) {
+            markChunkDirty(level, Math.floorDiv(pos.getX(), 16), Math.floorDiv(pos.getZ(), 16));
+        }
+    }
+
+    private static PadMapSnapshot invalidateDirtyChunks(Level level, int centerY, PadMapViewProfile profile,
+            float zoom) {
+        if (activeJob != null || completed == null) {
+            return null;
+        }
+        int cellSize = PadMapSampler.cellSizeForZoom(zoom);
+        String dimension = level.dimension().identifier().toString();
+        List<PadMapDirtyChunkTracker.Key> dirty = DIRTY_CHUNKS.drainForDimension(dimension, DIRTY_CHUNKS_PER_TICK);
+        if (dirty.isEmpty()) {
+            return null;
+        }
+        VIEW_SNAPSHOTS.invalidate(dirty);
+        PadMapSnapshot invalidatedSnapshot = PadMapDirtyInvalidation.invalidateSnapshot(completed, cellSize, dirty);
+        boolean invalidated = invalidatedSnapshot != null;
+        if (profile == PadMapViewProfile.OUTDOOR) {
+            List<PadMapDirtyInvalidation.CellRange> dirtyCellRanges = PadMapDirtyInvalidation.cellRanges(dirty,
+                    cellSize);
+            synchronized (CELL_CACHE) {
+                int before = CELL_CACHE.size();
+                for (PadMapDirtyInvalidation.CellRange dirtyCellRange : dirtyCellRanges) {
+                    for (int cellZ = dirtyCellRange.minCellZ(); cellZ <= dirtyCellRange.maxCellZ(); cellZ++) {
+                        for (int cellX = dirtyCellRange.minCellX(); cellX <= dirtyCellRange.maxCellX(); cellX++) {
+                            CELL_CACHE.remove(new CellKey(dimension, cellSize, cellX, cellZ));
+                        }
                     }
                 }
+                invalidated |= CELL_CACHE.size() != before;
             }
         }
-        return ceiling >= INDOOR_CEILING_MIN_HITS && artificial >= INDOOR_ARTIFICIAL_MIN_HITS
-                ? ViewProfile.INDOOR
-                : ViewProfile.OUTDOOR;
-    }
-
-    private static boolean isArtificialProfileBlock(ClientLevel level, BlockPos.MutableBlockPos mutable,
-            BlockState state) {
-        if (state.isAir() || !state.getFluidState().isEmpty() || state.getCollisionShape(level, mutable).isEmpty()) {
-            return false;
+        if (!invalidated) {
+            return null;
         }
-        return !state.is(BlockTags.LEAVES) && !state.is(BlockTags.LOGS) && !PadMapSampler.isNaturalTerrain(state);
-    }
-
-    private static ViewProfile stabilizeViewProfile(ViewProfile rawProfile, int rawFloorY) {
-        if (stableProfile == ViewProfile.INDOOR) {
-            if (rawProfile == ViewProfile.INDOOR) {
-                outdoorCandidateTicks = 0;
-                stabilizeIndoorFloor(rawFloorY);
-                return ViewProfile.INDOOR;
-            }
-            indoorCandidateTicks = 0;
-            if (++outdoorCandidateTicks < INDOOR_EXIT_CONFIRM_TICKS) {
-                return ViewProfile.INDOOR;
-            }
-            stableProfile = ViewProfile.OUTDOOR;
-            stableIndoorFloorY = outdoorLayerY();
-            candidateIndoorFloorY = outdoorLayerY();
-            candidateIndoorFloorTicks = 0;
-            return ViewProfile.OUTDOOR;
-        }
-        if (rawProfile == ViewProfile.INDOOR) {
-            outdoorCandidateTicks = 0;
-            candidateIndoorFloorY = rawFloorY;
-            if (++indoorCandidateTicks >= INDOOR_ENTER_CONFIRM_TICKS) {
-                stableProfile = ViewProfile.INDOOR;
-                stableIndoorFloorY = rawFloorY;
-                candidateIndoorFloorTicks = 0;
-                return ViewProfile.INDOOR;
-            }
-        } else {
-            indoorCandidateTicks = 0;
-            outdoorCandidateTicks = 0;
-        }
-        return ViewProfile.OUTDOOR;
-    }
-
-    private static void stabilizeIndoorFloor(int rawFloorY) {
-        if (stableIndoorFloorY == outdoorLayerY()) {
-            stableIndoorFloorY = rawFloorY;
-            candidateIndoorFloorY = rawFloorY;
-            candidateIndoorFloorTicks = 0;
-            return;
-        }
-        if (Math.abs(rawFloorY - stableIndoorFloorY) <= INDOOR_JUMP_TOLERANCE_BLOCKS) {
-            candidateIndoorFloorY = stableIndoorFloorY;
-            candidateIndoorFloorTicks = 0;
-            return;
-        }
-        if (candidateIndoorFloorY != rawFloorY) {
-            candidateIndoorFloorY = rawFloorY;
-            candidateIndoorFloorTicks = 1;
-            return;
-        }
-        if (++candidateIndoorFloorTicks >= INDOOR_FLOOR_CHANGE_CONFIRM_TICKS) {
-            stableIndoorFloorY = rawFloorY;
-            candidateIndoorFloorTicks = 0;
-        }
+        diskCacheDirty = true;
+        return invalidatedSnapshot;
     }
 
     private static void resetProfileStability() {
-        stableProfile = ViewProfile.OUTDOOR;
-        indoorCandidateTicks = 0;
-        outdoorCandidateTicks = 0;
-        stableIndoorFloorY = outdoorLayerY();
-        candidateIndoorFloorY = outdoorLayerY();
-        candidateIndoorFloorTicks = 0;
+        PROFILE_STABILIZER.reset();
     }
 
-    private static int normalizeIndoorFloorY(ClientLevel level, BlockPos playerPos) {
-        BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
-        for (int dy = 0; dy >= -2; dy--) {
-            int y = playerPos.getY() + dy;
-            if (y - 1 < level.getMinY()) {
-                continue;
-            }
-            mutable.set(playerPos.getX(), y, playerPos.getZ());
-            BlockState feet = level.getBlockState(mutable);
-            boolean feetOpen = feet.isAir() || feet.getCollisionShape(level, mutable).isEmpty();
-            mutable.set(playerPos.getX(), y + 1, playerPos.getZ());
-            BlockState head = level.getBlockState(mutable);
-            boolean headOpen = head.isAir() || head.getCollisionShape(level, mutable).isEmpty();
-            mutable.set(playerPos.getX(), y - 1, playerPos.getZ());
-            BlockState below = level.getBlockState(mutable);
-            if (feetOpen && headOpen && !below.getCollisionShape(level, mutable).isEmpty()) {
-                return y;
-            }
-        }
-        return playerPos.getY();
-    }
-
-    private static int outdoorLayerY() {
-        return Integer.MIN_VALUE;
-    }
-
-    private static int chunkDistance(int a, int b) {
-        return Math.abs(a - b) / 16;
+    private static void clearLevelRuntimeState() {
+        activeJob = null;
+        completed = null;
+        placeholder = null;
+        VIEW_SNAPSHOTS.clear();
+        DIRTY_CHUNKS.clear();
+        mapUpdateCountdown = 0;
+        nextUnknownRetryTick = 0L;
+        manualViewActive = false;
+        resetProfileStability();
     }
 
     private static boolean isPadRelevant(Minecraft minecraft) {
@@ -384,26 +336,26 @@ public final class PadMapClientCache {
         int height = PadMapSampler.DEFAULT_HEIGHT;
         PadMapTileKind[] tiles = new PadMapTileKind[size * height];
         java.util.Arrays.fill(tiles, PadMapTileKind.UNKNOWN);
-        placeholder = new PadMapSnapshot(Math.floorDiv(playerX, 16) * 16, outdoorLayerY(),
+        placeholder = new PadMapSnapshot(Math.floorDiv(playerX, 16) * 16, PROFILE_DETECTOR.outdoorLayerY(),
                 Math.floorDiv(playerZ, 16) * 16, 1, size, height, tiles);
         return placeholder;
     }
 
-    private static PadMapSnapshot transitionSnapshot(int playerX, int playerY, int playerZ, ViewProfile profile) {
+    private static PadMapSnapshot transitionSnapshot(int playerX, int playerY, int playerZ, PadMapViewProfile profile,
+            float zoom) {
         int width = PadMapSampler.DEFAULT_WIDTH;
         int height = PadMapSampler.DEFAULT_HEIGHT;
-        int cellSize = PadMapSampler.cellSizeForZoom(profile == ViewProfile.INDOOR ? INDOOR_ZOOM : OUTDOOR_ZOOM);
+        int cellSize = PadMapSampler.cellSizeForZoom(zoom);
         PadMapTileKind[] tiles = new PadMapTileKind[width * height];
         java.util.Arrays.fill(tiles, PadMapTileKind.UNKNOWN);
-        float displayScale = profile == ViewProfile.INDOOR ? INDOOR_DISPLAY_SCALE : 1.0F;
-        return new PadMapSnapshot(playerX, playerY, playerZ, cellSize, width, height, tiles, displayScale);
+        return SNAPSHOT_COMPOSER.compose(playerX, playerY, playerZ, cellSize, width, height, tiles, profile);
     }
 
-    private static PadMapTileKind cachedClassify(ClientLevel level, BlockPos.MutableBlockPos mutable, int worldX,
-            int worldZ, int cellSize) {
+    private static PadMapTileKind cachedClassify(Level level, BlockPos.MutableBlockPos mutable, String dimension,
+            int worldX, int worldZ, int cellSize) {
         int cellX = Math.floorDiv(worldX, cellSize);
         int cellZ = Math.floorDiv(worldZ, cellSize);
-        CellKey key = new CellKey(level.dimension().identifier().toString(), cellSize, cellX, cellZ);
+        CellKey key = new CellKey(dimension, cellSize, cellX, cellZ);
         synchronized (CELL_CACHE) {
             PadMapTileKind cached = CELL_CACHE.get(key);
             if (cached != null) {
@@ -430,6 +382,27 @@ public final class PadMapClientCache {
         }
     }
 
+    public static String describeStatus() {
+        Job job = activeJob;
+        int dirtySize = DIRTY_CHUNKS.size();
+        String completedInfo = completed == null
+                ? "completed=none"
+                : "completed=" + completed.width() + "x" + completed.height()
+                        + " cell=" + completed.cellSizeBlocks()
+                        + " center=(" + completed.centerX() + "," + completed.centerZ() + ")"
+                        + " profile=" + completedProfile;
+        String jobInfo = job == null ? "job=none" : job.describe();
+        return completedInfo
+                + ", " + jobInfo
+                + ", memoryCells=" + memoryCacheSize()
+                + ", dirtyChunks=" + dirtySize
+                + ", cellBudget=" + (CHUNKS_PER_TICK * CELLS_PER_CHUNK_BUDGET) + "/"
+                + (FAST_CHUNKS_PER_TICK * CELLS_PER_CHUNK_BUDGET)
+                + ", initialBurst=" + INITIAL_VISIBLE_BURST_CELLS
+                + ", recenter=" + RECENTER_BLOCKS
+                + ", disk=" + diskCachePath();
+    }
+
     public static void setServerWorldScope(String worldScopeId, String worldName) {
         String normalizedScopeId = isBlank(worldScopeId) ? null : worldScopeId.trim();
         if (java.util.Objects.equals(syncedWorldScopeId, normalizedScopeId)) {
@@ -443,159 +416,73 @@ public final class PadMapClientCache {
     }
 
     public static Path diskCachePath() {
-        return cacheRoot().resolve("cells.bin");
+        return PadMapDiskCachePaths.cells(Minecraft.getInstance(), syncedWorldScopeId);
     }
 
     public static Path snapshotCachePath() {
-        return cacheRoot().resolve("snapshot.bin");
+        return PadMapDiskCachePaths.snapshot(Minecraft.getInstance(), syncedWorldScopeId);
     }
 
     public static void flushDiskCache() {
         if (!DISK_CACHE_ENABLED || !diskCacheLoaded || !hasSyncedDiskScope()) {
             return;
         }
-        CellDiskSnapshot cells = captureCellDiskSnapshot();
-        ChunkDiskSnapshot chunks = captureChunkDiskSnapshot();
-        SnapshotDiskSnapshot snapshot = captureSnapshotDiskSnapshot();
+        PadMapCellDiskCodec.Snapshot cells = captureCellDiskSnapshot();
+        PadMapChunkDiskCodec.Snapshot chunks = captureChunkDiskSnapshot();
+        PadMapSnapshotDiskCodec.Snapshot snapshot = captureSnapshotDiskSnapshot();
         if (cells == null && chunks == null && snapshot == null) {
             return;
         }
         DISK_FLUSH_EXECUTOR.execute(() -> {
-            writeCellDiskCache(cells);
-            writeChunkDiskCache(chunks);
-            writeSnapshotDiskCache(snapshot);
+            PadMapCellDiskCodec.write(cells);
+            PadMapChunkDiskCodec.write(chunks);
+            PadMapSnapshotDiskCodec.write(snapshot);
         });
     }
 
-    private static CellDiskSnapshot captureCellDiskSnapshot() {
+    private static PadMapCellDiskCodec.Snapshot captureCellDiskSnapshot() {
         if (!diskCacheDirty) {
             return null;
         }
         Path path = diskCachePath();
-        List<CellDiskEntry> entries = new ArrayList<>();
+        List<PadMapCellDiskCodec.Entry> entries = new ArrayList<>();
         synchronized (CELL_CACHE) {
             for (Map.Entry<CellKey, PadMapTileKind> entry : CELL_CACHE.entrySet()) {
                 if (entry.getValue() != PadMapTileKind.UNKNOWN) {
-                    entries.add(new CellDiskEntry(entry.getKey(), entry.getValue()));
+                    CellKey key = entry.getKey();
+                    entries.add(new PadMapCellDiskCodec.Entry(key.dimension(), key.cellSize(), key.cellX(),
+                            key.cellZ(), entry.getValue()));
                 }
             }
         }
         diskCacheDirty = false;
-        return new CellDiskSnapshot(path, entries);
+        return new PadMapCellDiskCodec.Snapshot(path, entries);
     }
 
-    private static SnapshotDiskSnapshot captureSnapshotDiskSnapshot() {
-        if (!snapshotCacheDirty || completed == null || completed.tiles() == null) {
+    private static PadMapSnapshotDiskCodec.Snapshot captureSnapshotDiskSnapshot() {
+        if (!snapshotCacheDirty || completed == null || completed.tiles() == null || completed.hasUnknownTiles()) {
             return null;
         }
         Path path = snapshotCachePath();
         PadMapSnapshot snapshot = completed;
         PadMapTileKind[] tiles = java.util.Arrays.copyOf(snapshot.tiles(), snapshot.tiles().length);
         snapshotCacheDirty = false;
-        return new SnapshotDiskSnapshot(path, snapshot.centerX(), snapshot.centerY(), snapshot.centerZ(),
+        return new PadMapSnapshotDiskCodec.Snapshot(path, snapshot.centerX(), snapshot.centerY(), snapshot.centerZ(),
                 snapshot.cellSizeBlocks(), snapshot.width(), snapshot.height(), tiles);
     }
 
-    private static ChunkDiskSnapshot captureChunkDiskSnapshot() {
-        if (!chunkCacheDirty) {
-            return null;
-        }
-        Path path = chunkCachePath();
-        List<ChunkDiskEntry> entries = new ArrayList<>();
-        synchronized (CHUNK_CACHE) {
-            for (Map.Entry<ChunkKey, ChunkTile> entry : CHUNK_CACHE.entrySet()) {
-                ChunkKey key = entry.getKey();
-                if (key.profile() == ViewProfile.OUTDOOR) {
-                    entries.add(new ChunkDiskEntry(key, java.util.Arrays.copyOf(entry.getValue().tiles,
-                            entry.getValue().tiles.length)));
-                }
-            }
-        }
-        chunkCacheDirty = false;
-        return new ChunkDiskSnapshot(path, entries);
-    }
-
-    private static void writeCellDiskCache(CellDiskSnapshot snapshot) {
-        if (snapshot == null) {
-            return;
-        }
-        try {
-            Files.createDirectories(snapshot.path().getParent());
-            try (DataOutputStream out = new DataOutputStream(
-                    new BufferedOutputStream(Files.newOutputStream(snapshot.path())))) {
-                out.writeInt(DISK_CACHE_MAGIC);
-                out.writeInt(DISK_CACHE_VERSION);
-                out.writeInt(snapshot.entries().size());
-                for (CellDiskEntry entry : snapshot.entries()) {
-                    CellKey key = entry.key();
-                    out.writeUTF(key.dimension());
-                    out.writeInt(key.cellSize());
-                    out.writeInt(key.cellX());
-                    out.writeInt(key.cellZ());
-                    out.writeByte(entry.kind().ordinal());
-                }
-            }
-        } catch (IOException ignored) {
-        }
-    }
-
-    private static void writeSnapshotDiskCache(SnapshotDiskSnapshot snapshot) {
-        if (snapshot == null) {
-            return;
-        }
-        try {
-            Files.createDirectories(snapshot.path().getParent());
-            try (DataOutputStream out = new DataOutputStream(
-                    new BufferedOutputStream(Files.newOutputStream(snapshot.path())))) {
-                out.writeInt(SNAPSHOT_CACHE_MAGIC);
-                out.writeInt(SNAPSHOT_CACHE_VERSION);
-                out.writeInt(snapshot.centerX());
-                out.writeInt(snapshot.centerY());
-                out.writeInt(snapshot.centerZ());
-                out.writeInt(snapshot.cellSizeBlocks());
-                out.writeInt(snapshot.width());
-                out.writeInt(snapshot.height());
-                out.writeInt(snapshot.tiles().length);
-                for (PadMapTileKind tile : snapshot.tiles()) {
-                    out.writeByte(tile == null ? PadMapTileKind.UNKNOWN.ordinal() : tile.ordinal());
-                }
-            }
-        } catch (IOException ignored) {
-        }
-    }
-
-    private static void writeChunkDiskCache(ChunkDiskSnapshot snapshot) {
-        if (snapshot == null) {
-            return;
-        }
-        try {
-            Files.createDirectories(snapshot.path().getParent());
-            try (DataOutputStream out = new DataOutputStream(
-                    new BufferedOutputStream(Files.newOutputStream(snapshot.path())))) {
-                out.writeInt(CHUNK_CACHE_MAGIC);
-                out.writeInt(CHUNK_CACHE_VERSION);
-                out.writeInt(snapshot.entries().size());
-                for (ChunkDiskEntry entry : snapshot.entries()) {
-                    ChunkKey key = entry.key();
-                    out.writeUTF(key.dimension());
-                    out.writeInt(key.chunkX());
-                    out.writeInt(key.chunkZ());
-                    out.writeInt(key.cellSize());
-                    out.writeInt(key.floorY());
-                    for (PadMapTileKind tile : entry.tiles()) {
-                        out.writeByte(tile == null ? PadMapTileKind.UNKNOWN.ordinal() : tile.ordinal());
-                    }
-                }
-            }
-        } catch (IOException ignored) {
-        }
+    private static PadMapChunkDiskCodec.Snapshot captureChunkDiskSnapshot() {
+        return null;
     }
 
     public static int clearAllCaches(boolean deleteDisk) {
         activeJob = null;
         completed = null;
         placeholder = null;
+        VIEW_SNAPSHOTS.clear();
+        DIRTY_CHUNKS.clear();
         resetProfileStability();
+        nextUnknownRetryTick = 0L;
         int previousSize;
         synchronized (CELL_CACHE) {
             previousSize = CELL_CACHE.size();
@@ -607,7 +494,6 @@ public final class PadMapClientCache {
         diskCacheLoaded = true;
         diskCacheDirty = false;
         snapshotCacheDirty = false;
-        chunkCacheDirty = false;
         if (deleteDisk) {
             try {
                 Files.deleteIfExists(diskCachePath());
@@ -623,7 +509,10 @@ public final class PadMapClientCache {
         activeJob = null;
         completed = null;
         placeholder = null;
+        VIEW_SNAPSHOTS.clear();
+        DIRTY_CHUNKS.clear();
         resetProfileStability();
+        nextUnknownRetryTick = 0L;
     }
 
     private static void maybeFlushDiskCache() {
@@ -639,71 +528,33 @@ public final class PadMapClientCache {
         }
         diskCacheLoaded = true;
         loadSnapshotDiskCache();
-        loadChunkDiskCache();
         Path path = diskCachePath();
-        if (!Files.isRegularFile(path)) {
+        List<PadMapCellDiskCodec.Entry> entries = PadMapCellDiskCodec.read(path, CELL_CACHE_LIMIT);
+        if (entries == null) {
             return;
         }
-        try (DataInputStream in = new DataInputStream(new BufferedInputStream(Files.newInputStream(path)))) {
-            if (in.readInt() != DISK_CACHE_MAGIC || in.readInt() != DISK_CACHE_VERSION) {
-                return;
+        synchronized (CELL_CACHE) {
+            CELL_CACHE.clear();
+            for (PadMapCellDiskCodec.Entry entry : entries) {
+                CELL_CACHE.put(new CellKey(entry.dimension(), entry.cellSize(), entry.cellX(), entry.cellZ()),
+                        entry.kind());
             }
-            int count = Math.max(0, Math.min(in.readInt(), CELL_CACHE_LIMIT));
-            synchronized (CELL_CACHE) {
-                CELL_CACHE.clear();
-                for (int i = 0; i < count; i++) {
-                    CellKey key = new CellKey(in.readUTF(), in.readInt(), in.readInt(), in.readInt());
-                    int ordinal = in.readUnsignedByte();
-                    PadMapTileKind kind = tileKindByOrdinal(ordinal);
-                    if (kind == null) {
-                        CELL_CACHE.clear();
-                        return;
-                    }
-                    if (kind != PadMapTileKind.UNKNOWN) {
-                        CELL_CACHE.put(key, kind);
-                    }
-                }
-            }
-        } catch (IOException ignored) {
         }
     }
 
     private static void loadSnapshotDiskCache() {
         Path path = snapshotCachePath();
-        if (!Files.isRegularFile(path)) {
-            return;
-        }
-        try (DataInputStream in = new DataInputStream(new BufferedInputStream(Files.newInputStream(path)))) {
-            if (in.readInt() != SNAPSHOT_CACHE_MAGIC || in.readInt() != SNAPSHOT_CACHE_VERSION) {
-                return;
-            }
-            int centerX = in.readInt();
-            int centerY = in.readInt();
-            int centerZ = in.readInt();
-            int cellSize = in.readInt();
-            int width = in.readInt();
-            int height = in.readInt();
-            int length = in.readInt();
-            if (width != PadMapSampler.DEFAULT_WIDTH || height != PadMapSampler.DEFAULT_HEIGHT
-                    || cellSize != PadMapSampler.cellSizeForZoom(1.25F) || length != width * height) {
-                return;
-            }
-            PadMapTileKind[] tiles = new PadMapTileKind[length];
-            for (int i = 0; i < length; i++) {
-                int ordinal = in.readUnsignedByte();
-                PadMapTileKind kind = tileKindByOrdinal(ordinal);
-                if (kind == null) {
-                    return;
-                }
-                tiles[i] = kind;
-            }
-            completed = new PadMapSnapshot(centerX, centerY, centerZ, cellSize, width, height, tiles);
-        } catch (IOException ignored) {
+        PadMapSnapshot snapshot = PadMapSnapshotDiskCodec.read(path, PadMapSampler.DEFAULT_WIDTH,
+                PadMapSampler.DEFAULT_HEIGHT, PadMapSampler.cellSizeForZoom(OUTDOOR_ZOOM));
+        if (snapshot != null) {
+            completed = snapshot;
+            completedProfile = PadMapViewProfile.OUTDOOR;
+            VIEW_SNAPSHOTS.put(PadMapViewProfile.OUTDOOR, snapshot);
         }
     }
 
     public static Path chunkCachePath() {
-        return cacheRoot().resolve("chunks.bin");
+        return PadMapDiskCachePaths.chunks(Minecraft.getInstance(), syncedWorldScopeId);
     }
 
     private static void updateDiskScope(Minecraft minecraft) {
@@ -716,7 +567,10 @@ public final class PadMapClientCache {
         activeJob = null;
         completed = null;
         placeholder = null;
+        VIEW_SNAPSHOTS.clear();
+        DIRTY_CHUNKS.clear();
         resetProfileStability();
+        nextUnknownRetryTick = 0L;
         synchronized (CELL_CACHE) {
             CELL_CACHE.clear();
         }
@@ -726,16 +580,6 @@ public final class PadMapClientCache {
         diskCacheLoaded = false;
         diskCacheDirty = false;
         snapshotCacheDirty = false;
-        chunkCacheDirty = false;
-    }
-
-    private static Path cacheRoot() {
-        Minecraft minecraft = Minecraft.getInstance();
-        String scope = currentDiskScope(minecraft);
-        return minecraft.gameDirectory.toPath()
-                .resolve("netmusic-pad-map-cache")
-                .resolve(scope)
-                .resolve(currentDimensionScope(minecraft));
     }
 
     private static boolean hasSyncedDiskScope() {
@@ -743,252 +587,124 @@ public final class PadMapClientCache {
     }
 
     private static String currentDiskScope(Minecraft minecraft) {
-        if (minecraft == null) {
-            return "unknown";
-        }
-        if (!isBlank(syncedWorldScopeId)) {
-            return "world-" + stablePathToken(syncedWorldScopeId);
-        }
-        return "pending-world-scope";
-    }
-
-    private static String currentDimensionScope(Minecraft minecraft) {
-        if (minecraft == null || minecraft.level == null) {
-            return "unknown-dimension";
-        }
-        return stablePathToken(minecraft.level.dimension().identifier().toString());
-    }
-
-    private static String stablePathToken(String value) {
-        String normalized = isBlank(value) ? "unknown" : value.trim().toLowerCase(java.util.Locale.ROOT);
-        String readable = normalized.replace('\\', '_').replace('/', '_').replace(':', '_')
-                .replace('|', '_').replace(' ', '_');
-        readable = readable.replaceAll("[^a-z0-9._-]", "_");
-        if (readable.length() > 48) {
-            readable = readable.substring(0, 48);
-        }
-        return readable + "-" + shortHash(normalized);
-    }
-
-    private static String shortHash(String value) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-1");
-            byte[] bytes = digest.digest(value.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(bytes, 0, 5);
-        } catch (NoSuchAlgorithmException ignored) {
-            return Integer.toHexString(value.hashCode());
-        }
+        return PadMapDiskCachePaths.worldScope(syncedWorldScopeId);
     }
 
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
     }
 
-    private static PadMapTileKind tileKindByOrdinal(int ordinal) {
-        PadMapTileKind[] values = PadMapTileKind.values();
-        return ordinal >= 0 && ordinal < values.length ? values[ordinal] : null;
-    }
-
-    private static void loadChunkDiskCache() {
-        Path path = chunkCachePath();
-        if (!Files.isRegularFile(path)) {
-            return;
-        }
-        try (DataInputStream in = new DataInputStream(new BufferedInputStream(Files.newInputStream(path)))) {
-            if (in.readInt() != CHUNK_CACHE_MAGIC || in.readInt() != CHUNK_CACHE_VERSION) {
-                return;
-            }
-            int count = Math.max(0, Math.min(in.readInt(), CHUNK_CACHE_LIMIT));
-            synchronized (CHUNK_CACHE) {
-                CHUNK_CACHE.clear();
-                for (int i = 0; i < count; i++) {
-                    ChunkKey key = new ChunkKey(in.readUTF(), in.readInt(), in.readInt(), in.readInt(), in.readInt(),
-                            ViewProfile.OUTDOOR);
-                    ChunkTile tile = new ChunkTile();
-                    for (int j = 0; j < tile.tiles.length; j++) {
-                        int ordinal = in.readUnsignedByte();
-                        PadMapTileKind kind = tileKindByOrdinal(ordinal);
-                        if (kind == null) {
-                            CHUNK_CACHE.clear();
-                            return;
-                        }
-                        tile.tiles[j] = kind;
-                    }
-                    CHUNK_CACHE.put(key, tile);
-                }
-            }
-        } catch (IOException ignored) {
-        }
-    }
-
-    private static final class Job {
-        private final ClientLevel level;
+    static final class Job {
+        private final Level level;
         private final int centerX;
         private final int centerZ;
         private final int floorY;
-        private final ViewProfile profile;
+        private final PadMapViewProfile profile;
         private final int size;
         private final int height;
         private final int cellSize;
+        private final String dimension;
         private final float zoom;
         private final BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
-        private final List<ChunkKey> missingChunks = new ArrayList<>();
-        private int chunkCursor;
-        private int lastPreviewChunkCursor;
-        private int steps;
+        private final PadMapTileKind[] tiles;
+        private final List<PadMapSamplePlan.Cell> pendingCells;
+        private final int previewReadyCells;
+        private final PadMapJobProgress progress;
 
-        private Job(ClientLevel level, int centerX, int centerZ, int playerY, ViewProfile profile, float zoom,
+        Job(Level level, int centerX, int centerZ, int playerY, PadMapViewProfile profile, float zoom,
                 PadMapSnapshot previous) {
             this.level = level;
             this.zoom = zoom;
             this.cellSize = PadMapSampler.cellSizeForZoom(zoom);
+            this.dimension = level == null ? "" : level.dimension().identifier().toString();
             this.centerX = centerX;
             this.centerZ = centerZ;
             this.floorY = playerY;
             this.profile = profile;
             this.size = PadMapSampler.DEFAULT_SIZE;
             this.height = PadMapSampler.DEFAULT_HEIGHT;
-            seedPreviousSnapshot(previous);
-            collectMissingChunks();
+            this.tiles = new PadMapTileKind[size * height];
+            java.util.Arrays.fill(this.tiles, PadMapTileKind.UNKNOWN);
+            PadMapSnapshotSeeder.seed(previous, tiles, centerX, floorY, centerZ, cellSize, size, height);
+            this.pendingCells = PadMapSamplePlan.collectPendingCells(centerX, centerZ, cellSize, size, height,
+                    PadMapSampler.DEFAULT_VIEW_WIDTH, PadMapSampler.DEFAULT_VIEW_HEIGHT, tiles);
+            if (level != null) {
+                this.pendingCells.removeIf(cell -> !PadMapSampler.isCellReady(level, cell.worldX(), cell.worldZ(),
+                        cellSize));
+            }
+            this.previewReadyCells = previewReadyCells(pendingCells);
+            this.progress = new PadMapJobProgress(pendingCells.size(), CELLS_PER_CHUNK_BUDGET,
+                    INITIAL_VISIBLE_BURST_CELLS, PREVIEW_CHUNKS);
         }
 
         private boolean step(int chunkBudget) {
-            steps++;
-            int chunksPerStep = Math.max(1, chunkBudget);
-            for (int i = 0; i < chunksPerStep && chunkCursor < missingChunks.size(); i++, chunkCursor++) {
-                ChunkKey key = missingChunks.get(chunkCursor);
-                ChunkTile tile = sampleChunk(key);
-                synchronized (CHUNK_CACHE) {
-                    CHUNK_CACHE.put(key, tile);
-                }
-                chunkCacheDirty = true;
+            PadMapJobProgress.Step step = progress.beginStep(chunkBudget);
+            for (int i = step.startInclusive(); i < step.endExclusive(); i++) {
+                PadMapSamplePlan.Cell cell = pendingCells.get(i);
+                tiles[cell.index()] = sampleCell(cell.worldX(), cell.worldZ());
             }
-            return chunkCursor >= missingChunks.size();
+            return progress.done();
         }
 
         private boolean shouldPublishPreview() {
-            if (chunkCursor <= 0 || chunkCursor == lastPreviewChunkCursor) {
-                return false;
+            return progress.doneCells() >= previewReadyCells && progress.shouldPublishPreview();
+        }
+
+        private static int previewReadyCells(List<PadMapSamplePlan.Cell> cells) {
+            int count = 0;
+            for (PadMapSamplePlan.Cell cell : cells) {
+                if (cell.priority() <= 0) {
+                    count++;
+                }
             }
-            if (lastPreviewChunkCursor == 0) {
-                return true;
-            }
-            return chunkCursor - lastPreviewChunkCursor >= Math.max(1, PREVIEW_CHUNKS);
+            return Math.max(1, count);
         }
 
         private PadMapSnapshot preview() {
-            lastPreviewChunkCursor = chunkCursor;
-            return composeSnapshot(false);
+            progress.markPreviewPublished();
+            return SNAPSHOT_COMPOSER.compose(centerX, floorY, centerZ, cellSize, size, height, tiles, profile);
         }
 
-        private void seedPreviousSnapshot(PadMapSnapshot previous) {
-            if (previous == null || previous.width() != size || previous.height() != height
-                    || previous.cellSizeBlocks() != cellSize || previous.centerY() != floorY
-                    || previous.tiles() == null) {
-                return;
-            }
-            int halfW = size / 2;
-            int halfH = height / 2;
-            synchronized (CHUNK_CACHE) {
-                for (int z = 0; z < height; z++) {
-                    for (int x = 0; x < size; x++) {
-                        PadMapTileKind kind = previous.tile(x, z);
-                        if (kind == PadMapTileKind.UNKNOWN) {
-                            continue;
-                        }
-                        int worldX = previous.centerX() + (x - halfW) * cellSize;
-                        int worldZ = previous.centerZ() + (z - halfH) * cellSize;
-                        putCachedChunkCell(worldX, worldZ, kind);
-                    }
-                }
-            }
-        }
-
-        private void collectMissingChunks() {
-            int halfW = size / 2;
-            int halfH = height / 2;
-            int minWorldX = centerX - halfW * cellSize;
-            int maxWorldX = centerX + (size - halfW - 1) * cellSize;
-            int minWorldZ = centerZ - halfH * cellSize;
-            int maxWorldZ = centerZ + (height - halfH - 1) * cellSize;
-            String dimension = level.dimension().identifier().toString();
-            int centerChunkX = Math.floorDiv(centerX, 16);
-            int centerChunkZ = Math.floorDiv(centerZ, 16);
-            List<ChunkKey> keys = new ArrayList<>();
-            synchronized (CHUNK_CACHE) {
-                for (int chunkZ = Math.floorDiv(minWorldZ, 16); chunkZ <= Math.floorDiv(maxWorldZ, 16); chunkZ++) {
-                    for (int chunkX = Math.floorDiv(minWorldX, 16); chunkX <= Math.floorDiv(maxWorldX, 16); chunkX++) {
-                        ChunkKey key = new ChunkKey(dimension, chunkX, chunkZ, cellSize, floorY, profile);
-                        if (!CHUNK_CACHE.containsKey(key)) {
-                            keys.add(key);
-                        }
-                    }
-                }
-            }
-            keys.sort(java.util.Comparator.comparingInt(key -> Math.abs(key.chunkX() - centerChunkX)
-                    + Math.abs(key.chunkZ() - centerChunkZ)));
-            missingChunks.addAll(keys);
-        }
-
-        private ChunkTile sampleChunk(ChunkKey key) {
-            ChunkTile tile = new ChunkTile();
-            int baseX = key.chunkX() * 16;
-            int baseZ = key.chunkZ() * 16;
-            for (int z = 0; z < 16; z++) {
-                for (int x = 0; x < 16; x++) {
-                    int worldX = baseX + x * key.cellSize();
-                    int worldZ = baseZ + z * key.cellSize();
-                    tile.tiles[z * 16 + x] = profile == ViewProfile.INDOOR
-                            ? PadMapSampler.classifyInteriorCell(level, mutable, worldX, worldZ, floorY, key.cellSize())
-                            : cachedClassify(level, mutable, worldX, worldZ, key.cellSize());
-                }
-            }
-            return tile;
-        }
-
-        private void putCachedChunkCell(int worldX, int worldZ, PadMapTileKind kind) {
-            ChunkKey key = new ChunkKey(level.dimension().identifier().toString(), Math.floorDiv(worldX, 16),
-                    Math.floorDiv(worldZ, 16), cellSize, floorY, profile);
-            ChunkTile tile = CHUNK_CACHE.computeIfAbsent(key, ignored -> new ChunkTile());
-            tile.tiles[Math.floorMod(worldZ, 16) * 16 + Math.floorMod(worldX, 16)] = kind;
+        private PadMapTileKind sampleCell(int worldX, int worldZ) {
+            return profile == PadMapViewProfile.INDOOR
+                    ? PadMapSampler.classifyInteriorCell(level, mutable, worldX, worldZ, floorY, cellSize)
+                    : cachedClassify(level, mutable, dimension, worldX, worldZ, cellSize);
         }
 
         private PadMapSnapshot finish() {
-            return composeSnapshot(true);
-        }
-
-        private PadMapSnapshot composeSnapshot(boolean finalSnapshot) {
-            PadMapTileKind[] tiles = new PadMapTileKind[size * height];
-            int halfW = size / 2;
-            int halfH = height / 2;
-            String dimension = level.dimension().identifier().toString();
-            synchronized (CHUNK_CACHE) {
-                for (int z = 0; z < height; z++) {
-                    int lastChunkX = Integer.MIN_VALUE;
-                    int lastChunkZ = Integer.MIN_VALUE;
-                    ChunkTile lastTile = null;
-                    for (int x = 0; x < size; x++) {
-                        int worldX = centerX + (x - halfW) * cellSize;
-                        int worldZ = centerZ + (z - halfH) * cellSize;
-                        int chunkX = Math.floorDiv(worldX, 16);
-                        int chunkZ = Math.floorDiv(worldZ, 16);
-                        if (chunkX != lastChunkX || chunkZ != lastChunkZ) {
-                            lastChunkX = chunkX;
-                            lastChunkZ = chunkZ;
-                            lastTile = CHUNK_CACHE
-                                    .get(new ChunkKey(dimension, chunkX, chunkZ, cellSize, floorY, profile));
-                        }
-                        tiles[z * size + x] = lastTile == null ? PadMapTileKind.UNKNOWN
-                                : lastTile.tiles[Math.floorMod(worldZ, 16) * 16 + Math.floorMod(worldX, 16)];
-                    }
-                }
-            }
-            float displayScale = profile == ViewProfile.INDOOR ? INDOOR_DISPLAY_SCALE : 1.0F;
-            return new PadMapSnapshot(centerX, floorY, centerZ, cellSize, size, height, tiles, displayScale);
+            return SNAPSHOT_COMPOSER.compose(centerX, floorY, centerZ, cellSize, size, height, tiles, profile);
         }
 
         private int steps() {
-            return steps;
+            return progress.steps();
+        }
+
+        int centerX() {
+            return centerX;
+        }
+
+        int centerZ() {
+            return centerZ;
+        }
+
+        int floorY() {
+            return floorY;
+        }
+
+        PadMapViewProfile profile() {
+            return profile;
+        }
+
+        float zoom() {
+            return zoom;
+        }
+
+        private String describe() {
+            return "job=" + profile
+                    + " " + progress.doneCells() + "/" + progress.totalCells() + " cells " + progress.percent() + "%"
+                    + " center=(" + centerX + "," + centerZ + ")"
+                    + " cell=" + cellSize
+                    + " steps=" + progress.steps();
         }
     }
 
@@ -1001,29 +717,26 @@ public final class PadMapClientCache {
     }
 
     private record CellKey(String dimension, int cellSize, int cellX, int cellZ) {
+        @Override
+        public int hashCode() {
+            int hash = dimension.hashCode();
+            hash = 31 * hash + cellSize;
+            hash ^= Integer.rotateLeft(mix(cellX), 11);
+            hash ^= Integer.rotateLeft(mix(cellZ), 23);
+            return mix(hash);
+        }
+
+        private static int mix(int value) {
+            value ^= value >>> 16;
+            value *= 0x7FEB352D;
+            value ^= value >>> 15;
+            value *= 0x846CA68B;
+            return value ^ value >>> 16;
+        }
     }
 
-    private record ChunkKey(String dimension, int chunkX, int chunkZ, int cellSize, int floorY, ViewProfile profile) {
+    private record ChunkKey(String dimension, int chunkX, int chunkZ, int cellSize, int floorY,
+            PadMapViewProfile profile) {
     }
 
-    private record CellDiskEntry(CellKey key, PadMapTileKind kind) {
-    }
-
-    private record CellDiskSnapshot(Path path, List<CellDiskEntry> entries) {
-    }
-
-    private record SnapshotDiskSnapshot(Path path, int centerX, int centerY, int centerZ, int cellSizeBlocks,
-            int width, int height, PadMapTileKind[] tiles) {
-    }
-
-    private record ChunkDiskEntry(ChunkKey key, PadMapTileKind[] tiles) {
-    }
-
-    private record ChunkDiskSnapshot(Path path, List<ChunkDiskEntry> entries) {
-    }
-
-    private enum ViewProfile {
-        OUTDOOR,
-        INDOOR
-    }
 }

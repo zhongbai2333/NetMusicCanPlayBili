@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.client;
 
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackControlPacket;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.item.ItemStack;
 
@@ -59,7 +60,7 @@ public final class MP4AutoResumeClient {
             return;
         }
         int fingerprint = resumeFingerprint(deviceId, queueIndex, state.volumePerMille(), targetMillis);
-        if (MP4ClientPlayback.hasLocalPlayback(deviceId)) {
+        if (ClientMediaPlayback.hasPlayback(deviceId)) {
             return;
         }
         if (fingerprint == lastResumeFingerprint) {

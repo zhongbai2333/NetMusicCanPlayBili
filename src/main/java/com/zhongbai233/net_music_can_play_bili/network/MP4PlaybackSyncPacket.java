@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
-import com.zhongbai233.net_music_can_play_bili.client.MP4ClientPlayback;
+import com.zhongbai233.net_music_can_play_bili.client.MP4ClientMediaSync;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -12,11 +13,11 @@ public record MP4PlaybackSyncPacket(UUID ownerId, UUID sourceId, int sourceType,
         double sourceX, double sourceY, double sourceZ, boolean playing, int queueIndex, String playUrl, String rawUrl,
         String songName, int durationSeconds, int volumePerMille, String sessionId, long elapsedMillis,
         boolean headphoneRouted)
-        implements CustomPacketPayload {
-    public static final int SOURCE_PLAYER = 0;
-    public static final int SOURCE_ITEM = 1;
-    public static final int SOURCE_BLOCK = 2;
-    public static final int SOURCE_CONTAINER_ENTITY = 3;
+        implements CustomPacketPayload, ClientMediaSyncPayload {
+    public static final int SOURCE_PLAYER = ClientMediaSyncPayload.SOURCE_PLAYER;
+    public static final int SOURCE_ITEM = ClientMediaSyncPayload.SOURCE_ITEM;
+    public static final int SOURCE_BLOCK = ClientMediaSyncPayload.SOURCE_BLOCK;
+    public static final int SOURCE_CONTAINER_ENTITY = ClientMediaSyncPayload.SOURCE_CONTAINER_ENTITY;
 
     public static final Type<MP4PlaybackSyncPacket> TYPE = new Type<>(
             NetworkPayloadIds.id("mp4_playback_sync"));
@@ -94,6 +95,6 @@ public record MP4PlaybackSyncPacket(UUID ownerId, UUID sourceId, int sourceType,
     }
 
     public static void handle(MP4PlaybackSyncPacket payload, IPayloadContext context) {
-        MP4ClientPlayback.handleSync(payload);
+        MP4ClientMediaSync.handleSync(payload);
     }
 }

@@ -47,6 +47,20 @@ final class VideoPlaybackInstance {
             System.getProperty("ncpb.video.offscreen.prewarm_dot_threshold", "-0.20"));
     private static final double IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET = Double.parseDouble(
             System.getProperty("ncpb.video.pipeline.iris_warning_placeholder_view_depth_offset", "0.03"));
+    private static final Identifier[] LOADING_PLACEHOLDER_TEXTURES = new Identifier[] {
+            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
+                    "textures/gui/video_loading/loading_base_phase0.png"),
+            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
+                    "textures/gui/video_loading/loading_base_phase1.png"),
+            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
+                    "textures/gui/video_loading/loading_base_phase2.png"),
+            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
+                    "textures/gui/video_loading/loading_base_phase3.png")
+    };
+    private static final Identifier IRIS_WARNING_PLACEHOLDER_TEXTURE = Identifier.fromNamespaceAndPath(
+            NetMusicCanPlayBili.MODID, "textures/gui/video_loading/iris_translucent_warning_base.png");
+    private static final int LOADING_PLACEHOLDER_WIDTH = 320;
+    private static final int LOADING_PLACEHOLDER_HEIGHT = 180;
 
     private final String videoUrl;
     private int targetWidth;
@@ -60,7 +74,6 @@ final class VideoPlaybackInstance {
     private final String decoderOverride;
     private final Identifier firstTextureId;
     private final Identifier secondTextureId;
-    private final Identifier loadingTextureId;
     private final Identifier yTextureId;
     private final Identifier uTextureId;
     private final Identifier vTextureId;
@@ -76,7 +89,6 @@ final class VideoPlaybackInstance {
     private volatile AutoCloseable decoder;
     private volatile DynamicTexture frontTexture;
     private volatile DynamicTexture backTexture;
-    private volatile DynamicTexture loadingTexture;
     private volatile VideoYuvTextureSet yuvTextureSet;
     private volatile Identifier frontTextureId;
     private volatile Identifier backTextureId;
@@ -123,8 +135,6 @@ final class VideoPlaybackInstance {
                 "dynamic/bili_video_preview_" + textureSuffix + "_a");
         this.secondTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
                 "dynamic/bili_video_preview_" + textureSuffix + "_b");
-        this.loadingTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
-                "dynamic/bili_video_preview_" + textureSuffix + "_loading");
         this.yTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
                 "dynamic/bili_video_preview_" + textureSuffix + "_y");
         this.uTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
@@ -662,6 +672,24 @@ final class VideoPlaybackInstance {
         return currentFrameSnapshot();
     }
 
+    VideoBillboardPreview.ProjectorFrameSnapshot displayFrameSnapshot(BlockPos projectorPos) {
+        if (projectorPos != null && !projectorPositions.contains(projectorPos)) {
+            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
+        }
+        if (hasFrame) {
+            return currentFrameSnapshot();
+        }
+        if (!Boolean.parseBoolean(System.getProperty("ncpb.video.pipeline.loading_placeholder", "true"))) {
+            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
+        }
+        boolean irisWarning = shouldShowIrisTranslucencyWarning();
+        return new VideoBillboardPreview.ProjectorFrameSnapshot(true, false, loadingPlaceholderTexture(irisWarning),
+                null,
+                null, null,
+                com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
+                LOADING_PLACEHOLDER_WIDTH, LOADING_PLACEHOLDER_HEIGHT, true, !irisWarning);
+    }
+
     VideoBillboardPreview.ProjectorFrameSnapshot turntableFrameSnapshot(BlockPos turntablePos) {
         if (turntablePos == null || !anchor.isForTurntable(turntablePos) || !hasFrame) {
             return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
@@ -672,11 +700,13 @@ final class VideoPlaybackInstance {
     private VideoBillboardPreview.ProjectorFrameSnapshot currentFrameSnapshot() {
         if (frontTexture != null) {
             return new VideoBillboardPreview.ProjectorFrameSnapshot(true, false, frontTextureId, null, null, null,
-                    com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA);
+                    com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
+                    targetWidth, targetHeight, false, false);
         }
         if (yuvTextureSet != null) {
             return new VideoBillboardPreview.ProjectorFrameSnapshot(true, true, null, yuvTextureSet.yId(),
-                    yuvTextureSet.uId(), yuvTextureSet.vId(), yuvTextureSet.format());
+                    yuvTextureSet.uId(), yuvTextureSet.vId(), yuvTextureSet.format(), yuvTextureSet.width(),
+                    yuvTextureSet.height(), false, false);
         }
         return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
     }
@@ -696,6 +726,11 @@ final class VideoPlaybackInstance {
         boolean renderable = false;
         boolean prewarm = false;
         for (BlockPos pos : projectorPositions) {
+            if (VideoBillboardPreview.isProjectorRenderedByBer(pos)) {
+                renderable = true;
+                prewarm = true;
+                continue;
+            }
             if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
                 stale.add(pos);
                 continue;
@@ -711,6 +746,9 @@ final class VideoPlaybackInstance {
         markVisibility(renderable || holographicVisible, prewarm || holographicVisible);
         pumpUploadOnRenderThread();
         for (BlockPos pos : projectorPositions) {
+            if (VideoBillboardPreview.isProjectorRenderedByBer(pos)) {
+                continue;
+            }
             if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
                 stale.add(pos);
                 continue;
@@ -724,16 +762,16 @@ final class VideoPlaybackInstance {
                     && !VideoBillboardPreview.shouldDrawYuvImmediateWithIris()) {
                 VideoBillboardPreview.submitProjectorYuvGeometry(event, minecraft, camera, projector, yuvTextureSet);
             } else if (Boolean.parseBoolean(System.getProperty("ncpb.video.pipeline.loading_placeholder", "true"))) {
-                ensureLoadingTexture();
                 boolean irisWarning = shouldShowIrisTranslucencyWarning();
-                updateLoadingTexture(irisWarning);
                 if (irisWarning && IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET > 0.0D) {
                     VideoBillboardPreview.submitProjectorViewDepthOffsetGeometry(event, minecraft, camera, projector,
-                            loadingTextureId, LoadingTexture.WIDTH, LoadingTexture.HEIGHT,
+                            loadingPlaceholderTexture(irisWarning), LOADING_PLACEHOLDER_WIDTH,
+                            LOADING_PLACEHOLDER_HEIGHT,
                             IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET);
                 } else {
                     VideoBillboardPreview.submitProjectorEmissiveGeometry(event, minecraft, camera, projector,
-                            loadingTextureId, LoadingTexture.WIDTH, LoadingTexture.HEIGHT);
+                            loadingPlaceholderTexture(irisWarning), LOADING_PLACEHOLDER_WIDTH,
+                            LOADING_PLACEHOLDER_HEIGHT);
                 }
             }
         }
@@ -817,34 +855,13 @@ final class VideoPlaybackInstance {
         }
     }
 
-    private void ensureLoadingTexture() {
-        if (loadingTexture != null) {
-            NativeImage image = loadingTexture.getPixels();
-            if (image != null && !image.isClosed()) {
-                return;
-            }
+    private Identifier loadingPlaceholderTexture(boolean irisWarning) {
+        if (irisWarning) {
+            return IRIS_WARNING_PLACEHOLDER_TEXTURE;
         }
-        if (loadingTexture != null) {
-            Minecraft.getInstance().getTextureManager().release(loadingTextureId);
-            loadingTexture.close();
-        }
-        loadingTexture = new DynamicTexture("bili_video_" + sessionId + "_loading", LoadingTexture.WIDTH,
-                LoadingTexture.HEIGHT, false);
-        Minecraft.getInstance().getTextureManager().register(loadingTextureId, loadingTexture);
-        updateLoadingTexture(shouldShowIrisTranslucencyWarning());
-    }
-
-    private void updateLoadingTexture(boolean irisTranslucencyWarning) {
-        if (loadingTexture == null) {
-            return;
-        }
-        NativeImage image = loadingTexture.getPixels();
-        if (image == null || image.isClosed()) {
-            return;
-        }
-        LoadingTexture.draw(image, System.nanoTime() - startNanoTime, frameQueue.size(), frameQueue.capacity(),
-                irisTranslucencyWarning);
-        loadingTexture.upload();
+        long elapsedNs = Math.max(0L, System.nanoTime() - startNanoTime);
+        int phase = (int) ((elapsedNs / 300_000_000L) % LOADING_PLACEHOLDER_TEXTURES.length);
+        return LOADING_PLACEHOLDER_TEXTURES[phase];
     }
 
     private boolean shouldShowIrisTranslucencyWarning() {
@@ -1035,146 +1052,6 @@ final class VideoPlaybackInstance {
     private void releaseTexture() {
         releaseRgbaTextures();
         releaseYuvTextures();
-        if (loadingTexture != null) {
-            Minecraft.getInstance().getTextureManager().release(loadingTextureId);
-            loadingTexture.close();
-            loadingTexture = null;
-        }
-    }
-
-    static final class LoadingTexture {
-        static final int WIDTH = 320;
-        static final int HEIGHT = 180;
-        private static final int BG = 0xFF08090D;
-        private static final int PANEL = 0xFF151923;
-        private static final int GOLD = 0xFFFFD166;
-        private static final int GOLD_DIM = 0xFF7A6230;
-        private static final int TEXT = 0xFFE8E8E8;
-        private static final int SHADOW = 0xAA000000;
-
-        private LoadingTexture() {
-        }
-
-        static void draw(NativeImage image, long elapsedNs, int queuedFrames, int capacity,
-                boolean irisTranslucencyWarning) {
-            fill(image, 0, 0, WIDTH, HEIGHT, BG);
-            fill(image, 18, 18, WIDTH - 36, HEIGHT - 36, PANEL);
-            rect(image, 18, 18, WIDTH - 36, HEIGHT - 36, GOLD_DIM);
-
-            int phase = (int) ((elapsedNs / 300_000_000L) % 4L);
-            if (irisTranslucencyWarning) {
-                drawCenteredText(image, "VIDEO ACTIVE", 54, TEXT);
-                drawCenteredText(image, "TRANSLUCENT", 78, GOLD);
-                drawCenteredText(image, "MAY HIDE VIDEO", 102, 0xFFB8C1CC);
-            } else {
-                drawCenteredText(image, "LOADING" + dots(phase), 62, TEXT);
-                drawCenteredText(image, "DECODING", 84, 0xFFB8C1CC);
-                drawCenteredText(image, "PLEASE WAIT", 100, 0xFF8F9BA8);
-            }
-
-            int barX = 58;
-            int barY = 126;
-            int barW = 204;
-            int barH = 10;
-            rect(image, barX, barY, barW, barH, GOLD_DIM);
-            int segmentW = 42;
-            int movingX = barX + 2 + (int) (((elapsedNs / 12_000_000L) % Math.max(1, barW - segmentW - 4)));
-            fill(image, movingX, barY + 2, segmentW, barH - 4, GOLD);
-
-            int buffered = capacity <= 0 ? 0 : Math.min(barW - 4, Math.max(0, queuedFrames) * (barW - 4) / capacity);
-            fill(image, barX + 2, barY + barH + 8, buffered, 3, GOLD_DIM);
-        }
-
-        private static String dots(int phase) {
-            return switch (phase) {
-                case 1 -> ".";
-                case 2 -> "..";
-                case 3 -> "...";
-                default -> "";
-            };
-        }
-
-        private static void rect(NativeImage image, int x, int y, int w, int h, int color) {
-            fill(image, x, y, w, 1, color);
-            fill(image, x, y + h - 1, w, 1, color);
-            fill(image, x, y, 1, h, color);
-            fill(image, x + w - 1, y, 1, h, color);
-        }
-
-        private static void fill(NativeImage image, int x, int y, int w, int h, int color) {
-            int maxX = Math.min(WIDTH, x + Math.max(0, w));
-            int maxY = Math.min(HEIGHT, y + Math.max(0, h));
-            for (int py = Math.max(0, y); py < maxY; py++) {
-                for (int px = Math.max(0, x); px < maxX; px++) {
-                    image.setPixel(px, py, color);
-                }
-            }
-        }
-
-        private static void drawText(NativeImage image, String text, int x, int y, int color) {
-            drawTextRaw(image, text, x + 1, y + 1, SHADOW);
-            drawTextRaw(image, text, x, y, color);
-        }
-
-        private static void drawCenteredText(NativeImage image, String text, int y, int color) {
-            drawText(image, text, (WIDTH - textWidth(text)) / 2, y, color);
-        }
-
-        private static int textWidth(String text) {
-            int width = 0;
-            for (int i = 0; i < text.length(); i++) {
-                width += text.charAt(i) == ' ' ? 4 : 12;
-            }
-            return Math.max(0, width - 2);
-        }
-
-        private static void drawTextRaw(NativeImage image, String text, int x, int y, int color) {
-            int cursor = x;
-            for (int i = 0; i < text.length(); i++) {
-                char c = Character.toUpperCase(text.charAt(i));
-                if (c == ' ') {
-                    cursor += 4;
-                    continue;
-                }
-                int[] glyph = glyph(c);
-                for (int row = 0; row < 7; row++) {
-                    int bits = glyph[row];
-                    for (int col = 0; col < 5; col++) {
-                        if ((bits & (1 << (4 - col))) != 0) {
-                            fill(image, cursor + col * 2, y + row * 2, 2, 2, color);
-                        }
-                    }
-                }
-                cursor += 12;
-            }
-        }
-
-        private static int[] glyph(char c) {
-            return switch (c) {
-                case 'A' -> new int[] { 0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001 };
-                case 'C' -> new int[] { 0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110 };
-                case 'D' -> new int[] { 0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110 };
-                case 'E' -> new int[] { 0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111 };
-                case 'G' -> new int[] { 0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110 };
-                case 'H' -> new int[] { 0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001 };
-                case 'I' -> new int[] { 0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111 };
-                case 'K' -> new int[] { 0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001 };
-                case 'L' -> new int[] { 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111 };
-                case 'M' -> new int[] { 0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001 };
-                case 'N' -> new int[] { 0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001 };
-                case 'O' -> new int[] { 0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110 };
-                case 'P' -> new int[] { 0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000 };
-                case 'R' -> new int[] { 0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001 };
-                case 'S' -> new int[] { 0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110 };
-                case 'T' -> new int[] { 0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100 };
-                case 'U' -> new int[] { 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110 };
-                case 'V' -> new int[] { 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100 };
-                case 'W' -> new int[] { 0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001 };
-                case 'Y' -> new int[] { 0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100 };
-                case '.' -> new int[] { 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100 };
-                default -> new int[] { 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000 };
-            };
-        }
     }
 
     private record DecodedVideoFrame(long frameIndex, long ptsNanos, VideoBillboardPreview.DecodedFrame frame) {

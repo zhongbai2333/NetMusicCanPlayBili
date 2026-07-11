@@ -7,12 +7,14 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.Reso
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTimelineView;
+import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldMediaDeviceProfile;
 import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldMediaPlayback;
 import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldMediaRenderState;
 import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldVideoFrame;
 import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldVideoPipelineConfig;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
+import com.zhongbai233.net_music_can_play_bili.media.codec.VideoNativeDecoder;
 import it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
@@ -49,9 +51,15 @@ public final class MP4HandheldVideoClient {
             "ncpb.mp4.video");
     private static final int MAX_VIDEO_THREADS = Math.max(2,
             Integer.getInteger("ncpb.mp4.video.max_threads", 4));
+        private static final String HANDHELD_NATIVE_HWACCEL = System.getProperty(
+            "ncpb.mp4.video.native.hwaccel", "auto").trim();
+        private static final String PAD_NATIVE_HWACCEL = System.getProperty(
+            "ncpb.pad.video.native.hwaccel", "none").trim();
+        private static final boolean PAD_VIDEO_DEBUG_LOG = Boolean.getBoolean("ncpb.pad.video.debug_log");
     private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(MAX_VIDEO_THREADS,
             new Mp4VideoThreadFactory());
     private static final Map<UUID, DeviceVideoState> STATES = new ConcurrentHashMap<>();
+    private static final Map<UUID, HandheldMediaDeviceProfile> PROFILES = new ConcurrentHashMap<>();
     private static final AtomicBoolean highResolutionWarningShown = new AtomicBoolean(false);
     private static final MP4HandheldMediaProfile MP4_PROFILE = MP4HandheldMediaProfile.INSTANCE;
 
@@ -59,25 +67,35 @@ public final class MP4HandheldVideoClient {
     }
 
     public static boolean update(UUID deviceId) {
+        return update(deviceId, MP4_PROFILE);
+    }
+
+    public static boolean update(UUID deviceId, HandheldMediaDeviceProfile profile) {
         if (deviceId == null) {
             return false;
         }
+        HandheldMediaDeviceProfile activeProfile = profile != null ? profile : MP4_PROFILE;
+        PROFILES.put(deviceId, activeProfile);
         DeviceVideoState state = state(deviceId);
-        if (!MP4_PROFILE.isDeviceAvailable(deviceId)) {
+        if (!activeProfile.isDeviceAvailable(deviceId)) {
             stop(deviceId, "等待快捷栏");
             return false;
         }
-        HandheldMediaRenderState renderState = MP4_PROFILE.renderState(deviceId);
+        HandheldMediaRenderState renderState = activeProfile.renderState(deviceId);
         if (!renderState.videoDecodeEnabled()) {
             stop(deviceId, "等待横屏播放");
             return false;
         }
-        HandheldMediaPlayback playback = MP4_PROFILE.playback(deviceId);
+        HandheldMediaPlayback playback = activeProfile.playback(deviceId);
         if (!playback.hasPlayableVideoSource()) {
             stop(deviceId, "等待播放同步");
             return false;
         }
-        if (!MP4_PROFILE.hasStartedSound(deviceId, playback.sessionId())) {
+        if (!VideoNativeDecoder.isNativeAvailable()) {
+            stopForNativeUnavailable(state, playback);
+            return false;
+        }
+        if (!activeProfile.canStartVideoDecode(deviceId, playback)) {
             waitForAudioStart(state);
             return false;
         }
@@ -86,7 +104,7 @@ public final class MP4HandheldVideoClient {
         synchronized (state.lifecycleLock) {
             VideoSession session = state.activeSession;
             if (key.equals(state.activeKey) && session != null && !session.closed.get()) {
-                return pumpFrameForTimeline(state, session, anchoredVisualMillis(deviceId, playback));
+                return pumpFrameForTimeline(state, session, anchoredVisualMillis(deviceId, activeProfile, playback));
             }
             if (key.equals(state.resolvingKey)) {
                 return false;
@@ -188,14 +206,22 @@ public final class MP4HandheldVideoClient {
         if (record == null) {
             return state.currentSubtitle != null ? state.currentSubtitle : "";
         }
-        HandheldMediaPlayback playback = MP4_PROFILE.playback(deviceId);
-        long visualMillis = anchoredVisualMillis(deviceId, playback);
+        HandheldMediaDeviceProfile profile = profileFor(deviceId);
+        HandheldMediaPlayback playback = profile.playback(deviceId);
+        long visualMillis = anchoredVisualMillis(deviceId, profile, playback);
         int tick = visualMillis >= 0L
                 ? (int) Math.min(Integer.MAX_VALUE, visualMillis / 50L)
                 : -1;
         String primary = currentLineAt(record.getLyrics(), tick);
         String secondary = currentLineAt(record.getTransLyrics(), tick);
-        return "primary".equals(MP4_PROFILE.subtitleMode(deviceId)) ? primary : secondary;
+        String mode = profile.subtitleMode(deviceId);
+        if ("off".equals(mode)) {
+            return "";
+        }
+        if ("primary".equals(mode)) {
+            return !primary.isBlank() ? primary : secondary;
+        }
+        return !secondary.isBlank() ? secondary : primary;
     }
 
     public static void stop(String reason) {
@@ -204,11 +230,17 @@ public final class MP4HandheldVideoClient {
     }
 
     public static void stop(UUID deviceId, String reason) {
+        HandheldMediaDeviceProfile profile = profileFor(deviceId);
         DeviceVideoState state = stateOrNull(deviceId);
         if (state != null) {
             stop(state, reason);
         }
-        MP4ItemScreenRenderer.releaseVideoLayers(deviceId);
+        if (profile == MP4_PROFILE) {
+            MP4ItemScreenRenderer.releaseVideoLayers(deviceId);
+        } else {
+            com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer
+                    .releaseVideoLayers(deviceId);
+        }
     }
 
     private static void stop(DeviceVideoState state, String reason) {
@@ -243,6 +275,20 @@ public final class MP4HandheldVideoClient {
         }
     }
 
+    private static void stopForNativeUnavailable(DeviceVideoState state, HandheldMediaPlayback playback) {
+        synchronized (state.lifecycleLock) {
+            if ("原生视频不可用".equals(state.statusText)) {
+                return;
+            }
+            stopLocked(state, "原生视频不可用");
+            state.audioOnly = true;
+            state.statusText = "原生视频不可用";
+            LOGGER.warn("手持视频解码跳过：FFmpeg native 未加载，session={} raw='{}'",
+                    playback != null ? playback.sessionId() : "unknown",
+                    playback != null ? playback.rawUrl() : "unknown");
+        }
+    }
+
     private static void waitForAudioStart(DeviceVideoState state) {
         synchronized (state.lifecycleLock) {
             state.statusText = "等待音频缓冲...";
@@ -268,15 +314,22 @@ public final class MP4HandheldVideoClient {
     public static void clearAll() {
         STATES.values().forEach(state -> stop(state, "等待播放"));
         STATES.clear();
+        PROFILES.clear();
         MP4ItemScreenRenderer.releaseAllVideoLayers();
     }
 
     public static void stopDevicesOutsideHotbar() {
         for (Map.Entry<UUID, DeviceVideoState> entry : STATES.entrySet()) {
             UUID deviceId = entry.getKey();
-            if (!MP4_PROFILE.isDeviceAvailable(deviceId)) {
-                stop(entry.getValue(), "等待快捷栏");
-                MP4ItemScreenRenderer.releaseVideoLayers(deviceId);
+            HandheldMediaDeviceProfile profile = profileFor(deviceId);
+            if (!profile.isDeviceAvailable(deviceId)) {
+                stop(entry.getValue(), profile == MP4_PROFILE ? "等待快捷栏" : "等待设备");
+                if (profile == MP4_PROFILE) {
+                    MP4ItemScreenRenderer.releaseVideoLayers(deviceId);
+                } else {
+                    com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer
+                            .releaseVideoLayers(deviceId);
+                }
             }
         }
     }
@@ -285,7 +338,8 @@ public final class MP4HandheldVideoClient {
         tickHotbarVideoSessions();
         for (Map.Entry<UUID, DeviceVideoState> entry : STATES.entrySet()) {
             UUID deviceId = entry.getKey();
-            if (!MP4_PROFILE.isDeviceAvailable(deviceId)) {
+            HandheldMediaDeviceProfile profile = profileFor(deviceId);
+            if (!profile.isDeviceAvailable(deviceId)) {
                 continue;
             }
             DeviceVideoState state = entry.getValue();
@@ -293,11 +347,11 @@ public final class MP4HandheldVideoClient {
             if (session == null || session.closed.get() || !session.key.equals(state.activeKey)) {
                 continue;
             }
-            HandheldMediaPlayback playback = MP4_PROFILE.playback(deviceId);
+            HandheldMediaPlayback playback = profile.playback(deviceId);
             if (playback == null || !session.key.sessionId().equals(playback.sessionId())) {
                 continue;
             }
-            pumpFrameForTimeline(state, session, anchoredVisualMillis(deviceId, playback));
+            pumpFrameForTimeline(state, session, anchoredVisualMillis(deviceId, profile, playback));
         }
     }
 
@@ -337,8 +391,8 @@ public final class MP4HandheldVideoClient {
                         if (!key.equals(state.activeKey) || !key.equals(state.resolvingKey)) {
                             return;
                         }
-                        state.resolvingKey = PlaybackKey.EMPTY;
                         if (error != null) {
+                            state.resolvingKey = PlaybackKey.EMPTY;
                             state.failedKey = key;
                             state.audioOnly = !BiliVideoStreamResolver.isStoredVideoSelection(playback.rawUrl());
                             state.statusText = state.audioOnly ? "纯音乐" : "视频解析失败";
@@ -351,9 +405,27 @@ public final class MP4HandheldVideoClient {
                         state.currentSubtitle = state.subtitleRecord != null ? "" : "无可用字幕";
                         state.sourceWidth = stream.sourceWidth();
                         state.sourceHeight = stream.sourceHeight();
+                        logResolvedStreamIfPad(playback, stream);
                     }
                     startDecoder(deviceId, state, playback, key, stream);
                 });
+    }
+
+    private static void logResolvedStreamIfPad(HandheldMediaPlayback playback, ResolvedVideoStream stream) {
+        if (PAD_VIDEO_DEBUG_LOG && playback.sessionId() != null && playback.sessionId().contains("-pad-")) {
+            LOGGER.info(
+                    "Pad video stream resolved: session={} requestedRaw='{}' quality={} codec={} source={}x{} fps={} host={} title='{}'",
+                    playback.sessionId(), playback.rawUrl(), stream.quality(), stream.codecId(), stream.sourceWidth(),
+                    stream.sourceHeight(), stream.fps(), hostOf(stream.url()), stream.title());
+        }
+    }
+
+    private static String hostOf(String url) {
+        try {
+            return java.net.URI.create(url).getHost();
+        } catch (RuntimeException ignored) {
+            return "unknown";
+        }
     }
 
     private static ResolvedVideoStream resolveStream(HandheldMediaPlayback playback, int qualityCeiling) {
@@ -377,6 +449,7 @@ public final class MP4HandheldVideoClient {
                 return;
             }
             state.activeSession = session;
+            state.resolvingKey = PlaybackKey.EMPTY;
             state.statusText = "视频缓冲中...";
         }
         CompletableFuture.runAsync(() -> {
@@ -417,10 +490,8 @@ public final class MP4HandheldVideoClient {
                 : Fmp4NativeVideoDecoder.OutputFormat.NV12;
         LOGGER.debug("MP4 横屏视频输出格式: session={} format={} irisShaderpackFallback={}",
                 session.key.sessionId(), outputFormat, session.key.rgbaFallback());
-        try (Fmp4NativeVideoDecoder decoder = new Fmp4NativeVideoDecoder(stream.url(), stream.codecId(),
-                decodeSize.width(),
-                decodeSize.height(), CONFIG.maxFrames(), true, outputFormat, null,
-                elapsedMillis, totalMillis, stream.fps())) {
+        try (Fmp4NativeVideoDecoder decoder = openNativeDecoder(session.key.sessionId(), stream, decodeSize,
+            outputFormat, elapsedMillis, totalMillis)) {
             long displayedFrames = 0L;
             boolean firstFrameAccepted = false;
             while (!session.closed.get() && session.key.equals(state.activeKey)) {
@@ -466,6 +537,45 @@ public final class MP4HandheldVideoClient {
         }
     }
 
+    private static Fmp4NativeVideoDecoder openNativeDecoder(String sessionId, ResolvedVideoStream stream,
+            DecodeSize decodeSize, Fmp4NativeVideoDecoder.OutputFormat outputFormat, long elapsedMillis,
+            long totalMillis) throws IOException {
+        IOException last = null;
+        for (String hwaccel : handheldHwaccelCandidates(sessionId)) {
+            try {
+                if (PAD_VIDEO_DEBUG_LOG && isPadSession(sessionId)) {
+                    LOGGER.info("Pad video native decoder open: session={} hwaccel={} codec={} target={}x{} format={} offset={}ms",
+                            sessionId, hwaccel, stream.codecId(), decodeSize.width(), decodeSize.height(),
+                            outputFormat, elapsedMillis);
+                }
+                return new Fmp4NativeVideoDecoder(stream.url(), stream.codecId(), decodeSize.width(),
+                        decodeSize.height(), CONFIG.maxFrames(), true, outputFormat, hwaccel,
+                        elapsedMillis, totalMillis, stream.fps());
+            } catch (IOException e) {
+                last = e;
+                LOGGER.warn("MP4 横屏 native 解码器启动失败 hwaccel={}，尝试下一个候选: {}", hwaccel, e.toString());
+            }
+        }
+        throw last != null ? last : new IOException("Native handheld video decoder unavailable");
+    }
+
+    private static String[] handheldHwaccelCandidates(String sessionId) {
+        String requested = isPadSession(sessionId) ? PAD_NATIVE_HWACCEL : HANDHELD_NATIVE_HWACCEL;
+        if (requested.isBlank()
+                || "none".equalsIgnoreCase(requested)
+                || "off".equalsIgnoreCase(requested)) {
+            return new String[] { "none" };
+        }
+        if ("auto".equalsIgnoreCase(requested)) {
+            return VideoFeatureFlags.requestedHwaccelCandidates();
+        }
+        return new String[] { requested, "none" };
+    }
+
+    private static boolean isPadSession(String sessionId) {
+        return sessionId != null && sessionId.contains("-pad-");
+    }
+
     private static boolean waitWhileOffscreen(UUID deviceId, DeviceVideoState state, VideoSession session) {
         if (!CONFIG.offscreenPauseDecode() || !isOffscreenPauseActive(state)) {
             return !session.closed.get() && session.key.equals(state.activeKey);
@@ -506,11 +616,12 @@ public final class MP4HandheldVideoClient {
         if (session == null || session.closed.get() || CONFIG.offscreenResumeRestartLagNanos() <= 0L) {
             return;
         }
-        HandheldMediaPlayback playback = MP4_PROFILE.playback(deviceId);
+        HandheldMediaDeviceProfile profile = profileFor(deviceId);
+        HandheldMediaPlayback playback = profile.playback(deviceId);
         if (playback == null || !session.key.sessionId().equals(playback.sessionId())) {
             return;
         }
-        long visualMillis = anchoredVisualMillis(deviceId, playback);
+        long visualMillis = anchoredVisualMillis(deviceId, profile, playback);
         long latestMillis = latestFrameMillis(state, session);
         long lagNs = latestMillis >= 0L ? (visualMillis - latestMillis) * 1_000_000L : offscreenDurationNs;
         if (visualMillis < 0L || lagNs < CONFIG.offscreenResumeRestartLagNanos()) {
@@ -634,11 +745,12 @@ public final class MP4HandheldVideoClient {
             long framePtsNanos) {
         long targetNanos = Math.max(0L, framePtsNanos);
         while (!session.closed.get() && session.key.equals(state.activeKey)) {
-            HandheldMediaPlayback playback = MP4_PROFILE.playback(deviceId);
+            HandheldMediaDeviceProfile profile = profileFor(deviceId);
+            HandheldMediaPlayback playback = profile.playback(deviceId);
             if (!session.key.sessionId().equals(playback.sessionId())) {
                 return false;
             }
-            long visualMillis = anchoredVisualMillis(deviceId, playback);
+            long visualMillis = anchoredVisualMillis(deviceId, profile, playback);
             long visualNanos = sessionRelativeVisualNanos(session, visualMillis);
             long leadNanos = targetNanos - visualNanos;
             if (leadNanos <= CONFIG.maxDecodeLeadNanos()) {
@@ -662,8 +774,9 @@ public final class MP4HandheldVideoClient {
         if (CONFIG.startupDropLagNanos() <= 0L) {
             return false;
         }
-        HandheldMediaPlayback playback = MP4_PROFILE.playback(deviceId);
-        long visualNanos = sessionRelativeVisualNanos(session, anchoredVisualMillis(deviceId, playback));
+        HandheldMediaDeviceProfile profile = profileFor(deviceId);
+        HandheldMediaPlayback playback = profile.playback(deviceId);
+        long visualNanos = sessionRelativeVisualNanos(session, anchoredVisualMillis(deviceId, profile, playback));
         boolean drop = visualNanos - Math.max(0L, framePtsNanos) > CONFIG.startupDropLagNanos();
         return drop && frameQueueEmpty(state);
     }
@@ -709,12 +822,14 @@ public final class MP4HandheldVideoClient {
         return relativeMillis * 1_000_000L;
     }
 
-    private static long anchoredVisualMillis(UUID deviceId, HandheldMediaPlayback playback) {
+    private static long anchoredVisualMillis(UUID deviceId, HandheldMediaDeviceProfile profile,
+            HandheldMediaPlayback playback) {
         if (playback == null || playback.timeline() == null) {
             return -1L;
         }
         return ClientMediaTimelineView.forHandheldOwner(deviceId, playback,
-                MP4_PROFILE.hasStartedSound(deviceId, playback.sessionId()), playback.timeline().visualMillis(),
+                profileFor(deviceId, profile).hasStartedSound(deviceId, playback.sessionId()),
+                playback.timeline().visualMillis(),
                 playback.timeline().totalMillis()).visualMillis();
     }
 
@@ -781,6 +896,19 @@ public final class MP4HandheldVideoClient {
         }
         return MP4DeviceStacks.forEachHotbarAndOffhand(minecraft.player,
                 stack -> deviceId.equals(MP4Item.readDeviceId(stack)));
+    }
+
+    public static boolean isMp4DeviceProfile(UUID deviceId) {
+        return profileFor(deviceId) == MP4_PROFILE;
+    }
+
+    private static HandheldMediaDeviceProfile profileFor(UUID deviceId) {
+        return profileFor(deviceId, null);
+    }
+
+    private static HandheldMediaDeviceProfile profileFor(UUID deviceId, HandheldMediaDeviceProfile fallback) {
+        HandheldMediaDeviceProfile profile = deviceId != null ? PROFILES.get(deviceId) : null;
+        return profile != null ? profile : fallback != null ? fallback : MP4_PROFILE;
     }
 
     private static String currentLineAt(Int2ObjectSortedMap<String> lines, int tick) {

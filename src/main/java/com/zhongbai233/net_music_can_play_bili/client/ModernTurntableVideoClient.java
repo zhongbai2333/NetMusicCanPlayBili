@@ -10,6 +10,7 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockE
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -23,7 +24,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -48,14 +48,8 @@ public final class ModernTurntableVideoClient {
             .trim();
     private static final int VIDEO_RESOLVE_THREADS = Math.max(1, Integer.getInteger(
             "bili.video.turntable.resolve_threads", 2));
-    private static final AtomicInteger VIDEO_RESOLVE_THREAD_ID = new AtomicInteger();
     private static final ExecutorService VIDEO_RESOLVE_EXECUTOR = Executors.newFixedThreadPool(
-            VIDEO_RESOLVE_THREADS, runnable -> {
-                Thread thread = new Thread(runnable,
-                        "BiliVideoResolve-" + VIDEO_RESOLVE_THREAD_ID.incrementAndGet());
-                thread.setDaemon(true);
-                return thread;
-            });
+            VIDEO_RESOLVE_THREADS, NetMusicThreadFactory.daemon("BiliVideoResolve"));
 
     private static final Set<String> ACTIVE_SESSION_IDS = ConcurrentHashMap.newKeySet();
     private static final ConcurrentHashMap<BlockPos, String> ACTIVE_SESSION_BY_TURNTABLE = new ConcurrentHashMap<>();
@@ -108,6 +102,22 @@ public final class ModernTurntableVideoClient {
         syncFromPlayback(rawUrl, turntable.getBlockPos(), sync);
     }
 
+    public static void syncFromTurntableForProjectorIfPossible(ModernTurntableBlockEntity turntable,
+            VideoProjectorBlockEntity projector) {
+        if (turntable == null || projector == null || turntable.getLevel() == null || !turntable.isPlaying()) {
+            return;
+        }
+        String rawUrl = turntable.getRawUrl();
+        if (rawUrl == null || rawUrl.isBlank()) {
+            return;
+        }
+        PlaybackSync.Metadata sync = turntable.getPlaybackSyncMetadata(turntable.getLevel().getGameTime());
+        if (!sync.hasSession()) {
+            return;
+        }
+        syncFromPlayback(rawUrl, turntable.getBlockPos(), sync, List.of(projector));
+    }
+
     public static void refreshProjector(BlockPos projectorPos) {
         Minecraft minecraft = Minecraft.getInstance();
         if (projectorPos == null || minecraft.level == null) {
@@ -151,6 +161,11 @@ public final class ModernTurntableVideoClient {
     }
 
     public static void syncFromPlayback(String rawUrl, BlockPos turntablePos, PlaybackSync.Metadata sync) {
+        syncFromPlayback(rawUrl, turntablePos, sync, null);
+    }
+
+    private static void syncFromPlayback(String rawUrl, BlockPos turntablePos, PlaybackSync.Metadata sync,
+            List<VideoProjectorBlockEntity> explicitProjectors) {
         if (!ENABLED || sync == null || !sync.hasSession()) {
             return;
         }
@@ -164,7 +179,9 @@ public final class ModernTurntableVideoClient {
         if (immutableTurntablePos != null) {
             LATEST_SESSION_BY_TURNTABLE.put(immutableTurntablePos, sessionId);
         }
-        List<VideoProjectorBlockEntity> projectors = findLinkedVideoProjectors(turntablePos);
+        List<VideoProjectorBlockEntity> projectors = explicitProjectors != null
+                ? explicitProjectors
+                : findLinkedVideoProjectors(turntablePos);
         boolean holographicConsumer = HolographicGlassesClient.handlesTurntable(turntablePos);
         if (projectors.isEmpty() && !holographicConsumer) {
             logDecision(sessionId, "stop-no-projector", turntablePos, sync.elapsedMillis(), 0, 0, 0L,

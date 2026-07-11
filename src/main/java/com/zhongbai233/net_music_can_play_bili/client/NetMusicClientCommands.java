@@ -10,6 +10,7 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapClientCache;
 import com.zhongbai233.net_music_can_play_bili.gui.HolographicScreenConfigTestScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.VideoPlaceholderDebugScreen;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
@@ -42,6 +43,7 @@ public final class NetMusicClientCommands {
                 .then(literal("status").executes(NetMusicClientCommands::showPlaybackStatus))
                 .then(hologlassCommands())
                 .then(padCommands())
+                .then(videoCommands())
                 .then(benchCommands())
                 .then(dolbyCommands());
     }
@@ -58,6 +60,11 @@ public final class NetMusicClientCommands {
                         .then(literal("status").executes(NetMusicClientCommands::showPadMapCacheStatus))
                         .then(literal("save").executes(NetMusicClientCommands::savePadMapCache))
                         .then(literal("refresh").executes(NetMusicClientCommands::refreshPadMapCache)));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> videoCommands() {
+        return literal("video")
+                .then(literal("placeholders").executes(NetMusicClientCommands::openVideoPlaceholderDebug));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> benchCommands() {
@@ -116,6 +123,13 @@ public final class NetMusicClientCommands {
         Minecraft minecraft = Minecraft.getInstance();
         minecraft.execute(() -> minecraft.setScreen(new HolographicScreenConfigTestScreen()));
         feedback(Component.literal("已打开全息屏幕配置测试界面"));
+        return 1;
+    }
+
+    private static int openVideoPlaceholderDebug(CommandContext<CommandSourceStack> ctx) {
+        Minecraft minecraft = Minecraft.getInstance();
+        minecraft.execute(() -> minecraft.setScreen(new VideoPlaceholderDebugScreen()));
+        feedback(Component.literal("已打开视频占位图调试界面"));
         return 1;
     }
 
@@ -213,8 +227,7 @@ public final class NetMusicClientCommands {
     }
 
     private static int showPadMapCacheStatus(CommandContext<CommandSourceStack> ctx) {
-        feedback(Component.literal("Pad地图缓存: memoryCells=" + PadMapClientCache.memoryCacheSize()
-                + ", disk=" + PadMapClientCache.diskCachePath()));
+        feedback(Component.literal("Pad地图缓存: " + PadMapClientCache.describeStatus()));
         return 1;
     }
 

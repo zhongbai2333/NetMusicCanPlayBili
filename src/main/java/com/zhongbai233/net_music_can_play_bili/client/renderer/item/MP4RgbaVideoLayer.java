@@ -17,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /** MP4 手持视频层在 Iris shaderpack 下使用的 RGBA 回退纹理。 */
 final class MP4RgbaVideoLayer implements AutoCloseable {
     private static final Map<UUID, MP4RgbaVideoLayer> LAYERS = new ConcurrentHashMap<>();
+    private static final Map<UUID, MP4RgbaVideoLayer> HANDHELD_LAYERS = new ConcurrentHashMap<>();
 
     private final Identifier textureId;
     private DynamicTexture texture;
@@ -25,9 +26,13 @@ final class MP4RgbaVideoLayer implements AutoCloseable {
     private int uploadedHeight;
 
     private MP4RgbaVideoLayer(UUID deviceId) {
+        this(deviceId, "mp4_video");
+    }
+
+    private MP4RgbaVideoLayer(UUID deviceId, String texturePrefix) {
         String suffix = deviceId.toString().replace('-', '_');
         this.textureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
-                "dynamic/mp4_video_" + suffix + "_rgba");
+                "dynamic/" + texturePrefix + "_" + suffix + "_rgba");
     }
 
     static MP4RgbaVideoLayer forDevice(UUID deviceId) {
@@ -37,9 +42,22 @@ final class MP4RgbaVideoLayer implements AutoCloseable {
         return LAYERS.computeIfAbsent(deviceId, MP4RgbaVideoLayer::new);
     }
 
+    static MP4RgbaVideoLayer forHandheldDevice(UUID deviceId) {
+        if (deviceId == null) {
+            throw new IllegalArgumentException("MP4 handheld RGBA video layer requires a device id");
+        }
+        return HANDHELD_LAYERS.computeIfAbsent(deviceId, id -> new MP4RgbaVideoLayer(id, "pad_video"));
+    }
+
     static void releaseAll() {
         LAYERS.values().forEach(layer -> layer.close());
         LAYERS.clear();
+        releaseAllHandheld();
+    }
+
+    static void releaseAllHandheld() {
+        HANDHELD_LAYERS.values().forEach(layer -> layer.close());
+        HANDHELD_LAYERS.clear();
     }
 
     static void release(UUID deviceId) {
@@ -47,6 +65,16 @@ final class MP4RgbaVideoLayer implements AutoCloseable {
             return;
         }
         MP4RgbaVideoLayer layer = LAYERS.remove(deviceId);
+        if (layer != null) {
+            layer.close();
+        }
+    }
+
+    static void releaseHandheld(UUID deviceId) {
+        if (deviceId == null) {
+            return;
+        }
+        MP4RgbaVideoLayer layer = HANDHELD_LAYERS.remove(deviceId);
         if (layer != null) {
             layer.close();
         }

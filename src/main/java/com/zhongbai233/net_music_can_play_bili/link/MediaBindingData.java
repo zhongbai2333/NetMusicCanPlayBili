@@ -14,6 +14,7 @@ import java.util.UUID;
 public final class MediaBindingData {
     public static final String TAG_SOURCE_KIND = "source_kind";
     public static final String TAG_MP4_DEVICE_ID = "mp4_device_id";
+    public static final String TAG_MEDIA_DEVICE_ID = "media_device_id";
     public static final String TAG_DIMENSION = "dimension";
     public static final String TAG_POS_X = "x";
     public static final String TAG_POS_Y = "y";
@@ -24,6 +25,10 @@ public final class MediaBindingData {
 
     public static MediaSource mp4(UUID deviceId) {
         return MediaSource.mp4(deviceId);
+    }
+
+    public static MediaSource pad(UUID deviceId) {
+        return MediaSource.pad(deviceId);
     }
 
     public static MediaSource projector(Level level, BlockPos pos) {
@@ -45,8 +50,9 @@ public final class MediaBindingData {
             return;
         }
         tag.putString(TAG_SOURCE_KIND, source.kind().serializedName());
-        if (source.kind() == SourceKind.MP4 && source.mp4DeviceId() != null) {
-            tag.putString(TAG_MP4_DEVICE_ID, source.mp4DeviceId().toString());
+        if (source.isMediaDevice() && source.deviceId() != null) {
+            tag.putString(TAG_MP4_DEVICE_ID, source.deviceId().toString());
+            tag.putString(TAG_MEDIA_DEVICE_ID, source.deviceId().toString());
         } else if (source.isBlockSource() && source.dimension() != null && source.pos() != null) {
             tag.putString(TAG_DIMENSION, source.dimension().toString());
             tag.putInt(TAG_POS_X, source.pos().getX());
@@ -60,9 +66,15 @@ public final class MediaBindingData {
             return null;
         }
         SourceKind kind = SourceKind.byName(tag.getString(TAG_SOURCE_KIND).orElse(""));
-        if (kind == SourceKind.MP4) {
-            UUID deviceId = parseUuid(tag.getString(TAG_MP4_DEVICE_ID).orElse(""));
-            return deviceId != null ? MediaSource.mp4(deviceId) : null;
+        if (kind == SourceKind.MP4 || kind == SourceKind.PAD) {
+            UUID deviceId = parseUuid(tag.getString(TAG_MEDIA_DEVICE_ID).orElse(""));
+            if (deviceId == null) {
+                deviceId = parseUuid(tag.getString(TAG_MP4_DEVICE_ID).orElse(""));
+            }
+            if (deviceId == null) {
+                return null;
+            }
+            return kind == SourceKind.PAD ? MediaSource.pad(deviceId) : MediaSource.mp4(deviceId);
         }
         if (kind == SourceKind.VIDEO_PROJECTOR || kind == SourceKind.TURNTABLE) {
             ResourceKey<Level> dimension = parseDimension(tag.getString(TAG_DIMENSION).orElse(""));
@@ -97,11 +109,15 @@ public final class MediaBindingData {
     }
 
     public static List<UUID> mp4DeviceIds(List<MediaSource> sources) {
+        return mediaDeviceIds(sources);
+    }
+
+    public static List<UUID> mediaDeviceIds(List<MediaSource> sources) {
         List<UUID> result = new ArrayList<>();
         if (sources != null) {
             for (MediaSource source : sources) {
-                if (source != null && source.isMp4() && source.mp4DeviceId() != null) {
-                    result.add(source.mp4DeviceId());
+                if (source != null && source.isMediaDevice() && source.deviceId() != null) {
+                    result.add(source.deviceId());
                 }
             }
         }
@@ -133,6 +149,7 @@ public final class MediaBindingData {
 
     public enum SourceKind {
         MP4("mp4"),
+        PAD("pad"),
         VIDEO_PROJECTOR("video_projector"),
         TURNTABLE("turntable");
 
@@ -156,9 +173,13 @@ public final class MediaBindingData {
         }
     }
 
-    public record MediaSource(SourceKind kind, UUID mp4DeviceId, ResourceKey<Level> dimension, BlockPos pos) {
+    public record MediaSource(SourceKind kind, UUID deviceId, ResourceKey<Level> dimension, BlockPos pos) {
         public static MediaSource mp4(UUID deviceId) {
             return deviceId != null ? new MediaSource(SourceKind.MP4, deviceId, null, null) : null;
+        }
+
+        public static MediaSource pad(UUID deviceId) {
+            return deviceId != null ? new MediaSource(SourceKind.PAD, deviceId, null, null) : null;
         }
 
         public static MediaSource projector(ResourceKey<Level> dimension, BlockPos pos) {
@@ -177,6 +198,18 @@ public final class MediaBindingData {
             return kind == SourceKind.MP4;
         }
 
+        public boolean isPad() {
+            return kind == SourceKind.PAD;
+        }
+
+        public boolean isMediaDevice() {
+            return isMp4() || isPad();
+        }
+
+        public UUID mp4DeviceId() {
+            return isMp4() ? deviceId : null;
+        }
+
         public boolean isProjector() {
             return kind == SourceKind.VIDEO_PROJECTOR;
         }
@@ -190,9 +223,13 @@ public final class MediaBindingData {
         }
 
         public String shortName() {
-            if (isMp4() && mp4DeviceId != null) {
-                String value = mp4DeviceId.toString();
+            if (isMp4() && deviceId != null) {
+                String value = deviceId.toString();
                 return "MP4 " + (value.length() > 8 ? value.substring(0, 8) : value);
+            }
+            if (isPad() && deviceId != null) {
+                String value = deviceId.toString();
+                return "Pad " + (value.length() > 8 ? value.substring(0, 8) : value);
             }
             if (isProjector() && pos != null) {
                 return "投影仪 " + pos.getX() + "," + pos.getY() + "," + pos.getZ();

@@ -60,7 +60,7 @@ public final class PadMapStyleProcessor {
     private Workspace workspace(int width, int height) {
         int size = width * height;
         if (workspace == null || workspace.size != size) {
-            workspace = new Workspace(size);
+            workspace = new Workspace(width, height);
         }
         return workspace;
     }
@@ -109,12 +109,13 @@ public final class PadMapStyleProcessor {
 
     private void softenArea(boolean[] source, boolean[] output, int width, int height, int radius, int threshold) {
         System.arraycopy(source, 0, output, 0, source.length);
+        buildSummedArea(source, workspace.summedArea, width, height);
         for (int z = 0; z < height; z++) {
             for (int x = 0; x < width; x++) {
                 if (source[index(width, x, z)]) {
                     continue;
                 }
-                if (countInRadius(source, width, height, x, z, radius) >= threshold) {
+                if (countInRadius(workspace.summedArea, width, height, x, z, radius) >= threshold) {
                     output[index(width, x, z)] = true;
                 }
             }
@@ -123,13 +124,14 @@ public final class PadMapStyleProcessor {
 
     private void outlineWithSource(boolean[] source, boolean[] output, int width, int height) {
         System.arraycopy(source, 0, output, 0, source.length);
+        buildSummedArea(source, workspace.summedArea, width, height);
         for (int z = 0; z < height; z++) {
             for (int x = 0; x < width; x++) {
                 int index = index(width, x, z);
                 if (source[index]) {
                     continue;
                 }
-                if (countInRadius(source, width, height, x, z, 1) > 0) {
+                if (countInRadius(workspace.summedArea, width, height, x, z, 1) > 0) {
                     output[index] = true;
                 }
             }
@@ -138,13 +140,14 @@ public final class PadMapStyleProcessor {
 
     private void buildingCore(boolean[] source, boolean[] output, int width, int height, int threshold) {
         Arrays.fill(output, false);
+        buildSummedArea(source, workspace.summedArea, width, height);
         for (int z = 0; z < height; z++) {
             for (int x = 0; x < width; x++) {
                 int index = index(width, x, z);
                 if (!source[index]) {
                     continue;
                 }
-                if (countInRadius(source, width, height, x, z, 1) >= threshold) {
+                if (countInRadius(workspace.summedArea, width, height, x, z, 1) >= threshold) {
                     output[index] = true;
                 }
             }
@@ -166,6 +169,7 @@ public final class PadMapStyleProcessor {
     }
 
     private void fillSmallInteriorGaps(boolean[] mask, int width, int height) {
+        buildSummedArea(mask, workspace.summedArea, width, height);
         for (int z = 1; z < height - 1; z++) {
             for (int x = 1; x < width - 1; x++) {
                 int index = index(width, x, z);
@@ -185,7 +189,8 @@ public final class PadMapStyleProcessor {
                 if (mask[index(width, x, z + 1)]) {
                     cardinal++;
                 }
-                if (cardinal >= 3 || cardinal >= 2 && countInRadius(mask, width, height, x, z, 1) >= 5) {
+                if (cardinal >= 3
+                    || cardinal >= 2 && countInRadius(workspace.summedArea, width, height, x, z, 1) >= 5) {
                     mask[index] = true;
                 }
             }
@@ -335,18 +340,33 @@ public final class PadMapStyleProcessor {
         }
     }
 
-    private int countInRadius(boolean[] mask, int width, int height, int x, int z, int radius) {
-        int count = 0;
-        for (int dz = -radius; dz <= radius; dz++) {
-            for (int dx = -radius; dx <= radius; dx++) {
-                int nx = x + dx;
-                int nz = z + dz;
-                if (nx >= 0 && nx < width && nz >= 0 && nz < height && mask[index(width, nx, nz)]) {
-                    count++;
+    private void buildSummedArea(boolean[] mask, int[] summedArea, int width, int height) {
+        int stride = width + 1;
+        Arrays.fill(summedArea, 0);
+        for (int z = 0; z < height; z++) {
+            int rowSum = 0;
+            int sourceRow = z * width;
+            int outputRow = (z + 1) * stride;
+            int previousRow = z * stride;
+            for (int x = 0; x < width; x++) {
+                if (mask[sourceRow + x]) {
+                    rowSum++;
                 }
+                summedArea[outputRow + x + 1] = summedArea[previousRow + x + 1] + rowSum;
             }
         }
-        return count;
+    }
+
+    private int countInRadius(int[] summedArea, int width, int height, int x, int z, int radius) {
+        int stride = width + 1;
+        int minX = Math.max(0, x - radius);
+        int maxX = Math.min(width, x + radius + 1);
+        int minZ = Math.max(0, z - radius);
+        int maxZ = Math.min(height, z + radius + 1);
+        return summedArea[maxZ * stride + maxX]
+                - summedArea[minZ * stride + maxX]
+                - summedArea[maxZ * stride + minX]
+                + summedArea[minZ * stride + minX];
     }
 
     private int index(int width, int x, int z) {
@@ -374,8 +394,10 @@ public final class PadMapStyleProcessor {
         final boolean[] buildingFootprint;
         final boolean[] buildingCore;
         final int[] queue;
+        final int[] summedArea;
 
-        Workspace(int size) {
+        Workspace(int width, int height) {
+            int size = width * height;
             this.size = size;
             this.tree = new boolean[size];
             this.farmland = new boolean[size];
@@ -392,6 +414,7 @@ public final class PadMapStyleProcessor {
             this.buildingFootprint = new boolean[size];
             this.buildingCore = new boolean[size];
             this.queue = new int[size];
+                    this.summedArea = new int[(width + 1) * (height + 1)];
         }
 
         void clearInputs() {

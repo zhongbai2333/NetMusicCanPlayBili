@@ -6,6 +6,10 @@ import java.util.UUID;
 
 /** Pad 手持横屏聚焦/投影输入状态。 */
 public final class PadFocusState {
+    public static final String[] QUALITIES = {
+            "8K", "4K", "1080P60", "1080P+", "1080P", "720P", "480P", "360P"
+    };
+    private static final int[] QUALITY_VALUES = { 127, 120, 116, 112, 80, 64, 32, 16 };
     private static boolean active;
     private static InteractionHand hand = InteractionHand.MAIN_HAND;
     private static int ticks;
@@ -20,6 +24,20 @@ public final class PadFocusState {
     private static int pressTextureY = -1;
     private static String pressControl = "NONE";
     private static int pressTicks;
+    private static boolean showControls;
+    private static int controlsVisibleTicks;
+    private static boolean qualityMenuOpen;
+    private static boolean subtitleMenuOpen;
+    private static boolean subtitlesEnabled = true;
+    private static int subtitleMode = 1;
+    private static boolean subtitleAiEnabled;
+    private static int qualityIndex = QUALITY_VALUES.length - 1;
+    private static boolean scrubbingProgress;
+    private static float mediaProgress;
+    private static UUID pausedPointId;
+    private static long pausedElapsedMillis;
+    private static long pausedDurationMillis;
+    private static boolean pausedVideo;
     private static int draggingMediaId = -1;
     private static String draggingMediaName = "";
     private static UUID selectedPointId;
@@ -69,6 +87,20 @@ public final class PadFocusState {
         pressTextureY = -1;
         pressControl = "NONE";
         pressTicks = 0;
+        showControls = false;
+        controlsVisibleTicks = 0;
+        qualityMenuOpen = false;
+        subtitleMenuOpen = false;
+        subtitlesEnabled = true;
+        subtitleMode = 1;
+        subtitleAiEnabled = false;
+        qualityIndex = QUALITY_VALUES.length - 1;
+        scrubbingProgress = false;
+        mediaProgress = 0.0F;
+        pausedPointId = null;
+        pausedElapsedMillis = 0L;
+        pausedDurationMillis = 0L;
+        pausedVideo = false;
         draggingMediaId = -1;
         draggingMediaName = "";
         selectedPointId = null;
@@ -84,6 +116,7 @@ public final class PadFocusState {
 
     public static void tick() {
         tickPressFeedback();
+        tickControlsVisibility();
         ticks++;
         tickHoverAnimation();
     }
@@ -98,6 +131,7 @@ public final class PadFocusState {
             ticks++;
         }
         tickPressFeedback();
+        tickControlsVisibility();
         tickHoverAnimation();
     }
 
@@ -195,6 +229,163 @@ public final class PadFocusState {
 
     public static long revision() {
         return revision;
+    }
+
+    public static boolean controlsVisible() {
+        return showControls || scrubbingProgress || pausedPlaybackAvailable() || qualityMenuOpen || subtitleMenuOpen;
+    }
+
+    public static void toggleControls() {
+        if (controlsVisible()) {
+            showControls = false;
+            controlsVisibleTicks = 0;
+            scrubbingProgress = false;
+            qualityMenuOpen = false;
+            subtitleMenuOpen = false;
+        } else {
+            showControlsTemporarily();
+        }
+        revision++;
+    }
+
+    public static void showControlsTemporarily() {
+        showControls = true;
+        controlsVisibleTicks = 90;
+        revision++;
+    }
+
+    public static boolean qualityMenuOpen() {
+        return qualityMenuOpen;
+    }
+
+    public static boolean subtitleMenuOpen() {
+        return subtitleMenuOpen;
+    }
+
+    public static void toggleQualityMenu() {
+        qualityMenuOpen = !qualityMenuOpen;
+        if (qualityMenuOpen) {
+            subtitleMenuOpen = false;
+        }
+        showControlsTemporarily();
+    }
+
+    public static void toggleSubtitleMenu() {
+        subtitleMenuOpen = !subtitleMenuOpen;
+        if (subtitleMenuOpen) {
+            qualityMenuOpen = false;
+        }
+        showControlsTemporarily();
+    }
+
+    public static void selectQualityIndex(int index) {
+        qualityIndex = Math.max(0, Math.min(QUALITY_VALUES.length - 1, index));
+        qualityMenuOpen = false;
+        showControlsTemporarily();
+    }
+
+    public static int videoQualityCeiling() {
+        return QUALITY_VALUES[Math.max(0, Math.min(QUALITY_VALUES.length - 1, qualityIndex))];
+    }
+
+    public static String qualityLabel() {
+        return QUALITIES[Math.max(0, Math.min(QUALITIES.length - 1, qualityIndex))];
+    }
+
+    public static int qualityIndex() {
+        return qualityIndex;
+    }
+
+    public static boolean subtitlesEnabled() {
+        return subtitlesEnabled;
+    }
+
+    public static boolean subtitlePrimaryMode() {
+        return subtitleMode == 0;
+    }
+
+    public static boolean subtitleAiEnabled() {
+        return subtitleAiEnabled;
+    }
+
+    public static void selectSubtitleMode(int mode) {
+        subtitleMode = Math.max(0, Math.min(1, mode));
+        subtitlesEnabled = true;
+        showControlsTemporarily();
+    }
+
+    public static void disableSubtitle() {
+        subtitlesEnabled = false;
+        showControlsTemporarily();
+    }
+
+    public static void toggleSubtitleAi() {
+        subtitleAiEnabled = !subtitleAiEnabled;
+        subtitlesEnabled = true;
+        showControlsTemporarily();
+    }
+
+    public static String subtitleModeName() {
+        if (!subtitlesEnabled) {
+            return "off";
+        }
+        return subtitleMode == 0 ? "primary" : "secondary";
+    }
+
+    public static void setScrubbingProgress(boolean value) {
+        if (scrubbingProgress == value) {
+            return;
+        }
+        scrubbingProgress = value;
+        if (value) {
+            showControlsTemporarily();
+        }
+        revision++;
+    }
+
+    public static float mediaProgress() {
+        return mediaProgress;
+    }
+
+    public static void setMediaProgress(float progress) {
+        mediaProgress = Math.max(0.0F, Math.min(1.0F, progress));
+        showControlsTemporarily();
+    }
+
+    public static void rememberPausedPlayback(UUID pointId, long elapsedMillis, long durationMillis,
+            boolean video) {
+        pausedPointId = pointId;
+        pausedElapsedMillis = Math.max(0L, elapsedMillis);
+        pausedDurationMillis = Math.max(0L, durationMillis);
+        pausedVideo = video;
+        showControlsTemporarily();
+    }
+
+    public static void clearPausedPlayback() {
+        pausedPointId = null;
+        pausedElapsedMillis = 0L;
+        pausedDurationMillis = 0L;
+        pausedVideo = false;
+    }
+
+    public static UUID pausedPointId() {
+        return pausedPointId;
+    }
+
+    public static long pausedElapsedMillis() {
+        return pausedElapsedMillis;
+    }
+
+    public static long pausedDurationMillis() {
+        return pausedDurationMillis;
+    }
+
+    public static boolean pausedVideo() {
+        return pausedVideo;
+    }
+
+    public static boolean pausedPlaybackAvailable() {
+        return pausedPointId != null;
     }
 
     public static void updateHover(float x, float y) {
@@ -335,6 +526,19 @@ public final class PadFocusState {
             pressTextureY = -1;
             pressControl = "NONE";
             revision++;
+        }
+    }
+
+    private static void tickControlsVisibility() {
+        if (!showControls || scrubbingProgress || pausedPlaybackAvailable() || qualityMenuOpen || subtitleMenuOpen) {
+            return;
+        }
+        if (controlsVisibleTicks > 0) {
+            controlsVisibleTicks--;
+            if (controlsVisibleTicks == 0) {
+                showControls = false;
+                revision++;
+            }
         }
     }
 }

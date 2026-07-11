@@ -4,6 +4,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.media.stream.CdnHealthTracker;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import org.slf4j.Logger;
 
 import java.io.InputStream;
@@ -21,9 +22,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** B站 CDN 优选缓存与轻量首包竞速。 */
@@ -33,7 +32,8 @@ public final class BiliCdnSelector {
             .parseBoolean(System.getProperty("ncpb.bili.cdn_selector.enabled", "true"));
     private static final boolean RACE_ENABLED = Boolean
             .parseBoolean(System.getProperty("ncpb.bili.cdn_selector.race", "true"));
-    private static final int RACE_BYTES = Math.max(1, Integer.getInteger("ncpb.ncpb.bili.cdn_selector.race_bytes", 2048));
+    private static final int RACE_BYTES = Math.max(1,
+            Integer.getInteger("ncpb.ncpb.bili.cdn_selector.race_bytes", 2048));
     private static final long RACE_TIMEOUT_MILLIS = Math.max(250L,
             Long.getLong("ncpb.ncpb.bili.cdn_selector.race_timeout_ms", 2_500L));
     private static final int MAX_RACE_CANDIDATES = Math.max(1,
@@ -45,16 +45,7 @@ public final class BiliCdnSelector {
     private static final Object PREFERENCE_LOCK = new Object();
     private static final AtomicLong LAST_BACKGROUND_RACE_AT = new AtomicLong();
     private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(MAX_RACE_CANDIDATES,
-            new ThreadFactory() {
-                private final AtomicInteger next = new AtomicInteger(1);
-
-                @Override
-                public Thread newThread(Runnable runnable) {
-                    Thread thread = new Thread(runnable, "bili-cdn-selector-" + next.getAndIncrement());
-                    thread.setDaemon(true);
-                    return thread;
-                }
-            });
+            NetMusicThreadFactory.daemon("bili-cdn-selector"));
 
     private static volatile String preferredHost = System.getProperty("ncpb.bili.cdn.preferred_host", "")
             .trim().toLowerCase(Locale.ROOT);
@@ -218,13 +209,12 @@ public final class BiliCdnSelector {
             return;
         }
         List<String> snapshot = List.copyOf(candidates);
-        Thread thread = new Thread(() -> {
+        Thread thread = NetMusicThreadFactory.daemonThread("bili-cdn-background-race", () -> {
             String winner = raceFirstReadable(snapshot, false);
             if (winner != null && !winner.isBlank()) {
                 LOGGER.debug("B站 CDN 后台优选完成: host={}", hostOf(winner));
             }
-        }, "bili-cdn-background-race");
-        thread.setDaemon(true);
+        });
         thread.start();
     }
 

@@ -107,7 +107,7 @@ public final class AudioLinkIndex {
             return;
         }
         UUID playerId = player.getUUID();
-        Set<UUID> linkedMp4s = linkedMp4s(player);
+        Set<UUID> linkedMp4s = linkedMediaDevices(player);
         Set<UUID> previousLinks = MP4S_BY_HEADPHONE_OWNER.get(playerId);
         if (previousLinks != null) {
             for (UUID previous : previousLinks) {
@@ -126,7 +126,7 @@ public final class AudioLinkIndex {
             }
         }
 
-        UUID linkedMp4 = linkedMp4(player);
+        UUID linkedMp4 = linkedMediaDevice(player);
         UUID previous = MP4_BY_HEADPHONE_PLAYER.get(playerId);
         if (previous != null && !previous.equals(linkedMp4)) {
             removeHeadphonePlayer(playerId, previous);
@@ -222,31 +222,31 @@ public final class AudioLinkIndex {
         }
     }
 
-    private static UUID linkedMp4(ServerPlayer player) {
+    private static UUID linkedMediaDevice(ServerPlayer player) {
         ItemStack head = EquippedMediaItems.firstHeadphones(player);
         if (!HeadphoneAbility.has(head)) {
             return null;
         }
-        return AudioLinkData.readHeadphoneMp4(head);
+        return AudioLinkData.readHeadphoneMediaDevice(head);
     }
 
-    private static Set<UUID> linkedMp4s(ServerPlayer player) {
+    private static Set<UUID> linkedMediaDevices(ServerPlayer player) {
         Set<UUID> deviceIds = new HashSet<>();
-        EquippedMediaItems.forEachEquipped(player, stack -> addLinkedMp4(deviceIds, stack));
+        EquippedMediaItems.forEachEquipped(player, stack -> addLinkedMediaDevice(deviceIds, stack));
         ItemStack carried = player.containerMenu != null ? player.containerMenu.getCarried() : ItemStack.EMPTY;
-        addLinkedMp4(deviceIds, carried);
+        addLinkedMediaDevice(deviceIds, carried);
         var inventory = player.getInventory();
         for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
-            addLinkedMp4(deviceIds, inventory.getItem(slot));
+            addLinkedMediaDevice(deviceIds, inventory.getItem(slot));
         }
         return deviceIds;
     }
 
-    private static void addLinkedMp4(Set<UUID> deviceIds, ItemStack stack) {
+    private static void addLinkedMediaDevice(Set<UUID> deviceIds, ItemStack stack) {
         if (!HeadphoneAbility.has(stack)) {
             return;
         }
-        UUID deviceId = AudioLinkData.readHeadphoneMp4(stack);
+        UUID deviceId = AudioLinkData.readHeadphoneMediaDevice(stack);
         if (deviceId != null) {
             deviceIds.add(deviceId);
         }

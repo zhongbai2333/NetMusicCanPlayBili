@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
-import com.zhongbai233.net_music_can_play_bili.client.MP4ClientPlayback;
+import com.zhongbai233.net_music_can_play_bili.client.MP4ClientMediaSync;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTimelinePayload;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -10,7 +11,7 @@ import java.util.UUID;
 
 /** MP4 播放轻量校时包，不重复携带直链 URL。 */
 public record MP4PlaybackTimelinePacket(UUID sourceId, String sessionId, long elapsedMillis, int volumePerMille,
-        boolean headphoneRouted) implements CustomPacketPayload {
+        boolean headphoneRouted) implements CustomPacketPayload, ClientMediaTimelinePayload {
     public static final Type<MP4PlaybackTimelinePacket> TYPE = new Type<>(
             NetworkPayloadIds.id("mp4_playback_timeline"));
 
@@ -49,6 +50,6 @@ public record MP4PlaybackTimelinePacket(UUID sourceId, String sessionId, long el
     }
 
     public static void handle(MP4PlaybackTimelinePacket payload, IPayloadContext context) {
-        MP4ClientPlayback.handleTimeline(payload);
+        MP4ClientMediaSync.handleTimeline(payload);
     }
 }

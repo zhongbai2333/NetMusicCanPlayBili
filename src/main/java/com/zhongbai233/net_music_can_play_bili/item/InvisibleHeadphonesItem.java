@@ -62,13 +62,13 @@ public class InvisibleHeadphonesItem extends Item {
             tooltip.accept(Component.translatable("tooltip.net_music_can_play_bili.headphones.turntable",
                     turntable.getX(), turntable.getY(), turntable.getZ()).withStyle(ChatFormatting.GRAY));
         }
-        UUID mp4 = AudioLinkData.readHeadphoneMp4(stack);
+        UUID mp4 = AudioLinkData.readHeadphoneMediaDevice(stack);
         if (mp4 != null) {
             String shortId = mp4.toString();
             if (shortId.length() > 8) {
                 shortId = shortId.substring(0, 8);
             }
-            tooltip.accept(Component.translatable("tooltip.net_music_can_play_bili.headphones.mp4", shortId)
+            tooltip.accept(Component.translatable("tooltip.net_music_can_play_bili.headphones.media_device", shortId)
                     .withStyle(ChatFormatting.GRAY));
         }
     }

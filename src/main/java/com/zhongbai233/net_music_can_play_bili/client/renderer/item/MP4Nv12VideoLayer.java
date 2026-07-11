@@ -15,6 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /** MP4 手持视频层按设备隔离的 NV12 纹理上传器。 */
 final class MP4Nv12VideoLayer implements AutoCloseable {
     private static final Map<UUID, MP4Nv12VideoLayer> LAYERS = new ConcurrentHashMap<>();
+    private static final Map<UUID, MP4Nv12VideoLayer> HANDHELD_LAYERS = new ConcurrentHashMap<>();
 
     private final Identifier yTextureId;
     private final Identifier uvTextureId;
@@ -24,11 +25,15 @@ final class MP4Nv12VideoLayer implements AutoCloseable {
     private int uploadedHeight;
 
     private MP4Nv12VideoLayer(UUID deviceId) {
+        this(deviceId, "mp4_video");
+    }
+
+    private MP4Nv12VideoLayer(UUID deviceId, String texturePrefix) {
         String suffix = deviceId.toString().replace('-', '_');
         this.yTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
-                "dynamic/mp4_video_" + suffix + "_y");
+                "dynamic/" + texturePrefix + "_" + suffix + "_y");
         this.uvTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
-                "dynamic/mp4_video_" + suffix + "_uv");
+                "dynamic/" + texturePrefix + "_" + suffix + "_uv");
     }
 
     static MP4Nv12VideoLayer forDevice(UUID deviceId) {
@@ -38,9 +43,22 @@ final class MP4Nv12VideoLayer implements AutoCloseable {
         return LAYERS.computeIfAbsent(deviceId, MP4Nv12VideoLayer::new);
     }
 
+    static MP4Nv12VideoLayer forHandheldDevice(UUID deviceId) {
+        if (deviceId == null) {
+            throw new IllegalArgumentException("MP4 handheld video layer requires a device id");
+        }
+        return HANDHELD_LAYERS.computeIfAbsent(deviceId, id -> new MP4Nv12VideoLayer(id, "pad_video"));
+    }
+
     static void releaseAll() {
         LAYERS.values().forEach(layer -> layer.close());
         LAYERS.clear();
+        releaseAllHandheld();
+    }
+
+    static void releaseAllHandheld() {
+        HANDHELD_LAYERS.values().forEach(layer -> layer.close());
+        HANDHELD_LAYERS.clear();
     }
 
     static void release(UUID deviceId) {
@@ -48,6 +66,16 @@ final class MP4Nv12VideoLayer implements AutoCloseable {
             return;
         }
         MP4Nv12VideoLayer layer = LAYERS.remove(deviceId);
+        if (layer != null) {
+            layer.close();
+        }
+    }
+
+    static void releaseHandheld(UUID deviceId) {
+        if (deviceId == null) {
+            return;
+        }
+        MP4Nv12VideoLayer layer = HANDHELD_LAYERS.remove(deviceId);
         if (layer != null) {
             layer.close();
         }
