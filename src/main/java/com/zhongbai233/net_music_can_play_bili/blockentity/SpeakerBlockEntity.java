@@ -1,6 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.blockentity;
 
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.bili.SpeakerAudioRelay;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
@@ -146,7 +146,7 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
             AudioLinkIndex.unregisterSpeaker(serverLevel, worldPosition);
         }
         // 客户端和服务端均需清理 relay 和链接状态，防止长时间运行服务器内存泄漏
-        DolbyAudioRegistry.clearMachineOverrideForSpeaker(worldPosition);
+        ClientAudioOutputRegistry.clearMachineOverrideForSpeaker(worldPosition);
     }
 
     /** 此音响的独立音频 relay（客户端） */
@@ -157,15 +157,15 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
      * 客户端：根据链接状态注册/清除音频 relay，每个音响有独立的 OpenAL 管线
      */
     private void syncAudioOverride() {
-        DolbyAudioRegistry.clearMachineOverrideForSpeaker(worldPosition);
+        ClientAudioOutputRegistry.clearMachineOverrideForSpeaker(worldPosition);
         if (linkedTurntablePos != null) {
             // 每次重新同步都创建新的 relay；clearMachineOverrideForSpeaker 会 cleanup 旧 relay
             SpeakerAudioRelay relay = new SpeakerAudioRelay();
             audioRelay = relay;
             relay.setChannelIndex(channelIndex);
             relay.setUserVolume(volume);
-            DolbyAudioRegistry.registerRelay(worldPosition, linkedTurntablePos, relay);
-            DolbyAudioRegistry.updateRelayConfig(worldPosition, channelIndex, volume, autoMixJoc);
+            ClientAudioOutputRegistry.registerRelay(worldPosition, linkedTurntablePos, relay);
+            ClientAudioOutputRegistry.updateRelayConfig(worldPosition, channelIndex, volume, autoMixJoc);
         } else {
             if (audioRelay != null) {
                 audioRelay.cleanup();

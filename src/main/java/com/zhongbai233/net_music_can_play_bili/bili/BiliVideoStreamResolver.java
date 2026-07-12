@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.bili;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+
 import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 
 /** B站视频流公共解析器，供手持设备、投影仪和预览界面复用。 */

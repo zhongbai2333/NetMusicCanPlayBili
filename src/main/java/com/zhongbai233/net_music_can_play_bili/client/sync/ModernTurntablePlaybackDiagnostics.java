@@ -1,7 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
 import com.mojang.logging.LogUtils;
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import net.minecraft.client.Minecraft;
@@ -57,7 +57,7 @@ public final class ModernTurntablePlaybackDiagnostics {
 
         VideoBillboardPreview.VideoSyncStatus video = VideoBillboardPreview.getSyncStatus(sessionId);
         long videoMillis = video.mediaMillis();
-        DolbyAudioRegistry.AudioTimeline audio = DolbyAudioRegistry.getAudioTimeline(turntablePos);
+        ClientAudioOutputRegistry.AudioTimeline audio = ClientAudioOutputRegistry.getAudioTimeline(turntablePos);
         long audioMillis = audio.combinedMillis();
         long subtitleMillis = subtitleMillis(turntable);
 

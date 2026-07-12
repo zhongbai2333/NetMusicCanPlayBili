@@ -1,7 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.gui;
 
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntableSound;
 import com.zhongbai233.net_music_can_play_bili.network.ModernTurntableControlPacket;
@@ -40,6 +40,7 @@ public class ModernTurntableScreen extends BlackGoldScreen {
     private ProgressSlider progressSlider;
     private BlackGoldButton replayButton;
     private BlackGoldButton playPauseButton;
+    private BlackGoldButton repeatOneButton;
     private VolumeSlider volumeSlider;
 
     public ModernTurntableScreen(BlockPos pos) {
@@ -79,6 +80,11 @@ public class ModernTurntableScreen extends BlackGoldScreen {
                 Component.literal("▶ 播放"),
                 btn -> onPlayPause(), GOLD));
 
+        repeatOneButton = addRenderableWidget(new BlackGoldButton(
+                bx + PAD + (BTN_W + 6) * 2, controlsY, 68, BTN_H,
+                Component.literal("🔁 单曲"),
+                btn -> sendAction(ModernTurntableControlPacket.Action.TOGGLE_REPEAT_ONE), GOLD));
+
         volumeSlider = addRenderableWidget(
                 new VolumeSlider(bx + T_BOX_W - PAD - 110, controlsY, 110, BTN_H, blockPos));
 
@@ -95,7 +101,7 @@ public class ModernTurntableScreen extends BlackGoldScreen {
         tickCounter++;
         var t = turntable();
         boolean playing = t != null && t.isPlaying();
-        float audioLevel = playing ? DolbyAudioRegistry.audioLevel(blockPos) : 0.0f;
+        float audioLevel = playing ? ClientAudioOutputRegistry.audioLevel(blockPos) : 0.0f;
         float target = playing ? Math.max(0.08f, (float) Math.sqrt(audioLevel) * 1.15f) : 0.02f;
         energy += (target - energy) * 0.06f;
         updateVisualizerLevels(playing, audioLevel);
@@ -276,6 +282,10 @@ public class ModernTurntableScreen extends BlackGoldScreen {
             playPauseButton.active = playing || hasPlayback || t.hasDisc();
             playPauseButton.setMessage(Component.literal(playing ? "⏸ 暂停" : "▶ 播放"));
         }
+        if (repeatOneButton != null) {
+            repeatOneButton.active = t.hasDisc() || hasPlayback;
+            repeatOneButton.setMessage(Component.literal(t.isRepeatOne() ? "🔂 循环中" : "🔁 单曲"));
+        }
         if (progressSlider != null)
             progressSlider.active = hasPlayback && dur > 0;
     }
@@ -401,7 +411,7 @@ public class ModernTurntableScreen extends BlackGoldScreen {
     private final class VolumeSlider extends AbstractSliderButton {
         VolumeSlider(int x, int y, int w, int h, BlockPos sourcePos) {
             super(x, y, w, h, Component.literal(""),
-                    gainToSlider(DolbyAudioRegistry.userVolume(sourcePos)));
+                    gainToSlider(ClientAudioOutputRegistry.userVolume(sourcePos)));
             updateMessage();
         }
 
@@ -409,7 +419,7 @@ public class ModernTurntableScreen extends BlackGoldScreen {
         protected void updateMessage() {
             float gain = sliderToGain((float) this.value);
             ModernTurntableSound.clientVolume = gain;
-            DolbyAudioRegistry.setUserVolume(blockPos, gain);
+            ClientAudioOutputRegistry.setUserVolume(blockPos, gain);
             setMessage(Component.literal((int) (this.value * 100) + "%"));
         }
 

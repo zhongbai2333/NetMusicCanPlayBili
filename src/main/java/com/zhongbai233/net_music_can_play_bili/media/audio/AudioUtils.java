@@ -1,4 +1,4 @@
-package com.zhongbai233.net_music_can_play_bili.bili;
+package com.zhongbai233.net_music_can_play_bili.media.audio;
 
 import net.minecraft.core.BlockPos;
 

@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "key": {
+    "C": "minecraft:compass",
+    "I": "minecraft:iron_ingot",
+    "R": "minecraft:redstone",
+    "S": "minecraft:stick"
+  },
+  "pattern": [
+    " RC",
+    " IS",
+    "S  "
+  ],
+  "result": {
+    "id": "net_music_can_play_bili:media_management_tool"
+  }
+}

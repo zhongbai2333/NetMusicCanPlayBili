@@ -1,7 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
-import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -110,7 +110,7 @@ public final class ModernTurntableTimeline {
         if (!AUDIO_ANCHORED_LOCAL_TIMELINE || turntablePos == null) {
             return fallback;
         }
-        long audibleMillis = DolbyAudioRegistry.getAudioTimeline(turntablePos).audibleMillis();
+        long audibleMillis = ClientAudioOutputRegistry.getAudioTimeline(turntablePos).audibleMillis();
         if (audibleMillis < 0L) {
             return fallback;
         }

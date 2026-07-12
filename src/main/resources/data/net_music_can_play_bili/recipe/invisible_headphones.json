@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "key": {
+    "I": "minecraft:iron_nugget",
+    "N": "minecraft:note_block",
+    "R": "minecraft:redstone",
+    "W": "#minecraft:wool"
+  },
+  "pattern": [
+    "IRI",
+    "WNW",
+    "W W"
+  ],
+  "result": {
+    "id": "net_music_can_play_bili:invisible_headphones"
+  }
+}

@@ -1,7 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client;
 
 import com.mojang.logging.LogUtils;
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaAudioRouting;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRegistry;
@@ -36,7 +36,7 @@ final class Mp4ClientMediaSyncPolicy implements ClientMediaSyncPolicy {
         }
         float clamped = Math.max(0.0F, Math.min(1.0F, volume));
         ClientMediaPlaybackRegistry.computeIfPresent(sourceId, (ignored, active) -> active.withVolume(clamped));
-        DolbyAudioRegistry.setOwnerVolume(sourceId, ClientMediaPlayback.perceivedGain(clamped));
+        ClientAudioOutputRegistry.setOwnerVolume(sourceId, ClientMediaPlayback.perceivedGain(clamped));
         ClientMediaSoundHandle sound = ClientMediaSoundRegistry.get(sourceId);
         if (sound != null) {
             sound.setMediaVolume(clamped);
@@ -68,7 +68,7 @@ final class Mp4ClientMediaSyncPolicy implements ClientMediaSyncPolicy {
 
     @Override
     public void onSyncReceived(ClientMediaSyncPayload payload, UUID sourceId) {
-        if (PAD_VIDEO_DEBUG_LOG && payload.sessionId() != null && payload.sessionId().contains("-pad-")) {
+        if (PAD_VIDEO_DEBUG_LOG && PadClientMediaSessionIds.isPadSession(payload.sessionId())) {
             LOGGER.info(
                     "Pad playback sync received: owner={} source={} type={} playing={} session={} elapsed={}ms headphoneRouted={}",
                     payload.ownerId(), sourceId, payload.sourceType(), payload.playing(), payload.sessionId(),
@@ -91,7 +91,7 @@ final class Mp4ClientMediaSyncPolicy implements ClientMediaSyncPolicy {
 
     @Override
     public void afterRegisterPlayback(ClientMediaSyncPayload payload, UUID sourceId) {
-        if (PAD_VIDEO_DEBUG_LOG && payload.sessionId() != null && payload.sessionId().contains("-pad-")) {
+        if (PAD_VIDEO_DEBUG_LOG && PadClientMediaSessionIds.isPadSession(payload.sessionId())) {
             LOGGER.info(
                     "Pad playback active registered: source={} session={} raw='{}' playUrlBlank={} headphoneRouted={}",
                     sourceId, payload.sessionId(), payload.rawUrl(), payload.playUrl().isBlank(),

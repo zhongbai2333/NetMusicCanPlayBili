@@ -4,6 +4,7 @@
   "package": "com.zhongbai233.net_music_can_play_bili.mixin",
   "compatibilityLevel": "JAVA_25",
   "mixins": [
+    "MinecartRevolutionProjectorLinkCleanupMixin",
     "SetMusicIDMessageMixin",
     "TileEntityMusicPlayerMixin"
   ],

@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "key": {
+    "A": "minecraft:amethyst_shard",
+    "G": "minecraft:glass_pane",
+    "I": "minecraft:gold_ingot",
+    "R": "minecraft:redstone"
+  },
+  "pattern": [
+    "A A",
+    "GRG",
+    "I I"
+  ],
+  "result": {
+    "id": "net_music_can_play_bili:holographic_glasses"
+  }
+}

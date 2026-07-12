@@ -1,6 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.media.stream;
 
-import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 
 import java.net.URI;
 import java.net.URL;

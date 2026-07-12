@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "key": {
+    "G": "minecraft:glass_pane",
+    "I": "minecraft:iron_ingot",
+    "M": "net_music_can_play_bili:mp4",
+    "R": "minecraft:redstone"
+  },
+  "pattern": [
+    "GGG",
+    "IMI",
+    "IRI"
+  ],
+  "result": {
+    "id": "net_music_can_play_bili:pad"
+  }
+}

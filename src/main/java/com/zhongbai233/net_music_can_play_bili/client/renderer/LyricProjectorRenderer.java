@@ -9,7 +9,7 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.LyricProjectorBlockEn
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSubtitleLyricService;
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ModernTurntableTimeline;
 import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
 import it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap;
@@ -524,7 +524,7 @@ public class LyricProjectorRenderer
     }
 
     private static float resolveProjectorLyricTick(BlockPos turntablePos, ModernTurntableBlockEntity turntable) {
-        long audibleMillis = DolbyAudioRegistry.getAudioTimeline(turntablePos).audibleMillis();
+        long audibleMillis = ClientAudioOutputRegistry.getAudioTimeline(turntablePos).audibleMillis();
         if (audibleMillis >= 0L) {
             return Math.max(0L, audibleMillis - Math.max(0L, LYRIC_AUDIO_DELAY_MS)) / 50.0F;
         }

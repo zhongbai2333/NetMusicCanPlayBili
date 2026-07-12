@@ -51,11 +51,11 @@ public final class MP4HandheldVideoClient {
             "ncpb.mp4.video");
     private static final int MAX_VIDEO_THREADS = Math.max(2,
             Integer.getInteger("ncpb.mp4.video.max_threads", 4));
-        private static final String HANDHELD_NATIVE_HWACCEL = System.getProperty(
+    private static final String HANDHELD_NATIVE_HWACCEL = System.getProperty(
             "ncpb.mp4.video.native.hwaccel", "auto").trim();
-        private static final String PAD_NATIVE_HWACCEL = System.getProperty(
+    private static final String PAD_NATIVE_HWACCEL = System.getProperty(
             "ncpb.pad.video.native.hwaccel", "none").trim();
-        private static final boolean PAD_VIDEO_DEBUG_LOG = Boolean.getBoolean("ncpb.pad.video.debug_log");
+    private static final boolean PAD_VIDEO_DEBUG_LOG = Boolean.getBoolean("ncpb.pad.video.debug_log");
     private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(MAX_VIDEO_THREADS,
             new Mp4VideoThreadFactory());
     private static final Map<UUID, DeviceVideoState> STATES = new ConcurrentHashMap<>();
@@ -412,7 +412,7 @@ public final class MP4HandheldVideoClient {
     }
 
     private static void logResolvedStreamIfPad(HandheldMediaPlayback playback, ResolvedVideoStream stream) {
-        if (PAD_VIDEO_DEBUG_LOG && playback.sessionId() != null && playback.sessionId().contains("-pad-")) {
+        if (PAD_VIDEO_DEBUG_LOG && PadClientMediaSessionIds.isPadSession(playback.sessionId())) {
             LOGGER.info(
                     "Pad video stream resolved: session={} requestedRaw='{}' quality={} codec={} source={}x{} fps={} host={} title='{}'",
                     playback.sessionId(), playback.rawUrl(), stream.quality(), stream.codecId(), stream.sourceWidth(),
@@ -543,7 +543,7 @@ public final class MP4HandheldVideoClient {
         IOException last = null;
         for (String hwaccel : handheldHwaccelCandidates(sessionId)) {
             try {
-                if (PAD_VIDEO_DEBUG_LOG && isPadSession(sessionId)) {
+                if (PAD_VIDEO_DEBUG_LOG && PadClientMediaSessionIds.isPadSession(sessionId)) {
                     LOGGER.info("Pad video native decoder open: session={} hwaccel={} codec={} target={}x{} format={} offset={}ms",
                             sessionId, hwaccel, stream.codecId(), decodeSize.width(), decodeSize.height(),
                             outputFormat, elapsedMillis);
@@ -560,7 +560,9 @@ public final class MP4HandheldVideoClient {
     }
 
     private static String[] handheldHwaccelCandidates(String sessionId) {
-        String requested = isPadSession(sessionId) ? PAD_NATIVE_HWACCEL : HANDHELD_NATIVE_HWACCEL;
+        String requested = PadClientMediaSessionIds.isPadSession(sessionId)
+            ? PAD_NATIVE_HWACCEL
+            : HANDHELD_NATIVE_HWACCEL;
         if (requested.isBlank()
                 || "none".equalsIgnoreCase(requested)
                 || "off".equalsIgnoreCase(requested)) {
@@ -570,10 +572,6 @@ public final class MP4HandheldVideoClient {
             return VideoFeatureFlags.requestedHwaccelCandidates();
         }
         return new String[] { requested, "none" };
-    }
-
-    private static boolean isPadSession(String sessionId) {
-        return sessionId != null && sessionId.contains("-pad-");
     }
 
     private static boolean waitWhileOffscreen(UUID deviceId, DeviceVideoState state, VideoSession session) {

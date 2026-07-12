@@ -4,8 +4,8 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.ResolvedVideoStream;
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
-import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
@@ -184,6 +184,16 @@ public final class ModernTurntableVideoClient {
                 : findLinkedVideoProjectors(turntablePos);
         boolean holographicConsumer = HolographicGlassesClient.handlesTurntable(turntablePos);
         if (projectors.isEmpty() && !holographicConsumer) {
+            // MinecartRevolution 的投影仪 BE 位于模拟 level，无法通过 Minecraft.level 扫描到。
+            // BER 已经建立并维持同一唱片机会话时，周期全量同步不应把它误判成无 consumer。
+            if (VideoBillboardPreview.hasSessionForTurntable(turntablePos, sessionId)
+                    && VideoBillboardPreview.isSessionRunning(sessionId)) {
+                ACTIVE_SESSION_IDS.add(sessionId);
+                rememberActiveSession(immutableTurntablePos, sessionId);
+                logDecision(sessionId, "reuse-simulated-projector", turntablePos, sync.elapsedMillis(), 0, 0, 0L,
+                        "running session is retained for a BER-backed simulated projector");
+                return;
+            }
             logDecision(sessionId, "stop-no-projector", turntablePos, sync.elapsedMillis(), 0, 0, 0L,
                     "no linked video projector");
             VideoBillboardPreview.stopIfSession(sessionId);
@@ -348,7 +358,7 @@ public final class ModernTurntableVideoClient {
         if (turntablePos == null || sessionId == null || sessionId.isBlank()) {
             return false;
         }
-        DolbyAudioRegistry.AudioTimeline timeline = DolbyAudioRegistry.getAudioTimeline(turntablePos);
+        ClientAudioOutputRegistry.AudioTimeline timeline = ClientAudioOutputRegistry.getAudioTimeline(turntablePos);
         String audioSessionId = timeline.sessionId();
         if (audioSessionId != null && !audioSessionId.isBlank() && !audioSessionId.equals(sessionId)) {
             return false;

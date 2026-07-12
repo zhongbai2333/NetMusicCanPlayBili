@@ -1,0 +1,20 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {
+    "A": "minecraft:amethyst_shard",
+    "G": "minecraft:glass_pane",
+    "I": "minecraft:iron_ingot",
+    "L": "minecraft:glowstone",
+    "O": "minecraft:observer",
+    "R": "minecraft:redstone"
+  },
+  "pattern": [
+    "GAG",
+    "ROR",
+    "ILI"
+  ],
+  "result": {
+    "id": "net_music_can_play_bili:video_projector"
+  }
+}

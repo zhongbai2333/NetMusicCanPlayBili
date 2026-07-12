@@ -6,7 +6,9 @@ import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
 import com.zhongbai233.net_music_can_play_bili.item.MediaManagementToolItem;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.InteractionResult;
@@ -14,6 +16,7 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.TypedEntityData;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
@@ -103,7 +106,44 @@ public class VideoProjectorBlock extends Block implements EntityBlock {
         if (be instanceof VideoProjectorBlockEntity projector) {
             projector.linkTo(linkedPos);
             LinkHelper.clearLinkFromItem(stack);
+            clearLinkedBlockEntityData(stack);
         }
+    }
+
+    /**
+     * 同步写入标准方块实体组件。MinecartRevolution 等通用方块载具会复制该组件，
+     * 因而无需依赖本模组的物品 CUSTOM_DATA 即可保留唱片机链接。
+     */
+    public static void writeLinkedBlockEntityData(ItemStack stack, BlockPos linkedPos) {
+        TypedEntityData<?> existing = stack.get(DataComponents.BLOCK_ENTITY_DATA);
+        CompoundTag tag = existing != null ? existing.copyTagWithoutId() : new CompoundTag();
+        tag.putBoolean("LinkedTarget_has", true);
+        tag.putInt("LinkedTarget_x", linkedPos.getX());
+        tag.putInt("LinkedTarget_y", linkedPos.getY());
+        tag.putInt("LinkedTarget_z", linkedPos.getZ());
+        stack.set(DataComponents.BLOCK_ENTITY_DATA,
+                TypedEntityData.of(com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities.VIDEO_PROJECTOR.get(),
+                        tag));
+    }
+
+    /** 清除标准方块实体组件中的唱片机链接，同时保留投影参数等其它数据。 */
+    public static void clearLinkedBlockEntityData(ItemStack stack) {
+        TypedEntityData<?> existing = stack.get(DataComponents.BLOCK_ENTITY_DATA);
+        if (existing == null) {
+            return;
+        }
+        CompoundTag tag = existing.copyTagWithoutId();
+        tag.remove("LinkedTarget_has");
+        tag.remove("LinkedTarget_x");
+        tag.remove("LinkedTarget_y");
+        tag.remove("LinkedTarget_z");
+        if (tag.isEmpty()) {
+            stack.remove(DataComponents.BLOCK_ENTITY_DATA);
+            return;
+        }
+        stack.set(DataComponents.BLOCK_ENTITY_DATA,
+                TypedEntityData.of(com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities.VIDEO_PROJECTOR.get(),
+                        tag));
     }
 
     @Override

@@ -68,6 +68,7 @@ public record ModernTurntableControlPacket(BlockPos pos, Action action, long tar
             case PAUSE -> turntable.pausePlayback(level);
             case START -> turntable.resumePlayback(player, payload.targetMillis());
             case SEEK -> turntable.seekTo(level, payload.targetMillis());
+            case TOGGLE_REPEAT_ONE -> turntable.toggleRepeatOne();
         }
     }
 
@@ -75,7 +76,8 @@ public record ModernTurntableControlPacket(BlockPos pos, Action action, long tar
         REPLAY,
         PAUSE,
         START,
-        SEEK;
+        SEEK,
+        TOGGLE_REPEAT_ONE;
 
         public int id() {
             return ordinal();

@@ -1,7 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.media.pipeline;
 
 import com.github.tartaricacid.netmusic.soundlibs.org.jflac.sound.spi.Flac2PcmAudioInputStream;
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.bili.StereoOpenALHandler;
 import com.zhongbai233.net_music_can_play_bili.media.stream.BlockingAudioPipe;
 import net.minecraft.core.BlockPos;
@@ -59,7 +59,7 @@ public final class FlacOpenALPipeline extends AbstractAudioPipeline {
         this.stereo = new StereoOpenALHandler();
         this.startOffsetSeconds = Math.max(0f, startOffsetSeconds);
         this.stereo.setSampleRate((int) format.getSampleRate());
-        DolbyAudioRegistry.registerStereo(stereo, sourcePos, timelineStartOffsetSeconds, sessionId, ownerId);
+        ClientAudioOutputRegistry.registerStereo(stereo, sourcePos, timelineStartOffsetSeconds, sessionId, ownerId);
         FlacStreamSupport.writeNativeHeader(compressedPipe, dfLa);
     }
 
@@ -95,7 +95,7 @@ public final class FlacOpenALPipeline extends AbstractAudioPipeline {
         if (cleaned.compareAndSet(false, true)) {
             compressedPipe.closeWriter();
             compressedPipe.close();
-            DolbyAudioRegistry.unregisterStereo(stereo);
+            ClientAudioOutputRegistry.unregisterStereo(stereo);
             stereo.cleanup();
         }
     }

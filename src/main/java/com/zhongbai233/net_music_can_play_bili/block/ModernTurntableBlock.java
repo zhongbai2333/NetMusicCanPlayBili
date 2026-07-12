@@ -104,6 +104,7 @@ public class ModernTurntableBlock extends HorizontalDirectionalBlock implements 
                 return InteractionResult.SUCCESS;
             }
             LinkHelper.writeLinkToItem(stack, pos);
+            VideoProjectorBlock.writeLinkedBlockEntityData(stack, pos);
             player.sendSystemMessage(Component.translatable(
                     "message.net_music_can_play_bili.video_projector.item_linked",
                     pos.getX(), pos.getY(), pos.getZ()).withStyle(ChatFormatting.GOLD));

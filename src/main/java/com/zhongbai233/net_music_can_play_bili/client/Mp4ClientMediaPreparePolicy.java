@@ -85,7 +85,7 @@ final class Mp4ClientMediaPreparePolicy implements ClientMediaPreparePolicy {
 
     @Override
     public void onPrepareDuplicate(ClientMediaSyncPayload payload, UUID sourceId) {
-        if (PAD_VIDEO_DEBUG_LOG && payload.sessionId() != null && payload.sessionId().contains("-pad-")) {
+        if (PAD_VIDEO_DEBUG_LOG && PadClientMediaSessionIds.isPadSession(payload.sessionId())) {
             LOGGER.info("Pad playback prepare skipped: duplicate source={} session={} headphoneRouted={}",
                     sourceId, payload.sessionId(), payload.headphoneRouted());
         }
@@ -93,7 +93,7 @@ final class Mp4ClientMediaPreparePolicy implements ClientMediaPreparePolicy {
 
     @Override
     public void onPrepareScheduled(ClientMediaSyncPayload payload, UUID sourceId) {
-        if (PAD_VIDEO_DEBUG_LOG && payload.sessionId() != null && payload.sessionId().contains("-pad-")) {
+        if (PAD_VIDEO_DEBUG_LOG && PadClientMediaSessionIds.isPadSession(payload.sessionId())) {
             LOGGER.info(
                     "Pad playback prepare scheduled: source={} session={} raw='{}' playUrlHost={} elapsed={}ms duration={}s",
                     sourceId, payload.sessionId(), payload.rawUrl(), ClientMediaPreparer.hostOf(payload.playUrl()),

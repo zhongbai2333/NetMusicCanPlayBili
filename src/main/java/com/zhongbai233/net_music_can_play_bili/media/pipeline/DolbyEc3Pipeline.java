@@ -1,7 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.media.pipeline;
 
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioHandler;
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import net.minecraft.core.BlockPos;
 
 import javax.sound.sampled.AudioFormat;
@@ -54,7 +54,7 @@ public final class DolbyEc3Pipeline extends AbstractAudioPipeline {
         this.ownerClosed = ownerClosed;
         this.dolby = new DolbyAudioHandler();
         this.skipFramesRemaining = skipFrames(startOffsetSeconds);
-        DolbyAudioRegistry.register(dolby, sourcePos, timelineStartOffsetSeconds, sessionId, ownerId);
+        ClientAudioOutputRegistry.register(dolby, sourcePos, timelineStartOffsetSeconds, sessionId, ownerId);
     }
 
     @Override
@@ -89,7 +89,7 @@ public final class DolbyEc3Pipeline extends AbstractAudioPipeline {
     @Override
     public void close() {
         if (cleaned.compareAndSet(false, true)) {
-            DolbyAudioRegistry.unregister(dolby);
+            ClientAudioOutputRegistry.unregister(dolby);
             dolby.cleanup();
         }
     }

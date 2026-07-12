@@ -17,9 +17,7 @@ import org.slf4j.Logger;
 
 import java.io.IOException;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Collection;
-import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicLong;
@@ -47,6 +45,8 @@ final class VideoPlaybackInstance {
             System.getProperty("ncpb.video.offscreen.prewarm_dot_threshold", "-0.20"));
     private static final double IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET = Double.parseDouble(
             System.getProperty("ncpb.video.pipeline.iris_warning_placeholder_view_depth_offset", "0.03"));
+    private static final float IRIS_WARNING_PLACEHOLDER_LOCAL_DEPTH_OFFSET = Float.parseFloat(
+            System.getProperty("ncpb.video.pipeline.iris_warning_placeholder_local_depth_offset", "-0.01"));
     private static final Identifier[] LOADING_PLACEHOLDER_TEXTURES = new Identifier[] {
             Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
                     "textures/gui/video_loading/loading_base_phase0.png"),
@@ -676,18 +676,37 @@ final class VideoPlaybackInstance {
         if (projectorPos != null && !projectorPositions.contains(projectorPos)) {
             return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
         }
-        if (hasFrame) {
-            return currentFrameSnapshot();
+        boolean loadingPlaceholderEnabled = Boolean.parseBoolean(
+                System.getProperty("ncpb.video.pipeline.loading_placeholder", "true"));
+        // Iris shaderpack 会捕获 BER 提交的多平面 YUV 几何；直接把这类帧交给
+        // VideoProjectorRenderer 会造成不可见颜色写入或随视角变化的深度闪烁。
+        // 与旧的全局提交路径保持一致：该兼容模式下用明确的警告占位图替代 YUV
+        // 面片，而不是先因 hasFrame 返回实际视频，导致下方警告分支永远不可达。
+        boolean irisWarning = shouldShowIrisTranslucencyWarning();
+        if (irisWarning && loadingPlaceholderEnabled) {
+            return loadingPlaceholderSnapshot(true);
         }
-        if (!Boolean.parseBoolean(System.getProperty("ncpb.video.pipeline.loading_placeholder", "true"))) {
+        if (hasFrame) {
+            return irisWarning ? VideoBillboardPreview.ProjectorFrameSnapshot.empty() : currentFrameSnapshot();
+        }
+        if (!loadingPlaceholderEnabled) {
             return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
         }
-        boolean irisWarning = shouldShowIrisTranslucencyWarning();
+        return loadingPlaceholderSnapshot(false);
+    }
+
+    private VideoBillboardPreview.ProjectorFrameSnapshot loadingPlaceholderSnapshot(boolean irisWarning) {
         return new VideoBillboardPreview.ProjectorFrameSnapshot(true, false, loadingPlaceholderTexture(irisWarning),
                 null,
                 null, null,
                 com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
-                LOADING_PLACEHOLDER_WIDTH, LOADING_PLACEHOLDER_HEIGHT, true, !irisWarning);
+            LOADING_PLACEHOLDER_WIDTH, LOADING_PLACEHOLDER_HEIGHT,
+            // Iris guard 会主动跳过有已知 sampler 问题的 item_cutout draw。警告图是
+            // 完整不透明画面，应走 ENTITY_SOLID RGBA 兼容路径；普通加载图仍保留
+                // emissive/cutout 及进度层。警告图作为 immediate 视频的 RGBA 回退底片，
+                // 正常写入世界深度，但沿 BER 局部屏幕法线稍微后退，避免与视频共面。
+                !irisWarning, !irisWarning,
+                irisWarning ? IRIS_WARNING_PLACEHOLDER_LOCAL_DEPTH_OFFSET : 0.0F);
     }
 
     VideoBillboardPreview.ProjectorFrameSnapshot turntableFrameSnapshot(BlockPos turntablePos) {
@@ -701,12 +720,12 @@ final class VideoPlaybackInstance {
         if (frontTexture != null) {
             return new VideoBillboardPreview.ProjectorFrameSnapshot(true, false, frontTextureId, null, null, null,
                     com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
-                    targetWidth, targetHeight, false, false);
+                    targetWidth, targetHeight, false, false, 0.0F);
         }
         if (yuvTextureSet != null) {
             return new VideoBillboardPreview.ProjectorFrameSnapshot(true, true, null, yuvTextureSet.yId(),
                     yuvTextureSet.uId(), yuvTextureSet.vId(), yuvTextureSet.format(), yuvTextureSet.width(),
-                    yuvTextureSet.height(), false, false);
+                    yuvTextureSet.height(), false, false, 0.0F);
         }
         return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
     }
@@ -722,7 +741,6 @@ final class VideoPlaybackInstance {
         if (!firstSubmitLogged) {
             firstSubmitLogged = true;
         }
-        List<BlockPos> stale = new ArrayList<>();
         boolean renderable = false;
         boolean prewarm = false;
         for (BlockPos pos : projectorPositions) {
@@ -732,7 +750,8 @@ final class VideoPlaybackInstance {
                 continue;
             }
             if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
-                stale.add(pos);
+                // 矿车内的模拟方块实体不属于 Minecraft.level。不能因真实世界查询不到它，
+                // 就在某一渲染帧永久删除 consumer；卸载和解绑由 stopIfProjector 明确处理。
                 continue;
             }
             boolean projectorRenderable = VideoBillboardPreview.isProjectorScreenRenderable(minecraft, camera,
@@ -750,7 +769,6 @@ final class VideoPlaybackInstance {
                 continue;
             }
             if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
-                stale.add(pos);
                 continue;
             }
             if (HolographicGlassesClient.shouldHideProjectorVideos()) {
@@ -775,7 +793,6 @@ final class VideoPlaybackInstance {
                 }
             }
         }
-        projectorPositions.removeAll(stale);
     }
 
     private void markVisibility(boolean renderable, boolean prewarm) {
@@ -828,12 +845,16 @@ final class VideoPlaybackInstance {
             return;
         }
         Camera camera = minecraft.gameRenderer.getMainCamera();
-        List<BlockPos> stale = new ArrayList<>();
         boolean drew = false;
         boolean prewarm = false;
         for (BlockPos pos : projectorPositions) {
+            if (VideoBillboardPreview.drawCapturedProjectorYuvImmediate(event, sessionId, pos, yuvTextureSet,
+                    route)) {
+                drew = true;
+                prewarm = true;
+                continue;
+            }
             if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
-                stale.add(pos);
                 continue;
             }
             prewarm |= VideoBillboardPreview.isProjectorScreenRenderable(minecraft, camera, projector,
@@ -847,7 +868,6 @@ final class VideoPlaybackInstance {
             }
         }
         markVisibility(drew, prewarm);
-        projectorPositions.removeAll(stale);
         if (drew && !firstYuvImmediateLogged) {
             firstYuvImmediateLogged = true;
             LOGGER.warn("Iris/YUV: session={} 的投影仪 YUV 使用实例纹理 immediate 绘制，route={}, texture={}x{}",

@@ -34,6 +34,8 @@ import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.client.event.SubmitCustomGeometryEvent;
 import org.joml.Matrix4fStack;
+import org.joml.Matrix4f;
+import org.joml.Vector4f;
 import org.joml.Vector3fc;
 import org.slf4j.Logger;
 
@@ -84,7 +86,7 @@ public final class VideoBillboardPreview {
         return new ProjectorFrameSnapshot(true, yuv, TEXTURE_ID, yuv ? yuvTextureSet.yId() : null,
                 yuv ? yuvTextureSet.uId() : null, yuv ? yuvTextureSet.vId() : null,
                 yuv ? yuvTextureSet.format() : Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, width, height, false,
-                false);
+            false, 0.0F);
     }
 
     public static ProjectorFrameSnapshot currentProjectorDisplayFrame(BlockPos projectorPos) {
@@ -196,10 +198,10 @@ public final class VideoBillboardPreview {
 
     public record ProjectorFrameSnapshot(boolean hasFrame, boolean yuv, Identifier rgbaTexture, Identifier yTexture,
             Identifier uTexture, Identifier vTexture, Fmp4NativeVideoDecoder.DecodedFrame.Format format, int width,
-            int height, boolean emissiveRgba, boolean loadingProgressOverlay) {
+            int height, boolean emissiveRgba, boolean loadingProgressOverlay, float rgbaDepthOffset) {
         public static ProjectorFrameSnapshot empty() {
             return new ProjectorFrameSnapshot(false, false, null, null, null, null,
-                    Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, 0, 0, false, false);
+                Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, 0, 0, false, false, 0.0F);
         }
     }
 
@@ -235,6 +237,7 @@ public final class VideoBillboardPreview {
     private static volatile BlockPos activeProjectorPos;
     private static final Set<BlockPos> activeProjectorPositions = new CopyOnWriteArraySet<>();
     private static final Set<BlockPos> berRenderedProjectorPositions = new CopyOnWriteArraySet<>();
+    private static final Map<ProjectorImmediateKey, ProjectorImmediatePose> PROJECTOR_IMMEDIATE_POSES = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<BlockPos, VisibilitySample> PROJECTOR_VISIBILITY_CACHE = new ConcurrentHashMap<>();
     private static volatile boolean activeRequiresProjector;
     private static volatile PlaybackRequest activeRequest;
@@ -907,8 +910,15 @@ public final class VideoBillboardPreview {
         if (projectorPos != null && minecraft.level.getBlockEntity(projectorPos) instanceof VideoProjectorBlockEntity) {
             return true;
         }
+        if (isProjectorRenderedByBer(projectorPos)) {
+            return true;
+        }
         for (BlockPos pos : activeProjectorPositions) {
             if (minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity) {
+                activeProjectorPos = pos;
+                return true;
+            }
+            if (isProjectorRenderedByBer(pos)) {
                 activeProjectorPos = pos;
                 return true;
             }
@@ -1713,6 +1723,7 @@ public final class VideoBillboardPreview {
 
     @SubscribeEvent
     public static void onRenderFrame(RenderFrameEvent.Pre event) {
+        PROJECTOR_IMMEDIATE_POSES.clear();
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level == null || minecraft.player == null || INSTANCES.isEmpty()) {
             return;
@@ -2015,6 +2026,64 @@ public final class VideoBillboardPreview {
                 || "camera-relative".equals(YUV_IMMEDIATE_COORDS)
                 || "relative".equals(YUV_IMMEDIATE_COORDS);
         return drawProjectorYuvImmediate(event, minecraft, camera, projector, textures, route, cameraRelative);
+    }
+
+    public static void captureProjectorImmediatePose(String sessionId, BlockPos projectorPos, Matrix4f pose,
+            float halfHeight) {
+        if (sessionId == null || sessionId.isBlank() || projectorPos == null || pose == null
+                || halfHeight <= 0.0F) {
+            return;
+        }
+        PROJECTOR_IMMEDIATE_POSES.put(new ProjectorImmediateKey(sessionId, projectorPos.immutable()),
+                new ProjectorImmediatePose(new Matrix4f(pose), halfHeight));
+    }
+
+    static boolean drawCapturedProjectorYuvImmediate(RenderLevelStageEvent event, String sessionId,
+            BlockPos projectorPos, VideoYuvTextureSet textures, String route) {
+        if (event == null || sessionId == null || projectorPos == null || textures == null
+                || textures.width() <= 0 || textures.height() <= 0) {
+            return false;
+        }
+        ProjectorImmediatePose captured = PROJECTOR_IMMEDIATE_POSES.remove(
+                new ProjectorImmediateKey(sessionId, projectorPos));
+        if (captured == null) {
+            return false;
+        }
+
+        float halfWidth = captured.halfHeight() * textures.width() / (float) textures.height();
+        PreviewQuad quad = transformedLocalQuad(captured.pose(), halfWidth, captured.halfHeight());
+        RenderType renderType = yuvRenderTypeForCurrentIrisProgram(textures);
+        BufferBuilder builder = Tesselator.getInstance().begin(renderType.mode(), renderType.format());
+        PoseStack.Pose identityPose = new PoseStack().last();
+        emitQuad(builder, identityPose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),
+                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), false);
+        emitQuad(builder, identityPose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),
+                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), true);
+        MeshData mesh = builder.build();
+        if (mesh == null) {
+            return false;
+        }
+        if (YUV_DEBUG_LOG) {
+            LOGGER.debug("Iris/YUV: 使用 BER 当帧矩阵绘制投影视频，session={}, projector={}, route={}",
+                    sessionId, projectorPos, route);
+        }
+        drawWithEventModelView(renderType, mesh, event);
+        return true;
+    }
+
+    private static PreviewQuad transformedLocalQuad(Matrix4f pose, float halfWidth, float halfHeight) {
+        Vector4f p0 = new Vector4f(-halfWidth, halfHeight, 0.0F, 1.0F).mul(pose);
+        Vector4f p1 = new Vector4f(-halfWidth, -halfHeight, 0.0F, 1.0F).mul(pose);
+        Vector4f p2 = new Vector4f(halfWidth, -halfHeight, 0.0F, 1.0F).mul(pose);
+        Vector4f p3 = new Vector4f(halfWidth, halfHeight, 0.0F, 1.0F).mul(pose);
+        return new PreviewQuad(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z,
+                p2.x, p2.y, p2.z, p3.x, p3.y, p3.z);
+    }
+
+    private record ProjectorImmediateKey(String sessionId, BlockPos projectorPos) {
+    }
+
+    private record ProjectorImmediatePose(Matrix4f pose, float halfHeight) {
     }
 
     private static boolean drawProjectorYuvImmediate(RenderLevelStageEvent event, Minecraft minecraft, Camera camera,
@@ -2367,6 +2436,17 @@ public final class VideoBillboardPreview {
             ProjectorFrameSnapshot frame,
             float halfWidth,
             float halfHeight) {
+        return submitProjectorFrameOnPose(collector, poseStack, frame, halfWidth, halfHeight,
+            frame != null ? frame.rgbaDepthOffset() : 0.0F);
+        }
+
+        public static boolean submitProjectorFrameOnPose(
+            net.minecraft.client.renderer.SubmitNodeCollector collector,
+            PoseStack poseStack,
+            ProjectorFrameSnapshot frame,
+            float halfWidth,
+            float halfHeight,
+            float rgbaDepthOffset) {
         if (collector == null || poseStack == null || frame == null || !frame.hasFrame()
                 || frame.width() <= 0 || frame.height() <= 0 || halfWidth <= 0.0F || halfHeight <= 0.0F) {
             return false;
@@ -2383,10 +2463,10 @@ public final class VideoBillboardPreview {
             return false;
         }
         submitLocalTexturedQuad(collector, poseStack,
-                frame.emissiveRgba()
-                        ? RenderTypes.itemCutout(frame.rgbaTexture())
-                        : YuvVideoRenderTypes.videoRgbaEntity(frame.rgbaTexture()),
-                halfWidth, halfHeight);
+            frame.emissiveRgba()
+                ? RenderTypes.itemCutout(frame.rgbaTexture())
+                : YuvVideoRenderTypes.videoRgbaEntity(frame.rgbaTexture()),
+            -halfWidth, halfHeight, halfWidth, -halfHeight, rgbaDepthOffset);
         if (frame.loadingProgressOverlay()) {
             submitLoadingProgressOnPose(collector, poseStack, halfWidth, halfHeight);
         }
@@ -2407,6 +2487,12 @@ public final class VideoBillboardPreview {
                 pixelRight(LOADING_PROGRESS_X + LOADING_PROGRESS_W, halfWidth),
                 pixelBottom(LOADING_PROGRESS_Y + LOADING_PROGRESS_H, halfHeight),
                 0.004F);
+        submitLocalTexturedQuad(collector, poseStack, RenderTypes.itemCutout(LOADING_PROGRESS_FRAME_TEXTURE),
+                pixelLeft(LOADING_PROGRESS_X, halfWidth),
+                pixelTop(LOADING_PROGRESS_Y, halfHeight),
+                pixelRight(LOADING_PROGRESS_X + LOADING_PROGRESS_W, halfWidth),
+                pixelBottom(LOADING_PROGRESS_Y + LOADING_PROGRESS_H, halfHeight),
+                -0.004F);
         int movingX = LOADING_PROGRESS_X + 2 + (int) (((System.nanoTime() / 12_000_000L)
                 % Math.max(1, LOADING_PROGRESS_W - LOADING_PROGRESS_SEGMENT_W - 4)));
         submitLocalTexturedQuad(collector, poseStack, RenderTypes.itemCutout(LOADING_PROGRESS_SEGMENT_TEXTURE),
@@ -2415,6 +2501,12 @@ public final class VideoBillboardPreview {
                 pixelRight(movingX + LOADING_PROGRESS_SEGMENT_W, halfWidth),
                 pixelBottom(LOADING_PROGRESS_Y + 2 + LOADING_PROGRESS_SEGMENT_H, halfHeight),
                 0.006F);
+        submitLocalTexturedQuad(collector, poseStack, RenderTypes.itemCutout(LOADING_PROGRESS_SEGMENT_TEXTURE),
+                pixelLeft(movingX, halfWidth),
+                pixelTop(LOADING_PROGRESS_Y + 2, halfHeight),
+                pixelRight(movingX + LOADING_PROGRESS_SEGMENT_W, halfWidth),
+                pixelBottom(LOADING_PROGRESS_Y + 2 + LOADING_PROGRESS_SEGMENT_H, halfHeight),
+                -0.006F);
         return true;
     }
 
@@ -2722,7 +2814,8 @@ public final class VideoBillboardPreview {
             }
         }
         activeProjectorPositions
-                .removeIf(pos -> !(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity));
+                .removeIf(pos -> !(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity)
+                        && !isProjectorRenderedByBer(pos));
         activeProjectorPos = projectors.isEmpty() ? null : projectors.get(0).getBlockPos().immutable();
         return projectors;
     }

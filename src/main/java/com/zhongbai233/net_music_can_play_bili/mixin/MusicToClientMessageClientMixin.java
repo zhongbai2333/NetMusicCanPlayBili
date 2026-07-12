@@ -9,10 +9,11 @@ import com.github.tartaricacid.netmusic.network.message.MusicToClientMessage;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
-import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientMediaPreparer;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientMinecartAudioAnchors;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntableSound;
 import net.minecraft.client.Minecraft;
@@ -48,6 +49,15 @@ public abstract class MusicToClientMessageClientMixin {
         }
 
         if (modernTurntable) {
+            PlaybackSync.MinecartAnchor minecartAnchor = PlaybackSync.parseMinecartAnchor(message.url());
+            if (Minecraft.getInstance().options.getSoundSourceVolume(SoundSource.MASTER) <= 0f) {
+                ci.cancel();
+                return;
+            }
+            if (minecartAnchor != null && sync.hasSession()) {
+                ClientMinecartAudioAnchors.register(sync.sessionId(), minecartAnchor.entityId(),
+                        minecartAnchor.entityUuid());
+            }
             if (sync.hasSession()
                     && !ModernTurntablePlaybackTracker.tryStart(message.pos(), sync.sessionId(),
                             message.timeSecond())) {
@@ -55,11 +65,6 @@ public abstract class MusicToClientMessageClientMixin {
                 ci.cancel();
                 return;
             }
-            if (Minecraft.getInstance().options.getSoundSourceVolume(SoundSource.MASTER) <= 0f) {
-                ci.cancel();
-                return;
-            }
-
             boolean loadLyrics = GeneralConfig.ENABLE_PLAYER_LYRICS.get();
             ClientMediaPreparer.PreparedMedia prepared = ClientMediaPreparer.prepareAudioOnly(message.rawUrl(),
                     message.url(), message.songName(), true);
@@ -72,6 +77,10 @@ public abstract class MusicToClientMessageClientMixin {
             String syncedPlayUrl = sync.hasSession()
                     ? PlaybackSync.withSync(playUrl, sync.sessionId(), elapsedMillis, totalMillis)
                     : playUrl;
+            if (minecartAnchor != null) {
+                syncedPlayUrl = PlaybackSync.withMinecartAnchor(syncedPlayUrl, minecartAnchor.entityId(),
+                        minecartAnchor.entityUuid());
+            }
             HttpAudioStreamHandler.allowUrl(syncedPlayUrl, message.pos());
             ModernTurntableVideoClient.syncFromPlayback(message.rawUrl(), message.pos(), sync);
             BiliPlaybackDiagnostics.beginPlayback(message.songName(), message.rawUrl(), syncedPlayUrl);

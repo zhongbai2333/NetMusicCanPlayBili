@@ -1,15 +1,17 @@
 package com.zhongbai233.net_music_can_play_bili.tools;
 
 import com.zhongbai233.net_music_can_play_bili.bili.Mp3FrameSync;
-import com.zhongbai233.net_music_can_play_bili.bili.AudioUtils;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadDocument;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeHeaders;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 
 import java.net.URI;
 import java.net.URL;
 import java.net.http.HttpRequest;
 import java.time.Duration;
+import java.util.UUID;
 
 /**
  * Lightweight pure-logic self tests that do not require launching Minecraft.
@@ -27,6 +29,7 @@ public final class PureLogicSelfTest {
         speakerVolumeShrinksAudibleDistance();
         createsNamedDaemonThreads();
         togglesPadDocumentLockWithoutForkingContent();
+        preservesMinecartPlaybackSyncMetadata();
         System.out.println("PureLogicSelfTest passed");
     }
 
@@ -169,6 +172,30 @@ public final class PureLogicSelfTest {
         if (mirroredDraft.locked() || mirroredDraft.sequence() != locked.sequence()
                 || mirroredDraft.updatedAtMillis() != locked.updatedAtMillis()) {
             throw new AssertionError("copyWithLocked should preserve content version while changing item lock state");
+        }
+    }
+
+    private static void preservesMinecartPlaybackSyncMetadata() {
+        UUID minecartUuid = UUID.fromString("12345678-1234-5678-9abc-def012345678");
+        String synced = PlaybackSync.withSync("https://example.invalid/audio.m4a", "session-1", 1_250L, 9_000L);
+        synced = PlaybackSync.withMinecartAnchor(synced, 42, minecartUuid);
+        PlaybackSync.Metadata metadata = PlaybackSync.parse(synced);
+        PlaybackSync.MinecartAnchor anchor = PlaybackSync.parseMinecartAnchor(synced);
+        if (!"session-1".equals(metadata.sessionId()) || metadata.elapsedMillis() != 1_250L
+                || metadata.totalMillis() != 9_000L) {
+            throw new AssertionError("minecart anchor should preserve playback timing metadata");
+        }
+        if (anchor == null || anchor.entityId() != 42 || !minecartUuid.equals(anchor.entityUuid())) {
+            throw new AssertionError("minecart anchor metadata did not round-trip");
+        }
+        String transferred = PlaybackSync.transferSync(synced, "https://cdn.example.invalid/audio.m4a");
+        PlaybackSync.MinecartAnchor transferredAnchor = PlaybackSync.parseMinecartAnchor(transferred);
+        if (transferredAnchor == null || transferredAnchor.entityId() != 42
+                || !minecartUuid.equals(transferredAnchor.entityUuid())) {
+            throw new AssertionError("minecart anchor should survive URL transfer");
+        }
+        if (!"https://cdn.example.invalid/audio.m4a".equals(PlaybackSync.strip(transferred))) {
+            throw new AssertionError("stripping sync metadata should restore the clean target URL");
         }
     }
 

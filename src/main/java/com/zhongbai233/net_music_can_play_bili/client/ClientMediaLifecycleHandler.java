@@ -1,5 +1,7 @@
-package com.zhongbai233.net_music_can_play_bili.bili;
+package com.zhongbai233.net_music_can_play_bili.client;
 
+import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.level.Level;
@@ -12,13 +14,13 @@ import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 
 @EventBusSubscriber(value = Dist.CLIENT)
-public final class DolbyClientTickHandler {
+public final class ClientMediaLifecycleHandler {
     private static final long TICK_FALLBACK_AFTER_NANOS = 250_000_000L;
 
     private static volatile long lastFrameUpdateNanos;
     private static volatile Level lastTrackedLevel;
 
-    private DolbyClientTickHandler() {
+    private ClientMediaLifecycleHandler() {
     }
 
     @SubscribeEvent
@@ -32,7 +34,7 @@ public final class DolbyClientTickHandler {
                 .renderHeldOffscreenGuiFrameStart();
         com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer
                 .renderHeldOffscreenGuiFrameStart();
-        if (!DolbyAudioRegistry.isActive()) {
+        if (!ClientAudioOutputRegistry.isActive()) {
             return;
         }
 
@@ -61,7 +63,7 @@ public final class DolbyClientTickHandler {
         com.zhongbai233.net_music_can_play_bili.client.pad.PadMapClientCache.tick();
         com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer.tickHeldMapLayers();
 
-        if (!DolbyAudioRegistry.isActive()) {
+        if (!ClientAudioOutputRegistry.isActive()) {
             return;
         }
 
@@ -100,7 +102,7 @@ public final class DolbyClientTickHandler {
                 (float) eye.z
         };
 
-        DolbyAudioRegistry.updatePositions(listenerPos);
+        ClientAudioOutputRegistry.updatePositions(listenerPos);
     }
 
     private static void cleanupClientPlayback() {
@@ -120,7 +122,7 @@ public final class DolbyClientTickHandler {
         com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer.releaseAll();
         com.zhongbai233.net_music_can_play_bili.client.MP4AutoResumeClient.reset();
         HttpAudioStreamHandler.closeModernStreams();
-        DolbyAudioRegistry.cleanup();
+        ClientAudioOutputRegistry.cleanup();
         lastTrackedLevel = null;
     }
 }

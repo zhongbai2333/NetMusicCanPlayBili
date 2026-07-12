@@ -1,8 +1,12 @@
-package com.zhongbai233.net_music_can_play_bili.bili;
+package com.zhongbai233.net_music_can_play_bili.client.audio;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
+import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioHandler;
+import com.zhongbai233.net_music_can_play_bili.bili.SpeakerAudioRelay;
+import com.zhongbai233.net_music_can_play_bili.bili.StereoOpenALHandler;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import net.minecraft.core.BlockPos;
@@ -28,7 +32,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.UUID;
 
-public class DolbyAudioRegistry {
+public class ClientAudioOutputRegistry {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_ACTIVE_TURNTABLES = 16;
     private static final long CLEANUP_TIMEOUT_MILLIS = 2_000L;
@@ -37,6 +41,7 @@ public class DolbyAudioRegistry {
     private static final AtomicInteger ANONYMOUS_COUNTER = new AtomicInteger();
     private static final ConcurrentMap<BlockPos, DolbyEntry> DOLBY_HANDLERS = new ConcurrentHashMap<>();
     private static final ConcurrentMap<BlockPos, StereoEntry> STEREO_HANDLERS = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<UUID, BlockPos> MINECART_KEYS = new ConcurrentHashMap<>();
     private static final ConcurrentMap<String, Float> SOURCE_VOLUMES = new ConcurrentHashMap<>();
     private static final ConcurrentMap<UUID, Float> OWNER_VOLUMES = new ConcurrentHashMap<>();
     private static final int MAX_VOLUME_ENTRIES = 5_000;
@@ -84,7 +89,7 @@ public class DolbyAudioRegistry {
         if (handler == null) {
             return;
         }
-        BlockPos key = keyFor(pos, ownerId);
+        BlockPos key = keyFor(pos, ownerId, sessionId);
         String normalizedSessionId = normalizeSessionId(sessionId);
         hardStopIfSessionChanged(key, normalizedSessionId);
         DolbyEntry entry = new DolbyEntry(key, centerFor(pos), handler, System.currentTimeMillis(),
@@ -134,7 +139,7 @@ public class DolbyAudioRegistry {
         if (handler == null) {
             return;
         }
-        BlockPos key = keyFor(pos, ownerId);
+        BlockPos key = keyFor(pos, ownerId, sessionId);
         String normalizedSessionId = normalizeSessionId(sessionId);
         hardStopIfSessionChanged(key, normalizedSessionId);
         StereoEntry entry = new StereoEntry(key, centerFor(pos), handler, System.currentTimeMillis(),
@@ -189,7 +194,7 @@ public class DolbyAudioRegistry {
         }
 
         float[] currentListenerPos = AudioUtils.copyPos3(listenerPos);
-        DolbyAudioRegistry.listenerPos = currentListenerPos;
+        ClientAudioOutputRegistry.listenerPos = currentListenerPos;
         for (DolbyEntry entry : DOLBY_HANDLERS.values()) {
             if (isRealWorldKey(entry.pos())
                     && com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
@@ -205,7 +210,7 @@ public class DolbyAudioRegistry {
                 entry.handler().tick(entry.machinePos(), currentListenerPos, Long.MIN_VALUE, false);
                 continue;
             }
-            float[] pos = resolveMachinePos(entry.pos(), entry.machinePos(), entry.ownerId());
+            float[] pos = resolveMachinePos(entry);
             if (isRealWorldKey(entry.pos())
                     && com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
                             .handlesTurntable(entry.pos())) {
@@ -228,7 +233,7 @@ public class DolbyAudioRegistry {
                 entry.handler().tick(entry.machinePos(), currentListenerPos, Long.MIN_VALUE, false);
                 continue;
             }
-            float[] pos = resolveMachinePos(entry.pos(), entry.machinePos(), entry.ownerId());
+            float[] pos = resolveMachinePos(entry);
             if (isRealWorldKey(entry.pos())
                     && com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
                             .handlesTurntable(entry.pos())) {
@@ -256,6 +261,9 @@ public class DolbyAudioRegistry {
     }
 
     private static long targetRelativeTicks(AudioEntry entry) {
+        if (entry != null && ClientMinecartAudioAnchors.isMoving(entry.sessionId())) {
+            return Long.MAX_VALUE;
+        }
         var mc = net.minecraft.client.Minecraft.getInstance();
         if (mc == null || mc.level == null || entry == null || entry.pos() == null
                 || entry.pos().getX() == Integer.MIN_VALUE) {
@@ -289,6 +297,14 @@ public class DolbyAudioRegistry {
             }
         }
         return originalPos;
+    }
+
+    private static float[] resolveMachinePos(AudioEntry entry) {
+        var movingPos = ClientMinecartAudioAnchors.position(entry.sessionId());
+        if (movingPos != null) {
+            return new float[] { (float) movingPos.x, (float) movingPos.y, (float) movingPos.z };
+        }
+        return resolveMachinePos(entry.pos(), entry.machinePos(), entry.ownerId());
     }
 
     /** 将指定唱片机的音频输出重定向到音响位置 */
@@ -731,6 +747,8 @@ public class DolbyAudioRegistry {
         MACHINE_OVERRIDES.clear();
         fallbackMachinePos = null;
         listenerPos = null;
+        ClientMinecartAudioAnchors.clear();
+        MINECART_KEYS.clear();
         runCleanupTasks(cleanupTasks);
     }
 
@@ -1032,8 +1050,17 @@ public class DolbyAudioRegistry {
         return keyFor((BlockPos) null);
     }
 
+    private static BlockPos keyFor(BlockPos pos, UUID ownerId, String sessionId) {
+        UUID minecartUuid = ClientMinecartAudioAnchors.entityUuid(sessionId);
+        if (minecartUuid != null) {
+            return MINECART_KEYS.computeIfAbsent(minecartUuid, ignored ->
+                    new BlockPos(Integer.MIN_VALUE + 2, 0, ANONYMOUS_COUNTER.getAndIncrement()));
+        }
+        return keyFor(pos, ownerId);
+    }
+
     private static boolean isRealWorldKey(BlockPos pos) {
-        return pos != null && pos.getX() > Integer.MIN_VALUE + 1;
+        return pos != null && pos.getX() > Integer.MIN_VALUE + 2;
     }
 
     private static float[] centerFor(BlockPos pos) {

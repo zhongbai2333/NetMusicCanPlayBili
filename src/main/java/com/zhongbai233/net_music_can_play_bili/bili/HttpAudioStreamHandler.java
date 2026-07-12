@@ -1,5 +1,10 @@
 package com.zhongbai233.net_music_can_play_bili.bili;
 
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientMinecartAudioAnchors;
+
 import com.github.tartaricacid.netmusic.client.api.IAudioStreamHandler;
 import com.github.tartaricacid.netmusic.client.api.implement.DirectHttpHandler;
 import com.github.tartaricacid.netmusic.client.api.implement.NetEaseHttpHandler;
@@ -114,14 +119,16 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         long now = System.currentTimeMillis();
         cleanupAllowedUrls(now);
         PlaybackSync.Metadata sync = PlaybackSync.parse(url);
+        PlaybackSync.MinecartAnchor minecartAnchor = PlaybackSync.parseMinecartAnchor(url);
         PlaybackContext context = new PlaybackContext(
                 AudioUtils.copyPos(pos),
                 now + ALLOWED_URL_TTL_MILLIS,
                 sync.sessionId(),
                 sync.elapsedMillis(),
                 sync.totalMillis(),
-                ownerId);
-        closeStaleModernStreams(context.pos(), context.sessionId());
+                ownerId,
+                minecartAnchor != null ? minecartAnchor.entityUuid() : null);
+            closeStaleModernStreams(context.pos(), context.sessionId(), context.minecartUuid());
         String key = contextKey(url);
         ALLOWED_URLS.compute(key, (ignored, queue) -> {
             PlaybackContextQueue contexts = queue != null ? queue : new PlaybackContextQueue();
@@ -179,7 +186,8 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             if (fallbackSync.hasSession()) {
                 playbackContext = new PlaybackContext(
                         null, 0L, fallbackSync.sessionId(),
-                        fallbackSync.elapsedMillis(), fallbackSync.totalMillis(), null);
+                        fallbackSync.elapsedMillis(), fallbackSync.totalMillis(), null,
+                        ClientMinecartAudioAnchors.entityUuid(fallbackSync.sessionId()));
             }
         }
 
@@ -226,7 +234,8 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         worker.start();
         ActiveStreamControl streamControl = null;
         if (modernTurntable && playbackContext != null) {
-            streamControl = new ActiveStreamControl(url, playbackContext.pos(), playbackContext.sessionId(), closed,
+                streamControl = new ActiveStreamControl(url, playbackContext.pos(), playbackContext.sessionId(),
+                    playbackContext.minecartUuid(), closed,
                     bodyRef, worker, fallbackPipe, pipelineRef, formatReady);
         }
         if (streamControl != null) {
@@ -510,10 +519,10 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         pcm = requireReadablePcm(pcm, "no decoded PCM after HTTP seek");
         StereoOpenALHandler stereo = new StereoOpenALHandler();
         stereo.setSampleRate((int) pcm.getFormat().getSampleRate());
-        DolbyAudioRegistry.registerStereo(stereo, playbackContext.pos(), playbackContext.startOffsetSeconds(),
+        ClientAudioOutputRegistry.registerStereo(stereo, playbackContext.pos(), playbackContext.startOffsetSeconds(),
                 playbackContext.sessionId(), playbackContext.ownerId());
         return new OpenALTappedAudioInputStream(pcm, stereo, () -> {
-            DolbyAudioRegistry.unregisterStereo(stereo);
+            ClientAudioOutputRegistry.unregisterStereo(stereo);
             stereo.cleanup();
         });
     }
@@ -1333,6 +1342,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         private final URL url;
         private final BlockPos pos;
         private final String sessionId;
+        private final UUID minecartUuid;
         private final AtomicBoolean closed;
         private final AtomicReference<InputStream> bodyRef;
         private final Thread worker;
@@ -1340,12 +1350,13 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         private final AtomicReference<AudioDecodePipeline> pipelineRef;
         private final CountDownLatch formatReady;
 
-        private ActiveStreamControl(URL url, BlockPos pos, String sessionId, AtomicBoolean closed,
+        private ActiveStreamControl(URL url, BlockPos pos, String sessionId, UUID minecartUuid, AtomicBoolean closed,
                 AtomicReference<InputStream> bodyRef, Thread worker, BlockingAudioPipe fallbackPipe,
                 AtomicReference<AudioDecodePipeline> pipelineRef, CountDownLatch formatReady) {
             this.url = url;
             this.pos = AudioUtils.copyPos(pos);
             this.sessionId = sessionId != null ? sessionId : "";
+            this.minecartUuid = minecartUuid;
             this.closed = closed;
             this.bodyRef = bodyRef;
             this.worker = worker;
@@ -1368,12 +1379,15 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         }
     }
 
-    private static void closeStaleModernStreams(BlockPos pos, String sessionId) {
-        if (pos == null || sessionId == null || sessionId.isBlank()) {
+    private static void closeStaleModernStreams(BlockPos pos, String sessionId, UUID minecartUuid) {
+        if ((pos == null && minecartUuid == null) || sessionId == null || sessionId.isBlank()) {
             return;
         }
         for (ActiveStreamControl control : ACTIVE_MODERN_STREAMS) {
-            if (control.pos != null && control.pos.equals(pos) && !sessionId.equals(control.sessionId)) {
+            boolean sameSource = minecartUuid != null
+                    ? minecartUuid.equals(control.minecartUuid)
+                    : control.minecartUuid == null && control.pos != null && control.pos.equals(pos);
+            if (sameSource && !sessionId.equals(control.sessionId)) {
                 LOGGER.debug("关闭旧现代音频流: pos={} oldSession={} newSession={}", pos, control.sessionId, sessionId);
                 control.close();
             }
@@ -1424,8 +1438,8 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             long createdAtMillis) {
     }
 
-    private record PlaybackContext(BlockPos pos, long expiresAtMillis, String sessionId, long elapsedMillis,
-            long totalMillis, UUID ownerId) {
+        private record PlaybackContext(BlockPos pos, long expiresAtMillis, String sessionId, long elapsedMillis,
+            long totalMillis, UUID ownerId, UUID minecartUuid) {
         float startOffsetSeconds() {
             return Math.max(0L, elapsedMillis) / 1000.0f;
         }

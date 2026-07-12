@@ -1,0 +1,19 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {
+    "I": "minecraft:iron_ingot",
+    "N": "minecraft:note_block",
+    "P": "#minecraft:planks",
+    "R": "minecraft:redstone"
+  },
+  "pattern": [
+    "PPP",
+    "INI",
+    "PRP"
+  ],
+  "result": {
+    "count": 2,
+    "id": "net_music_can_play_bili:speaker"
+  }
+}

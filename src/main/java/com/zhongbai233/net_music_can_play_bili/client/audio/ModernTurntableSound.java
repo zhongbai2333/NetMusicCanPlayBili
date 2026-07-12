@@ -10,6 +10,7 @@ import com.zhongbai233.net_music_can_play_bili.client.sync.ModernTurntableTimeli
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 
 import java.net.URL;
@@ -19,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 public class ModernTurntableSound extends SyncedMediaSound {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int BLOCK_STATE_GRACE_TICKS = 40;
+    private static final int MINECART_MISSING_GRACE_TICKS = 200;
     private static final long STREAM_RETRY_DELAY_MILLIS = 750L;
 
     /** 客户端全局音量倍率，由 GUI 音量滑块控制。范围 [0, 2]，默认 1.0 */
@@ -29,6 +31,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
     private final String songName;
     private final long totalMillis;
     private boolean sessionFinished;
+    private int minecartMissingTicks;
 
     public ModernTurntableSound(BlockPos pos, URL songUrl, int timeSecond, LyricRecord lyricRecord) {
         this(pos, songUrl, timeSecond, lyricRecord, "", 0L);
@@ -69,6 +72,17 @@ public class ModernTurntableSound extends SyncedMediaSound {
         }
 
         tick++;
+        boolean movingSource = ClientMinecartAudioAnchors.isMoving(sessionId);
+        Vec3 currentMovingPos = ClientMinecartAudioAnchors.currentPosition(sessionId);
+        Vec3 movingPos = currentMovingPos != null ? currentMovingPos : ClientMinecartAudioAnchors.position(sessionId);
+        if (movingPos != null) {
+            this.x = movingPos.x;
+            this.y = movingPos.y;
+            this.z = movingPos.z;
+        }
+        if (movingSource) {
+            minecartMissingTicks = currentMovingPos != null ? 0 : minecartMissingTicks + 1;
+        }
         ModernTurntableBlockEntity turntable = level.getBlockEntity(pos) instanceof ModernTurntableBlockEntity modern
                 ? modern
                 : null;
@@ -82,7 +96,8 @@ public class ModernTurntableSound extends SyncedMediaSound {
         }
 
         if (tick > BLOCK_STATE_GRACE_TICKS) {
-            if (turntable == null || !turntable.isPlaying()) {
+                if (movingSource ? minecartMissingTicks > MINECART_MISSING_GRACE_TICKS
+                    : turntable == null || !turntable.isPlaying()) {
                 stopAndFinish();
                 return;
             }
@@ -142,7 +157,10 @@ public class ModernTurntableSound extends SyncedMediaSound {
             return false;
         }
         ModernTurntableBlockEntity turntable = ModernTurntableTimeline.turntable(pos);
-        if (turntable == null || !turntable.isPlaying() || !ModernTurntablePlaybackTracker.isCurrent(pos, sessionId)) {
+        boolean movingSource = ClientMinecartAudioAnchors.isMoving(sessionId);
+        if ((!movingSource && (turntable == null || !turntable.isPlaying()))
+            || (movingSource && !ClientMinecartAudioAnchors.isMoving(sessionId))
+            || !ModernTurntablePlaybackTracker.isCurrent(pos, sessionId)) {
             return false;
         }
         long delay = STREAM_RETRY_DELAY_MILLIS * Math.max(1L, request.attempt());
@@ -161,10 +179,12 @@ public class ModernTurntableSound extends SyncedMediaSound {
             return;
         }
         ModernTurntableBlockEntity turntable = ModernTurntableTimeline.turntable(pos);
-        if (turntable == null || !turntable.isPlaying()) {
+        boolean movingSource = ClientMinecartAudioAnchors.isMoving(sessionId);
+        if ((!movingSource && (turntable == null || !turntable.isPlaying()))
+            || (movingSource && !ClientMinecartAudioAnchors.isMoving(sessionId))) {
             return;
         }
-        long elapsedMillis = ModernTurntableTimeline.mediaMillis(pos);
+        long elapsedMillis = movingSource ? -1L : ModernTurntableTimeline.mediaMillis(pos);
         if (elapsedMillis < 0L) {
             elapsedMillis = startOffsetMillis + Math.max(0L, tick) * 50L;
         }
@@ -209,6 +229,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
             SyncedStreamRecoveryRegistry.unregister(sessionId);
             ModernTurntablePlaybackDiagnostics.finish(sessionId);
             ModernTurntablePlaybackTracker.finish(pos, sessionId);
+            ClientMinecartAudioAnchors.forget(sessionId);
             VideoBillboardPreview.stopIfSession(sessionId);
             var level = Minecraft.getInstance().level;
             if (level != null && level.getBlockEntity(pos) instanceof ModernTurntableBlockEntity turntable) {

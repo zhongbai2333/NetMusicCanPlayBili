@@ -1,0 +1,19 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {
+    "C": "minecraft:comparator",
+    "I": "minecraft:iron_ingot",
+    "J": "minecraft:jukebox",
+    "P": "#minecraft:planks",
+    "R": "minecraft:redstone"
+  },
+  "pattern": [
+    "PPP",
+    "RJR",
+    "ICI"
+  ],
+  "result": {
+    "id": "net_music_can_play_bili:modern_turntable"
+  }
+}

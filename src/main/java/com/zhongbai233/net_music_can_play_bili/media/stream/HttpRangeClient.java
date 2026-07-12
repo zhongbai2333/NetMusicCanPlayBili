@@ -4,7 +4,7 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliRequestHeaders;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliWbiSigner;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliCdnSelector;
-import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import org.slf4j.Logger;
 
 import java.io.IOException;

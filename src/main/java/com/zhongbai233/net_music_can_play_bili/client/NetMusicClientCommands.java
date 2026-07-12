@@ -7,7 +7,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliConfig;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapClientCache;
 import com.zhongbai233.net_music_can_play_bili.gui.HolographicScreenConfigTestScreen;
 import com.zhongbai233.net_music_can_play_bili.gui.VideoPlaceholderDebugScreen;
@@ -167,7 +167,7 @@ public final class NetMusicClientCommands {
     }
 
     private static int showSourceStatus(CommandContext<CommandSourceStack> ctx) {
-        for (String line : DolbyAudioRegistry.describeActiveSources()) {
+        for (String line : ClientAudioOutputRegistry.describeActiveSources()) {
             feedback(Component.literal(line));
         }
         return 1;

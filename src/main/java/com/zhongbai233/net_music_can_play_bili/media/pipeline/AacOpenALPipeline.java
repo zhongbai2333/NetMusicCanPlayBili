@@ -1,6 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.media.pipeline;
 
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.bili.StereoOpenALHandler;
 import net.minecraft.core.BlockPos;
 
@@ -45,7 +45,7 @@ public final class AacOpenALPipeline extends AbstractAudioPipeline {
         this.stereo = new StereoOpenALHandler();
         this.stereo.setSampleRate((int) decoder.format().getSampleRate());
         this.skipBytesRemaining = skipBytes(decoder.format(), startOffsetSeconds);
-        DolbyAudioRegistry.registerStereo(stereo, sourcePos, timelineStartOffsetSeconds, sessionId, ownerId);
+        ClientAudioOutputRegistry.registerStereo(stereo, sourcePos, timelineStartOffsetSeconds, sessionId, ownerId);
     }
 
     @Override
@@ -81,7 +81,7 @@ public final class AacOpenALPipeline extends AbstractAudioPipeline {
     @Override
     public void close() {
         if (cleaned.compareAndSet(false, true)) {
-            DolbyAudioRegistry.unregisterStereo(stereo);
+            ClientAudioOutputRegistry.unregisterStereo(stereo);
             stereo.cleanup();
         }
     }

@@ -1,6 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
-import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 
 import java.util.UUID;
 
@@ -80,7 +80,8 @@ public final class ClientMediaTimelineView {
         long pacing = started ? snapshot.pacingMillis() : fallback;
         boolean anchored = false;
         if (started) {
-            DolbyAudioRegistry.AudioTimeline audioTimeline = DolbyAudioRegistry.getOwnerAudioTimeline(ownerId);
+            ClientAudioOutputRegistry.AudioTimeline audioTimeline = ClientAudioOutputRegistry
+                    .getOwnerAudioTimeline(ownerId);
             long audibleMillis = matchingAudibleMillis(audioTimeline, expected, total);
             if (audibleMillis >= 0L) {
                 media = audibleMillis;
@@ -150,7 +151,7 @@ public final class ClientMediaTimelineView {
         return Math.max(0L, mediaMillis - Math.max(0L, absoluteStartMillis)) * 1_000_000L;
     }
 
-    private static long matchingAudibleMillis(DolbyAudioRegistry.AudioTimeline audioTimeline, String sessionId,
+    private static long matchingAudibleMillis(ClientAudioOutputRegistry.AudioTimeline audioTimeline, String sessionId,
             long totalMillis) {
         if (audioTimeline == null) {
             return -1L;

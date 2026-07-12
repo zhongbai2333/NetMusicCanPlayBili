@@ -7,7 +7,8 @@ import com.github.tartaricacid.netmusic.network.NetworkHandler;
 import com.github.tartaricacid.netmusic.network.message.MusicToClientMessage;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSongInfoSanitizer;
-import com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.compat.minecartrevolution.MinecartTurntableCompat;
 import com.zhongbai233.net_music_can_play_bili.block.ModernTurntableBlock;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.server.BiliWhitelistManager;
@@ -50,6 +51,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     private static final String ELAPSED_SECONDS_TAG = "ElapsedSeconds";
     private static final String ELAPSED_TICKS_TAG = "ElapsedTicks";
     private static final String OWNER_TAG = "PlaybackOwner";
+    private static final String REPEAT_ONE_TAG = "RepeatOne";
     private static final int SYNC_RANGE = 96;
     private static final int SYNC_INTERVAL_TICKS = 20;
 
@@ -68,6 +70,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     private long lastFullSyncGameTime;
     private boolean needsResolveOnLoad;
     private UUID playbackOwnerId;
+    private boolean repeatOne;
     private transient LyricRecord clientLyricRecord;
     private transient String clientLyricSessionId = "";
     private transient int clientLyricTick = -1;
@@ -165,7 +168,11 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         }
         int remaining = turntable.remainingSeconds(serverLevel.getGameTime());
         if (remaining <= 0) {
-            turntable.stopPlayback();
+            if (turntable.repeatOne && turntable.hasPlaybackData()) {
+                turntable.restartForRepeat(serverLevel);
+            } else {
+                turntable.stopPlayback();
+            }
             return;
         }
         // 每 3 秒全量重同步：覆盖关闭音量后进入范围、重进等边缘情况
@@ -233,6 +240,10 @@ public class ModernTurntableBlockEntity extends BlockEntity {
 
     public boolean isPlaying() {
         return playing;
+    }
+
+    public boolean isRepeatOne() {
+        return repeatOne;
     }
 
     public String getSongName() {
@@ -425,6 +436,21 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         startFromDisc(player);
     }
 
+    public void toggleRepeatOne() {
+        repeatOne = !repeatOne;
+        markDirty();
+    }
+
+    private void restartForRepeat(ServerLevel serverLevel) {
+        startedGameTime = serverLevel.getGameTime();
+        savedElapsedSeconds = 0;
+        savedElapsedTicks = 0L;
+        seekGeneration++;
+        syncedPlayers.clear();
+        markDirty();
+        syncNearbyPlayers(serverLevel, durationSeconds);
+    }
+
     public void pausePlayback(ServerLevel serverLevel) {
         if (!playing) {
             return;
@@ -536,6 +562,11 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         long elapsedMillis = elapsedMillis(serverLevel.getGameTime());
         String syncedPlayUrl = PlaybackSync.withSync(playUrl, playbackSessionId(), elapsedMillis,
                 durationSeconds * 1000L);
+        var hostMinecart = MinecartTurntableCompat.hostMinecart(level);
+        if (hostMinecart != null) {
+            syncedPlayUrl = PlaybackSync.withMinecartAnchor(syncedPlayUrl, hostMinecart.getId(),
+                hostMinecart.getUUID());
+        }
         for (ServerPlayer player : serverLevel.getEntitiesOfClass(ServerPlayer.class, range)) {
             UUID id = player.getUUID();
             nearby.add(id);
@@ -579,7 +610,9 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     }
 
     private String playbackSessionId() {
-        return Long.toString(worldPosition.asLong()) + "-" + Long.toString(startedGameTime)
+        UUID hostUuid = MinecartTurntableCompat.hostUuid(level);
+        String sourceId = hostUuid != null ? "minecart-" + hostUuid : Long.toString(worldPosition.asLong());
+        return sourceId + "-" + Long.toString(startedGameTime)
                 + (seekGeneration > 0 ? "-" + seekGeneration : "");
     }
 
@@ -625,6 +658,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         if (playbackOwnerId != null) {
             output.putString(OWNER_TAG, playbackOwnerId.toString());
         }
+        output.putBoolean(REPEAT_ONE_TAG, repeatOne);
     }
 
     @Override
@@ -641,6 +675,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         savedElapsedSeconds = input.getIntOr(ELAPSED_SECONDS_TAG, 0);
         savedElapsedTicks = input.getLongOr(ELAPSED_TICKS_TAG, (long) savedElapsedSeconds * 20L);
         playbackOwnerId = parseUuid(input.getStringOr(OWNER_TAG, ""));
+        repeatOne = input.getBooleanOr(REPEAT_ONE_TAG, false);
         saveElapsedTicks(savedElapsedTicks);
         syncedPlayers.clear();
         needsResolveOnLoad = playing && durationSeconds > 0 && savedElapsedTicks < (long) durationSeconds * 20L;

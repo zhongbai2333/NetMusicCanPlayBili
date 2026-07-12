@@ -1,13 +1,16 @@
-package com.zhongbai233.net_music_can_play_bili.bili;
+package com.zhongbai233.net_music_can_play_bili.media.sync;
 
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
+import java.util.UUID;
 
 public final class PlaybackSync {
     private static final String SESSION_KEY = "nmb_session=";
     private static final String ELAPSED_MS_KEY = "nmb_elapsed_ms=";
     private static final String TOTAL_MS_KEY = "nmb_total_ms=";
+    private static final String MINECART_ENTITY_KEY = "nmb_minecart_entity=";
+    private static final String MINECART_UUID_KEY = "nmb_minecart_uuid=";
 
     private PlaybackSync() {
     }
@@ -34,8 +37,48 @@ public final class PlaybackSync {
 
     public static String transferSync(String source, String target) {
         Metadata sync = parse(source);
-        return sync.hasSession() ? withSync(target, sync.sessionId(), sync.elapsedMillis(), sync.totalMillis())
-                : target;
+        if (!sync.hasSession()) {
+            return target;
+        }
+        String result = withSync(target, sync.sessionId(), sync.elapsedMillis(), sync.totalMillis());
+        MinecartAnchor anchor = parseMinecartAnchor(source);
+        return anchor != null ? withMinecartAnchor(result, anchor.entityId(), anchor.entityUuid()) : result;
+    }
+
+    public static String withMinecartAnchor(String value, int entityId, UUID entityUuid) {
+        if (value == null || value.isBlank() || entityId < 0 || entityUuid == null) {
+            return value;
+        }
+        String separator = value.indexOf('#') >= 0 ? "&" : "#";
+        return value + separator + MINECART_ENTITY_KEY + entityId + "&" + MINECART_UUID_KEY + entityUuid;
+    }
+
+    public static MinecartAnchor parseMinecartAnchor(String value) {
+        if (value == null) {
+            return null;
+        }
+        int hash = value.indexOf('#');
+        if (hash < 0 || hash == value.length() - 1) {
+            return null;
+        }
+        int entityId = -1;
+        UUID entityUuid = null;
+        for (String part : value.substring(hash + 1).split("&")) {
+            if (part.startsWith(MINECART_ENTITY_KEY)) {
+                try {
+                    entityId = Integer.parseInt(part.substring(MINECART_ENTITY_KEY.length()));
+                } catch (NumberFormatException ignored) {
+                    entityId = -1;
+                }
+            } else if (part.startsWith(MINECART_UUID_KEY)) {
+                try {
+                    entityUuid = UUID.fromString(part.substring(MINECART_UUID_KEY.length()));
+                } catch (IllegalArgumentException ignored) {
+                    entityUuid = null;
+                }
+            }
+        }
+        return entityId >= 0 && entityUuid != null ? new MinecartAnchor(entityId, entityUuid) : null;
     }
 
     public static Metadata parse(String value) {
@@ -79,8 +122,9 @@ public final class PlaybackSync {
         }
         String fragment = value.substring(hash + 1);
         return fragment.contains(SESSION_KEY) || fragment.contains(ELAPSED_MS_KEY) || fragment.contains(TOTAL_MS_KEY)
-                ? value.substring(0, hash)
-                : value;
+                || fragment.contains(MINECART_ENTITY_KEY) || fragment.contains(MINECART_UUID_KEY)
+                        ? value.substring(0, hash)
+                        : value;
     }
 
     public static URL strip(URL url) throws MalformedURLException {
@@ -101,5 +145,8 @@ public final class PlaybackSync {
         public int elapsedSeconds() {
             return (int) Math.min(Integer.MAX_VALUE, elapsedMillis / 1000L);
         }
+    }
+
+    public record MinecartAnchor(int entityId, UUID entityUuid) {
     }
 }

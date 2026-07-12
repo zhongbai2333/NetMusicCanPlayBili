@@ -19,6 +19,8 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.joml.Matrix4f;
+import org.joml.Vector4f;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 
@@ -60,6 +62,7 @@ public class VideoProjectorRenderer
         state.projectionDistanceX = projector.getProjectionDistanceX();
         state.projectionDistanceZ = projector.getProjectionDistanceZ();
         state.frame = VideoBillboardPreview.ProjectorFrameSnapshot.empty();
+        state.sessionId = null;
         state.hideVideoForPrivacy = HolographicGlassesClient.shouldHideProjectorVideos();
         state.visible = false;
         BlockPos linkedPos = projector.getLinkedTurntablePos();
@@ -83,6 +86,7 @@ public class VideoProjectorRenderer
         if (state.visible) {
             VideoBillboardPreview.attachProjectorToTurntable(linkedPos, projector.getBlockPos());
             var sync = turntable.getPlaybackSyncMetadata(level.getGameTime());
+            state.sessionId = sync.hasSession() ? sync.sessionId() : null;
             if (!sync.hasSession() || !VideoBillboardPreview.hasSessionForTurntable(linkedPos, sync.sessionId())) {
                 ModernTurntableVideoClient.syncFromTurntableForProjectorIfPossible(turntable, projector);
             }
@@ -115,13 +119,41 @@ public class VideoProjectorRenderer
                 0.5D + state.projectionDistanceZ);
         poseStack.mulPose(Axis.YP.rotationDegrees(state.projectionYaw));
         poseStack.mulPose(Axis.XP.rotationDegrees(-state.projectionPitch));
+        Matrix4f screenPose = new Matrix4f(poseStack.last().pose());
+
+        if (state.sessionId != null && !state.hideVideoForPrivacy) {
+            VideoBillboardPreview.captureProjectorImmediatePose(state.sessionId, state.projectorPos,
+                screenPose, halfHeight);
+        }
 
         if (state.hideVideoForPrivacy) {
             VideoBillboardPreview.submitProjectorPrivacyOverlayOnPose(collector, poseStack, halfWidth, halfHeight);
         } else {
-            VideoBillboardPreview.submitProjectorFrameOnPose(collector, poseStack, frame, halfWidth, halfHeight);
+            VideoBillboardPreview.submitProjectorFrameOnPose(collector, poseStack, frame, halfWidth, halfHeight,
+                    cameraRelativeBackOffset(screenPose, frame.rgbaDepthOffset()));
         }
         poseStack.popPose();
+    }
+
+    /**
+     * BER 的最终矩阵位于相机相对空间，相机即原点。根据屏幕局部 +Z
+     * 法线朝向相机的情况翻转偏移，使 RGBA 回退底片始终位于视频背后。
+     */
+    private static float cameraRelativeBackOffset(Matrix4f screenPose, float configuredOffset) {
+        float distance = Math.abs(configuredOffset);
+        if (distance <= 0.0F) {
+            return 0.0F;
+        }
+        Vector4f center = new Vector4f(0.0F, 0.0F, 0.0F, 1.0F).mul(screenPose);
+        Vector4f positiveZ = new Vector4f(0.0F, 0.0F, 1.0F, 1.0F).mul(screenPose);
+        float normalX = positiveZ.x - center.x;
+        float normalY = positiveZ.y - center.y;
+        float normalZ = positiveZ.z - center.z;
+        float towardCameraDot = normalX * -center.x + normalY * -center.y + normalZ * -center.z;
+        if (Math.abs(towardCameraDot) < 1.0e-6F) {
+            return configuredOffset;
+        }
+        return towardCameraDot > 0.0F ? -distance : distance;
     }
 
     @Override
@@ -140,7 +172,9 @@ public class VideoProjectorRenderer
 
     private static void syncActivatedState(VideoProjectorBlockEntity projector, boolean visible) {
         var level = projector.getLevel();
-        if (level == null)
+        // MinecartRevolution 的模拟 level 会在 setBlock 时 refreshBlockEntity()。
+        // 若在这里同步 ACTIVATED，会每帧移除并重建矿车内的投影仪 BE，继而停止、重建视频会话。
+        if (level == null || level != Minecraft.getInstance().level)
             return;
         BlockPos pos = projector.getBlockPos();
         BlockState currentState = level.getBlockState(pos);
@@ -171,6 +205,7 @@ public class VideoProjectorRenderer
         public float projectionDistanceX;
         public float projectionDistanceZ;
         public boolean hideVideoForPrivacy;
+        public String sessionId;
         public VideoBillboardPreview.ProjectorFrameSnapshot frame = VideoBillboardPreview.ProjectorFrameSnapshot
                 .empty();
     }

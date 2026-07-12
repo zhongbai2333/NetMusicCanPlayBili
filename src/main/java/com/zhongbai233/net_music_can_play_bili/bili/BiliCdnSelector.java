@@ -246,7 +246,7 @@ public final class BiliCdnSelector {
         long started = System.currentTimeMillis();
         try {
             URL parsed = URI.create(url).toURL();
-            URL requestUrl = com.zhongbai233.net_music_can_play_bili.bili.PlaybackSync.strip(parsed);
+            URL requestUrl = com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync.strip(parsed);
             HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(requestUrl.toString()))
                     .timeout(Duration.ofMillis(RACE_TIMEOUT_MILLIS))
                     .GET()

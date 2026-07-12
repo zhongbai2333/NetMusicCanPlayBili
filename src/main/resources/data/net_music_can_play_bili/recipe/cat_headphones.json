@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "key": {
+    "A": "minecraft:amethyst_shard",
+    "H": "net_music_can_play_bili:invisible_headphones",
+    "W": "#minecraft:wool"
+  },
+  "pattern": [
+    "A A",
+    "WHW"
+  ],
+  "result": {
+    "id": "net_music_can_play_bili:cat_headphones"
+  }
+}
