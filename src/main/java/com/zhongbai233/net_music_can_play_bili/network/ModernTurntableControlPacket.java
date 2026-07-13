@@ -65,10 +65,11 @@ public record ModernTurntableControlPacket(BlockPos pos, Action action, long tar
 
         switch (payload.action()) {
             case REPLAY -> turntable.replayFromBeginning(player);
-            case PAUSE -> turntable.pausePlayback(level);
+            case PAUSE -> turntable.pauseFromControl(level);
             case START -> turntable.resumePlayback(player, payload.targetMillis());
             case SEEK -> turntable.seekTo(level, payload.targetMillis());
             case TOGGLE_REPEAT_ONE -> turntable.toggleRepeatOne();
+            case CYCLE_REDSTONE_MODE -> turntable.cycleRedstoneMode(level);
         }
     }
 
@@ -77,7 +78,8 @@ public record ModernTurntableControlPacket(BlockPos pos, Action action, long tar
         PAUSE,
         START,
         SEEK,
-        TOGGLE_REPEAT_ONE;
+        TOGGLE_REPEAT_ONE,
+        CYCLE_REDSTONE_MODE;
 
         public int id() {
             return ordinal();

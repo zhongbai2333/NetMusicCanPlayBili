@@ -52,6 +52,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     private static final String ELAPSED_TICKS_TAG = "ElapsedTicks";
     private static final String OWNER_TAG = "PlaybackOwner";
     private static final String REPEAT_ONE_TAG = "RepeatOne";
+    private static final String REDSTONE_MODE_TAG = "RedstoneMode";
     private static final int SYNC_RANGE = 96;
     private static final int SYNC_INTERVAL_TICKS = 20;
 
@@ -72,9 +73,11 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     private boolean pendingAutomaticStart;
     private boolean resolvingPlayback;
     private boolean redstonePowered;
+    private boolean redstoneStateInitialized;
     private int lastComparatorOutput = -1;
     private UUID playbackOwnerId;
     private boolean repeatOne;
+    private TurntableRedstoneMode redstoneMode = TurntableRedstoneMode.IGNORE;
     private transient LyricRecord clientLyricRecord;
     private transient String clientLyricSessionId = "";
     private transient int clientLyricTick = -1;
@@ -141,7 +144,9 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         if (turntable.pendingAutomaticStart && turntable.hasDisc() && !turntable.playing
                 && !turntable.resolvingPlayback) {
             turntable.pendingAutomaticStart = false;
-            turntable.startFromDisc();
+            if (turntable.redstoneMode.shouldPlay(turntable.redstonePowered)) {
+                turntable.startFromDisc();
+            }
         }
         // 世界加载后需要重新解析 B站 CDN 直链（旧 URL 可能已过期）
         if (turntable.needsResolveOnLoad && turntable.playing && !turntable.rawUrl.isBlank()) {
@@ -184,6 +189,10 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         if (!(rawUrl.startsWith("BV") || rawUrl.startsWith("bv") || rawUrl.startsWith("av") || rawUrl.startsWith("AV"))
                 || !rawUrl.contains("|p=")) {
             // 非 B站 存储选集的 URL：尝试直接用保存的 URL 恢复
+            if (!redstoneAllowsPlayback(serverLevel)) {
+                resolvingPlayback = false;
+                return;
+            }
             playing = true;
             resolvingPlayback = false;
             startedGameTime = serverLevel.getGameTime() - elapsedTicks;
@@ -203,7 +212,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
                     if (!playing || !Objects.equals(rawUrl, resolved.songUrl != null ? resolved.songUrl : rawUrl)) {
                         String newUrl = playbackUrlForStorage(rawUrl,
                                 resolved.songUrl != null ? resolved.songUrl : playUrl);
-                        if (!newUrl.isBlank()) {
+                        if (!newUrl.isBlank() && redstoneAllowsPlayback(serverLevel)) {
                             playUrl = newUrl;
                             playing = true;
                             resolvingPlayback = false;
@@ -236,6 +245,10 @@ public class ModernTurntableBlockEntity extends BlockEntity {
 
     public boolean isRepeatOne() {
         return repeatOne;
+    }
+
+    public TurntableRedstoneMode getRedstoneMode() {
+        return redstoneMode;
     }
 
     public String getSongName() {
@@ -355,6 +368,9 @@ public class ModernTurntableBlockEntity extends BlockEntity {
             return;
         }
         pendingAutomaticStart = false;
+        if (!redstoneAllowsPlayback(serverLevel)) {
+            return;
+        }
 
         @SuppressWarnings("null")
         ItemMusicCD.SongInfo songInfo = ItemMusicCD.getSongInfo(disc);
@@ -401,6 +417,9 @@ public class ModernTurntableBlockEntity extends BlockEntity {
             stopPlayback();
             return;
         }
+        if (!redstoneAllowsPlayback(serverLevel)) {
+            return;
+        }
 
         rawUrl = original.songUrl != null ? original.songUrl : "";
         playUrl = playbackUrlForStorage(rawUrl, resolved.songUrl != null ? resolved.songUrl : rawUrl);
@@ -418,26 +437,63 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         syncNearbyPlayers(serverLevel, durationSeconds);
     }
 
-    public void handleRedstoneSignal(boolean powered) {
-        boolean risingEdge = powered && !redstonePowered;
-        redstonePowered = powered;
-        if (!risingEdge || !hasDisc() || resolvingPlayback) {
-            return;
-        }
-        if (hasPlaybackData() && level instanceof ServerLevel serverLevel) {
-            if (!playing) {
-                resumePlaybackAutomatically(serverLevel);
-            }
-        } else if (!playing) {
-            startFromDisc();
-        }
-    }
-
     private void pollRedstoneSignal(ServerLevel serverLevel) {
-        handleRedstoneSignal(serverLevel.hasNeighborSignal(worldPosition));
+        boolean powered = serverLevel.hasNeighborSignal(worldPosition);
+        boolean stateChanged = !redstoneStateInitialized || powered != redstonePowered;
+        redstonePowered = powered;
+        redstoneStateInitialized = true;
+        if (stateChanged) {
+            applyRedstoneMode(serverLevel);
+        }
         if (lastComparatorOutput < 0) {
             lastComparatorOutput = getComparatorOutput();
         }
+    }
+
+    private void applyRedstoneMode(ServerLevel serverLevel) {
+        if (!redstoneStateInitialized || redstoneMode == TurntableRedstoneMode.IGNORE || !hasDisc()) {
+            return;
+        }
+        if (redstoneMode.shouldPlay(redstonePowered)) {
+            if (!playing && !resolvingPlayback) {
+                if (hasPlaybackData()) {
+                    resumePlaybackAutomatically(serverLevel);
+                } else {
+                    startFromDisc();
+                }
+            }
+        } else if (playing) {
+            pausePlayback(serverLevel);
+        }
+    }
+
+    public void cycleRedstoneMode(ServerLevel serverLevel) {
+        redstoneMode = redstoneMode.next();
+        redstonePowered = serverLevel.hasNeighborSignal(worldPosition);
+        redstoneStateInitialized = true;
+        if (redstoneMode == TurntableRedstoneMode.IGNORE) {
+            if (hasDisc() && !playing && !resolvingPlayback) {
+                if (hasPlaybackData()) {
+                    resumePlaybackAutomatically(serverLevel);
+                } else {
+                    startFromDisc();
+                }
+            }
+        } else {
+            applyRedstoneMode(serverLevel);
+        }
+        markDirty();
+    }
+
+    public void pauseFromControl(ServerLevel serverLevel) {
+        if (redstoneMode == TurntableRedstoneMode.IGNORE || !redstoneAllowsPlayback(serverLevel)) {
+            pausePlayback(serverLevel);
+        }
+    }
+
+    private boolean redstoneAllowsPlayback(ServerLevel serverLevel) {
+        return redstoneMode == TurntableRedstoneMode.IGNORE
+                || redstoneMode.shouldPlay(serverLevel.hasNeighborSignal(worldPosition));
     }
 
     private void resumePlaybackAutomatically(ServerLevel serverLevel) {
@@ -499,6 +555,9 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         if (!(level instanceof ServerLevel) || disc.isEmpty()) {
             return;
         }
+        if (!redstoneAllowsPlayback((ServerLevel) level)) {
+            return;
+        }
         playing = false;
         startedGameTime = 0L;
         savedElapsedSeconds = 0;
@@ -540,6 +599,9 @@ public class ModernTurntableBlockEntity extends BlockEntity {
 
     public void resumePlayback(ServerPlayer player, long targetMillis) {
         if (!(level instanceof ServerLevel serverLevel) || playing) {
+            return;
+        }
+        if (!redstoneAllowsPlayback(serverLevel)) {
             return;
         }
         if (!hasPlaybackData()) {
@@ -731,6 +793,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
             output.putString(OWNER_TAG, playbackOwnerId.toString());
         }
         output.putBoolean(REPEAT_ONE_TAG, repeatOne);
+        output.putString(REDSTONE_MODE_TAG, redstoneMode.serializedName());
     }
 
     @Override
@@ -748,6 +811,8 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         savedElapsedTicks = input.getLongOr(ELAPSED_TICKS_TAG, (long) savedElapsedSeconds * 20L);
         playbackOwnerId = parseUuid(input.getStringOr(OWNER_TAG, ""));
         repeatOne = input.getBooleanOr(REPEAT_ONE_TAG, false);
+        redstoneMode = TurntableRedstoneMode.byName(input.getStringOr(REDSTONE_MODE_TAG, "ignore"));
+        redstoneStateInitialized = false;
         saveElapsedTicks(savedElapsedTicks);
         syncedPlayers.clear();
         needsResolveOnLoad = playing && durationSeconds > 0 && savedElapsedTicks < (long) durationSeconds * 20L;

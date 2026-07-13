@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.tools;
 
 import com.zhongbai233.net_music_can_play_bili.bili.Mp3FrameSync;
 import com.zhongbai233.net_music_can_play_bili.blockentity.TurntableComparatorSignal;
+import com.zhongbai233.net_music_can_play_bili.blockentity.TurntableRedstoneMode;
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadDocument;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeHeaders;
@@ -32,6 +33,7 @@ public final class PureLogicSelfTest {
         togglesPadDocumentLockWithoutForkingContent();
         preservesMinecartPlaybackSyncMetadata();
         mapsTurntableProgressToComparatorSignal();
+        mapsTurntableRedstoneModes();
         System.out.println("PureLogicSelfTest passed");
     }
 
@@ -216,6 +218,31 @@ public final class PureLogicSelfTest {
         int actual = TurntableComparatorSignal.fromProgress(hasDisc, elapsedMillis, durationMillis);
         if (actual != expected) {
             throw new AssertionError("expected comparator signal " + expected + ", got " + actual);
+        }
+    }
+
+    private static void mapsTurntableRedstoneModes() {
+        if (!TurntableRedstoneMode.HIGH_SIGNAL.shouldPlay(true)
+                || TurntableRedstoneMode.HIGH_SIGNAL.shouldPlay(false)) {
+            throw new AssertionError("high-signal mode should only play while powered");
+        }
+        if (TurntableRedstoneMode.LOW_SIGNAL.shouldPlay(true)
+                || !TurntableRedstoneMode.LOW_SIGNAL.shouldPlay(false)) {
+            throw new AssertionError("low-signal mode should only play while unpowered");
+        }
+        if (!TurntableRedstoneMode.IGNORE.shouldPlay(true)
+                || !TurntableRedstoneMode.IGNORE.shouldPlay(false)) {
+            throw new AssertionError("ignore mode should not block playback at either signal level");
+        }
+        if (TurntableRedstoneMode.IGNORE.next() != TurntableRedstoneMode.HIGH_SIGNAL
+                || TurntableRedstoneMode.HIGH_SIGNAL.next() != TurntableRedstoneMode.LOW_SIGNAL
+                || TurntableRedstoneMode.LOW_SIGNAL.next() != TurntableRedstoneMode.IGNORE) {
+            throw new AssertionError("unexpected turntable redstone mode cycle order");
+        }
+        if (TurntableRedstoneMode.byName("high_signal") != TurntableRedstoneMode.HIGH_SIGNAL
+                || TurntableRedstoneMode.byName("low_signal") != TurntableRedstoneMode.LOW_SIGNAL
+                || TurntableRedstoneMode.byName("unknown") != TurntableRedstoneMode.IGNORE) {
+            throw new AssertionError("turntable redstone mode persistence mapping failed");
         }
     }
 

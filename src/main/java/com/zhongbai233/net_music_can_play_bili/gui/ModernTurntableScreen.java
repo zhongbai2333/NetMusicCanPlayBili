@@ -41,6 +41,7 @@ public class ModernTurntableScreen extends BlackGoldScreen {
     private BlackGoldButton replayButton;
     private BlackGoldButton playPauseButton;
     private BlackGoldButton repeatOneButton;
+    private BlackGoldButton redstoneModeButton;
     private VolumeSlider volumeSlider;
 
     public ModernTurntableScreen(BlockPos pos) {
@@ -84,6 +85,11 @@ public class ModernTurntableScreen extends BlackGoldScreen {
                 bx + PAD + (BTN_W + 6) * 2, controlsY, 68, BTN_H,
                 Component.literal("🔁 单曲"),
                 btn -> sendAction(ModernTurntableControlPacket.Action.TOGGLE_REPEAT_ONE), GOLD));
+
+        redstoneModeButton = addRenderableWidget(new BlackGoldButton(
+                bx + PAD, controlsY - BTN_H - 6, 126, BTN_H,
+                Component.literal("红石：忽略"),
+                btn -> sendAction(ModernTurntableControlPacket.Action.CYCLE_REDSTONE_MODE), GOLD));
 
         volumeSlider = addRenderableWidget(
                 new VolumeSlider(bx + T_BOX_W - PAD - 110, controlsY, 110, BTN_H, blockPos));
@@ -285,6 +291,9 @@ public class ModernTurntableScreen extends BlackGoldScreen {
         if (repeatOneButton != null) {
             repeatOneButton.active = t.hasDisc() || hasPlayback;
             repeatOneButton.setMessage(Component.literal(t.isRepeatOne() ? "🔂 循环中" : "🔁 单曲"));
+        }
+        if (redstoneModeButton != null) {
+            redstoneModeButton.setMessage(Component.literal("红石：" + t.getRedstoneMode().displayName()));
         }
         if (progressSlider != null)
             progressSlider.active = hasPlayback && dur > 0;
