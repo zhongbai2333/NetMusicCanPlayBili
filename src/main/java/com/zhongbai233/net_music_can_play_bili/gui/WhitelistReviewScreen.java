@@ -21,12 +21,16 @@ public class WhitelistReviewScreen extends Screen {
     private static final int ROW_TOP = 48;
     private static final int ROW_HEIGHT = 22;
     private static final int VISIBLE_ROWS = 7;
+    private static final int SCROLLBAR_WIDTH = 5;
+    private static final int SCROLLBAR_MIN_THUMB_HEIGHT = 18;
     private static final int DETAIL_TOP = ROW_TOP + VISIBLE_ROWS * ROW_HEIGHT + 10;
 
     private List<WhitelistReviewPacket.Entry> entries;
     private int selectedIndex;
     private int scrollOffset;
     private boolean closeHovered;
+    private boolean draggingScrollbar;
+    private double scrollbarDragOffsetY;
 
     public WhitelistReviewScreen(WhitelistReviewPacket payload) {
         super(Component.literal("白名单统一审核"));
@@ -60,7 +64,8 @@ public class WhitelistReviewScreen extends Screen {
         if (selectedIndex < 0 && !entries.isEmpty()) {
             selectedIndex = Math.min(scrollOffset, entries.size() - 1);
         }
-        clampScroll();
+        clampScrollOffset();
+        ensureSelectedVisible();
         rebuildButtons();
     }
 
@@ -146,9 +151,25 @@ public class WhitelistReviewScreen extends Screen {
                     bx + BOX_W - 116, y + 6, BlackGoldUi.TEXT_SECONDARY, false);
         }
         if (entries.size() > VISIBLE_ROWS) {
+            drawScrollbar(g, bx, by, mx, my);
             g.text(font, Component.literal((scrollOffset + 1) + "-" + (scrollOffset + rows) + "/" + entries.size()),
                     bx + BOX_W - 76, by + 34, BlackGoldUi.TEXT_DIM, false);
         }
+    }
+
+    private void drawScrollbar(GuiGraphicsExtractor g, int bx, int by, int mx, int my) {
+        int trackX = scrollbarX(bx);
+        int trackY = scrollbarY(by);
+        int trackHeight = scrollbarHeight();
+        int thumbY = scrollbarThumbY(by);
+        int thumbHeight = scrollbarThumbHeight();
+        boolean hovered = mx >= trackX && mx <= trackX + SCROLLBAR_WIDTH
+                && my >= thumbY && my <= thumbY + thumbHeight;
+        g.fillGradient(trackX, trackY, trackX + SCROLLBAR_WIDTH, trackY + trackHeight,
+                0xFF242424, 0xFF242424);
+        int thumbColor = draggingScrollbar || hovered ? BlackGoldUi.GOLD : BlackGoldUi.GOLD_DIM;
+        g.fillGradient(trackX, thumbY, trackX + SCROLLBAR_WIDTH, thumbY + thumbHeight,
+                thumbColor, thumbColor);
     }
 
     private void drawDetails(GuiGraphicsExtractor g, int bx, int by) {
@@ -181,6 +202,18 @@ public class WhitelistReviewScreen extends Screen {
             onClose();
             return true;
         }
+        if (event.button() == 0 && entries.size() > VISIBLE_ROWS && inScrollbar(event.x(), event.y(), bx, by)) {
+            int thumbY = scrollbarThumbY(by);
+            int thumbHeight = scrollbarThumbHeight();
+            if (event.y() < thumbY || event.y() > thumbY + thumbHeight) {
+                scrollbarDragOffsetY = thumbHeight / 2.0D;
+                scrollToScrollbarPosition(event.y(), by);
+            } else {
+                scrollbarDragOffsetY = event.y() - thumbY;
+            }
+            draggingScrollbar = true;
+            return true;
+        }
         int listX = bx + 14;
         int listY = by + ROW_TOP;
         if (event.x() >= listX && event.x() <= listX + BOX_W - 28
@@ -197,13 +230,32 @@ public class WhitelistReviewScreen extends Screen {
     }
 
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (entries.size() <= VISIBLE_ROWS) {
-            return false;
+    public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
+        if (draggingScrollbar && event.button() == 0) {
+            scrollToScrollbarPosition(event.y(), boxY());
+            return true;
         }
+        return super.mouseDragged(event, dragX, dragY);
+    }
+
+    @Override
+    public boolean mouseReleased(MouseButtonEvent event) {
+        if (draggingScrollbar && event.button() == 0) {
+            draggingScrollbar = false;
+            return true;
+        }
+        return super.mouseReleased(event);
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (entries.size() <= VISIBLE_ROWS || scrollY == 0.0D || !inList(mouseX, mouseY)) {
+            return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        }
+        int previousOffset = scrollOffset;
         scrollOffset += scrollY < 0.0D ? 1 : -1;
-        clampScroll();
-        return true;
+        clampScrollOffset();
+        return scrollOffset != previousOffset || super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
     }
 
     private void removeSelected() {
@@ -240,9 +292,12 @@ public class WhitelistReviewScreen extends Screen {
         return -1;
     }
 
-    private void clampScroll() {
+    private void clampScrollOffset() {
         int max = Math.max(0, entries.size() - VISIBLE_ROWS);
         scrollOffset = Math.max(0, Math.min(max, scrollOffset));
+    }
+
+    private void ensureSelectedVisible() {
         if (selectedIndex >= 0) {
             if (selectedIndex < scrollOffset) {
                 scrollOffset = selectedIndex;
@@ -250,6 +305,56 @@ public class WhitelistReviewScreen extends Screen {
                 scrollOffset = Math.max(0, selectedIndex - VISIBLE_ROWS + 1);
             }
         }
+    }
+
+    private void scrollToScrollbarPosition(double mouseY, int by) {
+        int maxScroll = Math.max(0, entries.size() - VISIBLE_ROWS);
+        int travel = scrollbarHeight() - scrollbarThumbHeight();
+        if (maxScroll <= 0 || travel <= 0) {
+            scrollOffset = 0;
+            return;
+        }
+        double thumbTop = mouseY - scrollbarDragOffsetY;
+        double progress = (thumbTop - scrollbarY(by)) / travel;
+        scrollOffset = (int) Math.round(progress * maxScroll);
+        clampScrollOffset();
+    }
+
+    private boolean inList(double mouseX, double mouseY) {
+        int bx = boxX();
+        int by = boxY();
+        return mouseX >= bx + 14 && mouseX <= bx + BOX_W - 14
+                && mouseY >= by + ROW_TOP && mouseY < by + ROW_TOP + VISIBLE_ROWS * ROW_HEIGHT;
+    }
+
+    private boolean inScrollbar(double mouseX, double mouseY, int bx, int by) {
+        int x = scrollbarX(bx);
+        int y = scrollbarY(by);
+        return mouseX >= x && mouseX <= x + SCROLLBAR_WIDTH
+                && mouseY >= y && mouseY <= y + scrollbarHeight();
+    }
+
+    private int scrollbarX(int bx) {
+        return bx + BOX_W - 20;
+    }
+
+    private int scrollbarY(int by) {
+        return by + ROW_TOP;
+    }
+
+    private int scrollbarHeight() {
+        return VISIBLE_ROWS * ROW_HEIGHT - 2;
+    }
+
+    private int scrollbarThumbHeight() {
+        return Math.max(SCROLLBAR_MIN_THUMB_HEIGHT,
+                scrollbarHeight() * VISIBLE_ROWS / Math.max(VISIBLE_ROWS, entries.size()));
+    }
+
+    private int scrollbarThumbY(int by) {
+        int maxScroll = Math.max(0, entries.size() - VISIBLE_ROWS);
+        int travel = scrollbarHeight() - scrollbarThumbHeight();
+        return scrollbarY(by) + (maxScroll == 0 ? 0 : Math.round((float) travel * scrollOffset / maxScroll));
     }
 
     private int boxX() {
