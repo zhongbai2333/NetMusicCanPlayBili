@@ -162,6 +162,18 @@ public class ModernTurntableBlock extends HorizontalDirectionalBlock implements 
         return InteractionResult.PASS;
     }
 
+    @Override
+    protected boolean hasAnalogOutputSignal(BlockState state) {
+        return true;
+    }
+
+    @Override
+    protected int getAnalogOutputSignal(BlockState state, Level level, BlockPos pos, Direction direction) {
+        return level.getBlockEntity(pos) instanceof ModernTurntableBlockEntity turntable
+                ? turntable.getComparatorOutput()
+                : 0;
+    }
+
     private static void openClientScreen(BlockPos pos) {
         ModernTurntableClientHooks.openModernTurntableScreen(pos);
     }

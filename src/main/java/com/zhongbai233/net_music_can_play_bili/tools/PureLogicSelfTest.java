@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.tools;
 
 import com.zhongbai233.net_music_can_play_bili.bili.Mp3FrameSync;
+import com.zhongbai233.net_music_can_play_bili.blockentity.TurntableComparatorSignal;
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadDocument;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeHeaders;
@@ -30,6 +31,7 @@ public final class PureLogicSelfTest {
         createsNamedDaemonThreads();
         togglesPadDocumentLockWithoutForkingContent();
         preservesMinecartPlaybackSyncMetadata();
+        mapsTurntableProgressToComparatorSignal();
         System.out.println("PureLogicSelfTest passed");
     }
 
@@ -196,6 +198,24 @@ public final class PureLogicSelfTest {
         }
         if (!"https://cdn.example.invalid/audio.m4a".equals(PlaybackSync.strip(transferred))) {
             throw new AssertionError("stripping sync metadata should restore the clean target URL");
+        }
+    }
+
+    private static void mapsTurntableProgressToComparatorSignal() {
+        assertComparatorSignal(0, false, 0L, 60_000L);
+        assertComparatorSignal(0, true, 0L, 0L);
+        assertComparatorSignal(1, true, 0L, 60_000L);
+        assertComparatorSignal(8, true, 30_000L, 60_000L);
+        assertComparatorSignal(15, true, 60_000L, 60_000L);
+        assertComparatorSignal(15, true, 90_000L, 60_000L);
+        assertComparatorSignal(1, true, -1_000L, 60_000L);
+    }
+
+    private static void assertComparatorSignal(int expected, boolean hasDisc, long elapsedMillis,
+            long durationMillis) {
+        int actual = TurntableComparatorSignal.fromProgress(hasDisc, elapsedMillis, durationMillis);
+        if (actual != expected) {
+            throw new AssertionError("expected comparator signal " + expected + ", got " + actual);
         }
     }
 
