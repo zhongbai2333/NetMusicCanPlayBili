@@ -14,6 +14,7 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEn
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.client.VideoFeatureFlags;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.ProjectorScreenBounds;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.RenderVertexUtils;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
@@ -1824,7 +1825,9 @@ public final class VideoBillboardPreview {
             double dx = anchorX - cameraPos.x;
             double dy = anchorY - cameraPos.y;
             double dz = anchorZ - cameraPos.z;
-            if (dx * dx + dy * dy + dz * dz > MAX_RENDER_DISTANCE_SQR) {
+            if (projector != null
+                    ? !isProjectorWithinRenderDistance(cameraPos, projector, anchorX, anchorY, anchorZ, aspect)
+                    : dx * dx + dy * dy + dz * dz > MAX_RENDER_DISTANCE_SQR) {
                 return;
             }
 
@@ -2180,7 +2183,9 @@ public final class VideoBillboardPreview {
             double dx = anchorX - cameraPos.x;
             double dy = anchorY - cameraPos.y;
             double dz = anchorZ - cameraPos.z;
-            if (dx * dx + dy * dy + dz * dz > MAX_RENDER_DISTANCE_SQR) {
+            if (projector != null
+                    ? !isProjectorWithinRenderDistance(cameraPos, projector, anchorX, anchorY, anchorZ, aspect)
+                    : dx * dx + dy * dy + dz * dz > MAX_RENDER_DISTANCE_SQR) {
                 return null;
             }
 
@@ -2355,15 +2360,12 @@ public final class VideoBillboardPreview {
             return;
         }
         Vec3 cameraPos = camera.position();
+        if (!isProjectorWithinRenderDistance(cameraPos, projector, anchorX, anchorY, anchorZ, aspect)) {
+            return;
+        }
         double dx = anchorX - cameraPos.x;
         double dy = anchorY - cameraPos.y;
         double dz = anchorZ - cameraPos.z;
-        if (dx * dx + dy * dy + dz * dz > MAX_RENDER_DISTANCE_SQR) {
-            return;
-        }
-        if (!isScreenInView(camera, anchorX, anchorY, anchorZ)) {
-            return;
-        }
 
         double yawRad = Math.toRadians(anchorYawDeg);
         double pitchRad = Math.toRadians(projector.getProjectionPitch());
@@ -2632,13 +2634,7 @@ public final class VideoBillboardPreview {
             return;
         }
         Vec3 cameraPos = camera.position();
-        double dx = anchorX - cameraPos.x;
-        double dy = anchorY - cameraPos.y;
-        double dz = anchorZ - cameraPos.z;
-        if (dx * dx + dy * dy + dz * dz > MAX_RENDER_DISTANCE_SQR) {
-            return;
-        }
-        if (!isScreenInView(camera, anchorX, anchorY, anchorZ)) {
+        if (!isProjectorWithinRenderDistance(cameraPos, projector, anchorX, anchorY, anchorZ, aspect)) {
             return;
         }
 
@@ -2869,10 +2865,7 @@ public final class VideoBillboardPreview {
         double centerY = pos.getY() + projector.getProjectionHeight();
         double centerZ = pos.getZ() + 0.5D + projector.getProjectionDistanceZ();
         Vec3 cameraPos = camera.position();
-        double dx = centerX - cameraPos.x;
-        double dy = centerY - cameraPos.y;
-        double dz = centerZ - cameraPos.z;
-        if (dx * dx + dy * dy + dz * dz > MAX_RENDER_DISTANCE_SQR) {
+        if (!isProjectorWithinRenderDistance(cameraPos, projector, centerX, centerY, centerZ, 16.0D / 9.0D)) {
             return false;
         }
         for (Vec3 sample : projectorVisibilitySamples(projector, centerX, centerY, centerZ)) {
@@ -2882,6 +2875,14 @@ public final class VideoBillboardPreview {
             }
         }
         return false;
+    }
+
+    private static boolean isProjectorWithinRenderDistance(Vec3 cameraPos, VideoProjectorBlockEntity projector,
+            double centerX, double centerY, double centerZ, double aspect) {
+        var bounds = ProjectorScreenBounds.aroundCenter(centerX, centerY, centerZ,
+                projector.getProjectionYaw(), projector.getProjectionPitch(),
+                projector.getProjectionScale(), aspect, 0.0D);
+        return ProjectorScreenBounds.distanceToSqr(bounds, cameraPos) <= MAX_RENDER_DISTANCE_SQR;
     }
 
     private static List<Vec3> projectorVisibilitySamples(VideoProjectorBlockEntity projector,
@@ -2928,10 +2929,6 @@ public final class VideoBillboardPreview {
 
     static double viewDotThreshold() {
         return VIEW_DOT_THRESHOLD;
-    }
-
-    private static boolean isScreenInView(Camera camera, double centerX, double centerY, double centerZ) {
-        return isScreenInView(camera, centerX, centerY, centerZ, VIEW_DOT_THRESHOLD);
     }
 
     private static boolean isScreenInView(Camera camera, double centerX, double centerY, double centerZ,

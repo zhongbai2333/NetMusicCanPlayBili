@@ -70,6 +70,12 @@ public record ModernTurntableControlPacket(BlockPos pos, Action action, long tar
             case SEEK -> turntable.seekTo(level, payload.targetMillis());
             case TOGGLE_REPEAT_ONE -> turntable.toggleRepeatOne();
             case CYCLE_REDSTONE_MODE -> turntable.cycleRedstoneMode(level);
+            case CYCLE_EXTRACTION_MODE -> turntable.cycleExtractionMode();
+            case SET_VOLUME -> {
+                if (player.mayBuild()) {
+                    turntable.setVolumePerMille((int) Math.max(0L, Math.min(1000L, payload.targetMillis())));
+                }
+            }
         }
     }
 
@@ -79,7 +85,9 @@ public record ModernTurntableControlPacket(BlockPos pos, Action action, long tar
         START,
         SEEK,
         TOGGLE_REPEAT_ONE,
-        CYCLE_REDSTONE_MODE;
+        CYCLE_REDSTONE_MODE,
+        CYCLE_EXTRACTION_MODE,
+        SET_VOLUME;
 
         public int id() {
             return ordinal();

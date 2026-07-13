@@ -4,6 +4,7 @@ package com.zhongbai233.net_music_can_play_bili.blockentity;
 public enum TurntableRedstoneMode {
     HIGH_SIGNAL("high_signal", "高信号"),
     LOW_SIGNAL("low_signal", "低信号"),
+    PULSE_TOGGLE("pulse_toggle", "脉冲切换"),
     IGNORE("ignore", "忽略红石");
 
     private final String serializedName;
@@ -26,6 +27,7 @@ public enum TurntableRedstoneMode {
         return switch (this) {
             case HIGH_SIGNAL -> powered;
             case LOW_SIGNAL -> !powered;
+            case PULSE_TOGGLE -> true;
             case IGNORE -> true;
         };
     }
@@ -33,7 +35,8 @@ public enum TurntableRedstoneMode {
     public TurntableRedstoneMode next() {
         return switch (this) {
             case HIGH_SIGNAL -> LOW_SIGNAL;
-            case LOW_SIGNAL -> IGNORE;
+            case LOW_SIGNAL -> PULSE_TOGGLE;
+            case PULSE_TOGGLE -> IGNORE;
             case IGNORE -> HIGH_SIGNAL;
         };
     }

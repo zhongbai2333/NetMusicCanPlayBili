@@ -3,7 +3,6 @@ package com.zhongbai233.net_music_can_play_bili.gui;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
-import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntableSound;
 import com.zhongbai233.net_music_can_play_bili.network.ModernTurntableControlPacket;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -42,6 +41,7 @@ public class ModernTurntableScreen extends BlackGoldScreen {
     private BlackGoldButton playPauseButton;
     private BlackGoldButton repeatOneButton;
     private BlackGoldButton redstoneModeButton;
+    private BlackGoldButton extractionModeButton;
     private VolumeSlider volumeSlider;
 
     public ModernTurntableScreen(BlockPos pos) {
@@ -91,8 +91,13 @@ public class ModernTurntableScreen extends BlackGoldScreen {
                 Component.literal("红石：忽略"),
                 btn -> sendAction(ModernTurntableControlPacket.Action.CYCLE_REDSTONE_MODE), GOLD));
 
+        extractionModeButton = addRenderableWidget(new BlackGoldButton(
+            bx + T_BOX_W - PAD - 126, controlsY - BTN_H - 6, 126, BTN_H,
+            Component.literal("提取：播完提取"),
+            btn -> sendAction(ModernTurntableControlPacket.Action.CYCLE_EXTRACTION_MODE), GOLD));
+
         volumeSlider = addRenderableWidget(
-                new VolumeSlider(bx + T_BOX_W - PAD - 110, controlsY, 110, BTN_H, blockPos));
+            new VolumeSlider(bx + T_BOX_W - PAD - 110, controlsY, 110, BTN_H));
 
         refreshWidgets();
     }
@@ -295,6 +300,16 @@ public class ModernTurntableScreen extends BlackGoldScreen {
         if (redstoneModeButton != null) {
             redstoneModeButton.setMessage(Component.literal("红石：" + t.getRedstoneMode().displayName()));
         }
+        if (extractionModeButton != null) {
+            extractionModeButton.setMessage(Component.literal("提取：" + t.getExtractionMode().displayName()));
+        }
+        if (volumeSlider != null) {
+            if (!volumeSlider.isUserDragging()) {
+                volumeSlider.setGain(t.getVolume());
+            }
+            Minecraft mc = Minecraft.getInstance();
+            volumeSlider.active = mc.player != null && mc.player.mayBuild();
+        }
         if (progressSlider != null)
             progressSlider.active = hasPlayback && dur > 0;
     }
@@ -418,17 +433,38 @@ public class ModernTurntableScreen extends BlackGoldScreen {
     // ==================== 内部控件类 ====================
 
     private final class VolumeSlider extends AbstractSliderButton {
-        VolumeSlider(int x, int y, int w, int h, BlockPos sourcePos) {
-            super(x, y, w, h, Component.literal(""),
-                    gainToSlider(ClientAudioOutputRegistry.userVolume(sourcePos)));
+        private boolean userDragging;
+
+        VolumeSlider(int x, int y, int w, int h) {
+            super(x, y, w, h, Component.literal(""), 1.0D);
+            updateMessage();
+        }
+
+        boolean isUserDragging() {
+            return userDragging;
+        }
+
+        void setGain(float gain) {
+            this.value = gainToSlider(gain);
             updateMessage();
         }
 
         @Override
+        public void onClick(MouseButtonEvent event, boolean cancelled) {
+            userDragging = true;
+            super.onClick(event, cancelled);
+        }
+
+        @Override
+        public void onRelease(MouseButtonEvent event) {
+            super.onRelease(event);
+            userDragging = false;
+            send(ModernTurntableControlPacket.Action.SET_VOLUME,
+                    Math.round(sliderToGain((float) value) * 1000.0F));
+        }
+
+        @Override
         protected void updateMessage() {
-            float gain = sliderToGain((float) this.value);
-            ModernTurntableSound.clientVolume = gain;
-            ClientAudioOutputRegistry.setUserVolume(blockPos, gain);
             setMessage(Component.literal((int) (this.value * 100) + "%"));
         }
 

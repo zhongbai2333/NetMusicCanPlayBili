@@ -1,7 +1,5 @@
 package com.zhongbai233.net_music_can_play_bili.client.audio;
 
-import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioHandler;
@@ -12,22 +10,12 @@ import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFac
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
 
-import java.io.IOException;
-import java.io.Reader;
-import java.io.Writer;
-import java.lang.reflect.Type;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.UUID;
@@ -42,22 +30,7 @@ public class ClientAudioOutputRegistry {
     private static final ConcurrentMap<BlockPos, DolbyEntry> DOLBY_HANDLERS = new ConcurrentHashMap<>();
     private static final ConcurrentMap<BlockPos, StereoEntry> STEREO_HANDLERS = new ConcurrentHashMap<>();
     private static final ConcurrentMap<UUID, BlockPos> MINECART_KEYS = new ConcurrentHashMap<>();
-    private static final ConcurrentMap<String, Float> SOURCE_VOLUMES = new ConcurrentHashMap<>();
     private static final ConcurrentMap<UUID, Float> OWNER_VOLUMES = new ConcurrentHashMap<>();
-    private static final int MAX_VOLUME_ENTRIES = 5_000;
-
-    private static final Gson GSON = new Gson();
-    private static final Type VOLUME_MAP_TYPE = new TypeToken<Map<String, Float>>() {
-    }.getType();
-    /** 音量持久化 debounce 专用，单线程复用，避免每次新建线程 */
-    private static final ScheduledExecutorService VOLUME_SAVE_EXECUTOR = Executors
-            .newSingleThreadScheduledExecutor(NetMusicThreadFactory.daemon("VolumeSaveDebounce"));
-    private static volatile long lastSaveMillis;
-    private static volatile boolean pendingSave;
-
-    static {
-        loadVolumes();
-    }
 
     private static final ConcurrentMap<BlockPos, BlockPos> MACHINE_OVERRIDES = new ConcurrentHashMap<>();
     /** 音响 relay 注册表：speakerPos → relay */
@@ -94,7 +67,7 @@ public class ClientAudioOutputRegistry {
         hardStopIfSessionChanged(key, normalizedSessionId);
         DolbyEntry entry = new DolbyEntry(key, centerFor(pos), handler, System.currentTimeMillis(),
                 startOffsetTicks(startOffsetSeconds), normalizedSessionId, ownerId);
-        handler.setUserVolume(ownerId != null ? OWNER_VOLUMES.getOrDefault(ownerId, 1.0F) : volumeFor(key));
+        handler.setUserVolume(ownerId != null ? OWNER_VOLUMES.getOrDefault(ownerId, 1.0F) : turntableVolume(key));
         closeStereoAt(key);
         DolbyEntry old = DOLBY_HANDLERS.put(key, entry);
         if (old != null) {
@@ -144,7 +117,7 @@ public class ClientAudioOutputRegistry {
         hardStopIfSessionChanged(key, normalizedSessionId);
         StereoEntry entry = new StereoEntry(key, centerFor(pos), handler, System.currentTimeMillis(),
                 startOffsetTicks(startOffsetSeconds), normalizedSessionId, ownerId);
-        handler.setUserVolume(ownerId != null ? OWNER_VOLUMES.getOrDefault(ownerId, 1.0F) : volumeFor(key));
+        handler.setUserVolume(ownerId != null ? OWNER_VOLUMES.getOrDefault(ownerId, 1.0F) : turntableVolume(key));
         closeDolbyAt(key);
         StereoEntry old = STEREO_HANDLERS.put(key, entry);
         if (old != null) {
@@ -196,6 +169,9 @@ public class ClientAudioOutputRegistry {
         float[] currentListenerPos = AudioUtils.copyPos3(listenerPos);
         ClientAudioOutputRegistry.listenerPos = currentListenerPos;
         for (DolbyEntry entry : DOLBY_HANDLERS.values()) {
+            if (entry.ownerId() == null) {
+                entry.handler().setUserVolume(turntableVolume(entry.pos()));
+            }
             if (isRealWorldKey(entry.pos())
                     && com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
                             .linkedTurntableOutOfRange(entry.pos())) {
@@ -219,6 +195,9 @@ public class ClientAudioOutputRegistry {
             entry.handler().tick(pos, currentListenerPos, targetRelativeTicks(entry), followsLocalPlayerFront(entry));
         }
         for (StereoEntry entry : STEREO_HANDLERS.values()) {
+            if (entry.ownerId() == null) {
+                entry.handler().setUserVolume(turntableVolume(entry.pos()));
+            }
             if (isRealWorldKey(entry.pos())
                     && com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
                             .linkedTurntableOutOfRange(entry.pos())) {
@@ -423,29 +402,6 @@ public class ClientAudioOutputRegistry {
         return !DOLBY_HANDLERS.isEmpty() || !STEREO_HANDLERS.isEmpty();
     }
 
-    public static void setUserVolume(BlockPos pos, float volume) {
-        if (pos == null) {
-            return;
-        }
-        BlockPos key = keyFor(pos);
-        float clamped = AudioUtils.clampGain(volume);
-        String volumeKey = volumeKeyFor(key);
-        if (volumeKey == null) {
-            return;
-        }
-        SOURCE_VOLUMES.put(volumeKey, clamped);
-        evictVolumesIfNeeded();
-        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
-        if (dolby != null) {
-            dolby.handler().setUserVolume(clamped);
-        }
-        StereoEntry stereo = STEREO_HANDLERS.get(key);
-        if (stereo != null) {
-            stereo.handler().setUserVolume(clamped);
-        }
-        saveVolumesDebounced();
-    }
-
     public static void setOwnerVolume(UUID ownerId, float volume) {
         if (ownerId == null) {
             return;
@@ -462,13 +418,6 @@ public class ClientAudioOutputRegistry {
                 stereo.handler().setUserVolume(clamped);
             }
         }
-    }
-
-    public static float userVolume(BlockPos pos) {
-        if (pos == null) {
-            return 1.0f;
-        }
-        return volumeFor(keyFor(pos));
     }
 
     public static float audioLevel(BlockPos pos) {
@@ -885,151 +834,16 @@ public class ClientAudioOutputRegistry {
         return null;
     }
 
-    private static float volumeFor(BlockPos key) {
-        String volumeKey = volumeKeyFor(key);
-        if (volumeKey == null) {
-            return 1.0f;
+    private static float turntableVolume(BlockPos pos) {
+        if (!isRealWorldKey(pos)) {
+            return 1.0F;
         }
-        return SOURCE_VOLUMES.getOrDefault(volumeKey, 1.0f);
-    }
-
-    // ---- 音量持久化 ----
-
-    private static Path volumeFilePath() {
-        return Paths.get("config", "net_music_can_play_bili", "turntable_volumes.json");
-    }
-
-    private static void loadVolumes() {
-        Path file = volumeFilePath();
-        if (!Files.exists(file)) {
-            return;
-        }
-        try (Reader reader = Files.newBufferedReader(file)) {
-            Map<String, Float> saved = GSON.fromJson(reader, VOLUME_MAP_TYPE);
-            if (saved != null) {
-                for (var entry : saved.entrySet()) {
-                    String key = entry.getKey();
-                    float value = AudioUtils.clampGain(entry.getValue());
-                    if (isScopedVolumeKey(key)) {
-                        SOURCE_VOLUMES.put(key, value);
-                    }
-                }
-                LOGGER.debug("加载已保存的唱片机音量: {} 个位置", SOURCE_VOLUMES.size());
-            }
-        } catch (IOException e) {
-            LOGGER.warn("读取唱片机音量文件失败: {}", e.toString());
-        }
-    }
-
-    private static void saveVolumesDebounced() {
-        long now = System.currentTimeMillis();
-        lastSaveMillis = now;
-        if (pendingSave) {
-            return;
-        }
-        pendingSave = true;
-        VOLUME_SAVE_EXECUTOR.schedule(() -> {
-            // 如果 1.5s 内又有新写入，跳过本次（下次写入会触发新的 schedule）
-            if (System.currentTimeMillis() - lastSaveMillis < 1400) {
-                pendingSave = false;
-                return;
-            }
-            saveVolumesNow();
-            pendingSave = false;
-        }, 1500, TimeUnit.MILLISECONDS);
-    }
-
-    private static void saveVolumesNow() {
-        if (SOURCE_VOLUMES.isEmpty()) {
-            return;
-        }
-        Map<String, Float> data = new HashMap<>();
-        for (var entry : SOURCE_VOLUMES.entrySet()) {
-            data.put(entry.getKey(), entry.getValue());
-        }
-        if (data.isEmpty()) {
-            return;
-        }
-        Path file = volumeFilePath();
-        try {
-            Files.createDirectories(file.getParent());
-            try (Writer writer = Files.newBufferedWriter(file)) {
-                GSON.toJson(data, writer);
-            }
-        } catch (IOException e) {
-            LOGGER.warn("保存唱片机音量文件失败: {}", e.toString());
-        }
-    }
-
-    private static boolean isScopedVolumeKey(String key) {
-        return key != null && key.contains("|") && key.indexOf('|') != key.lastIndexOf('|');
-    }
-
-    private static String volumeKeyFor(BlockPos pos) {
-        if (pos == null || pos.getX() == Integer.MIN_VALUE) {
-            return null;
-        }
-        return currentWorldScope() + "|" + currentDimensionKey() + "|"
-                + pos.getX() + "," + pos.getY() + "," + pos.getZ();
-    }
-
-    private static String currentDimensionKey() {
         var mc = net.minecraft.client.Minecraft.getInstance();
-        if (mc != null && mc.level != null) {
-            try {
-                return mc.level.dimension().toString();
-            } catch (Exception ignored) {
-            }
+        if (mc != null && mc.level != null
+                && mc.level.getBlockEntity(pos) instanceof ModernTurntableBlockEntity turntable) {
+            return turntable.getVolume();
         }
-        return "unknown_dimension";
-    }
-
-    private static String currentWorldScope() {
-        var mc = net.minecraft.client.Minecraft.getInstance();
-        if (mc == null) {
-            return "unknown_world";
-        }
-
-        if (mc.getCurrentServer() != null) {
-            String ip = mc.getCurrentServer().ip;
-            return "server:" + sanitizeScope(!isBlank(ip) ? ip : mc.getCurrentServer().name);
-        }
-
-        if (mc.getSingleplayerServer() != null) {
-            String levelName = mc.getSingleplayerServer().getWorldData().getLevelName();
-            return "singleplayer:" + sanitizeScope(levelName);
-        }
-
-        return "unknown_world";
-    }
-
-    private static boolean isBlank(String value) {
-        return value == null || value.isBlank();
-    }
-
-    private static String sanitizeScope(String value) {
-        if (value == null || value.isBlank()) {
-            return "unknown";
-        }
-        return value.replace('\\', '/').replace('|', '_').trim();
-    }
-
-    private static void evictVolumesIfNeeded() {
-        if (SOURCE_VOLUMES.size() <= MAX_VOLUME_ENTRIES) {
-            return;
-        }
-        // 驱逐最旧的一半条目
-        int target = MAX_VOLUME_ENTRIES / 2;
-        var iter = SOURCE_VOLUMES.entrySet().iterator();
-        int removed = 0;
-        while (iter.hasNext() && SOURCE_VOLUMES.size() > target) {
-            iter.next();
-            iter.remove();
-            removed++;
-        }
-        if (removed > 0) {
-            LOGGER.debug("音量表驱逐 {} 条旧记录", removed);
-        }
+        return 1.0F;
     }
 
     private static BlockPos keyFor(BlockPos pos) {

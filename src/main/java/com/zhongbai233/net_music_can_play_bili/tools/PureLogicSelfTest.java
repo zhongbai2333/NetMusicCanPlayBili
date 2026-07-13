@@ -2,7 +2,9 @@ package com.zhongbai233.net_music_can_play_bili.tools;
 
 import com.zhongbai233.net_music_can_play_bili.bili.Mp3FrameSync;
 import com.zhongbai233.net_music_can_play_bili.blockentity.TurntableComparatorSignal;
+import com.zhongbai233.net_music_can_play_bili.blockentity.TurntableExtractionMode;
 import com.zhongbai233.net_music_can_play_bili.blockentity.TurntableRedstoneMode;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.ProjectorScreenBounds;
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadDocument;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeHeaders;
@@ -14,6 +16,10 @@ import java.net.URL;
 import java.net.http.HttpRequest;
 import java.time.Duration;
 import java.util.UUID;
+
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Lightweight pure-logic self tests that do not require launching Minecraft.
@@ -34,6 +40,8 @@ public final class PureLogicSelfTest {
         preservesMinecartPlaybackSyncMetadata();
         mapsTurntableProgressToComparatorSignal();
         mapsTurntableRedstoneModes();
+        mapsTurntableExtractionModes();
+        coversMovedAndOversizedProjectorScreens();
         System.out.println("PureLogicSelfTest passed");
     }
 
@@ -234,15 +242,71 @@ public final class PureLogicSelfTest {
                 || !TurntableRedstoneMode.IGNORE.shouldPlay(false)) {
             throw new AssertionError("ignore mode should not block playback at either signal level");
         }
+        if (!TurntableRedstoneMode.PULSE_TOGGLE.shouldPlay(true)
+                || !TurntableRedstoneMode.PULSE_TOGGLE.shouldPlay(false)) {
+            throw new AssertionError("pulse mode playback is latched and must not depend on signal duration");
+        }
         if (TurntableRedstoneMode.IGNORE.next() != TurntableRedstoneMode.HIGH_SIGNAL
                 || TurntableRedstoneMode.HIGH_SIGNAL.next() != TurntableRedstoneMode.LOW_SIGNAL
-                || TurntableRedstoneMode.LOW_SIGNAL.next() != TurntableRedstoneMode.IGNORE) {
+                || TurntableRedstoneMode.LOW_SIGNAL.next() != TurntableRedstoneMode.PULSE_TOGGLE
+                || TurntableRedstoneMode.PULSE_TOGGLE.next() != TurntableRedstoneMode.IGNORE) {
             throw new AssertionError("unexpected turntable redstone mode cycle order");
         }
         if (TurntableRedstoneMode.byName("high_signal") != TurntableRedstoneMode.HIGH_SIGNAL
                 || TurntableRedstoneMode.byName("low_signal") != TurntableRedstoneMode.LOW_SIGNAL
+                || TurntableRedstoneMode.byName("pulse_toggle") != TurntableRedstoneMode.PULSE_TOGGLE
                 || TurntableRedstoneMode.byName("unknown") != TurntableRedstoneMode.IGNORE) {
             throw new AssertionError("turntable redstone mode persistence mapping failed");
+        }
+    }
+
+    private static void mapsTurntableExtractionModes() {
+        if (TurntableExtractionMode.AFTER_PLAYBACK.next() != TurntableExtractionMode.ALWAYS
+                || TurntableExtractionMode.ALWAYS.next() != TurntableExtractionMode.AFTER_PLAYBACK) {
+            throw new AssertionError("unexpected turntable extraction mode cycle order");
+        }
+        if (TurntableExtractionMode.byName("after_playback") != TurntableExtractionMode.AFTER_PLAYBACK
+                || TurntableExtractionMode.byName("always") != TurntableExtractionMode.ALWAYS
+                || TurntableExtractionMode.byName("unknown") != TurntableExtractionMode.AFTER_PLAYBACK) {
+            throw new AssertionError("turntable extraction mode persistence mapping failed");
+        }
+    }
+
+    private static void coversMovedAndOversizedProjectorScreens() {
+        BlockPos projector = new BlockPos(70, 10, 20);
+        AABB wide = ProjectorScreenBounds.aroundBlock(projector,
+                5.0D, 3.0D, -4.0D, 0.0D, 0.0D, 3.0D, 8.0D, 0.0D);
+        double centerX = projector.getX() + 5.5D;
+        double centerY = projector.getY() + 3.0D;
+        double centerZ = projector.getZ() - 3.5D;
+        double halfHeight = ProjectorScreenBounds.BASE_HEIGHT * 3.0D * 0.5D;
+        double halfWidth = halfHeight * 8.0D;
+        assertContains(wide, centerX - halfWidth, centerY - halfHeight, centerZ);
+        assertContains(wide, centerX + halfWidth, centerY + halfHeight, centerZ);
+
+        AABB rotated = ProjectorScreenBounds.aroundCenter(centerX, centerY, centerZ,
+                90.0D, 45.0D, 3.0D, 8.0D, 0.0D);
+        double diagonalUp = halfHeight / Math.sqrt(2.0D);
+        assertContains(rotated, centerX - diagonalUp, centerY + diagonalUp, centerZ - halfWidth);
+        assertContains(rotated, centerX + diagonalUp, centerY - diagonalUp, centerZ + halfWidth);
+
+        AABB edgeInsideRange = ProjectorScreenBounds.aroundCenter(70.0D, 0.0D, 0.0D,
+                0.0D, 0.0D, 3.0D, 8.0D, 0.0D);
+        double distanceSqr = ProjectorScreenBounds.distanceToSqr(edgeInsideRange, Vec3.ZERO);
+        if (distanceSqr >= 64.0D * 64.0D) {
+            throw new AssertionError("projector edge inside render range should not be culled: " + distanceSqr);
+        }
+        if (ProjectorScreenBounds.distanceToSqr(edgeInsideRange, new Vec3(70.0D, 0.0D, 0.0D)) != 0.0D) {
+            throw new AssertionError("camera inside projector bounds should have zero distance");
+        }
+    }
+
+    private static void assertContains(AABB bounds, double x, double y, double z) {
+        double epsilon = 1.0e-8D;
+        if (x < bounds.minX - epsilon || x > bounds.maxX + epsilon
+                || y < bounds.minY - epsilon || y > bounds.maxY + epsilon
+                || z < bounds.minZ - epsilon || z > bounds.maxZ + epsilon) {
+            throw new AssertionError("projector bounds " + bounds + " do not contain " + x + "," + y + "," + z);
         }
     }
 

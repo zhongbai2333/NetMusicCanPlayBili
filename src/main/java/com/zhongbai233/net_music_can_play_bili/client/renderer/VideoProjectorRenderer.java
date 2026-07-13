@@ -34,12 +34,10 @@ import com.mojang.blaze3d.vertex.PoseStack;
  */
 public class VideoProjectorRenderer
         implements BlockEntityRenderer<VideoProjectorBlockEntity, VideoProjectorRenderer.State> {
-    private static final double PROJECTOR_RENDER_MARGIN = Double.parseDouble(
-            System.getProperty("ncpb.video.projector.render_margin", "12.0"));
-    private static final double PROJECTOR_RENDER_MIN_INFLATE = Double.parseDouble(
-            System.getProperty("ncpb.video.projector.render_min_inflate", "16.0"));
+        private static final double PROJECTOR_RENDER_MARGIN = Double.parseDouble(
+            System.getProperty("ncpb.video.projector.render_margin", "0.5"));
     private static final double PROJECTOR_RENDER_MAX_ASPECT = Double.parseDouble(
-            System.getProperty("ncpb.video.projector.render_max_aspect", "2.4"));
+            System.getProperty("ncpb.video.projector.render_max_aspect", "8.0"));
 
     public VideoProjectorRenderer(BlockEntityRendererProvider.Context context) {
     }
@@ -158,16 +156,18 @@ public class VideoProjectorRenderer
 
     @Override
     public AABB getRenderBoundingBox(VideoProjectorBlockEntity blockEntity) {
-        double scale = Math.max(0.25D, Math.abs(blockEntity.getProjectionScale()));
-        double halfHeight = 1.35D * scale * 0.5D;
-        double halfWidth = halfHeight * Math.max(1.0D, PROJECTOR_RENDER_MAX_ASPECT);
-        double screenRadius = Math.sqrt(halfWidth * halfWidth + halfHeight * halfHeight);
-        double offsetRadius = Math.sqrt(
-                blockEntity.getProjectionDistanceX() * blockEntity.getProjectionDistanceX()
-                        + blockEntity.getProjectionHeight() * blockEntity.getProjectionHeight()
-                        + blockEntity.getProjectionDistanceZ() * blockEntity.getProjectionDistanceZ());
-        double inflate = Math.max(PROJECTOR_RENDER_MIN_INFLATE, offsetRadius + screenRadius + PROJECTOR_RENDER_MARGIN);
-        return new AABB(blockEntity.getBlockPos()).inflate(inflate, inflate, inflate);
+        return ProjectorScreenBounds.aroundBlock(blockEntity.getBlockPos(),
+            blockEntity.getProjectionDistanceX(), blockEntity.getProjectionHeight(),
+            blockEntity.getProjectionDistanceZ(), blockEntity.getProjectionYaw(),
+            blockEntity.getProjectionPitch(), blockEntity.getProjectionScale(),
+            PROJECTOR_RENDER_MAX_ASPECT, PROJECTOR_RENDER_MARGIN);
+        }
+
+        @Override
+        public boolean shouldRender(VideoProjectorBlockEntity blockEntity, Vec3 cameraPos) {
+        double viewDistance = getViewDistance();
+        return ProjectorScreenBounds.distanceToSqr(getRenderBoundingBox(blockEntity), cameraPos)
+            < viewDistance * viewDistance;
     }
 
     private static void syncActivatedState(VideoProjectorBlockEntity projector, boolean visible) {

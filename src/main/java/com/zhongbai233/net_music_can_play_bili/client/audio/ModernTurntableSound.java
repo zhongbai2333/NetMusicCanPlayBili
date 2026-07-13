@@ -23,9 +23,6 @@ public class ModernTurntableSound extends SyncedMediaSound {
     private static final int MINECART_MISSING_GRACE_TICKS = 200;
     private static final long STREAM_RETRY_DELAY_MILLIS = 750L;
 
-    /** 客户端全局音量倍率，由 GUI 音量滑块控制。范围 [0, 2]，默认 1.0 */
-    public static volatile float clientVolume = 1.0f;
-
     private final BlockPos pos;
     private final String rawUrl;
     private final String songName;
@@ -57,14 +54,13 @@ public class ModernTurntableSound extends SyncedMediaSound {
         this.x = pos.getX() + 0.5D;
         this.y = pos.getY() + 0.5D;
         this.z = pos.getZ() + 0.5D;
-        this.volume = Math.max(0.01F, 4.0F * clientVolume);
+        this.volume = 4.0F;
         ModernTurntablePlaybackTracker.registerSound(this);
         SyncedStreamRecoveryRegistry.register(this.sessionId, this::recoverStream);
     }
 
     @Override
     public void tick() {
-        this.volume = Math.max(0.01F, 4.0F * clientVolume);
         var level = Minecraft.getInstance().level;
         if (level == null) {
             stopAndFinish();
@@ -86,6 +82,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
         ModernTurntableBlockEntity turntable = level.getBlockEntity(pos) instanceof ModernTurntableBlockEntity modern
                 ? modern
                 : null;
+        this.volume = 4.0F * (turntable != null ? turntable.getVolume() : 1.0F);
         if (!ModernTurntablePlaybackTracker.isCurrent(pos, sessionId)) {
             stopAndFinish();
             return;
