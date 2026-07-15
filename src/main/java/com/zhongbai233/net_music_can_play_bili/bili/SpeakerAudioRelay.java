@@ -202,7 +202,7 @@ public class SpeakerAudioRelay {
 
     /** 音响音量会同步收缩最大传播距离，避免低音量仍能被远处听到。 */
     private static float gainForDistance(float d, float volume) {
-        return AudioUtils.speakerGainForDistance(d, volume);
+        return AudioUtils.spatialGainForDistance(d, volume);
     }
 
     private static float gameVol() {

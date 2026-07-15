@@ -6,6 +6,7 @@ import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.item.HolographicGlassesItem;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseExecutor;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
@@ -469,14 +470,7 @@ final class VideoPlaybackInstance {
         AutoCloseable oldDecoder = decoder;
         decoder = null;
         if (oldDecoder != null) {
-            Thread closer = new Thread(() -> {
-                try {
-                    oldDecoder.close();
-                } catch (Exception ignored) {
-                }
-            }, "bili-video-adaptive-close-" + sessionId);
-            closer.setDaemon(true);
-            closer.start();
+            MediaCloseExecutor.closeAsync(oldDecoder, "adaptive video decoder " + sessionId);
         }
         Thread oldThread = decodeThread;
         if (oldThread != null) {
@@ -700,9 +694,9 @@ final class VideoPlaybackInstance {
                 null,
                 null, null,
                 com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
-            LOADING_PLACEHOLDER_WIDTH, LOADING_PLACEHOLDER_HEIGHT,
-            // Iris guard 会主动跳过有已知 sampler 问题的 item_cutout draw。警告图是
-            // 完整不透明画面，应走 ENTITY_SOLID RGBA 兼容路径；普通加载图仍保留
+                LOADING_PLACEHOLDER_WIDTH, LOADING_PLACEHOLDER_HEIGHT,
+                // Iris guard 会主动跳过有已知 sampler 问题的 item_cutout draw。警告图是
+                // 完整不透明画面，应走 ENTITY_SOLID RGBA 兼容路径；普通加载图仍保留
                 // emissive/cutout 及进度层。警告图作为 immediate 视频的 RGBA 回退底片，
                 // 正常写入世界深度，但沿 BER 局部屏幕法线稍微后退，避免与视频共面。
                 !irisWarning, !irisWarning,
@@ -1048,14 +1042,7 @@ final class VideoPlaybackInstance {
         AutoCloseable dec = decoder;
         decoder = null;
         if (dec != null) {
-            Thread closer = new Thread(() -> {
-                try {
-                    dec.close();
-                } catch (Exception ignored) {
-                }
-            }, "bili-video-close-" + sessionId);
-            closer.setDaemon(true);
-            closer.start();
+            MediaCloseExecutor.closeAsync(dec, "video decoder " + sessionId);
         }
         Thread thread = decodeThread;
         if (thread != null) {

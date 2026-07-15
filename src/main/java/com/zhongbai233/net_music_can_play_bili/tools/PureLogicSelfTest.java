@@ -34,7 +34,7 @@ public final class PureLogicSelfTest {
         parsesHttpRangeTotals();
         parsesFullHttpRanges();
         buildsRangeRequests();
-        speakerVolumeShrinksAudibleDistance();
+        spatialVolumeShrinksAudibleDistance();
         createsNamedDaemonThreads();
         togglesPadDocumentLockWithoutForkingContent();
         preservesMinecartPlaybackSyncMetadata();
@@ -127,26 +127,38 @@ public final class PureLogicSelfTest {
         }
     }
 
-    private static void speakerVolumeShrinksAudibleDistance() {
-        float fullAtThirtyTwo = AudioUtils.speakerGainForDistance(32.0f, 1.0f);
-        if (fullAtThirtyTwo <= 0.0f) {
-            throw new AssertionError("full-volume speaker should still be audible at 32 blocks");
+    private static void spatialVolumeShrinksAudibleDistance() {
+        float fullAtEdge = AudioUtils.spatialGainForDistance(64.0f, 1.0f);
+        float expectedAtEdge = AudioUtils.gainForDistance(64.0f);
+        if (Math.abs(fullAtEdge - expectedAtEdge) > 1.0e-6f) {
+            throw new AssertionError("spatial audio should retain normal gain through its designed audible edge");
         }
-        float halfAtThirtyTwo = AudioUtils.speakerGainForDistance(32.0f, 0.5f);
-        if (halfAtThirtyTwo <= 0.0f) {
-            throw new AssertionError("half-volume speaker should include its 32-block edge");
+        float fullFadeStart = AudioUtils.spatialGainForDistance(65.0f, 1.0f);
+        float fullFadeMiddle = AudioUtils.spatialGainForDistance(70.0f, 1.0f);
+        float fullFadeEnd = AudioUtils.spatialGainForDistance(76.0f, 1.0f);
+        if (!(fullAtEdge > fullFadeStart && fullFadeStart > fullFadeMiddle
+                && fullFadeMiddle > fullFadeEnd && fullFadeEnd > 0.0f)) {
+            throw new AssertionError("spatial audio should fade monotonically after its designed audible edge");
         }
-        float halfPastEdge = AudioUtils.speakerGainForDistance(32.01f, 0.5f);
-        if (halfPastEdge != 0.0f) {
-            throw new AssertionError("half-volume speaker should be silent past 32 blocks, got " + halfPastEdge);
+        if (AudioUtils.spatialGainForDistance(76.8f, 1.0f) != 0.0f
+                || AudioUtils.spatialGainForDistance(77.0f, 1.0f) != 0.0f) {
+            throw new AssertionError("full-volume client fade should end after its 12.8-block outer tail");
         }
-        float lowAtThirtyTwo = AudioUtils.speakerGainForDistance(32.0f, 0.25f);
-        if (lowAtThirtyTwo != 0.0f) {
-            throw new AssertionError(
-                    "quarter-volume speaker should not be audible at 32 blocks, got " + lowAtThirtyTwo);
+        float halfAtEdge = AudioUtils.spatialGainForDistance(32.0f, 0.5f);
+        if (Math.abs(halfAtEdge - AudioUtils.gainForDistance(32.0f) * 0.5f) > 1.0e-6f) {
+            throw new AssertionError("half-volume spatial audio should retain normal gain through 32 blocks");
         }
-        if (AudioUtils.speakerGainForDistance(1.5f, 0.0f) != 0.0f) {
-            throw new AssertionError("muted speaker should be silent at any distance");
+        float halfFade = AudioUtils.spatialGainForDistance(35.0f, 0.5f);
+        if (halfFade <= 0.0f || halfFade >= AudioUtils.gainForDistance(35.0f) * 0.5f
+                || AudioUtils.spatialGainForDistance(38.4f, 0.5f) != 0.0f) {
+            throw new AssertionError("half-volume client fade should occupy 32 through 38.4 blocks");
+        }
+        float quarterFade = AudioUtils.spatialGainForDistance(17.0f, 0.25f);
+        if (quarterFade <= 0.0f || AudioUtils.spatialGainForDistance(19.2f, 0.25f) != 0.0f) {
+            throw new AssertionError("quarter-volume client fade should occupy 16 through 19.2 blocks");
+        }
+        if (AudioUtils.spatialGainForDistance(1.5f, 0.0f) != 0.0f) {
+            throw new AssertionError("muted spatial audio should be silent at any distance");
         }
     }
 

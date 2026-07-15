@@ -7,6 +7,7 @@ import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4RangeSeekSupport
 import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4StreamParser;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeClient;
 import org.slf4j.Logger;
+import org.lwjgl.system.MemoryUtil;
 
 import javax.sound.sampled.UnsupportedAudioFileException;
 import java.io.ByteArrayOutputStream;
@@ -28,6 +29,8 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Java fMP4/DASH 解复用 + FFmpeg JNI 视频解码器。
@@ -80,11 +83,12 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private final int fps;
     private final BlockingQueue<DecodedFrame> frames = new ArrayBlockingQueue<>(MAX_PENDING_FRAMES);
     private final BlockingQueue<byte[]> reusableBuffers = new ArrayBlockingQueue<>(MAX_PENDING_FRAMES);
-    private final BlockingQueue<ByteBuffer> reusableNv12Buffers = new ArrayBlockingQueue<>(MAX_PENDING_FRAMES);
+    private final NativeNv12BufferPool nativeNv12Buffers = new NativeNv12BufferPool(MAX_PENDING_FRAMES);
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean finished = new AtomicBoolean(false);
     private final AtomicBoolean decoderClosed = new AtomicBoolean(false);
+    private final AtomicReference<InputStream> activeInput = new AtomicReference<>();
     private final VideoNativeDecoder decoder;
     private final HttpRangeClient http = new HttpRangeClient();
 
@@ -265,7 +269,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
 
     private void parseStreamOnce(long offsetMillis) throws IOException, UnsupportedAudioFileException {
         Fmp4StreamStart seekStart = openStreamStart(offsetMillis);
-        try (InputStream stream = seekStart.stream()) {
+        InputStream stream = activateInput(seekStart.stream());
+        try (stream) {
             fallbackFramesToDrop = Math.max(0, Math.round(seekStart.residualSeconds() * fps));
             timelineStartNanos = Math.max(0L, Math.round(seekStart.fragmentSeconds() * 1_000_000_000.0D));
             dropBeforeMediaPtsNanos = Math.max(0L, offsetMillis * 1_000_000L);
@@ -321,7 +326,22 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     throw new UnsupportedAudioFileException("video stream is not fMP4 video");
                 }
             });
+        } finally {
+            activeInput.compareAndSet(stream, null);
         }
+    }
+
+    private InputStream activateInput(InputStream stream) throws IOException {
+        activeInput.set(stream);
+        if (closed.get() && activeInput.compareAndSet(stream, null)) {
+            closeQuietly(stream);
+            throw new IOException("native video decoder closed");
+        }
+        return stream;
+    }
+
+    private void closeActiveInput() {
+        closeQuietly(activeInput.getAndSet(null));
     }
 
     private long estimateCurrentOffsetMillis() {
@@ -808,17 +828,16 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private DecodedFrame getNextNv12Frame() {
         if (DIRECT_NV12_BUFFERS) {
             int byteCount = Math.max(1, targetWidth) * Math.max(1, targetHeight) * 3 / 2;
-            ByteBuffer buffer = reusableNv12Buffers.poll();
-            if (buffer == null || buffer.capacity() < byteCount) {
-                buffer = ByteBuffer.allocateDirect(byteCount).order(ByteOrder.nativeOrder());
-            }
-            ByteBuffer output = buffer;
-            if (!decoder.getVideoFrameNv12Into(output)) {
-                reusableNv12Buffers.offer(output);
+            NativeNv12Buffer slot = nativeNv12Buffers.acquire(byteCount);
+            if (slot == null) {
                 return null;
             }
-            return new DecodedFrame(output, byteCount, DecodedFrame.Format.NV12,
-                    () -> reusableNv12Buffers.offer(output));
+            if (!decoder.getVideoFrameNv12Into(slot.buffer())) {
+                nativeNv12Buffers.release(slot);
+                return null;
+            }
+            return new DecodedFrame(slot.buffer(), byteCount, DecodedFrame.Format.NV12,
+                    () -> nativeNv12Buffers.release(slot));
         }
         return DecodedFrame.wrap(decoder.getVideoFrameNv12(), DecodedFrame.Format.NV12);
     }
@@ -1055,6 +1074,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     @Override
     public void close() {
         closed.set(true);
+        closeActiveInput();
         Thread thread = worker;
         if (thread != null) {
             thread.interrupt();
@@ -1063,6 +1083,9 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     thread.join(2_000L);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
+                }
+                if (thread.isAlive()) {
+                    LOGGER.warn("Native video decoder worker did not stop within 2000ms: {}", videoUrl);
                 }
             }
         }
@@ -1074,7 +1097,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             frame.close();
         }
         reusableBuffers.clear();
-        reusableNv12Buffers.clear();
+        nativeNv12Buffers.retire();
     }
 
     private void closeDecoderOnce() {
@@ -1103,12 +1126,11 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         private final ByteBuffer buffer;
         private final int byteLength;
         private final Format format;
-        private final Runnable release;
-        private final long ptsNanos;
-        private final long nativeGetNanos;
-        private final long queueWaitNanos;
-        private boolean closed;
-        private boolean releaseTransferred;
+        private final SharedRelease release;
+        private long ptsNanos;
+        private long nativeGetNanos;
+        private long queueWaitNanos;
+        private final AtomicBoolean closed = new AtomicBoolean(false);
 
         private DecodedFrame(byte[] data, Format format, Runnable release) {
             this(data, null, data != null ? data.length : 0, format, release, -1L, -1L, -1L);
@@ -1123,6 +1145,12 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
 
         private DecodedFrame(byte[] data, ByteBuffer buffer, int byteLength, Format format, Runnable release,
+                long ptsNanos, long nativeGetNanos, long queueWaitNanos) {
+            this(data, buffer, byteLength, format, new SharedRelease(release), ptsNanos, nativeGetNanos,
+                    queueWaitNanos);
+        }
+
+        private DecodedFrame(byte[] data, ByteBuffer buffer, int byteLength, Format format, SharedRelease release,
                 long ptsNanos, long nativeGetNanos, long queueWaitNanos) {
             this.data = data;
             this.buffer = buffer;
@@ -1197,35 +1225,106 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
 
         private DecodedFrame withPtsNanos(long ptsNanos) {
-            return new DecodedFrame(data, buffer, byteLength, format, transferRelease(), ptsNanos, nativeGetNanos,
-                    queueWaitNanos);
+            this.ptsNanos = ptsNanos;
+            return this;
         }
 
         private DecodedFrame withNativeGetNanos(long nativeGetNanos) {
-            return new DecodedFrame(data, buffer, byteLength, format, transferRelease(), ptsNanos, nativeGetNanos,
-                    queueWaitNanos);
+            this.nativeGetNanos = nativeGetNanos;
+            return this;
         }
 
         private DecodedFrame withQueueWaitNanos(long queueWaitNanos) {
-            return new DecodedFrame(data, buffer, byteLength, format, transferRelease(), ptsNanos, nativeGetNanos,
-                    queueWaitNanos);
+            this.queueWaitNanos = queueWaitNanos;
+            return this;
         }
 
-        private Runnable transferRelease() {
-            if (releaseTransferred) {
-                return null;
+        public DecodedFrame retain() {
+            if (closed.get() || !release.tryRetain()) {
+                throw new IllegalStateException("decoded frame is already closed");
             }
-            releaseTransferred = true;
-            return release;
+            return new DecodedFrame(data, buffer, byteLength, format, release, ptsNanos, nativeGetNanos,
+                    queueWaitNanos);
         }
 
         @Override
         public void close() {
-            if (!closed) {
-                closed = true;
-                if (release != null && !releaseTransferred) {
-                    release.run();
+            if (closed.compareAndSet(false, true)) {
+                release.release();
+            }
+        }
+
+        private static final class SharedRelease {
+            private final AtomicInteger references = new AtomicInteger(1);
+            private final Runnable action;
+
+            private SharedRelease(Runnable action) {
+                this.action = action;
+            }
+
+            private boolean tryRetain() {
+                int current;
+                do {
+                    current = references.get();
+                    if (current == 0) {
+                        return false;
+                    }
+                } while (!references.compareAndSet(current, current + 1));
+                return true;
+            }
+
+            private void release() {
+                if (references.decrementAndGet() == 0 && action != null) {
+                    action.run();
                 }
+            }
+        }
+    }
+
+    private record NativeNv12Buffer(ByteBuffer buffer) {
+    }
+
+    private static final class NativeNv12BufferPool {
+        private final int maxIdle;
+        private final java.util.ArrayDeque<NativeNv12Buffer> idle = new java.util.ArrayDeque<>();
+        private boolean retired;
+
+        private NativeNv12BufferPool(int maxIdle) {
+            this.maxIdle = Math.max(1, maxIdle);
+        }
+
+        synchronized NativeNv12Buffer acquire(int byteCount) {
+            if (retired) {
+                return null;
+            }
+            NativeNv12Buffer selected = null;
+            while (!idle.isEmpty()) {
+                NativeNv12Buffer candidate = idle.removeFirst();
+                if (candidate.buffer().capacity() >= byteCount) {
+                    selected = candidate;
+                    break;
+                }
+                MemoryUtil.memFree(candidate.buffer());
+            }
+            if (selected == null) {
+                ByteBuffer buffer = MemoryUtil.memAlloc(byteCount).order(ByteOrder.nativeOrder());
+                selected = new NativeNv12Buffer(buffer);
+            }
+            return selected;
+        }
+
+        synchronized void release(NativeNv12Buffer buffer) {
+            if (retired || idle.size() >= maxIdle) {
+                MemoryUtil.memFree(buffer.buffer());
+            } else {
+                idle.addLast(buffer);
+            }
+        }
+
+        synchronized void retire() {
+            retired = true;
+            while (!idle.isEmpty()) {
+                MemoryUtil.memFree(idle.removeFirst().buffer());
             }
         }
     }

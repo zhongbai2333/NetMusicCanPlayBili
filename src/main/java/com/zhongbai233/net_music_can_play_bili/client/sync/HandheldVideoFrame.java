@@ -15,6 +15,16 @@ public record HandheldVideoFrame(byte[] data, ByteBuffer buffer, int byteLength,
         return new HandheldVideoFrame(data, buffer, byteLength, decoded.format(), width, height, ptsNanos, decoded);
     }
 
+    public HandheldVideoFrame retain() {
+        if (delegate instanceof Fmp4NativeVideoDecoder.DecodedFrame decoded) {
+            Fmp4NativeVideoDecoder.DecodedFrame retained = decoded.retain();
+            ByteBuffer retainedBuffer = retained.buffer();
+            return new HandheldVideoFrame(retainedBuffer == null ? retained.data() : null, retainedBuffer, byteLength,
+                    format, width, height, ptsNanos, retained);
+        }
+        return new HandheldVideoFrame(data, buffer, byteLength, format, width, height, ptsNanos, null);
+    }
+
     @Override
     public void close() {
         if (delegate != null) {

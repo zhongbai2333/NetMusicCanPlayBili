@@ -268,7 +268,7 @@ public class DolbyAudioHandler {
         if (machinePos != null && listenerPos != null) {
             float yaw = (float) Math.atan2(machinePos[0] - listenerPos[0], machinePos[2] - listenerPos[2]);
             float distance = distance(listenerPos, machinePos);
-            float gain = gainForDistance(distance);
+            float gain = spatialGainForDistance(distance, userVolume);
             lines.add(String.format("音乐机=%s 玩家耳位=%s 距离=%.2f gain=%.3f yaw=%.1f°",
                     fmtPos(machinePos), fmtPos(listenerPos), distance, gain, Math.toDegrees(yaw)));
         } else {
@@ -859,8 +859,8 @@ public class DolbyAudioHandler {
                     String.format("%.2f", lp[1]), String.format("%.2f", lp[2]), numObjects);
         }
         sa.updatePositions(bedPositions, objectPositions, lp, forward);
-        float d = distance(lp, mp), g = gainForDistance(d);
-        float gv = MUTE_MAIN_WHEN_RELAYS_STARTED && allRelaysStarted() ? 0f : g * userVolume * gameVolume();
+        float d = distance(lp, mp), g = spatialGainForDistance(d, userVolume);
+        float gv = MUTE_MAIN_WHEN_RELAYS_STARTED && allRelaysStarted() ? 0f : g * gameVolume();
         for (int ch = 0; ch < numBedChannels; ch++)
             sa.setBedGain(ch, channelGain(ch, gv));
         for (int o = 0; o < numObjects; o++)
@@ -1079,8 +1079,8 @@ public class DolbyAudioHandler {
         return channels == 6 || channels == 8 ? 2 : 0;
     }
 
-    private static float gainForDistance(float d) {
-        return AudioUtils.gainForDistance(d);
+    private static float spatialGainForDistance(float d, float volume) {
+        return AudioUtils.spatialGainForDistance(d, volume);
     }
 
     private static float clampGain(float g) {

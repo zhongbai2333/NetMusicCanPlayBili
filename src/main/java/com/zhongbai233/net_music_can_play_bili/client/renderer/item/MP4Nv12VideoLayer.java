@@ -82,26 +82,27 @@ final class MP4Nv12VideoLayer implements AutoCloseable {
     }
 
     boolean uploadLatest(UUID deviceId) {
-        HandheldVideoFrame frame = MP4HandheldVideoClient.latestFrame(deviceId);
-        if (frame == null || frame.format() != Fmp4NativeVideoDecoder.DecodedFrame.Format.NV12) {
-            return false;
-        }
-        long sequence = MP4HandheldVideoClient.frameSequence(deviceId);
-        if (textureSet != null && sequence == uploadedSequence
-                && uploadedWidth == frame.width() && uploadedHeight == frame.height()) {
+        try (HandheldVideoFrame frame = MP4HandheldVideoClient.acquireLatestFrame(deviceId)) {
+            if (frame == null || frame.format() != Fmp4NativeVideoDecoder.DecodedFrame.Format.NV12) {
+                return false;
+            }
+            long sequence = MP4HandheldVideoClient.frameSequence(deviceId);
+            if (textureSet != null && sequence == uploadedSequence
+                    && uploadedWidth == frame.width() && uploadedHeight == frame.height()) {
+                return true;
+            }
+            ensureTextureSet();
+            boolean uploaded = frame.buffer() != null
+                    ? textureSet.upload(frame.buffer(), frame.byteLength(), frame.width(), frame.height())
+                    : textureSet.upload(frame.data(), frame.width(), frame.height());
+            if (!uploaded) {
+                return false;
+            }
+            uploadedSequence = sequence;
+            uploadedWidth = frame.width();
+            uploadedHeight = frame.height();
             return true;
         }
-        ensureTextureSet();
-        boolean uploaded = frame.buffer() != null
-                ? textureSet.upload(frame.buffer(), frame.byteLength(), frame.width(), frame.height())
-                : textureSet.upload(frame.data(), frame.width(), frame.height());
-        if (!uploaded) {
-            return false;
-        }
-        uploadedSequence = sequence;
-        uploadedWidth = frame.width();
-        uploadedHeight = frame.height();
-        return true;
     }
 
     VideoYuvTextureSet textureSet() {

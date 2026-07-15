@@ -219,10 +219,10 @@ public class StereoOpenALHandler {
                 spatialAudio.updatePositions(BED_POSITIONS, EMPTY_OBJECT_POSITIONS, listenerPos,
                         frontSmoother.update(forwardToMachine, followLocalPlayerFront));
                 float distance = distance(listenerPos, machinePos);
-                float gain = gainForDistance(distance);
+                float gain = spatialGainForDistance(distance, userVolume);
                 lastDistance = distance;
                 lastGain = gain;
-                float gv = allRelaysStarted() ? 0f : gain * userVolume * gameVolume();
+                float gv = allRelaysStarted() ? 0f : gain * gameVolume();
                 spatialAudio.setBedGain(0, gv);
                 spatialAudio.setBedGain(1, gv);
             }
@@ -546,8 +546,8 @@ public class StereoOpenALHandler {
                 userVolume, audioLevel()));
     }
 
-    private static float gainForDistance(float d) {
-        return AudioUtils.gainForDistance(d);
+    private static float spatialGainForDistance(float d, float volume) {
+        return AudioUtils.spatialGainForDistance(d, volume);
     }
 
     private static float clampGain(float gain) {

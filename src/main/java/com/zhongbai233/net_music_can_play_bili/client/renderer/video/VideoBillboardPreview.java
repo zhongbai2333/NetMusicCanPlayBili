@@ -16,6 +16,7 @@ import com.zhongbai233.net_music_can_play_bili.client.VideoFeatureFlags;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.ProjectorScreenBounds;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.RenderVertexUtils;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseExecutor;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.rendertype.RenderType;
@@ -87,7 +88,7 @@ public final class VideoBillboardPreview {
         return new ProjectorFrameSnapshot(true, yuv, TEXTURE_ID, yuv ? yuvTextureSet.yId() : null,
                 yuv ? yuvTextureSet.uId() : null, yuv ? yuvTextureSet.vId() : null,
                 yuv ? yuvTextureSet.format() : Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, width, height, false,
-            false, 0.0F);
+                false, 0.0F);
     }
 
     public static ProjectorFrameSnapshot currentProjectorDisplayFrame(BlockPos projectorPos) {
@@ -202,7 +203,7 @@ public final class VideoBillboardPreview {
             int height, boolean emissiveRgba, boolean loadingProgressOverlay, float rgbaDepthOffset) {
         public static ProjectorFrameSnapshot empty() {
             return new ProjectorFrameSnapshot(false, false, null, null, null, null,
-                Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, 0, 0, false, false, 0.0F);
+                    Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, 0, 0, false, false, 0.0F);
         }
     }
 
@@ -933,14 +934,7 @@ public final class VideoBillboardPreview {
         if (decoder == null) {
             return;
         }
-        Thread closer = new Thread(() -> {
-            try {
-                decoder.close();
-            } catch (Exception ignored) {
-            }
-        }, "bili-video-decoder-close");
-        closer.setDaemon(true);
-        closer.start();
+        MediaCloseExecutor.closeAsync(decoder, "billboard video decoder");
     }
 
     static AutoCloseable openDecoder(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
@@ -1014,6 +1008,7 @@ public final class VideoBillboardPreview {
         private final int byteLength;
         private final AutoCloseable delegate;
         private final long ptsNanos;
+        private final AtomicBoolean closed = new AtomicBoolean(false);
 
         private DecodedFrame(byte[] rgba, AutoCloseable delegate) {
             this(Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, rgba, null,
@@ -1096,9 +1091,21 @@ public final class VideoBillboardPreview {
             return ptsNanos;
         }
 
+        DecodedFrame retain() {
+            if (delegate instanceof Fmp4NativeVideoDecoder.DecodedFrame nativeFrame) {
+                Fmp4NativeVideoDecoder.DecodedFrame retained = nativeFrame.retain();
+                ByteBuffer retainedBuffer = retained.buffer();
+                return retainedBuffer != null
+                        ? new DecodedFrame(retained.format(), null, retainedBuffer, retained.byteLength(), retained,
+                                ptsNanos)
+                        : new DecodedFrame(retained.format(), retained.data(), retained, ptsNanos);
+            }
+            return new DecodedFrame(format, data, buffer, byteLength, null, ptsNanos);
+        }
+
         @Override
         public void close() {
-            if (delegate != null) {
+            if (delegate != null && closed.compareAndSet(false, true)) {
                 try {
                     delegate.close();
                 } catch (Exception ignored) {
@@ -1378,15 +1385,25 @@ public final class VideoBillboardPreview {
             return -1L;
         }
         CompletableFuture<Long> future = new CompletableFuture<>();
-        minecraft.execute(() -> {
-            if (generation != decodeGeneration.get() || !running || !isActiveProjectorValid()) {
-                future.complete(-1L);
-                return;
-            }
-            long startNs = System.nanoTime();
-            boolean ok = uploadDecodedFrameOnRenderThread(frame, frameWidth, frameHeight);
-            future.complete(ok ? System.nanoTime() - startNs : -1L);
-        });
+        DecodedFrame retained = frame.retain();
+        try {
+            minecraft.execute(() -> {
+                try (retained) {
+                    if (generation != decodeGeneration.get() || !running || !isActiveProjectorValid()) {
+                        future.complete(-1L);
+                        return;
+                    }
+                    long startNs = System.nanoTime();
+                    boolean ok = uploadDecodedFrameOnRenderThread(retained, frameWidth, frameHeight);
+                    future.complete(ok ? System.nanoTime() - startNs : -1L);
+                } catch (Exception e) {
+                    future.completeExceptionally(e);
+                }
+            });
+        } catch (RuntimeException e) {
+            retained.close();
+            throw e;
+        }
         try {
             return future.get();
         } catch (InterruptedException e) {
@@ -1435,11 +1452,21 @@ public final class VideoBillboardPreview {
             return -1L;
         }
         CompletableFuture<Long> future = new CompletableFuture<>();
-        minecraft.execute(() -> {
-            long startNs = System.nanoTime();
-            boolean ok = uploadDecodedFrameOnRenderThread(DecodedFrame.wrap(frame), frameWidth, frameHeight);
-            future.complete(ok ? System.nanoTime() - startNs : -1L);
-        });
+        Fmp4NativeVideoDecoder.DecodedFrame retained = frame.retain();
+        try {
+            minecraft.execute(() -> {
+                try (DecodedFrame wrapped = DecodedFrame.wrap(retained)) {
+                    long startNs = System.nanoTime();
+                    boolean ok = uploadDecodedFrameOnRenderThread(wrapped, frameWidth, frameHeight);
+                    future.complete(ok ? System.nanoTime() - startNs : -1L);
+                } catch (Exception e) {
+                    future.completeExceptionally(e);
+                }
+            });
+        } catch (RuntimeException e) {
+            retained.close();
+            throw e;
+        }
         try {
             return future.get();
         } catch (InterruptedException e) {
@@ -2439,10 +2466,10 @@ public final class VideoBillboardPreview {
             float halfWidth,
             float halfHeight) {
         return submitProjectorFrameOnPose(collector, poseStack, frame, halfWidth, halfHeight,
-            frame != null ? frame.rgbaDepthOffset() : 0.0F);
-        }
+                frame != null ? frame.rgbaDepthOffset() : 0.0F);
+    }
 
-        public static boolean submitProjectorFrameOnPose(
+    public static boolean submitProjectorFrameOnPose(
             net.minecraft.client.renderer.SubmitNodeCollector collector,
             PoseStack poseStack,
             ProjectorFrameSnapshot frame,
@@ -2465,10 +2492,10 @@ public final class VideoBillboardPreview {
             return false;
         }
         submitLocalTexturedQuad(collector, poseStack,
-            frame.emissiveRgba()
-                ? RenderTypes.itemCutout(frame.rgbaTexture())
-                : YuvVideoRenderTypes.videoRgbaEntity(frame.rgbaTexture()),
-            -halfWidth, halfHeight, halfWidth, -halfHeight, rgbaDepthOffset);
+                frame.emissiveRgba()
+                        ? RenderTypes.itemCutout(frame.rgbaTexture())
+                        : YuvVideoRenderTypes.videoRgbaEntity(frame.rgbaTexture()),
+                -halfWidth, halfHeight, halfWidth, -halfHeight, rgbaDepthOffset);
         if (frame.loadingProgressOverlay()) {
             submitLoadingProgressOnPose(collector, poseStack, halfWidth, halfHeight);
         }

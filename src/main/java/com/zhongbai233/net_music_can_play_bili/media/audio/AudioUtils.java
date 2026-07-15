@@ -9,8 +9,13 @@ public final class AudioUtils {
     public static final float DISTANCE_REFERENCE = 8.0f;
     /** 最小有效距离（音响半径），避免进入音响圈内部时增益异常 */
     public static final float SPATIAL_RADIUS = 1.5f;
-    /** 音响满音量时的最大可听距离；音量降低时会按比例收缩 */
-    public static final float SPEAKER_MAX_AUDIBLE_DISTANCE = 64.0f;
+    /** 空间音源满音量时的最大可听距离；音量降低时会按比例收缩 */
+    public static final float MAX_AUDIBLE_DISTANCE = 64.0f;
+    /** 超出设计听距后用于客户端平滑淡入淡出的额外距离比例。 */
+    public static final float AUDIBLE_FADE_FRACTION = 0.20f;
+    /** @deprecated 使用 {@link #MAX_AUDIBLE_DISTANCE}。 */
+    @Deprecated
+    public static final float SPEAKER_MAX_AUDIBLE_DISTANCE = MAX_AUDIBLE_DISTANCE;
 
     private AudioUtils() {
     }
@@ -56,17 +61,33 @@ public final class AudioUtils {
         return clampGain(DISTANCE_REFERENCE / (DISTANCE_REFERENCE + clamped));
     }
 
-    /** 音响专用衰减：音量既影响最终响度，也按比例收缩最大传播距离。 */
-    public static float speakerGainForDistance(float d, float volume) {
+    /**
+     * 客户端空间音源衰减：设计听距内保留原始增益，越界后再平滑淡出。
+     * 音量只负责缩放设计听距与响度，不要求服务端按该距离停止媒体流。
+     */
+    public static float spatialGainForDistance(float d, float volume) {
         float clampedVolume = clampGain(volume);
         if (clampedVolume <= 0.0f) {
             return 0.0f;
         }
-        float maxAudibleDistance = SPEAKER_MAX_AUDIBLE_DISTANCE * clampedVolume;
-        if (d > maxAudibleDistance) {
+        float maxAudibleDistance = MAX_AUDIBLE_DISTANCE * clampedVolume;
+        float baseGain = gainForDistance(d) * clampedVolume;
+        if (d <= maxAudibleDistance) {
+            return baseGain;
+        }
+        float fadeDistance = maxAudibleDistance * AUDIBLE_FADE_FRACTION;
+        float fadeEnd = maxAudibleDistance + fadeDistance;
+        if (d >= fadeEnd) {
             return 0.0f;
         }
-        return gainForDistance(d) * clampedVolume;
+        float remaining = clampGain((fadeEnd - d) / fadeDistance);
+        float fadeGain = remaining * remaining * (3.0f - 2.0f * remaining);
+        return baseGain * fadeGain;
+    }
+
+    /** 音响衰减兼容入口。 */
+    public static float speakerGainForDistance(float d, float volume) {
+        return spatialGainForDistance(d, volume);
     }
 
     /** 格式化坐标为可读字符串 */

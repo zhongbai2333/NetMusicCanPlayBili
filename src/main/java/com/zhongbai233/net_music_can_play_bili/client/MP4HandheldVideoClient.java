@@ -164,6 +164,26 @@ public final class MP4HandheldVideoClient {
         return state != null ? state.latestFrame.get() : null;
     }
 
+    public static HandheldVideoFrame acquireLatestFrame(UUID deviceId) {
+        DeviceVideoState state = stateOrNull(deviceId);
+        if (state == null) {
+            return null;
+        }
+        for (int attempt = 0; attempt < 2; attempt++) {
+            HandheldVideoFrame frame = state.latestFrame.get();
+            if (frame == null) {
+                return null;
+            }
+            try {
+                return frame.retain();
+            } catch (IllegalStateException ignored) {
+                // The producer replaced and closed this frame between get() and retain(); retry
+                // the current slot.
+            }
+        }
+        return null;
+    }
+
     public static long frameSequence(UUID deviceId) {
         DeviceVideoState state = stateOrNull(deviceId);
         return state != null ? state.frameSequence.get() : -1L;
@@ -491,7 +511,7 @@ public final class MP4HandheldVideoClient {
         LOGGER.debug("MP4 横屏视频输出格式: session={} format={} irisShaderpackFallback={}",
                 session.key.sessionId(), outputFormat, session.key.rgbaFallback());
         try (Fmp4NativeVideoDecoder decoder = openNativeDecoder(session.key.sessionId(), stream, decodeSize,
-            outputFormat, elapsedMillis, totalMillis)) {
+                outputFormat, elapsedMillis, totalMillis)) {
             long displayedFrames = 0L;
             boolean firstFrameAccepted = false;
             while (!session.closed.get() && session.key.equals(state.activeKey)) {
@@ -544,7 +564,8 @@ public final class MP4HandheldVideoClient {
         for (String hwaccel : handheldHwaccelCandidates(sessionId)) {
             try {
                 if (PAD_VIDEO_DEBUG_LOG && PadClientMediaSessionIds.isPadSession(sessionId)) {
-                    LOGGER.info("Pad video native decoder open: session={} hwaccel={} codec={} target={}x{} format={} offset={}ms",
+                    LOGGER.info(
+                            "Pad video native decoder open: session={} hwaccel={} codec={} target={}x{} format={} offset={}ms",
                             sessionId, hwaccel, stream.codecId(), decodeSize.width(), decodeSize.height(),
                             outputFormat, elapsedMillis);
                 }
@@ -561,8 +582,8 @@ public final class MP4HandheldVideoClient {
 
     private static String[] handheldHwaccelCandidates(String sessionId) {
         String requested = PadClientMediaSessionIds.isPadSession(sessionId)
-            ? PAD_NATIVE_HWACCEL
-            : HANDHELD_NATIVE_HWACCEL;
+                ? PAD_NATIVE_HWACCEL
+                : HANDHELD_NATIVE_HWACCEL;
         if (requested.isBlank()
                 || "none".equalsIgnoreCase(requested)
                 || "off".equalsIgnoreCase(requested)) {

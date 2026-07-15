@@ -81,26 +81,27 @@ final class MP4RgbaVideoLayer implements AutoCloseable {
     }
 
     boolean uploadLatest(UUID deviceId) {
-        HandheldVideoFrame frame = MP4HandheldVideoClient.latestFrame(deviceId);
-        if (frame == null || frame.format() != Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA) {
-            return false;
-        }
-        long sequence = MP4HandheldVideoClient.frameSequence(deviceId);
-        if (texture != null && sequence == uploadedSequence
-                && uploadedWidth == frame.width() && uploadedHeight == frame.height()) {
+        try (HandheldVideoFrame frame = MP4HandheldVideoClient.acquireLatestFrame(deviceId)) {
+            if (frame == null || frame.format() != Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA) {
+                return false;
+            }
+            long sequence = MP4HandheldVideoClient.frameSequence(deviceId);
+            if (texture != null && sequence == uploadedSequence
+                    && uploadedWidth == frame.width() && uploadedHeight == frame.height()) {
+                return true;
+            }
+            ensureTexture(frame.width(), frame.height());
+            NativeImage image = texture.getPixels();
+            if (image == null || image.isClosed()) {
+                return false;
+            }
+            uploadPixels(image, frame);
+            texture.upload();
+            uploadedSequence = sequence;
+            uploadedWidth = frame.width();
+            uploadedHeight = frame.height();
             return true;
         }
-        ensureTexture(frame.width(), frame.height());
-        NativeImage image = texture.getPixels();
-        if (image == null || image.isClosed()) {
-            return false;
-        }
-        uploadPixels(image, frame);
-        texture.upload();
-        uploadedSequence = sequence;
-        uploadedWidth = frame.width();
-        uploadedHeight = frame.height();
-        return true;
     }
 
     Identifier textureId() {
@@ -112,7 +113,8 @@ final class MP4RgbaVideoLayer implements AutoCloseable {
             return;
         }
         if (texture != null) {
-            texture.close();
+            Minecraft.getInstance().getTextureManager().release(textureId);
+            texture = null;
         }
         texture = new DynamicTexture("mp4_video_rgba_" + textureId.getPath().replace('/', '_'), width, height, false);
         Minecraft.getInstance().getTextureManager().register(textureId, texture);
@@ -153,7 +155,7 @@ final class MP4RgbaVideoLayer implements AutoCloseable {
     @Override
     public void close() {
         if (texture != null) {
-            texture.close();
+            Minecraft.getInstance().getTextureManager().release(textureId);
             texture = null;
         }
         uploadedSequence = -1L;
