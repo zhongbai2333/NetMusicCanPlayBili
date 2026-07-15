@@ -6,6 +6,7 @@ import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillbo
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTimelineView;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
+import com.zhongbai233.net_music_can_play_bili.media.stream.MediaNetworkFailureClassifier;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistPreviewPacket;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistReviewPacket;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistReviewActionPacket;
@@ -41,6 +42,8 @@ public class WhitelistPreviewScreen extends Screen {
     private String durationProbeKey = "";
     private String pendingVideoSessionId = "";
     private String resolvingVideoKey = "";
+    private boolean videoResolveFailed;
+    private boolean videoResolveNetworkFailure;
 
     public WhitelistPreviewScreen(WhitelistPreviewPacket payload) {
         super(Component.literal("白名单视频预览"));
@@ -67,6 +70,8 @@ public class WhitelistPreviewScreen extends Screen {
         this.pausedAtMillis = -1L;
         this.locallyPaused = !next.playing();
         this.resolvingVideoKey = "";
+        this.videoResolveFailed = false;
+        this.videoResolveNetworkFailure = false;
         beginDurationProbe(next);
         startPlayback(next);
         rebuildButtons();
@@ -161,6 +166,19 @@ public class WhitelistPreviewScreen extends Screen {
         VideoBillboardPreview.ProjectorFrameSnapshot frame = VideoBillboardPreview.currentPreviewFrame(sessionId);
         if (frame.hasFrame() && !frame.yuv() && frame.rgbaTexture() != null) {
             g.blit(frame.rgbaTexture(), x, y, x + VIDEO_W, y + VIDEO_H, 0.0F, 1.0F, 0.0F, 1.0F);
+            if (VideoBillboardPreview.hasNetworkFailure(sessionId)) {
+                g.centeredText(font, Component.literal("点击画面重新连接"), x + VIDEO_W / 2,
+                        y + VIDEO_H - 20, 0xFFFFD166);
+            }
+            return;
+        }
+        if (videoResolveFailed) {
+            g.centeredText(font, Component.literal(videoResolveNetworkFailure
+                    ? "视频网络连接失败"
+                    : "视频信息解析失败"), x + VIDEO_W / 2,
+                    y + VIDEO_H / 2 - 14, 0xFFFF8A78);
+            g.centeredText(font, Component.literal("点击画面重新连接"), x + VIDEO_W / 2,
+                    y + VIDEO_H / 2 + 4, 0xFFFFD166);
             return;
         }
         String text = frame.hasFrame() && frame.yuv()
@@ -205,12 +223,29 @@ public class WhitelistPreviewScreen extends Screen {
             onClose();
             return true;
         }
+        String sessionId = WhitelistPreviewPacket.sessionId(payload.previewId(), payload.elapsedMillis());
+        if (hitVideo(bx, by, event.x(), event.y()) && videoResolveFailed) {
+            videoResolveFailed = false;
+            videoResolveNetworkFailure = false;
+            resolvingVideoKey = "";
+            startPreviewVideo(payload, sessionId);
+            return true;
+        }
+        if (hitVideo(bx, by, event.x(), event.y()) && VideoBillboardPreview.retryNetworkFailure(sessionId)) {
+            return true;
+        }
         if (hitProgress(bx, by, event.x(), event.y())) {
             scrubbing = true;
             updateScrub(bx, event.x());
             return true;
         }
         return super.mouseClicked(event, cancelled);
+    }
+
+    private boolean hitVideo(int bx, int by, double mouseX, double mouseY) {
+        int x = videoX(bx);
+        int y = by + 52;
+        return mouseX >= x && mouseX <= x + VIDEO_W && mouseY >= y && mouseY <= y + VIDEO_H;
     }
 
     @Override
@@ -267,6 +302,8 @@ public class WhitelistPreviewScreen extends Screen {
 
     private void startPreviewVideo(WhitelistPreviewPacket packet, String sessionId) {
         pendingVideoSessionId = "";
+        videoResolveFailed = false;
+        videoResolveNetworkFailure = false;
         if (BiliVideoStreamResolver.isStoredVideoSelection(packet.videoUrl())) {
             resolveAndStartBiliPreviewVideo(packet, sessionId);
             return;
@@ -296,6 +333,9 @@ public class WhitelistPreviewScreen extends Screen {
             }
             resolvingVideoKey = "";
             if (error != null || stream == null) {
+                videoResolveFailed = true;
+                videoResolveNetworkFailure = error != null
+                        && MediaNetworkFailureClassifier.isNetworkFailure(error);
                 return;
             }
             VideoBillboardPreview.startRgbaPreviewAt(stream.url(), stream.sourceWidth(), stream.sourceHeight(),

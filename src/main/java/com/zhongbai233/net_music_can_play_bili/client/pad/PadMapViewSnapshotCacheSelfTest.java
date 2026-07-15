@@ -11,6 +11,7 @@ public final class PadMapViewSnapshotCacheSelfTest {
         restoresOutdoorAfterIndoorRoundTrip();
         isolatesIndoorFloorsAndCellSizes();
         invalidatesInactiveSnapshots();
+        evictsLeastRecentlyUsedSnapshot();
         System.out.println("PadMapViewSnapshotCacheSelfTest passed");
     }
 
@@ -46,6 +47,22 @@ public final class PadMapViewSnapshotCacheSelfTest {
         PadMapSnapshot invalidated = cache.get(PadMapViewProfile.OUTDOOR, -64, 1);
         if (invalidated == null || invalidated.tile(0, 0) != PadMapTileKind.UNKNOWN) {
             throw new AssertionError("dirty updates must invalidate inactive profile snapshots");
+        }
+    }
+
+    private static void evictsLeastRecentlyUsedSnapshot() {
+        PadMapViewSnapshotCache cache = new PadMapViewSnapshotCache(2);
+        PadMapSnapshot floor64 = snapshot(0, 64, 0, 1, PadMapTileKind.INDOOR_FLOOR);
+        PadMapSnapshot floor80 = snapshot(0, 80, 0, 1, PadMapTileKind.BUILDING);
+        PadMapSnapshot floor96 = snapshot(0, 96, 0, 1, PadMapTileKind.ROCK);
+        cache.put(PadMapViewProfile.INDOOR, floor64);
+        cache.put(PadMapViewProfile.INDOOR, floor80);
+        cache.get(PadMapViewProfile.INDOOR, 64, 1);
+        cache.put(PadMapViewProfile.INDOOR, floor96);
+        if (cache.get(PadMapViewProfile.INDOOR, 80, 1) != null
+                || cache.get(PadMapViewProfile.INDOOR, 64, 1) != floor64
+                || cache.get(PadMapViewProfile.INDOOR, 96, 1) != floor96) {
+            throw new AssertionError("snapshot cache must evict its least recently used floor");
         }
     }
 

@@ -382,6 +382,7 @@ public final class MP4PlaybackSyncManager {
     public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
         if (event.getEntity() instanceof ServerPlayer player) {
             UUID playerId = player.getUUID();
+            NetworkRateLimiter.removePlayer(playerId);
             AudioLinkIndex.removeHeadphonePlayer(playerId);
             AudioLinkIndex.removeHeadphoneOwner(playerId);
         }

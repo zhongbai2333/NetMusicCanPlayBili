@@ -70,30 +70,41 @@ public final class MP4ItemScreenRenderer {
         MP4RgbaVideoLayer.release(deviceId);
     }
 
+    public static void releaseDeviceResources(UUID deviceId) {
+        if (deviceId == null) {
+            return;
+        }
+        MP4GuiTexture guiTexture = GUI_TEXTURES.remove(deviceId);
+        if (guiTexture != null) {
+            guiTexture.close();
+        }
+        releaseVideoLayers(deviceId);
+    }
+
     public static void releaseAllVideoLayers() {
         MP4Nv12VideoLayer.releaseAll();
         MP4RgbaVideoLayer.releaseAll();
     }
 
-        public static void renderHeldOffscreenGuiFrameStart() {
-                Minecraft minecraft = Minecraft.getInstance();
-                if (minecraft.player == null) {
-                        return;
-                }
-                renderHeldOffscreenGuiFrameStart(minecraft.player.getMainHandItem());
-                renderHeldOffscreenGuiFrameStart(minecraft.player.getOffhandItem());
+    public static void renderHeldOffscreenGuiFrameStart() {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.player == null) {
+            return;
         }
+        renderHeldOffscreenGuiFrameStart(minecraft.player.getMainHandItem());
+        renderHeldOffscreenGuiFrameStart(minecraft.player.getOffhandItem());
+    }
 
-        private static void renderHeldOffscreenGuiFrameStart(ItemStack stack) {
-                if (!(stack.getItem() instanceof MP4Item)) {
-                        return;
-                }
-                UUID deviceId = MP4Item.readDeviceId(stack);
-                if (deviceId == null) {
-                        return;
-                }
-                textureFor(deviceId).renderFrameStart(deviceId);
+    private static void renderHeldOffscreenGuiFrameStart(ItemStack stack) {
+        if (!(stack.getItem() instanceof MP4Item)) {
+            return;
         }
+        UUID deviceId = MP4Item.readDeviceId(stack);
+        if (deviceId == null) {
+            return;
+        }
+        textureFor(deviceId).renderFrameStart(deviceId);
+    }
 
     public interface ArmRenderer {
         void renderMapHand(PoseStack poseStack, SubmitNodeCollector collector, int light, HumanoidArm arm);

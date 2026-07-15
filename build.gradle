@@ -48,6 +48,10 @@ neoForge {
             jvmProp 'ncpb.video.enable_bench_features', prop('ncpbVideoBenchFeatures', 'false')
             jvmProp 'ncpb.video.render.backend', prop('ncpbVideoRenderBackend', 'nv12')
 
+            // 内存诊断：低频输出 JVM、进程提交以及本模组显式 native/PBO 分配。
+            jvmProp 'ncpb.memory.diagnostics', prop('ncpbMemoryDiagnostics', 'false')
+            jvmProp 'ncpb.memory.report_interval_ms', prop('ncpbMemoryReportIntervalMs', '5000')
+
             // 默认播放器优先使用已验证的 NV12 双平面路径；需要排查时可通过 -PncpbVideoRenderBackend=rgba/yuv420 回退。
             jvmProp 'ncpb.video.iris.force_yuv_shader', prop('ncpbIrisForceYuvShader', 'true')
             jvmProp 'ncpb.video.iris.allow_three_plane', prop('ncpbIrisAllowThreePlane', 'true')

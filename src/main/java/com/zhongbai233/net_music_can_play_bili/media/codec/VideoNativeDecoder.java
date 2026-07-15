@@ -60,6 +60,42 @@ public class VideoNativeDecoder implements AutoCloseable {
         return Eac3NativeDecoder.isNativeAvailable();
     }
 
+    /**
+     * Returns process-wide FFmpeg allocator and D3D11VA resource statistics.
+     * Old native bundles safely report {@link NativeMemoryStats#unavailable()}.
+     */
+    public static NativeMemoryStats nativeMemoryStats() {
+        if (!isNativeAvailable()) {
+            return NativeMemoryStats.unavailable();
+        }
+        try {
+            long[] values = VideoJni.getNativeMemoryStats();
+            if (values == null || values.length < 11) {
+                return NativeMemoryStats.unavailable();
+            }
+            return new NativeMemoryStats(true,
+                    values[0], values[1], values[2], values[3], values[4],
+                    values[5], values[6], values[7], values[8], values[9], values[10]);
+        } catch (UnsatisfiedLinkError oldNative) {
+            return NativeMemoryStats.unavailable();
+        } catch (Throwable error) {
+            LOGGER.debug("VideoNativeDecoder: 查询 FFmpeg 内存统计失败", error);
+            return NativeMemoryStats.unavailable();
+        }
+    }
+
+    public record NativeMemoryStats(boolean available,
+            long ffmpegCurrentBytes, long ffmpegPeakBytes,
+            long allocations, long reallocations, long frees,
+            long d3d11TextureCurrent, long d3d11TexturePeak,
+            long d3d11SurfaceCurrent, long d3d11SurfacePeak,
+            long d3d11LogicalBytesCurrent, long d3d11LogicalBytesPeak) {
+        public static NativeMemoryStats unavailable() {
+            return new NativeMemoryStats(false, 0L, 0L, 0L, 0L, 0L,
+                    0L, 0L, 0L, 0L, 0L, 0L);
+        }
+    }
+
     public void setRequestedHwaccel(String requestedHwaccel) {
         if (!open) {
             this.requestedHwaccel = requestedHwaccel == null || requestedHwaccel.isBlank()

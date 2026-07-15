@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import java.net.URL;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 客户端同步媒体流断链恢复注册表。
@@ -18,24 +19,38 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class SyncedStreamRecoveryRegistry {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_ATTEMPTS = Integer.getInteger("ncpb.bili.media.stream_recovery.max_attempts", 3);
-    private static final long MIN_INTERVAL_MILLIS = Long.getLong("ncpb.bili.media.stream_recovery.min_interval_ms", 1_000L);
+    private static final long MIN_INTERVAL_MILLIS = Long.getLong("ncpb.bili.media.stream_recovery.min_interval_ms",
+            1_000L);
 
     private static final ConcurrentHashMap<String, Entry> ENTRIES = new ConcurrentHashMap<>();
+    private static final AtomicLong GENERATIONS = new AtomicLong();
 
     private SyncedStreamRecoveryRegistry() {
     }
 
-    public static void register(String sessionId, RecoveryHandler handler) {
+    public static Registration register(String sessionId, RecoveryHandler handler) {
         if (sessionId == null || sessionId.isBlank() || handler == null) {
-            return;
+            return Registration.NONE;
         }
-        ENTRIES.put(sessionId, new Entry(handler, new AtomicInteger(), 0L));
+        long generation = GENERATIONS.incrementAndGet();
+        ENTRIES.compute(sessionId, (ignored, existing) -> existing == null
+                ? new Entry(handler, new AtomicInteger(), 0L, generation)
+                : new Entry(handler, existing.attempts(), existing.lastAttemptMillis(), generation));
+        return new Registration(sessionId, generation);
     }
 
     public static void unregister(String sessionId) {
         if (sessionId != null && !sessionId.isBlank()) {
             ENTRIES.remove(sessionId);
         }
+    }
+
+    public static void unregister(Registration registration) {
+        if (registration == null || registration == Registration.NONE) {
+            return;
+        }
+        ENTRIES.computeIfPresent(registration.sessionId(),
+                (ignored, entry) -> entry.generation() == registration.generation() ? null : entry);
     }
 
     public static void clear() {
@@ -63,9 +78,14 @@ public final class SyncedStreamRecoveryRegistry {
             ENTRIES.remove(sessionId, entry);
             return false;
         }
-        ENTRIES.put(sessionId, entry.withLastAttemptMillis(now));
+        Entry attemptedEntry = entry.withLastAttemptMillis(now);
+        if (!ENTRIES.replace(sessionId, entry, attemptedEntry)) {
+            LOGGER.debug("媒体流恢复处理器已由新播放代接管: session={} attempt={}", sessionId, attempt);
+            return true;
+        }
         try {
-            boolean scheduled = entry.handler().recover(new RecoveryRequest(sessionId, failedUrl, error, attempt));
+            boolean scheduled = attemptedEntry.handler().recover(
+                    new RecoveryRequest(sessionId, failedUrl, error, attempt));
             if (!scheduled) {
                 LOGGER.warn("媒体流恢复处理器拒绝恢复: session={} attempt={} reason={}", sessionId, attempt,
                         error != null ? error.toString() : "unknown");
@@ -85,9 +105,13 @@ public final class SyncedStreamRecoveryRegistry {
         boolean recover(RecoveryRequest request);
     }
 
-    private record Entry(RecoveryHandler handler, AtomicInteger attempts, long lastAttemptMillis) {
+    public record Registration(String sessionId, long generation) {
+        private static final Registration NONE = new Registration("", 0L);
+    }
+
+    private record Entry(RecoveryHandler handler, AtomicInteger attempts, long lastAttemptMillis, long generation) {
         Entry withLastAttemptMillis(long value) {
-            return new Entry(handler, attempts, value);
+            return new Entry(handler, attempts, value, generation);
         }
     }
 }

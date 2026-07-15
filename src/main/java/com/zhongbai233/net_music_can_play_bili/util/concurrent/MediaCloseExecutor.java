@@ -4,6 +4,7 @@ import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
 
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -25,26 +26,32 @@ public final class MediaCloseExecutor {
     private MediaCloseExecutor() {
     }
 
-    public static void closeAsync(AutoCloseable resource, String description) {
+    public static CompletableFuture<Void> closeAsync(AutoCloseable resource, String description) {
         if (resource == null) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
-        CloseTask task = new CloseTask(resource, description != null ? description : "media resource");
+        CompletableFuture<Void> completion = new CompletableFuture<>();
+        CloseTask task = new CloseTask(resource, description != null ? description : "media resource", completion);
         try {
             EXECUTOR.execute(task);
         } catch (RejectedExecutionException e) {
-            LOGGER.warn("媒体关闭队列已满，当前线程同步关闭 {}", task.description());
-            task.run();
+            LOGGER.warn("媒体关闭队列已满，改用独立后台线程关闭 {}", task.description());
+            Thread emergencyThread = NetMusicThreadFactory.daemonThread("media-close-emergency", task);
+            emergencyThread.start();
         }
+        return completion;
     }
 
-    private record CloseTask(AutoCloseable resource, String description) implements Runnable {
+    private record CloseTask(AutoCloseable resource, String description, CompletableFuture<Void> completion)
+            implements Runnable {
         @Override
         public void run() {
             try {
                 resource.close();
             } catch (Exception e) {
                 LOGGER.warn("关闭 {} 失败: {}", description, e.toString());
+            } finally {
+                completion.complete(null);
             }
         }
     }

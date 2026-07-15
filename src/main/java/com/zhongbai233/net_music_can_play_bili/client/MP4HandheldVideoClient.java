@@ -345,10 +345,10 @@ public final class MP4HandheldVideoClient {
             if (!profile.isDeviceAvailable(deviceId)) {
                 stop(entry.getValue(), profile == MP4_PROFILE ? "等待快捷栏" : "等待设备");
                 if (profile == MP4_PROFILE) {
-                    MP4ItemScreenRenderer.releaseVideoLayers(deviceId);
+                    MP4ItemScreenRenderer.releaseDeviceResources(deviceId);
                 } else {
                     com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer
-                            .releaseVideoLayers(deviceId);
+                            .releaseDeviceResources(deviceId);
                 }
             }
         }
@@ -512,6 +512,9 @@ public final class MP4HandheldVideoClient {
                 session.key.sessionId(), outputFormat, session.key.rgbaFallback());
         try (Fmp4NativeVideoDecoder decoder = openNativeDecoder(session.key.sessionId(), stream, decodeSize,
                 outputFormat, elapsedMillis, totalMillis)) {
+            if (!session.attachDecoder(decoder)) {
+                return;
+            }
             long displayedFrames = 0L;
             boolean firstFrameAccepted = false;
             while (!session.closed.get() && session.key.equals(state.activeKey)) {
@@ -554,6 +557,8 @@ public final class MP4HandheldVideoClient {
                 displayedFrames++;
                 state.statusText = "视频播放中";
             }
+        } finally {
+            session.detachDecoder();
         }
     }
 
@@ -957,15 +962,40 @@ public final class MP4HandheldVideoClient {
         private final PlaybackKey key;
         private final long decoderStartOffsetMillis;
         private final AtomicBoolean closed = new AtomicBoolean(false);
+        private final AtomicReference<Fmp4NativeVideoDecoder> decoder = new AtomicReference<>();
 
         private VideoSession(PlaybackKey key, long decoderStartOffsetMillis) {
             this.key = Objects.requireNonNull(key);
             this.decoderStartOffsetMillis = Math.max(0L, decoderStartOffsetMillis);
         }
 
+        private boolean attachDecoder(Fmp4NativeVideoDecoder value) {
+            if (closed.get()) {
+                value.requestClose();
+                return false;
+            }
+            decoder.set(value);
+            if (closed.get()) {
+                Fmp4NativeVideoDecoder attached = decoder.getAndSet(null);
+                if (attached != null) {
+                    attached.requestClose();
+                }
+                return false;
+            }
+            return true;
+        }
+
+        private void detachDecoder() {
+            decoder.set(null);
+        }
+
         @Override
         public void close() {
             closed.set(true);
+            Fmp4NativeVideoDecoder attached = decoder.getAndSet(null);
+            if (attached != null) {
+                attached.requestClose();
+            }
         }
     }
 

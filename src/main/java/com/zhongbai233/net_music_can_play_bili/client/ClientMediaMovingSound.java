@@ -30,6 +30,7 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
     private final String debugName;
     private float mediaVolume;
     private boolean finished;
+    private final SyncedStreamRecoveryRegistry.Registration recoveryRegistration;
 
     public ClientMediaMovingSound(UUID sourceId, URL songUrl, int timeSecond, LyricRecord lyricRecord,
             String sessionId, long startOffsetMillis, float volume, boolean headphoneRouted,
@@ -45,7 +46,7 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
         LOGGER.trace("{} 声音实例创建: source={} session={} headphoneRouted={} volume={} gain={} attenuation={}",
                 this.debugName, sourceId, this.sessionId, headphoneRouted, this.mediaVolume, volume, attenuation);
         this.lifecyclePolicy.registerSound(sourceId, this.sessionId, this);
-        SyncedStreamRecoveryRegistry.register(this.sessionId,
+        recoveryRegistration = SyncedStreamRecoveryRegistry.register(this.sessionId,
                 request -> this.lifecyclePolicy.recoverAfterStreamFailure(sourceId, this.sessionId, request.error()));
     }
 
@@ -67,7 +68,7 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
     @Override
     public void discardWithoutFinishing() {
         finished = true;
-        SyncedStreamRecoveryRegistry.unregister(sessionId);
+        SyncedStreamRecoveryRegistry.unregister(recoveryRegistration);
         stop();
     }
 
@@ -158,7 +159,7 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
     protected void finishSession() {
         if (!finished) {
             finished = true;
-            SyncedStreamRecoveryRegistry.unregister(sessionId);
+            SyncedStreamRecoveryRegistry.unregister(recoveryRegistration);
             lifecyclePolicy.finish(sourceId, sessionId);
         }
     }

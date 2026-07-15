@@ -10,6 +10,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
+import com.zhongbai233.net_music_can_play_bili.media.stream.MediaNetworkFailureClassifier;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.client.VideoFeatureFlags;
@@ -56,6 +57,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * B站视频投影的客户端渲染管线
@@ -77,6 +79,11 @@ public final class VideoBillboardPreview {
                 }
             }
         }
+        if (activeNetworkFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED && width > 0 && height > 0
+                && (projectorPos == null || activeProjectorPositions.isEmpty()
+                        || activeProjectorPositions.contains(projectorPos))) {
+            return networkErrorSnapshot();
+        }
         if (!hasFrame || width <= 0 || height <= 0) {
             return ProjectorFrameSnapshot.empty();
         }
@@ -97,6 +104,11 @@ public final class VideoBillboardPreview {
                 ProjectorFrameSnapshot snapshot = instance.displayFrameSnapshot(projectorPos);
                 if (snapshot.hasFrame()) {
                     return snapshot;
+                }
+            }
+            for (PendingLoading pending : PENDING_LOADING.values()) {
+                if (pending.projectorPositions().contains(projectorPos)) {
+                    return VideoPlaybackInstance.loadingPlaceholderSnapshot(pending.startedNanoTime());
                 }
             }
         }
@@ -130,6 +142,10 @@ public final class VideoBillboardPreview {
             NetMusicCanPlayBili.MODID, "textures/gui/video_loading/progress_frame_204x10.png");
     private static final Identifier LOADING_PROGRESS_SEGMENT_TEXTURE = Identifier.fromNamespaceAndPath(
             NetMusicCanPlayBili.MODID, "textures/gui/video_loading/progress_segment_42x6.png");
+    private static final Identifier NETWORK_ERROR_PLACEHOLDER_TEXTURE = Identifier.fromNamespaceAndPath(
+            NetMusicCanPlayBili.MODID, "textures/gui/video_loading/network_error_base.png");
+    private static final boolean NETWORK_ERROR_PLACEHOLDER_ENABLED = Boolean.parseBoolean(
+            System.getProperty("ncpb.video.pipeline.network_error_placeholder", "true"));
     private static final int LOADING_PLACEHOLDER_WIDTH = 320;
     private static final int LOADING_PLACEHOLDER_HEIGHT = 180;
     private static final int LOADING_PROGRESS_X = 58;
@@ -194,6 +210,7 @@ public final class VideoBillboardPreview {
             System.getProperty("ncpb.video.yuv.upload_planes", "true"));
 
     private static final Map<String, VideoPlaybackInstance> INSTANCES = new ConcurrentHashMap<>();
+    private static final Map<String, PendingLoading> PENDING_LOADING = new ConcurrentHashMap<>();
 
     private static final AtomicBoolean started = new AtomicBoolean(false);
     private static final AtomicBoolean loggedIrisYuvRenderType = new AtomicBoolean(false);
@@ -216,6 +233,7 @@ public final class VideoBillboardPreview {
     private static volatile long activeStartOffsetMillis;
     private static volatile long activeStartNanoTime;
     private static volatile boolean hasFrame;
+    private static volatile boolean activeNetworkFailure;
     private static DynamicTexture texture;
     private static VideoYuvTextureSet yuvTextureSet;
     private static DynamicTexture packedBenchTexture;
@@ -234,7 +252,7 @@ public final class VideoBillboardPreview {
     private static volatile boolean firstImmediateQuadLogged;
     private static volatile boolean loggedProjectorYuvImmediate;
     private static volatile Thread decodeThread;
-    private static volatile AutoCloseable activeDecoder;
+    private static final AtomicReference<AutoCloseable> ACTIVE_DECODER = new AtomicReference<>();
     private static volatile String activeSessionId = "";
     private static volatile BlockPos activeProjectorPos;
     private static final Set<BlockPos> activeProjectorPositions = new CopyOnWriteArraySet<>();
@@ -246,6 +264,12 @@ public final class VideoBillboardPreview {
     private static volatile boolean firstPreviewSubmitLogged;
 
     private VideoBillboardPreview() {
+    }
+
+    private static ProjectorFrameSnapshot networkErrorSnapshot() {
+        return new ProjectorFrameSnapshot(true, false, NETWORK_ERROR_PLACEHOLDER_TEXTURE, null, null, null,
+                Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, LOADING_PLACEHOLDER_WIDTH,
+                LOADING_PLACEHOLDER_HEIGHT, true, false, 0.0F);
     }
 
     public static void start(String videoUrl, int targetWidth, int targetHeight, int fps) {
@@ -324,6 +348,54 @@ public final class VideoBillboardPreview {
         }
     }
 
+    public static boolean hasNetworkFailure(String sessionId) {
+        String normalized = sessionId != null ? sessionId : "";
+        VideoPlaybackInstance instance = INSTANCES.get(normalized);
+        if (instance != null) {
+            return instance.hasNetworkFailure();
+        }
+        return activeNetworkFailure && normalized.equals(activeSessionId);
+    }
+
+    public static boolean retryNetworkFailure(String sessionId) {
+        String normalized = sessionId != null ? sessionId : "";
+        VideoPlaybackInstance instance = INSTANCES.get(normalized);
+        if (instance != null) {
+            return instance.retryNetworkFailure();
+        }
+        return retryLegacyNetworkFailure(normalized);
+    }
+
+    public static int retryAllNetworkFailures() {
+        int retried = 0;
+        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+            if (instance.retryNetworkFailure()) {
+                retried++;
+            }
+        }
+        if (retryLegacyNetworkFailure(activeSessionId)) {
+            retried++;
+        }
+        return retried;
+    }
+
+    private static boolean retryLegacyNetworkFailure(String sessionId) {
+        PlaybackRequest request = activeRequest;
+        if (!activeNetworkFailure || request == null
+                || (sessionId != null && !sessionId.isBlank() && !sessionId.equals(activeSessionId))) {
+            return false;
+        }
+        long retryOffsetMillis = activeStartOffsetMillis;
+        if (activeStartNanoTime > 0L) {
+            retryOffsetMillis += Math.max(0L, (System.nanoTime() - activeStartNanoTime) / 1_000_000L);
+        }
+        stopForReplace();
+        startInternal(request.videoUrl(), request.targetWidth(), request.targetHeight(), request.fps(),
+                request.codecId(), request.preferNative(), request.decoderOverride(), request.sessionId(),
+                retryOffsetMillis, request.totalMillis(), request.anchorPositions(), true, request.forceRgbaOutput());
+        return true;
+    }
+
     public static void startSynced(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             String sessionId, long startOffsetMillis, BlockPos anchorPos, String decoderOverride) {
         startSynced(videoUrl, targetWidth, targetHeight, fps, codecId, sessionId, startOffsetMillis, 0L, anchorPos,
@@ -393,6 +465,7 @@ public final class VideoBillboardPreview {
                 sessionId,
                 normalizedOffset, Math.max(0L, totalMillis), projectors, anchor, preferNative, decoderOverride);
         INSTANCES.put(sessionId, instance);
+        PENDING_LOADING.remove(sessionId);
         instance.start();
     }
 
@@ -428,6 +501,7 @@ public final class VideoBillboardPreview {
 
         running = true;
         hasFrame = false;
+        activeNetworkFailure = false;
         width = Math.max(1, targetWidth);
         height = Math.max(1, targetHeight);
         int protectedFps = protectedUploadFps(targetWidth, targetHeight, fps);
@@ -495,6 +569,7 @@ public final class VideoBillboardPreview {
 
         running = true;
         hasFrame = false;
+        activeNetworkFailure = false;
         anchorInitialized = false;
         width = Math.max(1, targetWidth);
         height = Math.max(1, targetHeight);
@@ -516,9 +591,11 @@ public final class VideoBillboardPreview {
             instance.stop();
         }
         INSTANCES.clear();
+        PENDING_LOADING.clear();
         running = false;
         started.set(false);
         hasFrame = false;
+        activeNetworkFailure = false;
         anchorInitialized = false;
         activeFps = 0;
         activeStartOffsetMillis = 0L;
@@ -549,6 +626,7 @@ public final class VideoBillboardPreview {
         running = false;
         started.set(false);
         hasFrame = false;
+        activeNetworkFailure = false;
         activeRequiresProjector = false;
         activeProjectorPositions.clear();
         activeFps = 0;
@@ -570,6 +648,7 @@ public final class VideoBillboardPreview {
 
     public static void stopIfSession(String sessionId) {
         String normalized = sessionId != null ? sessionId : "";
+        clearPendingLoading(normalized);
         ModernTurntableVideoClient.forgetSession(normalized);
         VideoPlaybackInstance instance = INSTANCES.remove(normalized);
         if (instance != null) {
@@ -586,6 +665,8 @@ public final class VideoBillboardPreview {
         }
         berRenderedProjectorPositions.remove(projectorPos);
         PROJECTOR_VISIBILITY_CACHE.remove(projectorPos);
+        PENDING_LOADING.replaceAll((sessionId, pending) -> pending.withoutProjector(projectorPos));
+        PENDING_LOADING.entrySet().removeIf(entry -> entry.getValue().projectorPositions().isEmpty());
         INSTANCES.values().forEach(instance -> instance.removeProjector(projectorPos));
         INSTANCES.entrySet().removeIf(entry -> {
             if (entry.getValue().hasProjectors()) {
@@ -660,6 +741,11 @@ public final class VideoBillboardPreview {
         if (normalized.isBlank()) {
             return;
         }
+        PendingLoading pending = PENDING_LOADING.get(normalized);
+        if (pending != null) {
+            PENDING_LOADING.put(normalized,
+                    new PendingLoading(immutablePositions(projectorPositions), pending.startedNanoTime()));
+        }
         VideoPlaybackInstance instance = INSTANCES.get(normalized);
         if (instance != null) {
             instance.replaceProjectors(projectorPositions);
@@ -669,6 +755,31 @@ public final class VideoBillboardPreview {
             replaceActiveProjectors(projectorPositions);
             activeProjectorPos = activeProjectorPositions.stream().findFirst().orElse(null);
             activeRequiresProjector = !activeProjectorPositions.isEmpty();
+        }
+    }
+
+    public static void beginPendingLoading(String sessionId, Collection<BlockPos> projectorPositions) {
+        String normalized = sessionId != null ? sessionId : "";
+        List<BlockPos> positions = immutablePositions(projectorPositions);
+        if (normalized.isBlank() || positions.isEmpty()) {
+            return;
+        }
+        PENDING_LOADING.compute(normalized, (ignored, existing) -> new PendingLoading(positions,
+                existing != null ? existing.startedNanoTime() : System.nanoTime()));
+    }
+
+    public static void clearPendingLoading(String sessionId) {
+        String normalized = sessionId != null ? sessionId : "";
+        if (!normalized.isBlank()) {
+            PENDING_LOADING.remove(normalized);
+        }
+    }
+
+    private record PendingLoading(List<BlockPos> projectorPositions, long startedNanoTime) {
+        private PendingLoading withoutProjector(BlockPos projectorPos) {
+            return new PendingLoading(projectorPositions.stream()
+                    .filter(pos -> !pos.equals(projectorPos))
+                    .toList(), startedNanoTime);
         }
     }
 
@@ -789,9 +900,11 @@ public final class VideoBillboardPreview {
         long frameIntervalNs = fps > 0 ? Math.max(1L, 1_000_000_000L / fps) : 50_000_000L;
         long frameIndex = 0L;
         int consecutiveBadFrames = 0;
-        try (AutoCloseable decoder = openDecoder(videoUrl, targetWidth, targetHeight, fps, codecId, preferNative,
-                decoderOverride, startOffsetMillis, totalMillis, forceRgbaOutput)) {
-            activeDecoder = decoder;
+        AutoCloseable decoder = null;
+        try {
+            decoder = openDecoder(videoUrl, targetWidth, targetHeight, fps, codecId, preferNative,
+                    decoderOverride, startOffsetMillis, totalMillis, forceRgbaOutput);
+            ACTIVE_DECODER.set(decoder);
             warnNativeOffsetLimitation(decoder, startOffsetMillis);
             while (running && generation == decodeGeneration.get()) {
                 if (isGamePaused()) {
@@ -864,12 +977,25 @@ public final class VideoBillboardPreview {
 
             }
         } catch (IOException e) {
+            if (generation == decodeGeneration.get()) {
+                activeNetworkFailure = MediaNetworkFailureClassifier.isNetworkFailure(e);
+            }
             LOGGER.error("视频 billboard 预览解码失败", e);
         } catch (Exception e) {
+            if (generation == decodeGeneration.get()) {
+                activeNetworkFailure = MediaNetworkFailureClassifier.isNetworkFailure(e);
+            }
             LOGGER.error("视频 billboard 预览 native 解码失败", e);
         } finally {
+            if (decoder != null) {
+                try {
+                    decoder.close();
+                } catch (Exception e) {
+                    LOGGER.warn("视频 billboard 解码器关闭失败", e);
+                }
+            }
+            ACTIVE_DECODER.compareAndSet(decoder, null);
             if (generation == decodeGeneration.get()) {
-                activeDecoder = null;
                 running = false;
                 started.set(false);
                 decodeThread = null;
@@ -929,8 +1055,7 @@ public final class VideoBillboardPreview {
     }
 
     private static void closeActiveDecoderAsync() {
-        AutoCloseable decoder = activeDecoder;
-        activeDecoder = null;
+        AutoCloseable decoder = ACTIVE_DECODER.getAndSet(null);
         if (decoder == null) {
             return;
         }
@@ -990,8 +1115,15 @@ public final class VideoBillboardPreview {
     }
 
     static byte[] nextFrame(AutoCloseable decoder) throws Exception {
-        DecodedFrame frame = nextDecodedFrame(decoder);
-        return frame != null ? frame.rgba() : null;
+        try (DecodedFrame frame = nextDecodedFrame(decoder)) {
+            if (frame == null) {
+                return null;
+            }
+            if (frame.format() != Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA) {
+                throw new IllegalStateException("decoded frame is " + frame.format() + ", not RGBA");
+            }
+            return frame.data();
+        }
     }
 
     static DecodedFrame nextDecodedFrame(AutoCloseable decoder) throws Exception {
@@ -1770,6 +1902,7 @@ public final class VideoBillboardPreview {
                 instance.stop();
             }
             INSTANCES.clear();
+            PENDING_LOADING.clear();
             running = false;
             hasFrame = false;
             return;
@@ -1787,7 +1920,7 @@ public final class VideoBillboardPreview {
                     return true;
                 }
                 instance.submit(event, minecraft, camera);
-                return !instance.isRunning() && !instance.hasFrame();
+                return !instance.isRunning() && !instance.hasFrame() && !instance.hasNetworkFailure();
             });
         }
         boolean renderYuvFrame = shouldRenderYuvFrame();

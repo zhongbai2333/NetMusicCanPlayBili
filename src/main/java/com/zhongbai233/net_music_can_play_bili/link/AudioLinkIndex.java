@@ -188,6 +188,7 @@ public final class AudioLinkIndex {
 
     public static void clear() {
         SPEAKERS_BY_TURNTABLE.clear();
+        VIDEO_PROJECTORS_BY_TURNTABLE.clear();
         HEADPHONE_PLAYERS_BY_MP4.clear();
         MP4_BY_HEADPHONE_PLAYER.clear();
         HEADPHONE_OWNERS_BY_MP4.clear();

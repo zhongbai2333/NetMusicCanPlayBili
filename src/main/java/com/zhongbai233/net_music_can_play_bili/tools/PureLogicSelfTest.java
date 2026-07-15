@@ -8,14 +8,22 @@ import com.zhongbai233.net_music_can_play_bili.client.renderer.ProjectorScreenBo
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadDocument;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeHeaders;
+import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4StreamParser;
+import com.zhongbai233.net_music_can_play_bili.media.stream.MediaNetworkFailureClassifier;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseExecutor;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 
 import java.net.URI;
+import java.net.SocketTimeoutException;
 import java.net.URL;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.http.HttpRequest;
 import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.AABB;
@@ -34,8 +42,11 @@ public final class PureLogicSelfTest {
         parsesHttpRangeTotals();
         parsesFullHttpRanges();
         buildsRangeRequests();
+        rejectsOversizedMediaPayloadBeforeReading();
+        classifiesMediaNetworkFailures();
         spatialVolumeShrinksAudibleDistance();
         createsNamedDaemonThreads();
+        closesMediaResourcesOffCallerThread();
         togglesPadDocumentLockWithoutForkingContent();
         preservesMinecartPlaybackSyncMetadata();
         mapsTurntableProgressToComparatorSignal();
@@ -127,6 +138,41 @@ public final class PureLogicSelfTest {
         }
     }
 
+    private static void rejectsOversizedMediaPayloadBeforeReading() throws Exception {
+        InputStream mustNotRead = new InputStream() {
+            @Override
+            public int read() {
+                throw new AssertionError("oversized payload must be rejected before reading or allocating");
+            }
+        };
+        try {
+            Fmp4StreamParser.readFully(mustNotRead, Long.MAX_VALUE);
+            throw new AssertionError("oversized media payload should be rejected");
+        } catch (IOException expected) {
+            if (!expected.getMessage().contains("too large")) {
+                throw new AssertionError("unexpected oversized payload error", expected);
+            }
+        }
+    }
+
+    private static void classifiesMediaNetworkFailures() {
+        if (!MediaNetworkFailureClassifier.isNetworkFailure(new SocketTimeoutException("read timed out"))) {
+            throw new AssertionError("socket timeout should be classified as a network failure");
+        }
+        if (!MediaNetworkFailureClassifier.isNetworkFailure(
+                new IllegalStateException("wrapper", new java.io.IOException("CDN response ended early")))) {
+            throw new AssertionError("nested CDN short read should be classified as a network failure");
+        }
+        if (MediaNetworkFailureClassifier.isNetworkFailure(
+                new java.io.IOException("unable to parse fMP4 moov decoder config"))) {
+            throw new AssertionError("container parsing failure must not be presented as a network failure");
+        }
+        if (MediaNetworkFailureClassifier.isNetworkFailure(
+                new java.io.IOException("native video decoder unavailable"))) {
+            throw new AssertionError("decoder initialization failure must not be presented as a network failure");
+        }
+    }
+
     private static void spatialVolumeShrinksAudibleDistance() {
         float fullAtEdge = AudioUtils.spatialGainForDistance(64.0f, 1.0f);
         float expectedAtEdge = AudioUtils.gainForDistance(64.0f);
@@ -172,6 +218,17 @@ public final class PureLogicSelfTest {
         });
         if (!pooled.isDaemon() || !pooled.getName().startsWith("unit-pool-")) {
             throw new AssertionError("daemon factory should create named daemon threads");
+        }
+    }
+
+    private static void closesMediaResourcesOffCallerThread() throws Exception {
+        String callerThread = Thread.currentThread().getName();
+        AtomicReference<String> closeThread = new AtomicReference<>();
+        MediaCloseExecutor.closeAsync(() -> closeThread.set(Thread.currentThread().getName()), "self-test resource")
+                .get(5L, TimeUnit.SECONDS);
+        String actual = closeThread.get();
+        if (actual == null || actual.equals(callerThread)) {
+            throw new AssertionError("media close should complete on a background thread, got " + actual);
         }
     }
 

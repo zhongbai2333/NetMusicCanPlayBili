@@ -8,6 +8,8 @@ import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4StreamParser;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeClient;
 import org.slf4j.Logger;
 import org.lwjgl.system.MemoryUtil;
+import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
+import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker.Category;
 
 import javax.sound.sampled.UnsupportedAudioFileException;
 import java.io.ByteArrayOutputStream;
@@ -27,6 +29,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -88,6 +91,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean finished = new AtomicBoolean(false);
     private final AtomicBoolean decoderClosed = new AtomicBoolean(false);
+    private final CompletableFuture<Void> termination = new CompletableFuture<>();
     private final AtomicReference<InputStream> activeInput = new AtomicReference<>();
     private final VideoNativeDecoder decoder;
     private final HttpRangeClient http = new HttpRangeClient();
@@ -238,6 +242,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                 finished.set(true);
                 closed.set(true);
                 closeDecoderOnce();
+                termination.complete(null);
             }
         }, "bili-native-video-decoder");
         worker.setDaemon(true);
@@ -1073,24 +1078,21 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
 
     @Override
     public void close() {
-        closed.set(true);
-        closeActiveInput();
+        requestClose();
         Thread thread = worker;
-        if (thread != null) {
-            thread.interrupt();
-            if (thread != Thread.currentThread()) {
-                try {
-                    thread.join(2_000L);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-                if (thread.isAlive()) {
-                    LOGGER.warn("Native video decoder worker did not stop within 2000ms: {}", videoUrl);
-                }
+        if (thread != null && thread != Thread.currentThread()) {
+            try {
+                thread.join(2_000L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            if (thread.isAlive()) {
+                LOGGER.warn("Native video decoder worker did not stop within 2000ms: {}", videoUrl);
             }
         }
         if (thread == null || thread == Thread.currentThread() || !thread.isAlive()) {
             closeDecoderOnce();
+            termination.complete(null);
         }
         DecodedFrame frame;
         while ((frame = frames.poll()) != null) {
@@ -1098,6 +1100,24 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
         reusableBuffers.clear();
         nativeNv12Buffers.retire();
+    }
+
+    /** Requests cancellation without waiting for the decoder worker to exit. */
+    public void requestClose() {
+        closed.set(true);
+        closeActiveInput();
+        Thread thread = worker;
+        if (thread != null) {
+            thread.interrupt();
+        }
+    }
+
+    /**
+     * Completes only after the native decoder worker has exited and its decoder
+     * handle is closed.
+     */
+    public CompletableFuture<Void> terminationFuture() {
+        return termination;
     }
 
     private void closeDecoderOnce() {
@@ -1304,10 +1324,12 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     selected = candidate;
                     break;
                 }
+                MemoryResourceTracker.freed(Category.DECODER_NV12, candidate.buffer().capacity());
                 MemoryUtil.memFree(candidate.buffer());
             }
             if (selected == null) {
                 ByteBuffer buffer = MemoryUtil.memAlloc(byteCount).order(ByteOrder.nativeOrder());
+                MemoryResourceTracker.allocated(Category.DECODER_NV12, buffer.capacity());
                 selected = new NativeNv12Buffer(buffer);
             }
             return selected;
@@ -1315,6 +1337,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
 
         synchronized void release(NativeNv12Buffer buffer) {
             if (retired || idle.size() >= maxIdle) {
+                MemoryResourceTracker.freed(Category.DECODER_NV12, buffer.buffer().capacity());
                 MemoryUtil.memFree(buffer.buffer());
             } else {
                 idle.addLast(buffer);
@@ -1324,7 +1347,9 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         synchronized void retire() {
             retired = true;
             while (!idle.isEmpty()) {
-                MemoryUtil.memFree(idle.removeFirst().buffer());
+                ByteBuffer buffer = idle.removeFirst().buffer();
+                MemoryResourceTracker.freed(Category.DECODER_NV12, buffer.capacity());
+                MemoryUtil.memFree(buffer);
             }
         }
     }

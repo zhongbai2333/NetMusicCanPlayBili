@@ -60,6 +60,7 @@ final class PadOffscreenGuiRenderer implements AutoCloseable {
     private ProjectionMatrixBuffer projectionBuffer;
     private SubmitNodeStorage submitNodeStorage;
     private FogRenderer fogRenderer;
+    private boolean registered;
     private boolean failed;
     private boolean loggedReady;
     private PadGuiViewState lastView;
@@ -89,6 +90,7 @@ final class PadOffscreenGuiRenderer implements AutoCloseable {
             ensureResources();
         } catch (RuntimeException ex) {
             failed = true;
+            close();
             LOGGER.warn("Pad 离屏 GUI 初始化失败: {}", textureId, ex);
         }
     }
@@ -102,6 +104,7 @@ final class PadOffscreenGuiRenderer implements AutoCloseable {
             mapRenderContext.tick(view.map());
         } catch (RuntimeException ex) {
             failed = true;
+            close();
             LOGGER.warn("Pad 地图离屏层 tick 更新失败: {}", textureId, ex);
         }
     }
@@ -134,6 +137,7 @@ final class PadOffscreenGuiRenderer implements AutoCloseable {
             }
         } catch (RuntimeException ex) {
             failed = true;
+            close();
             LOGGER.warn("Pad 离屏 GUI 渲染失败: {}", textureId, ex);
         }
     }
@@ -146,6 +150,7 @@ final class PadOffscreenGuiRenderer implements AutoCloseable {
         texture = new RenderTargetTexture(target);
         Minecraft minecraft = Minecraft.getInstance();
         minecraft.getTextureManager().register(textureId, texture);
+        registered = true;
         renderState = new GuiRenderState();
         projectionBuffer = new ProjectionMatrixBuffer("netmusic_pad_offscreen_gui_projection");
         submitNodeStorage = new SubmitNodeStorage();
@@ -420,12 +425,12 @@ final class PadOffscreenGuiRenderer implements AutoCloseable {
                 : PadFocusState.pausedDurationMillis();
         String song = ClientMediaPlayback.songName(deviceId);
         String lyric = playing
-            ? (view.subtitlePrimaryMode() ? ClientMediaPlayback.lyricLine(deviceId)
-                : ClientMediaPlayback.translatedLyricLine(deviceId))
-            : "";
+                ? (view.subtitlePrimaryMode() ? ClientMediaPlayback.lyricLine(deviceId)
+                        : ClientMediaPlayback.translatedLyricLine(deviceId))
+                : "";
         if (playing && (lyric == null || lyric.isBlank())) {
             lyric = view.subtitlePrimaryMode() ? ClientMediaPlayback.translatedLyricLine(deviceId)
-                : ClientMediaPlayback.lyricLine(deviceId);
+                    : ClientMediaPlayback.lyricLine(deviceId);
         }
         if (view.subtitlesEnabled() && lyric != null && !lyric.isBlank()) {
             drawVideoSubtitle(g, lyric, 158);
@@ -654,12 +659,29 @@ final class PadOffscreenGuiRenderer implements AutoCloseable {
 
     @Override
     public void close() {
-        if (texture != null) {
-            texture.close();
+        if (registered) {
+            Minecraft.getInstance().getTextureManager().release(textureId);
+            registered = false;
+        }
+        if (renderer != null) {
+            renderer.close();
+            renderer = null;
+        }
+        if (projectionBuffer != null) {
+            projectionBuffer.close();
+            projectionBuffer = null;
+        }
+        if (fogRenderer != null) {
+            fogRenderer.close();
+            fogRenderer = null;
         }
         if (target != null) {
             target.destroyBuffers();
+            target = null;
         }
+        texture = null;
+        renderState = null;
+        submitNodeStorage = null;
         mapRenderContext.close();
     }
 }

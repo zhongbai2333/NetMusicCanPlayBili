@@ -11,6 +11,7 @@ import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputReg
 import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapClientCache;
 import com.zhongbai233.net_music_can_play_bili.gui.HolographicScreenConfigTestScreen;
 import com.zhongbai233.net_music_can_play_bili.gui.VideoPlaceholderDebugScreen;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
@@ -64,7 +65,8 @@ public final class NetMusicClientCommands {
 
     private static LiteralArgumentBuilder<CommandSourceStack> videoCommands() {
         return literal("video")
-                .then(literal("placeholders").executes(NetMusicClientCommands::openVideoPlaceholderDebug));
+                .then(literal("placeholders").executes(NetMusicClientCommands::openVideoPlaceholderDebug))
+                .then(literal("retry").executes(NetMusicClientCommands::retryFailedVideos));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> benchCommands() {
@@ -131,6 +133,14 @@ public final class NetMusicClientCommands {
         minecraft.execute(() -> minecraft.setScreen(new VideoPlaceholderDebugScreen()));
         feedback(Component.literal("已打开视频占位图调试界面"));
         return 1;
+    }
+
+    private static int retryFailedVideos(CommandContext<CommandSourceStack> ctx) {
+        int retried = VideoBillboardPreview.retryAllNetworkFailures();
+        feedback(Component.literal(retried > 0
+                ? "已重试 " + retried + " 个网络失败的视频会话"
+                : "当前没有可重试的网络失败视频"));
+        return retried > 0 ? 1 : 0;
     }
 
     private static void feedback(Component msg) {

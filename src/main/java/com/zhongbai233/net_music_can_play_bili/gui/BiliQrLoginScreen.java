@@ -34,6 +34,8 @@ public class BiliQrLoginScreen extends Screen {
     private int pollTick;
     private int closeTick = -1;
     private volatile boolean done;
+    private int loadGeneration;
+    private boolean removed;
 
     public BiliQrLoginScreen() {
         super(Component.literal("B站登录"));
@@ -42,17 +44,22 @@ public class BiliQrLoginScreen extends Screen {
 
     @Override
     protected void init() {
+        removed = false;
+        int generation = ++loadGeneration;
         loginManager.generate().thenAccept(state -> {
+            if (!isCurrent(generation)) {
+                return;
+            }
             if (state == BiliLoginManager.State.PENDING) {
                 statusText = "请用 B站APP 扫描二维码";
-                loadQrImage(loginManager.getQrUrl());
+                loadQrImage(loginManager.getQrUrl(), generation);
             } else {
                 statusText = "二维码生成失败，请重试";
             }
         });
     }
 
-    private void loadQrImage(String qrContentUrl) {
+    private void loadQrImage(String qrContentUrl, int generation) {
         String encodedUrl = java.net.URLEncoder.encode(qrContentUrl, java.nio.charset.StandardCharsets.UTF_8);
         String qrImageUrl = "https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=" + encodedUrl;
 
@@ -74,13 +81,38 @@ public class BiliQrLoginScreen extends Screen {
                 return null;
             }
         }).thenAcceptAsync(nativeImage -> {
-            if (nativeImage != null && this.minecraft != null) {
-                this.qrTexture = new DynamicTexture(() -> "bili_qrcode", nativeImage);
-                this.qrTextureId = Identifier.fromNamespaceAndPath("net_music_can_play_bili", "bili_qrcode");
-                this.minecraft.getTextureManager().register(qrTextureId, qrTexture);
-                this.qrTexture.upload();
+            if (nativeImage == null) {
+                return;
+            }
+            if (!isCurrent(generation)) {
+                nativeImage.close();
+                return;
+            }
+            DynamicTexture texture = null;
+            try {
+                texture = new DynamicTexture(() -> "bili_qrcode", nativeImage);
+                Identifier textureId = Identifier.fromNamespaceAndPath("net_music_can_play_bili", "bili_qrcode");
+                cleanupTexture();
+                this.qrTexture = texture;
+                this.qrTextureId = textureId;
+                this.minecraft.getTextureManager().register(textureId, texture);
+                texture.upload();
+            } catch (RuntimeException | LinkageError error) {
+                if (this.qrTexture == texture) {
+                    cleanupTexture();
+                } else if (texture != null) {
+                    texture.close();
+                } else {
+                    nativeImage.close();
+                }
+                LOGGER.error("创建二维码纹理失败", error);
             }
         }, Minecraft.getInstance());
+    }
+
+    private boolean isCurrent(int generation) {
+        return !removed && generation == loadGeneration && this.minecraft != null
+                && this.minecraft.screen == this;
     }
 
     @Override
@@ -173,13 +205,20 @@ public class BiliQrLoginScreen extends Screen {
 
     @Override
     public void removed() {
+        removed = true;
+        loadGeneration++;
         cleanupTexture();
     }
 
     private void cleanupTexture() {
         if (qrTexture != null) {
-            qrTexture.close();
+            if (this.minecraft != null && qrTextureId != null) {
+                this.minecraft.getTextureManager().release(qrTextureId);
+            } else {
+                qrTexture.close();
+            }
             qrTexture = null;
         }
+        qrTextureId = null;
     }
 }

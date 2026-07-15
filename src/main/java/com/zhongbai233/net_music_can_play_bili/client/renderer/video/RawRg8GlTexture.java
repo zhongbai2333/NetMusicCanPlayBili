@@ -22,6 +22,7 @@ final class RawRg8GlTexture extends GlTexture {
         int previousTexture = GL11C.glGetInteger(GL11C.GL_TEXTURE_BINDING_2D);
         int previousUnpackAlignment = GL11C.glGetInteger(GL11C.GL_UNPACK_ALIGNMENT);
         int id = GL11C.glGenTextures();
+        boolean ownedByWrapper = false;
         try {
             GlStateManager._bindTexture(id);
             GL11C.glTexParameteri(GL11C.GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
@@ -36,11 +37,15 @@ final class RawRg8GlTexture extends GlTexture {
                     GL30C.GL_RG, GL11C.GL_UNSIGNED_BYTE, 0L);
             int error = GL11C.glGetError();
             if (error != GL11C.GL_NO_ERROR) {
-                GL11C.glDeleteTextures(id);
                 throw new IllegalStateException("创建 GL_RG8 NV12 UV 纹理失败，glError=" + error);
             }
-            return new RawRg8GlTexture(usage, label, Math.max(1, width), Math.max(1, height), id);
+            RawRg8GlTexture texture = new RawRg8GlTexture(usage, label, Math.max(1, width), Math.max(1, height), id);
+            ownedByWrapper = true;
+            return texture;
         } finally {
+            if (!ownedByWrapper && id != 0) {
+                GL11C.glDeleteTextures(id);
+            }
             GL11C.glPixelStorei(GL11C.GL_UNPACK_ALIGNMENT, previousUnpackAlignment);
             GlStateManager._bindTexture(previousTexture);
         }

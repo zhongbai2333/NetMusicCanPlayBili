@@ -7,6 +7,8 @@ import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.TextureFormat;
 import net.minecraft.client.renderer.texture.AbstractTexture;
 import org.lwjgl.system.MemoryUtil;
+import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
+import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker.Category;
 
 import java.nio.ByteBuffer;
 
@@ -40,6 +42,7 @@ final class Yuv420pPlaneTexture extends AbstractTexture {
             this.sampler = RenderSystem.getSamplerCache().getRepeat(FilterMode.LINEAR);
             this.textureView = RenderSystem.getDevice().createTextureView(this.texture);
             this.uploadBuffer = MemoryUtil.memAlloc(this.width * this.height);
+            MemoryResourceTracker.allocated(Category.TEXTURE_STAGING, this.uploadBuffer.capacity());
         } catch (RuntimeException | LinkageError e) {
             close();
             throw e;
@@ -53,9 +56,11 @@ final class Yuv420pPlaneTexture extends AbstractTexture {
         int byteCount = width * height;
         if (uploadBuffer == null || uploadBuffer.capacity() < byteCount) {
             if (uploadBuffer != null) {
+                MemoryResourceTracker.freed(Category.TEXTURE_STAGING, uploadBuffer.capacity());
                 MemoryUtil.memFree(uploadBuffer);
             }
             uploadBuffer = MemoryUtil.memAlloc(byteCount);
+            MemoryResourceTracker.allocated(Category.TEXTURE_STAGING, uploadBuffer.capacity());
         }
         uploadBuffer.clear();
         uploadBuffer.put(yuv420p, offset, byteCount);
@@ -92,6 +97,7 @@ final class Yuv420pPlaneTexture extends AbstractTexture {
             pboUploader = null;
         }
         if (uploadBuffer != null) {
+            MemoryResourceTracker.freed(Category.TEXTURE_STAGING, uploadBuffer.capacity());
             MemoryUtil.memFree(uploadBuffer);
             uploadBuffer = null;
         }

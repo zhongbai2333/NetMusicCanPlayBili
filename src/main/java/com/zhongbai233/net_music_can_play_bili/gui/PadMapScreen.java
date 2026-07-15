@@ -94,10 +94,7 @@ public class PadMapScreen extends Screen {
     @Override
     public void onClose() {
         PadMapClientCache.clearManualView();
-        if (mapTexture != null) {
-            mapTexture.close();
-            mapTexture = null;
-        }
+        releaseMapTexture();
         super.onClose();
     }
 
@@ -209,13 +206,24 @@ public class PadMapScreen extends Screen {
         if (sizeMatches) {
             return;
         }
-        if (mapTexture != null) {
-            mapTexture.close();
-        }
+        releaseMapTexture();
         mapTextureId = Identifier.fromNamespaceAndPath("net_music_can_play_bili",
                 "dynamic/pad_map_screen_" + hand.name().toLowerCase(java.util.Locale.ROOT));
         mapTexture = new DynamicTexture(mapTextureId.toString(), width, height, false);
         Minecraft.getInstance().getTextureManager().register(mapTextureId, mapTexture);
+    }
+
+    private void releaseMapTexture() {
+        if (mapTexture != null) {
+            if (mapTextureId != null) {
+                Minecraft.getInstance().getTextureManager().release(mapTextureId);
+            } else {
+                mapTexture.close();
+            }
+            mapTexture = null;
+        }
+        mapTextureId = null;
+        renderedSnapshot = null;
     }
 
     private void drawPanel(GuiGraphicsExtractor g, int x, int y, int mouseX, int mouseY) {

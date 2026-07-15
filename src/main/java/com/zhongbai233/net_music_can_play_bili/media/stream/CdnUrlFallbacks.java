@@ -46,6 +46,7 @@ public final class CdnUrlFallbacks {
         for (String url : clean) {
             GROUPS_BY_URL.put(url, group);
         }
+        cleanup(now);
     }
 
     public static List<URL> candidates(URL primary) {
@@ -78,14 +79,25 @@ public final class CdnUrlFallbacks {
     }
 
     private static void cleanup(long now) {
-        if (GROUPS_BY_URL.size() < MAX_GROUPS) {
-            return;
-        }
         GROUPS_BY_URL.forEach((url, group) -> {
             if (group.expiresAtMillis() < now) {
                 GROUPS_BY_URL.remove(url, group);
             }
         });
+        int maxEntries = Math.max(1, MAX_GROUPS);
+        while (GROUPS_BY_URL.size() > maxEntries) {
+            UrlGroup oldest = null;
+            for (UrlGroup group : GROUPS_BY_URL.values()) {
+                if (oldest == null || group.expiresAtMillis() < oldest.expiresAtMillis()) {
+                    oldest = group;
+                }
+            }
+            if (oldest == null) {
+                return;
+            }
+            UrlGroup groupToRemove = oldest;
+            GROUPS_BY_URL.entrySet().removeIf(entry -> entry.getValue() == groupToRemove);
+        }
     }
 
     private static String key(URL url) {

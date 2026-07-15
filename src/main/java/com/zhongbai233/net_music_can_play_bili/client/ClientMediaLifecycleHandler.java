@@ -46,6 +46,7 @@ public final class ClientMediaLifecycleHandler {
 
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
+        com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryDiagnostics.tick();
         // 切世界/单人存档重进时清掉旧 tracker 记录
         Minecraft mc = Minecraft.getInstance();
         if (mc.level != lastTrackedLevel) {
@@ -106,6 +107,7 @@ public final class ClientMediaLifecycleHandler {
     }
 
     private static void cleanupClientPlayback() {
+        com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryDiagnostics.report("before-cleanup");
         com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview.stop();
         com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient.clear();
         com.zhongbai233.net_music_can_play_bili.client.sync.ModernTurntableTimeline.clear();
@@ -123,6 +125,7 @@ public final class ClientMediaLifecycleHandler {
         com.zhongbai233.net_music_can_play_bili.client.MP4AutoResumeClient.reset();
         HttpAudioStreamHandler.closeModernStreams();
         ClientAudioOutputRegistry.cleanup();
+        com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryDiagnostics.report("after-cleanup");
         lastTrackedLevel = null;
     }
 }

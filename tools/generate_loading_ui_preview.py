@@ -156,6 +156,25 @@ def draw_loading_base(phase: int, iris_warning: bool = False) -> bytearray:
     return px
 
 
+def draw_network_error_base() -> bytearray:
+    px = bytearray(WIDTH * HEIGHT * 4)
+    fill(px, 0, 0, WIDTH, HEIGHT, BG)
+    fill(px, 18, 18, WIDTH - 36, HEIGHT - 36, PANEL)
+    rect(px, 18, 18, WIDTH - 36, HEIGHT - 36, 0xFF9B493F)
+    draw_centered_text(px, "NETWORK ERROR", 52, 0xFFFF8A78)
+    draw_centered_text(px, "CHECK CONNECTION", 78, TEXT)
+    draw_centered_text(px, "TRY AGAIN", 102, 0xFFB8C1CC)
+
+    bar_x = 58
+    bar_y = 126
+    bar_w = 204
+    bar_h = 10
+    rect(px, bar_x, bar_y, bar_w, bar_h, 0xFF63342F)
+    for x in range(bar_x + 4, bar_x + bar_w - 4, 18):
+        fill(px, x, bar_y + 3, 9, bar_h - 6, 0xFF9B493F)
+    return px
+
+
 def draw_progress_layer(elapsed_ns: int, queued_frames: int, capacity: int) -> bytearray:
     px = bytearray(WIDTH * HEIGHT * 4)
     fill(px, 0, 0, WIDTH, HEIGHT, TRANSPARENT)
@@ -263,6 +282,7 @@ def main() -> None:
     save_png(progress_dir / "progress_segment_42x6.png", draw_progress_segment(42, 6), 42, 6)
 
     save_png(base_dir / "iris_translucent_warning_base.png", draw_loading_base(0, True))
+    save_png(base_dir / "network_error_base.png", draw_network_error_base())
     save_png(overlay_dir / "holographic_privacy_overlay.png", draw_holographic_privacy_overlay())
     print(f"Generated loading UI previews in {args.out.resolve()}")
 

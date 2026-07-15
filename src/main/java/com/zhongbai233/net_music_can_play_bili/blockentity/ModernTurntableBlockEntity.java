@@ -35,10 +35,12 @@ import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.AABB;
 import org.slf4j.Logger;
 
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.WeakHashMap;
 
 public class ModernTurntableBlockEntity extends BlockEntity {
     private static final Logger LOGGER = LogUtils.getLogger();
@@ -59,6 +61,8 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     private static final String VOLUME_PER_MILLE_TAG = "VolumePerMille";
     private static final int SYNC_RANGE = 96;
     private static final int SYNC_INTERVAL_TICKS = 20;
+    private static final Set<ModernTurntableBlockEntity> LOADED_SERVER_TURNTABLES = Collections.synchronizedSet(
+            Collections.newSetFromMap(new WeakHashMap<>()));
 
     private final Set<UUID> syncedPlayers = new HashSet<>();
 
@@ -95,8 +99,17 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     }
 
     @Override
+    public void onLoad() {
+        super.onLoad();
+        if (level instanceof ServerLevel) {
+            LOADED_SERVER_TURNTABLES.add(this);
+        }
+    }
+
+    @Override
     public void setRemoved() {
         super.setRemoved();
+        LOADED_SERVER_TURNTABLES.remove(this);
         syncedPlayers.clear();
         clientLyricRecord = null;
         clientLyricSessionId = "";
@@ -798,18 +811,74 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         for (ServerPlayer player : serverLevel.getEntitiesOfClass(ServerPlayer.class, range)) {
             UUID id = player.getUUID();
             nearby.add(id);
-            if (syncedPlayers.add(id)) {
-                @SuppressWarnings("null")
-                MusicToClientMessage message = new MusicToClientMessage(
-                        worldPosition,
-                        syncedPlayUrl,
-                        rawUrl.isBlank() ? playUrl : rawUrl,
-                        Math.max(1, remainingSeconds),
-                        songName);
-                NetworkHandler.sendToClientPlayer(message, player);
-            }
+            syncPlayer(player, remainingSeconds, syncedPlayUrl);
         }
         syncedPlayers.retainAll(nearby);
+    }
+
+    public static void syncLoadedTurntablesToSpectators(ServerLevel serverLevel) {
+        ModernTurntableBlockEntity[] loaded;
+        synchronized (LOADED_SERVER_TURNTABLES) {
+            loaded = LOADED_SERVER_TURNTABLES.toArray(ModernTurntableBlockEntity[]::new);
+        }
+        for (ModernTurntableBlockEntity turntable : loaded) {
+            if (turntable.isRemoved() || turntable.level != serverLevel) {
+                continue;
+            }
+            turntable.syncNearbySpectators(serverLevel);
+        }
+    }
+
+    public static void clearLoadedServerTurntables() {
+        LOADED_SERVER_TURNTABLES.clear();
+    }
+
+    private void syncNearbySpectators(ServerLevel serverLevel) {
+        if (!playing || playUrl.isBlank()) {
+            return;
+        }
+        int remaining = remainingSeconds(serverLevel.getGameTime());
+        if (remaining <= 0) {
+            return;
+        }
+        AABB range = new AABB(worldPosition).inflate(SYNC_RANGE);
+        Set<UUID> nearbySpectators = new HashSet<>();
+        for (ServerPlayer player : serverLevel.players()) {
+            if (player.isSpectator() && range.contains(player.position())) {
+                nearbySpectators.add(player.getUUID());
+                syncPlayer(serverLevel, player, remaining);
+            }
+        }
+        syncedPlayers.removeIf(id -> {
+            ServerPlayer player = serverLevel.getServer().getPlayerList().getPlayer(id);
+            return player != null && player.isSpectator() && !nearbySpectators.contains(id);
+        });
+    }
+
+    private void syncPlayer(ServerLevel serverLevel, ServerPlayer player, int remainingSeconds) {
+        if (!syncedPlayers.add(player.getUUID())) {
+            return;
+        }
+        long elapsedMillis = elapsedMillis(serverLevel.getGameTime());
+        String syncedPlayUrl = PlaybackSync.withSync(playUrl, playbackSessionId(), elapsedMillis,
+                durationSeconds * 1000L);
+        var hostMinecart = MinecartTurntableCompat.hostMinecart(level);
+        if (hostMinecart != null) {
+            syncedPlayUrl = PlaybackSync.withMinecartAnchor(syncedPlayUrl, hostMinecart.getId(),
+                    hostMinecart.getUUID());
+        }
+        syncPlayer(player, remainingSeconds, syncedPlayUrl);
+    }
+
+    private void syncPlayer(ServerPlayer player, int remainingSeconds, String syncedPlayUrl) {
+        @SuppressWarnings("null")
+        MusicToClientMessage message = new MusicToClientMessage(
+                worldPosition,
+                syncedPlayUrl,
+                rawUrl.isBlank() ? playUrl : rawUrl,
+                Math.max(1, remainingSeconds),
+                songName);
+        NetworkHandler.sendToClientPlayer(message, player);
     }
 
     private void recordAudit(ServerLevel serverLevel) {
@@ -910,7 +979,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         repeatOne = input.getBooleanOr(REPEAT_ONE_TAG, false);
         redstoneMode = TurntableRedstoneMode.byName(input.getStringOr(REDSTONE_MODE_TAG, "ignore"));
         extractionMode = TurntableExtractionMode.byName(
-            input.getStringOr(EXTRACTION_MODE_TAG, "after_playback"));
+                input.getStringOr(EXTRACTION_MODE_TAG, "after_playback"));
         playbackCompleted = input.getBooleanOr(PLAYBACK_COMPLETED_TAG, false);
         volumePerMille = Math.max(0, Math.min(1000, input.getIntOr(VOLUME_PER_MILLE_TAG, 1000)));
         redstoneStateInitialized = false;

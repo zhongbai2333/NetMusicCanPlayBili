@@ -7,15 +7,19 @@ import com.mojang.logging.LogUtils;
 import org.lwjgl.opengl.GL11C;
 import org.lwjgl.opengl.GL15C;
 import org.lwjgl.opengl.GL30C;
+import org.lwjgl.opengl.GL32C;
 import org.slf4j.Logger;
 
 import java.nio.ByteBuffer;
+import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
+import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker.Category;
 
 /**
  * NV12 纹理上传 PBO。
  *
  * <p>
- * 首版采用 orphan + map/unmap + {@code glTexSubImage2D(offset=0)}。
+ * 使用带 fence 的有界 PBO 环形缓冲。GPU 尚未消费完全部槽位时立即回退普通上传，
+ * 不等待 GPU，也不通过持续 orphan 创建无界 backing storage。
  * </p>
  */
 final class Nv12PboUploader implements AutoCloseable {
@@ -26,12 +30,14 @@ final class Nv12PboUploader implements AutoCloseable {
     private static final int GL_UNPACK_SKIP_ROWS = 0x0CF3;
     private static final int GL_UNPACK_IMAGE_HEIGHT = 0x806E;
     private static final int GL_UNPACK_SKIP_IMAGES = 0x806D;
-    private static final int MAP_FLAGS = GL30C.GL_MAP_WRITE_BIT | GL30C.GL_MAP_INVALIDATE_BUFFER_BIT;
+    private static final int RING_SIZE = 3;
+    private static final int MAP_FLAGS = GL30C.GL_MAP_WRITE_BIT | GL30C.GL_MAP_UNSYNCHRONIZED_BIT;
 
     private final String label;
-    private int pbo;
-    private int capacity;
+    private final PboSlot[] slots = new PboSlot[RING_SIZE];
+    private int nextSlot;
     private boolean loggedFirstUpload;
+    private boolean loggedBackpressure;
     private boolean disabled;
 
     Nv12PboUploader(String label) {
@@ -123,15 +129,21 @@ final class Nv12PboUploader implements AutoCloseable {
         boolean mappedBuffer = false;
         try {
             clearGlErrors();
-            ensurePbo(bytes);
-            GL15C.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
+            PboSlot slot = acquireSlot(bytes);
+            if (slot == null) {
+                if (!loggedBackpressure) {
+                    loggedBackpressure = true;
+                    LOGGER.info("NV12/PBO: {} 环形缓冲繁忙，本帧回退普通上传以限制驱动内存", label);
+                }
+                return false;
+            }
+            GL15C.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, slot.pbo);
             int error = GL11C.glGetError();
             if (error != GL11C.GL_NO_ERROR) {
                 disabled = true;
                 LOGGER.warn("NV12/PBO: {} 绑定 PBO 失败 {}，本纹理后续回退普通上传", label, glErrorName(error));
                 return false;
             }
-            GL15C.glBufferData(GL_PIXEL_UNPACK_BUFFER, bytes, GL15C.GL_STREAM_DRAW);
             ByteBuffer mapped = GL30C.glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0L, bytes, MAP_FLAGS);
             if (mapped == null) {
                 return false;
@@ -156,10 +168,11 @@ final class Nv12PboUploader implements AutoCloseable {
                         label, glErrorName(error));
                 return false;
             }
+            slot.fence = GL32C.glFenceSync(GL32C.GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
             if (!loggedFirstUpload) {
                 loggedFirstUpload = true;
-                LOGGER.info("NV12/PBO: 首次通过 PBO 上传 {}: {}x{}, format={}, bytes={}, pbo={}",
-                        label, width, height, glFormatName(format), bytes, pbo);
+                LOGGER.info("NV12/PBO: 首次通过有界环形 PBO 上传 {}: {}x{}, format={}, bytes={}, pbo={}",
+                        label, width, height, glFormatName(format), bytes, slot.pbo);
             }
             return true;
         } catch (RuntimeException | LinkageError e) {
@@ -212,21 +225,67 @@ final class Nv12PboUploader implements AutoCloseable {
         };
     }
 
-    private void ensurePbo(int bytes) {
-        if (pbo == 0) {
-            pbo = GL15C.glGenBuffers();
+    private PboSlot acquireSlot(int bytes) {
+        for (int checked = 0; checked < RING_SIZE; checked++) {
+            int index = (nextSlot + checked) % RING_SIZE;
+            PboSlot slot = slots[index];
+            if (slot == null) {
+                slot = new PboSlot(GL15C.glGenBuffers());
+                slots[index] = slot;
+            }
+            if (!isAvailable(slot)) {
+                continue;
+            }
+            GL15C.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, slot.pbo);
+            if (slot.capacity < bytes) {
+                GL15C.glBufferData(GL_PIXEL_UNPACK_BUFFER, bytes, GL15C.GL_STREAM_DRAW);
+                MemoryResourceTracker.allocated(Category.GPU_PBO, bytes - slot.capacity);
+                slot.capacity = bytes;
+            }
+            nextSlot = (index + 1) % RING_SIZE;
+            return slot;
         }
-        if (capacity < bytes) {
-            capacity = bytes;
+        return null;
+    }
+
+    private static boolean isAvailable(PboSlot slot) {
+        if (slot.fence == 0L) {
+            return true;
         }
+        int status = GL32C.glClientWaitSync(slot.fence, 0, 0L);
+        if (status == GL32C.GL_ALREADY_SIGNALED || status == GL32C.GL_CONDITION_SATISFIED) {
+            GL32C.glDeleteSync(slot.fence);
+            slot.fence = 0L;
+            return true;
+        }
+        return false;
     }
 
     @Override
     public void close() {
-        if (pbo != 0) {
-            GL15C.glDeleteBuffers(pbo);
-            pbo = 0;
-            capacity = 0;
+        for (int i = 0; i < slots.length; i++) {
+            PboSlot slot = slots[i];
+            if (slot == null) {
+                continue;
+            }
+            if (slot.fence != 0L) {
+                GL32C.glDeleteSync(slot.fence);
+                slot.fence = 0L;
+            }
+            GL15C.glDeleteBuffers(slot.pbo);
+            MemoryResourceTracker.freed(Category.GPU_PBO, slot.capacity);
+            slots[i] = null;
+        }
+        nextSlot = 0;
+    }
+
+    private static final class PboSlot {
+        private final int pbo;
+        private int capacity;
+        private long fence;
+
+        private PboSlot(int pbo) {
+            this.pbo = pbo;
         }
     }
 

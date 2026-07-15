@@ -48,6 +48,11 @@ public final class ChunkPrefetchInputStream extends InputStream {
     private volatile Mode mode = Mode.UNKNOWN;
     private volatile long totalLength = -1L;
     private final long startByteOffset;
+    /**
+     * Guarded by demandLock; remains set until buffered data falls to the low-water
+     * mark.
+     */
+    private boolean backpressurePaused;
 
     public ChunkPrefetchInputStream(URL url) throws IOException {
         this(url, 0L);
@@ -320,10 +325,17 @@ public final class ChunkPrefetchInputStream extends InputStream {
         long copied = 0L;
         try {
             while (!closed && copied < maxBytes) {
-                int toRead = (int) Math.min(buffer.length, maxBytes - copied);
+                int writable = awaitWritableBytes();
+                if (writable <= 0) {
+                    break;
+                }
+                int toRead = (int) Math.min(Math.min(buffer.length, writable), maxBytes - copied);
                 int n = body.read(buffer, 0, toRead);
                 if (n < 0) {
                     break;
+                }
+                if (n == 0) {
+                    continue;
                 }
                 spool.write(buffer, 0, n);
                 copied += n;
@@ -335,6 +347,34 @@ public final class ChunkPrefetchInputStream extends InputStream {
             throw new IOException("CDN response ended early: expected " + contentLength + ", got " + copied);
         }
         return copied;
+    }
+
+    /**
+     * Applies the same bounded, hysteretic backpressure to every HTTP response
+     * mode.
+     */
+    private int awaitWritableBytes() throws IOException {
+        synchronized (demandLock) {
+            long ahead = Math.max(0L, spool.cachedLength() - readPosition);
+            if (ahead >= highWater) {
+                backpressurePaused = true;
+            }
+            while (!closed && !spool.isComplete() && backpressurePaused
+                    && (ahead > lowWater || ahead >= highWater)) {
+                try {
+                    demandLock.wait(500L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("prefetch downloader interrupted", e);
+                }
+                ahead = Math.max(0L, spool.cachedLength() - readPosition);
+            }
+            if (closed || spool.isComplete()) {
+                return 0;
+            }
+            backpressurePaused = false;
+            return (int) Math.min(Integer.MAX_VALUE, highWater - ahead);
+        }
     }
 
     public static final class EmptyCdnResponseException extends IOException {

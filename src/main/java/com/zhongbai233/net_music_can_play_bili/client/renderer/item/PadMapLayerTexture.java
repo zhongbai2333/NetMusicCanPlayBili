@@ -111,13 +111,20 @@ final class PadMapLayerTexture implements AutoCloseable {
         float cellY = cell;
         PadMapStyleProcessor.StyledMap styled = styleProcessor.style(map);
         boolean[] repaint = prepareReuse(image, map, styled, bakedStyled, ox, oy, cellX, cellY);
-        drawAreaMask(image, styled.farmlandArea(), repaint, styled.width(), styled.height(), ox, oy, cellX, cellY, 0xFFE0D5B7);
-        drawAreaMask(image, styled.greenArea(), repaint, styled.width(), styled.height(), ox, oy, cellX, cellY, 0xFFBCD3B2);
-        drawAreaMask(image, styled.waterArea(), repaint, styled.width(), styled.height(), ox, oy, cellX, cellY, 0xFF9DBDCE);
-        drawAreaMask(image, styled.indoorFloor(), repaint, styled.width(), styled.height(), ox, oy, cellX, cellY, 0xFFE8DED0);
-        drawAreaMask(image, styled.buildingZone(), repaint, styled.width(), styled.height(), ox, oy, cellX, cellY, 0xFFD1CBC3);
-        drawAreaMask(image, styled.buildingCore(), repaint, styled.width(), styled.height(), ox, oy, cellX, cellY, 0xFFBEB7AE);
-        drawLineMask(image, styled.waterLine(), repaint, styled.width(), styled.height(), ox, oy, cellX, cellY, 0xFF86AFC4, 1);
+        drawAreaMask(image, styled.farmlandArea(), repaint, styled.width(), styled.height(), ox, oy, cellX, cellY,
+                0xFFE0D5B7);
+        drawAreaMask(image, styled.greenArea(), repaint, styled.width(), styled.height(), ox, oy, cellX, cellY,
+                0xFFBCD3B2);
+        drawAreaMask(image, styled.waterArea(), repaint, styled.width(), styled.height(), ox, oy, cellX, cellY,
+                0xFF9DBDCE);
+        drawAreaMask(image, styled.indoorFloor(), repaint, styled.width(), styled.height(), ox, oy, cellX, cellY,
+                0xFFE8DED0);
+        drawAreaMask(image, styled.buildingZone(), repaint, styled.width(), styled.height(), ox, oy, cellX, cellY,
+                0xFFD1CBC3);
+        drawAreaMask(image, styled.buildingCore(), repaint, styled.width(), styled.height(), ox, oy, cellX, cellY,
+                0xFFBEB7AE);
+        drawLineMask(image, styled.waterLine(), repaint, styled.width(), styled.height(), ox, oy, cellX, cellY,
+                0xFF86AFC4, 1);
         drawUnknownCells(image, map, repaint, ox, oy, cellX, cellY);
         vignette(image);
         bakedSnapshot = map;
@@ -146,7 +153,7 @@ final class PadMapLayerTexture implements AutoCloseable {
                 if (reusable) {
                     int oldIndex = oldZ * map.width() + oldX;
                     reusable = outsideVignette(oldX, oldZ, cellX, cellY)
-                        && sameVisual(styled, index, oldStyled, oldIndex)
+                            && sameVisual(styled, index, oldStyled, oldIndex)
                             && map.tile(map.width() - 1 - x, z) == bakedSnapshot.tile(map.width() - 1 - oldX, oldZ);
                 }
                 repaint[index] = !reusable;
@@ -178,15 +185,18 @@ final class PadMapLayerTexture implements AutoCloseable {
         fill(image, 0, 0, TARGET_WIDTH, TARGET_HEIGHT, 0xFFE6E0D5);
         for (int y = 0; y < TARGET_HEIGHT; y++) {
             int sy = y - shiftY;
-            if (sy < 0 || sy >= TARGET_HEIGHT) continue;
+            if (sy < 0 || sy >= TARGET_HEIGHT)
+                continue;
             for (int x = 0; x < TARGET_WIDTH; x++) {
                 int sx = x - shiftX;
-                if (sx >= 0 && sx < TARGET_WIDTH) image.setPixel(x, y, source[sy * TARGET_WIDTH + sx]);
+                if (sx >= 0 && sx < TARGET_WIDTH)
+                    image.setPixel(x, y, source[sy * TARGET_WIDTH + sx]);
             }
         }
     }
 
-    private void drawUnknownCells(NativeImage image, PadMapSnapshot map, boolean[] repaint, int ox, int oy, float cellX, float cellY) {
+    private void drawUnknownCells(NativeImage image, PadMapSnapshot map, boolean[] repaint, int ox, int oy, float cellX,
+            float cellY) {
         for (int z = 0; z < map.height(); z++) {
             for (int x = 0; x < map.width(); x++) {
                 if (!repaint[z * map.width() + x] || map.tile(map.width() - 1 - x, z) != PadMapTileKind.UNKNOWN) {
@@ -198,7 +208,8 @@ final class PadMapLayerTexture implements AutoCloseable {
         }
     }
 
-    private void drawAreaMask(NativeImage image, boolean[] mask, boolean[] repaint, int width, int height, int ox, int oy, float cellX,
+    private void drawAreaMask(NativeImage image, boolean[] mask, boolean[] repaint, int width, int height, int ox,
+            int oy, float cellX,
             float cellY, int color) {
         for (int z = 0; z < height; z++) {
             for (int x = 0; x < width; x++) {
@@ -210,7 +221,8 @@ final class PadMapLayerTexture implements AutoCloseable {
         }
     }
 
-    private void drawLineMask(NativeImage image, boolean[] mask, boolean[] repaint, int width, int height, int ox, int oy, float cellX,
+    private void drawLineMask(NativeImage image, boolean[] mask, boolean[] repaint, int width, int height, int ox,
+            int oy, float cellX,
             float cellY, int color, int lineWidth) {
         int half = Math.max(0, lineWidth / 2);
         for (int z = 0; z < height; z++) {
@@ -274,7 +286,7 @@ final class PadMapLayerTexture implements AutoCloseable {
     @Override
     public void close() {
         if (texture != null) {
-            texture.close();
+            Minecraft.getInstance().getTextureManager().release(textureId);
             texture = null;
         }
     }

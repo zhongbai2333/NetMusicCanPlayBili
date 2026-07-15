@@ -47,8 +47,8 @@ public class StereoOpenALHandler {
     private long lastFrameFeedNanos;
     private double frameBudget;
 
-    private OpenALSpatialAudio spatialAudio;
-    private boolean initialized;
+    private volatile OpenALSpatialAudio spatialAudio;
+    private volatile boolean initialized;
     private int frameCount;
     private int sampleRate = 48000;
     private float[][] pendingBlock = new float[2][SAMPLES_PER_BLOCK];

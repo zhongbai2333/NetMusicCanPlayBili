@@ -108,4 +108,7 @@ final class VideoJni {
      * @return width << 32 | height
      */
     static native long getDimensions(long handle);
+
+    /** 查询进程级 FFmpeg av_malloc 与 D3D11VA 资源统计。 */
+    static native long[] getNativeMemoryStats();
 }

@@ -67,6 +67,7 @@ public final class ModernTurntableVideoClient {
         if (sessionId == null || sessionId.isBlank()) {
             return;
         }
+        VideoBillboardPreview.clearPendingLoading(sessionId);
         ACTIVE_SESSION_IDS.remove(sessionId);
         ACTIVE_QUALITY_CEILING_BY_SESSION.remove(sessionId);
         ACTIVE_REQUEST_BY_SESSION.remove(sessionId);
@@ -186,12 +187,15 @@ public final class ModernTurntableVideoClient {
         if (projectors.isEmpty() && !holographicConsumer) {
             // MinecartRevolution 的投影仪 BE 位于模拟 level，无法通过 Minecraft.level 扫描到。
             // BER 已经建立并维持同一唱片机会话时，周期全量同步不应把它误判成无 consumer。
-            if (VideoBillboardPreview.hasSessionForTurntable(turntablePos, sessionId)
-                    && VideoBillboardPreview.isSessionRunning(sessionId)) {
+                if (VideoBillboardPreview.hasSessionForTurntable(turntablePos, sessionId)
+                    && (VideoBillboardPreview.isSessionRunning(sessionId)
+                        || VideoBillboardPreview.hasNetworkFailure(sessionId))) {
                 ACTIVE_SESSION_IDS.add(sessionId);
                 rememberActiveSession(immutableTurntablePos, sessionId);
                 logDecision(sessionId, "reuse-simulated-projector", turntablePos, sync.elapsedMillis(), 0, 0, 0L,
-                        "running session is retained for a BER-backed simulated projector");
+                    VideoBillboardPreview.hasNetworkFailure(sessionId)
+                        ? "network-failed session is retained for manual retry on a BER-backed simulated projector"
+                        : "running session is retained for a BER-backed simulated projector");
                 return;
             }
             logDecision(sessionId, "stop-no-projector", turntablePos, sync.elapsedMillis(), 0, 0, 0L,
@@ -200,18 +204,28 @@ public final class ModernTurntableVideoClient {
             forgetSession(sessionId);
             return;
         }
+        List<BlockPos> projectorPositions = projectors.stream()
+                .map(projector -> projector.getBlockPos().immutable())
+                .toList();
         if (!isAudioReady(turntablePos, sessionId)) {
             VideoBillboardPreview.stopIfSession(sessionId);
             forgetSession(sessionId);
+            VideoBillboardPreview.beginPendingLoading(sessionId, projectorPositions);
             logDecision(sessionId, "wait-audio-ready", turntablePos, sync.elapsedMillis(), 0, 0, 0L,
                     "video waits until matching audio stream is ready");
             return;
         }
-        List<BlockPos> projectorPositions = projectors.stream()
-                .map(projector -> projector.getBlockPos().immutable())
-                .toList();
         long elapsedMillis = Math.max(0L, sync.elapsedMillis());
         int qualityCeiling = qualityCeiling(projectors);
+        if (VideoBillboardPreview.hasNetworkFailure(sessionId)) {
+            VideoBillboardPreview.updateSessionProjectors(sessionId, projectorPositions);
+            ACTIVE_SESSION_IDS.add(sessionId);
+            rememberActiveSession(immutableTurntablePos, sessionId);
+            logDecision(sessionId, "hold-network-failure", turntablePos, elapsedMillis, qualityCeiling,
+                projectorPositions.size(), 0L,
+                "same session is held at the network error placeholder until explicit retry");
+            return;
+        }
         String existingForTurntable = immutableTurntablePos != null
                 ? ACTIVE_SESSION_BY_TURNTABLE.get(immutableTurntablePos)
                 : null;
@@ -284,6 +298,7 @@ public final class ModernTurntableVideoClient {
                 // 把同一个 HTTP/2 连接刷爆成 "too many concurrent streams"。
                 PendingVideoRequest pending = PENDING_REQUEST_BY_SESSION.get(sessionId);
                 if (pending != null && pending.matches(elapsedMillis, qualityCeiling)) {
+                    VideoBillboardPreview.beginPendingLoading(sessionId, projectorPositions);
                     rememberActiveSession(immutableTurntablePos, sessionId);
                     logDecision(sessionId, "reuse-pending", turntablePos, elapsedMillis, qualityCeiling,
                             projectorPositions.size(), pending.requestId(), "stream resolve already in flight");
@@ -316,6 +331,7 @@ public final class ModernTurntableVideoClient {
         long requestId = REQUEST_SEQUENCE.incrementAndGet();
         ACTIVE_REQUEST_BY_SESSION.put(sessionId, requestId);
         PENDING_REQUEST_BY_SESSION.put(sessionId, new PendingVideoRequest(elapsedMillis, qualityCeiling, requestId));
+        VideoBillboardPreview.beginPendingLoading(sessionId, projectorPositions);
         logDecision(sessionId, "schedule-resolve", turntablePos, elapsedMillis, qualityCeiling,
                 projectorPositions.size(), requestId, "async B站 video stream resolve with quality ceiling");
         CompletableFuture

@@ -13,6 +13,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class Fmp4StreamParser {
     private static final int FORMAT_SNIFF_SIZE = 64;
     private static final int MAX_METADATA_BOX_SIZE = 16 * 1024 * 1024;
+    private static final int MAX_BUFFERED_PAYLOAD_SIZE = Math.max(1024 * 1024,
+            Integer.getInteger("ncpb.media.fmp4.max_buffered_payload_bytes", 64 * 1024 * 1024));
     private static final int SKIP_BUFFER_SIZE = 8192;
 
     public void parse(InputStream source, AtomicBoolean closed, Callback callback)
@@ -69,8 +71,9 @@ public final class Fmp4StreamParser {
     }
 
     public static byte[] readFully(InputStream in, long length) throws IOException {
-        if (length > Integer.MAX_VALUE) {
-            throw new IOException("MP4 box too large to buffer: " + length);
+        if (length < 0L || length > MAX_BUFFERED_PAYLOAD_SIZE) {
+            throw new IOException("MP4 payload too large to buffer: " + length + " > "
+                    + MAX_BUFFERED_PAYLOAD_SIZE);
         }
         byte[] data = new byte[(int) length];
         readFullyInto(in, data, 0, data.length);

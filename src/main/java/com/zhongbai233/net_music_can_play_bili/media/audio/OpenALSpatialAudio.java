@@ -19,8 +19,12 @@ import org.lwjgl.openal.ALC10;
 import org.lwjgl.openal.EXTFloat32;
 import org.lwjgl.openal.SOFTHRTF;
 import org.lwjgl.openal.SOFTSourceSpatialize;
+import org.lwjgl.system.MemoryUtil;
+import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
+import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker.Category;
 
 import java.util.ArrayDeque;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
@@ -50,6 +54,7 @@ public class OpenALSpatialAudio {
     /** Minecraft OpenAL context/device 缓存。 */
     private static volatile OpenAlHandles CACHED_HANDLES;
     private static final Object CACHE_LOCK = new Object();
+    private static final ConcurrentLinkedQueue<NativeResources> PENDING_NATIVE_DELETES = new ConcurrentLinkedQueue<>();
 
     private int[] bedSources; // 床声道 OpenAL 声源 ID
     private int[] objectSources; // 动态对象 OpenAL 声源 ID
@@ -91,6 +96,7 @@ public class OpenALSpatialAudio {
         if (!ensureOpenAlContext("init")) {
             return false;
         }
+        drainPendingNativeDeletes();
         cleanup();
         try {
             detectAudioFormat();
@@ -101,8 +107,9 @@ public class OpenALSpatialAudio {
             this.deviceLost = false;
             this.mediaConsumedBuffers = 0L;
             this.primaryQueuedMediaFlags = new ArrayDeque<>(NUM_BUFFERS * 2);
-            this.uploadScratch = BufferUtils.createByteBuffer(SAMPLES_PER_BUFFER * bytesPerSample)
+            this.uploadScratch = MemoryUtil.memAlloc(SAMPLES_PER_BUFFER * bytesPerSample)
                     .order(ByteOrder.LITTLE_ENDIAN);
+            MemoryResourceTracker.allocated(Category.AUDIO_STAGING, this.uploadScratch.capacity());
 
             // 分配床声道声源
             bedSources = new int[numBeds];
@@ -393,20 +400,41 @@ public class OpenALSpatialAudio {
         int[] objectSourcesToDelete = objectSources;
         int[][] bedBuffersToDelete = bedBuffers;
         int[][] objBuffersToDelete = objBuffers;
+        ByteBuffer uploadScratchToFree = uploadScratch;
         clearLocalReferences();
+        if (uploadScratchToFree != null) {
+            MemoryResourceTracker.freed(Category.AUDIO_STAGING, uploadScratchToFree.capacity());
+            MemoryUtil.memFree(uploadScratchToFree);
+        }
         Thread cleanupThread = new Thread(
-                () -> safeCleanupNative(bedSourcesToDelete, objectSourcesToDelete, bedBuffersToDelete,
-                        objBuffersToDelete),
+                () -> safeCleanupNative(new NativeResources(bedSourcesToDelete, objectSourcesToDelete,
+                        bedBuffersToDelete, objBuffersToDelete)),
                 "OpenALSpatialCleanup");
         cleanupThread.setDaemon(true);
         cleanupThread.start();
     }
 
-    private void safeCleanupNative(int[] bedSourcesToDelete, int[] objectSourcesToDelete, int[][] bedBuffersToDelete,
-            int[][] objBuffersToDelete) {
+    private void safeCleanupNative(NativeResources resources) {
         if (!ensureOpenAlContext("cleanup")) {
+            PENDING_NATIVE_DELETES.offer(resources);
             return;
         }
+        deleteNativeResources(resources);
+        drainPendingNativeDeletes();
+    }
+
+    private static void drainPendingNativeDeletes() {
+        NativeResources pending;
+        while ((pending = PENDING_NATIVE_DELETES.poll()) != null) {
+            deleteNativeResources(pending);
+        }
+    }
+
+    private static void deleteNativeResources(NativeResources resources) {
+        int[] bedSourcesToDelete = resources.bedSources();
+        int[] objectSourcesToDelete = resources.objectSources();
+        int[][] bedBuffersToDelete = resources.bedBuffers();
+        int[][] objBuffersToDelete = resources.objectBuffers();
         if (bedSourcesToDelete != null) {
             for (int src : bedSourcesToDelete) {
                 try {
@@ -443,6 +471,10 @@ public class OpenALSpatialAudio {
                 }
             }
         }
+    }
+
+    private record NativeResources(int[] bedSources, int[] objectSources, int[][] bedBuffers,
+            int[][] objectBuffers) {
     }
 
     private void detectAudioFormat() {
@@ -508,12 +540,18 @@ public class OpenALSpatialAudio {
                     return false;
                 }
             }
-            ByteBuffer silence = BufferUtils.createByteBuffer(SAMPLES_PER_BUFFER * bytesPerSample)
+            ByteBuffer silence = MemoryUtil.memCalloc(SAMPLES_PER_BUFFER * bytesPerSample)
                     .order(ByteOrder.LITTLE_ENDIAN);
-            for (int b = 0; b < NUM_BUFFERS; b++) {
-                silence.clear();
-                AL10.alBufferData(buffers[i][b], monoFormat, silence, actualSampleRate);
-                AL10.alSourceQueueBuffers(sources[i], buffers[i][b]);
+            MemoryResourceTracker.allocated(Category.AUDIO_STAGING, silence.capacity());
+            try {
+                for (int b = 0; b < NUM_BUFFERS; b++) {
+                    silence.clear();
+                    AL10.alBufferData(buffers[i][b], monoFormat, silence, actualSampleRate);
+                    AL10.alSourceQueueBuffers(sources[i], buffers[i][b]);
+                }
+            } finally {
+                MemoryResourceTracker.freed(Category.AUDIO_STAGING, silence.capacity());
+                MemoryUtil.memFree(silence);
             }
             AL10.alSourcei(sources[i], AL10.AL_SOURCE_RELATIVE, AL10.AL_FALSE);
             forceSourceSpatialize(sources[i]);
@@ -691,7 +729,12 @@ public class OpenALSpatialAudio {
         int len = SAMPLES_PER_BUFFER;
         ByteBuffer buf = uploadScratch;
         if (buf == null || buf.capacity() < len * bytesPerSample) {
-            buf = BufferUtils.createByteBuffer(len * bytesPerSample).order(ByteOrder.LITTLE_ENDIAN);
+            if (buf != null) {
+                MemoryResourceTracker.freed(Category.AUDIO_STAGING, buf.capacity());
+                MemoryUtil.memFree(buf);
+            }
+            buf = MemoryUtil.memAlloc(len * bytesPerSample).order(ByteOrder.LITTLE_ENDIAN);
+            MemoryResourceTracker.allocated(Category.AUDIO_STAGING, buf.capacity());
             uploadScratch = buf;
         }
         buf.clear();
@@ -930,9 +973,13 @@ public class OpenALSpatialAudio {
      * 生成一个 OpenAL source。失败时返回 0，上层应立即 {@link #cleanup()}
      */
     private static int genSource(String type, int index) {
+        clearAlErrors();
         int source = AL10.alGenSources();
         int err = AL10.alGetError();
         if (err != AL10.AL_NO_ERROR) {
+            if (source != 0) {
+                AL10.alDeleteSources(source);
+            }
             LOGGER.error("OpenAL genSource({}[{}]) 失败: AL error 0x{}", type, index,
                     Integer.toHexString(err).toUpperCase());
             return 0;
@@ -948,9 +995,13 @@ public class OpenALSpatialAudio {
      * 生成一个 OpenAL buffer。失败时返回 0，上层应立即 {@link #cleanup()}
      */
     private static int genBuffer(String type, int channelOrObj, int bufferIdx) {
+        clearAlErrors();
         int buffer = AL10.alGenBuffers();
         int err = AL10.alGetError();
         if (err != AL10.AL_NO_ERROR) {
+            if (buffer != 0) {
+                AL10.alDeleteBuffers(buffer);
+            }
             LOGGER.error("OpenAL genBuffer({}[{}][{}]) 失败: AL error 0x{}", type, channelOrObj, bufferIdx,
                     Integer.toHexString(err).toUpperCase());
             return 0;
@@ -961,5 +1012,11 @@ public class OpenALSpatialAudio {
             return 0;
         }
         return buffer;
+    }
+
+    private static void clearAlErrors() {
+        for (int i = 0; i < 8 && AL10.alGetError() != AL10.AL_NO_ERROR; i++) {
+            // Clear stale context errors before attributing an error to a new allocation.
+        }
     }
 }

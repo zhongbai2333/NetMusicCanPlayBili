@@ -6,12 +6,17 @@ import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.item.HolographicGlassesItem;
+import com.zhongbai233.net_music_can_play_bili.media.stream.MediaNetworkFailureClassifier;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseExecutor;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.HoverEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.client.event.SubmitCustomGeometryEvent;
 import org.slf4j.Logger;
@@ -20,6 +25,7 @@ import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -60,6 +66,10 @@ final class VideoPlaybackInstance {
     };
     private static final Identifier IRIS_WARNING_PLACEHOLDER_TEXTURE = Identifier.fromNamespaceAndPath(
             NetMusicCanPlayBili.MODID, "textures/gui/video_loading/iris_translucent_warning_base.png");
+    private static final Identifier NETWORK_ERROR_PLACEHOLDER_TEXTURE = Identifier.fromNamespaceAndPath(
+            NetMusicCanPlayBili.MODID, "textures/gui/video_loading/network_error_base.png");
+    private static final boolean NETWORK_ERROR_PLACEHOLDER_ENABLED = Boolean.parseBoolean(
+            System.getProperty("ncpb.video.pipeline.network_error_placeholder", "true"));
     private static final int LOADING_PLACEHOLDER_WIDTH = 320;
     private static final int LOADING_PLACEHOLDER_HEIGHT = 180;
 
@@ -88,6 +98,7 @@ final class VideoPlaybackInstance {
     private volatile long startNanoTime;
     private volatile Thread decodeThread;
     private volatile AutoCloseable decoder;
+    private volatile CompletableFuture<Void> decodeExit = CompletableFuture.completedFuture(null);
     private volatile DynamicTexture frontTexture;
     private volatile DynamicTexture backTexture;
     private volatile VideoYuvTextureSet yuvTextureSet;
@@ -106,6 +117,8 @@ final class VideoPlaybackInstance {
     private volatile long offscreenSinceNanoTime;
     private volatile boolean prewarmVisible = true;
     private volatile boolean loggedOffscreenPause;
+    private volatile boolean networkFailure;
+    private volatile boolean networkFailureNotified;
     private volatile boolean guiConsumer;
     private int consecutiveBadUploads;
 
@@ -170,11 +183,25 @@ final class VideoPlaybackInstance {
         offscreenSinceNanoTime = 0L;
         prewarmVisible = true;
         loggedOffscreenPause = false;
+        networkFailure = false;
+        networkFailureNotified = false;
         consecutiveBadUploads = 0;
         frameQueue.clear();
         startNanoTime = System.nanoTime();
         long gen = generation.incrementAndGet();
-        Thread thread = new Thread(() -> decode(gen), "bili-video-" + sessionId);
+        startDecodeThread(gen, "bili-video-" + sessionId);
+    }
+
+    private void startDecodeThread(long gen, String threadName) {
+        CompletableFuture<Void> exit = new CompletableFuture<>();
+        decodeExit = exit;
+        Thread thread = new Thread(() -> {
+            try {
+                decode(gen);
+            } finally {
+                exit.complete(null);
+            }
+        }, threadName);
         thread.setDaemon(true);
         decodeThread = thread;
         thread.start();
@@ -232,6 +259,10 @@ final class VideoPlaybackInstance {
         } catch (Exception e) {
             if (gen != generation.get() || (!running && isInterruptedWait(e))) {
                 return;
+            }
+            networkFailure = MediaNetworkFailureClassifier.isNetworkFailure(e);
+            if (networkFailure) {
+                notifyNetworkFailure();
             }
             LOGGER.error("视频会话解码失败: session={}", sessionId, e);
         } finally {
@@ -469,13 +500,18 @@ final class VideoPlaybackInstance {
                 && (frontTexture != null || yuvTextureSet != null);
         AutoCloseable oldDecoder = decoder;
         decoder = null;
-        if (oldDecoder != null) {
-            MediaCloseExecutor.closeAsync(oldDecoder, "adaptive video decoder " + sessionId);
+        CompletableFuture<Void> oldDecodeExit = decodeExit;
+        CompletableFuture<Void> nativeTermination = CompletableFuture.completedFuture(null);
+        if (oldDecoder instanceof com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder nativeDecoder) {
+            nativeDecoder.requestClose();
+            nativeTermination = nativeDecoder.terminationFuture();
         }
         Thread oldThread = decodeThread;
         if (oldThread != null) {
             oldThread.interrupt();
         }
+        CompletableFuture<Void> closeCompletion = MediaCloseExecutor.closeAsync(oldDecoder,
+                "adaptive video decoder " + sessionId);
 
         frameQueue.clear();
         if (!preserveVisibleFrame) {
@@ -487,6 +523,8 @@ final class VideoPlaybackInstance {
         firstFrameLogged = false;
         firstDecodedNanoTime = 0L;
         startupBufferReady = false;
+        networkFailure = false;
+        networkFailureNotified = false;
         startNanoTime = System.nanoTime();
         lastUploadPumpNanoTime = System.nanoTime();
         decoderStartOffsetMillis = Math.max(0L, restartOffsetMillis);
@@ -495,14 +533,19 @@ final class VideoPlaybackInstance {
             lastUploadedPtsNanos = -1L;
         }
         consecutiveBadUploads = 0;
+        // Keep the session active while the old native worker drains so periodic sync
+        // packets cannot
+        // replace this instance. The generation guard prevents the old worker from
+        // publishing state.
         running = true;
-
-        Thread thread = new Thread(() -> decode(gen), preserveVisibleFrame
-                ? "bili-video-" + sessionId + "-resume"
-                : "bili-video-" + sessionId + "-adaptive");
-        thread.setDaemon(true);
-        decodeThread = thread;
-        thread.start();
+        CompletableFuture.allOf(closeCompletion, nativeTermination, oldDecodeExit).thenRun(() -> {
+            if (gen != generation.get() || !running || !hasVideoConsumer()) {
+                return;
+            }
+            startDecodeThread(gen, preserveVisibleFrame
+                    ? "bili-video-" + sessionId + "-resume"
+                    : "bili-video-" + sessionId + "-adaptive");
+        });
     }
 
     private boolean shouldWaitForStartupBuffer() {
@@ -660,6 +703,9 @@ final class VideoPlaybackInstance {
         if (projectorPos != null && !projectorPositions.contains(projectorPos)) {
             return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
         }
+        if (networkFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
+            return placeholderSnapshot(PlaceholderKind.NETWORK_ERROR);
+        }
         if (!hasFrame) {
             return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
         }
@@ -676,9 +722,12 @@ final class VideoPlaybackInstance {
         // VideoProjectorRenderer 会造成不可见颜色写入或随视角变化的深度闪烁。
         // 与旧的全局提交路径保持一致：该兼容模式下用明确的警告占位图替代 YUV
         // 面片，而不是先因 hasFrame 返回实际视频，导致下方警告分支永远不可达。
+        if (networkFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
+            return placeholderSnapshot(PlaceholderKind.NETWORK_ERROR);
+        }
         boolean irisWarning = shouldShowIrisTranslucencyWarning();
         if (irisWarning && loadingPlaceholderEnabled) {
-            return loadingPlaceholderSnapshot(true);
+            return placeholderSnapshot(PlaceholderKind.IRIS_WARNING);
         }
         if (hasFrame) {
             return irisWarning ? VideoBillboardPreview.ProjectorFrameSnapshot.empty() : currentFrameSnapshot();
@@ -686,11 +735,15 @@ final class VideoPlaybackInstance {
         if (!loadingPlaceholderEnabled) {
             return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
         }
-        return loadingPlaceholderSnapshot(false);
+        return placeholderSnapshot(PlaceholderKind.LOADING);
     }
 
-    private VideoBillboardPreview.ProjectorFrameSnapshot loadingPlaceholderSnapshot(boolean irisWarning) {
-        return new VideoBillboardPreview.ProjectorFrameSnapshot(true, false, loadingPlaceholderTexture(irisWarning),
+    private VideoBillboardPreview.ProjectorFrameSnapshot placeholderSnapshot(PlaceholderKind kind) {
+        if (kind == PlaceholderKind.LOADING) {
+            return loadingPlaceholderSnapshot(startNanoTime);
+        }
+        boolean irisWarning = kind == PlaceholderKind.IRIS_WARNING;
+        return new VideoBillboardPreview.ProjectorFrameSnapshot(true, false, placeholderTexture(kind),
                 null,
                 null, null,
                 com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
@@ -699,12 +752,27 @@ final class VideoPlaybackInstance {
                 // 完整不透明画面，应走 ENTITY_SOLID RGBA 兼容路径；普通加载图仍保留
                 // emissive/cutout 及进度层。警告图作为 immediate 视频的 RGBA 回退底片，
                 // 正常写入世界深度，但沿 BER 局部屏幕法线稍微后退，避免与视频共面。
-                !irisWarning, !irisWarning,
+                !irisWarning, kind == PlaceholderKind.LOADING,
                 irisWarning ? IRIS_WARNING_PLACEHOLDER_LOCAL_DEPTH_OFFSET : 0.0F);
     }
 
+    static VideoBillboardPreview.ProjectorFrameSnapshot loadingPlaceholderSnapshot(long startedNanoTime) {
+        long elapsedNs = Math.max(0L, System.nanoTime() - startedNanoTime);
+        int phase = (int) ((elapsedNs / 300_000_000L) % LOADING_PLACEHOLDER_TEXTURES.length);
+        return new VideoBillboardPreview.ProjectorFrameSnapshot(true, false, LOADING_PLACEHOLDER_TEXTURES[phase],
+                null, null, null,
+                com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
+                LOADING_PLACEHOLDER_WIDTH, LOADING_PLACEHOLDER_HEIGHT, true, true, 0.0F);
+    }
+
     VideoBillboardPreview.ProjectorFrameSnapshot turntableFrameSnapshot(BlockPos turntablePos) {
-        if (turntablePos == null || !anchor.isForTurntable(turntablePos) || !hasFrame) {
+        if (turntablePos == null || !anchor.isForTurntable(turntablePos)) {
+            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
+        }
+        if (networkFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
+            return placeholderSnapshot(PlaceholderKind.NETWORK_ERROR);
+        }
+        if (!hasFrame) {
             return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
         }
         return currentFrameSnapshot();
@@ -725,6 +793,9 @@ final class VideoPlaybackInstance {
     }
 
     VideoBillboardPreview.ProjectorFrameSnapshot previewFrameSnapshot() {
+        if (networkFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
+            return placeholderSnapshot(PlaceholderKind.NETWORK_ERROR);
+        }
         if (!hasFrame) {
             return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
         }
@@ -767,6 +838,10 @@ final class VideoPlaybackInstance {
             }
             if (HolographicGlassesClient.shouldHideProjectorVideos()) {
                 VideoBillboardPreview.submitProjectorPrivacyOverlay(event, minecraft, camera, projector);
+            } else if (networkFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
+                VideoBillboardPreview.submitProjectorEmissiveGeometry(event, minecraft, camera, projector,
+                        placeholderTexture(PlaceholderKind.NETWORK_ERROR), LOADING_PLACEHOLDER_WIDTH,
+                        LOADING_PLACEHOLDER_HEIGHT);
             } else if (hasFrame && frontTexture != null) {
                 VideoBillboardPreview.submitProjectorGeometry(event, minecraft, camera, projector, frontTextureId,
                         targetWidth, targetHeight);
@@ -774,15 +849,18 @@ final class VideoPlaybackInstance {
                     && !VideoBillboardPreview.shouldDrawYuvImmediateWithIris()) {
                 VideoBillboardPreview.submitProjectorYuvGeometry(event, minecraft, camera, projector, yuvTextureSet);
             } else if (Boolean.parseBoolean(System.getProperty("ncpb.video.pipeline.loading_placeholder", "true"))) {
-                boolean irisWarning = shouldShowIrisTranslucencyWarning();
+                PlaceholderKind kind = shouldShowIrisTranslucencyWarning()
+                        ? PlaceholderKind.IRIS_WARNING
+                        : PlaceholderKind.LOADING;
+                boolean irisWarning = kind == PlaceholderKind.IRIS_WARNING;
                 if (irisWarning && IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET > 0.0D) {
                     VideoBillboardPreview.submitProjectorViewDepthOffsetGeometry(event, minecraft, camera, projector,
-                            loadingPlaceholderTexture(irisWarning), LOADING_PLACEHOLDER_WIDTH,
+                            placeholderTexture(kind), LOADING_PLACEHOLDER_WIDTH,
                             LOADING_PLACEHOLDER_HEIGHT,
                             IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET);
                 } else {
                     VideoBillboardPreview.submitProjectorEmissiveGeometry(event, minecraft, camera, projector,
-                            loadingPlaceholderTexture(irisWarning), LOADING_PLACEHOLDER_WIDTH,
+                            placeholderTexture(kind), LOADING_PLACEHOLDER_WIDTH,
                             LOADING_PLACEHOLDER_HEIGHT);
                 }
             }
@@ -829,7 +907,8 @@ final class VideoPlaybackInstance {
     }
 
     void renderYuvImmediate(RenderLevelStageEvent event, String route) {
-        if (!hasFrame || yuvTextureSet == null || !VideoBillboardPreview.isCustomYuvShaderAvailable()
+        if ((networkFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED)
+                || !hasFrame || yuvTextureSet == null || !VideoBillboardPreview.isCustomYuvShaderAvailable()
                 || !VideoBillboardPreview.shouldDrawYuvImmediateWithIris()) {
             return;
         }
@@ -869,13 +948,22 @@ final class VideoPlaybackInstance {
         }
     }
 
-    private Identifier loadingPlaceholderTexture(boolean irisWarning) {
-        if (irisWarning) {
+    private Identifier placeholderTexture(PlaceholderKind kind) {
+        if (kind == PlaceholderKind.NETWORK_ERROR) {
+            return NETWORK_ERROR_PLACEHOLDER_TEXTURE;
+        }
+        if (kind == PlaceholderKind.IRIS_WARNING) {
             return IRIS_WARNING_PLACEHOLDER_TEXTURE;
         }
         long elapsedNs = Math.max(0L, System.nanoTime() - startNanoTime);
         int phase = (int) ((elapsedNs / 300_000_000L) % LOADING_PLACEHOLDER_TEXTURES.length);
         return LOADING_PLACEHOLDER_TEXTURES[phase];
+    }
+
+    private enum PlaceholderKind {
+        LOADING,
+        IRIS_WARNING,
+        NETWORK_ERROR
     }
 
     private boolean shouldShowIrisTranslucencyWarning() {
@@ -1008,6 +1096,49 @@ final class VideoPlaybackInstance {
 
     boolean hasFrame() {
         return hasFrame;
+    }
+
+    boolean hasNetworkFailure() {
+        return networkFailure;
+    }
+
+    synchronized boolean retryNetworkFailure() {
+        if (!networkFailure || !hasVideoConsumer()) {
+            return false;
+        }
+        long retryOffsetMillis = currentRestartOffsetMillis();
+        long syncedOffsetMillis = anchor.timeline().mediaMillis();
+        if (syncedOffsetMillis >= 0L) {
+            retryOffsetMillis = Math.max(retryOffsetMillis, syncedOffsetMillis);
+            if (totalMillis > 0L) {
+                retryOffsetMillis = Math.min(totalMillis, retryOffsetMillis);
+            }
+        }
+        LOGGER.info("手动重试视频网络连接: session={}, offset={}ms", sessionId, retryOffsetMillis);
+        restartDecoder(targetWidth, targetHeight, retryOffsetMillis, hasFrame);
+        return true;
+    }
+
+    private void notifyNetworkFailure() {
+        if (networkFailureNotified) {
+            return;
+        }
+        networkFailureNotified = true;
+        Minecraft minecraft = Minecraft.getInstance();
+        minecraft.execute(() -> {
+            if (!networkFailure || minecraft.player == null) {
+                return;
+            }
+            Component retry = Component.literal("[重试视频]")
+                    .withStyle(style -> style
+                            .withColor(ChatFormatting.GOLD)
+                            .withUnderlined(true)
+                            .withClickEvent(new ClickEvent.RunCommand("/ncpbc video retry"))
+                            .withHoverEvent(new HoverEvent.ShowText(Component.literal("点击重新连接视频流"))));
+            minecraft.player.sendSystemMessage(Component.literal("视频网络连接失败 ")
+                    .withStyle(ChatFormatting.RED)
+                    .append(retry));
+        });
     }
 
     long mediaMillis() {

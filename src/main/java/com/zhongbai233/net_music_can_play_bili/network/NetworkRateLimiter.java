@@ -32,6 +32,12 @@ final class NetworkRateLimiter {
         }
     }
 
+    static void removePlayer(UUID playerId) {
+        if (playerId != null) {
+            WINDOWS.keySet().removeIf(key -> playerId.equals(key.playerId()));
+        }
+    }
+
     private record Key(UUID playerId, String channel) {
     }
 

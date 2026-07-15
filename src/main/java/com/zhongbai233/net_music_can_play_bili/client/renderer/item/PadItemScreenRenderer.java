@@ -75,6 +75,17 @@ public final class PadItemScreenRenderer {
         MP4RgbaVideoLayer.releaseHandheld(deviceId);
     }
 
+    public static void releaseDeviceResources(UUID deviceId) {
+        if (deviceId == null) {
+            return;
+        }
+        PadGuiTexture guiTexture = GUI_TEXTURES.remove(deviceId);
+        if (guiTexture != null) {
+            guiTexture.close();
+        }
+        releaseVideoLayers(deviceId);
+    }
+
     private static boolean isLockedPad(UUID deviceId) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.player == null || deviceId == null) {
@@ -307,7 +318,7 @@ public final class PadItemScreenRenderer {
                         : YuvVideoRenderTypes.padNv12Entity(nv12Layer.textureSet().yId(), nv12Layer.textureSet().uId(),
                                 nv12Layer.textureSet().vId()),
                 (pose, buffer) -> emitTexturedQuad(buffer, pose, vx0, vy0, z, vx0, vy1, z, vx1, vy1, z, vx1,
-                    vy0, z, false));
+                        vy0, z, false));
         if (VIDEO_RENDERDOC_PROBE) {
             submitRenderDocProbe(poseStack, collector, probeTextureId, vx0, vy0, vx1, vy1, z + 0.004F,
                     0x99FF00FF);

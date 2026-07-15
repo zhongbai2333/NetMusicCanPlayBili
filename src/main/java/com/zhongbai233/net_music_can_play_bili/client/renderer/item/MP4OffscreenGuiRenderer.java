@@ -68,6 +68,7 @@ final class MP4OffscreenGuiRenderer implements AutoCloseable {
             ensureResources();
         } catch (RuntimeException ex) {
             failed = true;
+            close();
             LOGGER.warn("MP4 离屏 GUI 初始化失败: {}", textureId, ex);
         }
     }
@@ -87,6 +88,7 @@ final class MP4OffscreenGuiRenderer implements AutoCloseable {
             }
         } catch (RuntimeException ex) {
             failed = true;
+            close();
             LOGGER.warn("MP4 离屏 GUI 渲染失败: {}", textureId, ex);
         }
     }
@@ -803,5 +805,8 @@ final class MP4OffscreenGuiRenderer implements AutoCloseable {
             target.destroyBuffers();
             target = null;
         }
+        texture = null;
+        renderState = null;
+        submitNodeStorage = null;
     }
 }

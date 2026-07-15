@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** 客户端 Pad 地图缓存：分帧采样，禁止在渲染帧里同步扫全图。 */
 public final class PadMapClientCache {
@@ -59,6 +60,7 @@ public final class PadMapClientCache {
             .parseBoolean(System.getProperty("ncpb.pad.map_disk_cache", "true"));
     private static final ExecutorService DISK_FLUSH_EXECUTOR = Executors.newSingleThreadExecutor(
             NetMusicThreadFactory.daemon("pad-map-disk-flush"));
+    private static final AtomicBoolean DISK_FLUSH_IN_PROGRESS = new AtomicBoolean(false);
     private static final LinkedHashMap<CellKey, PadMapTileKind> CELL_CACHE = new LinkedHashMap<>(1024, 0.75F, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<CellKey, PadMapTileKind> eldest) {
@@ -427,17 +429,32 @@ public final class PadMapClientCache {
         if (!DISK_CACHE_ENABLED || !diskCacheLoaded || !hasSyncedDiskScope()) {
             return;
         }
+        if (!DISK_FLUSH_IN_PROGRESS.compareAndSet(false, true)) {
+            return;
+        }
         PadMapCellDiskCodec.Snapshot cells = captureCellDiskSnapshot();
         PadMapChunkDiskCodec.Snapshot chunks = captureChunkDiskSnapshot();
         PadMapSnapshotDiskCodec.Snapshot snapshot = captureSnapshotDiskSnapshot();
         if (cells == null && chunks == null && snapshot == null) {
+            DISK_FLUSH_IN_PROGRESS.set(false);
             return;
         }
-        DISK_FLUSH_EXECUTOR.execute(() -> {
-            PadMapCellDiskCodec.write(cells);
-            PadMapChunkDiskCodec.write(chunks);
-            PadMapSnapshotDiskCodec.write(snapshot);
-        });
+        try {
+            DISK_FLUSH_EXECUTOR.execute(() -> {
+                try {
+                    PadMapCellDiskCodec.write(cells);
+                    PadMapChunkDiskCodec.write(chunks);
+                    PadMapSnapshotDiskCodec.write(snapshot);
+                } finally {
+                    DISK_FLUSH_IN_PROGRESS.set(false);
+                }
+            });
+        } catch (RuntimeException error) {
+            DISK_FLUSH_IN_PROGRESS.set(false);
+            diskCacheDirty |= cells != null;
+            snapshotCacheDirty |= snapshot != null;
+            throw error;
+        }
     }
 
     private static PadMapCellDiskCodec.Snapshot captureCellDiskSnapshot() {
