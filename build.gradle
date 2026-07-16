@@ -186,6 +186,7 @@ def lightweightSelfTests = [
         runPadMapStyleSelfTest                : ['Runs lightweight Pad map style post-processing self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.tools.PadMapStyleSelfTest'],
         runPureLogicSelfTest                  : ['Runs lightweight pure logic self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.tools.PureLogicSelfTest'],
         runMemoryCircuitBreakerSelfTest        : ['Runs memory circuit breaker state transition self tests.', 'com.zhongbai233.net_music_can_play_bili.client.diagnostics.MemoryCircuitBreakerSelfTest'],
+        runSpeakerRelayMutePolicySelfTest      : ['Runs speaker relay takeover mute policy self tests.', 'com.zhongbai233.net_music_can_play_bili.bili.SpeakerRelayMutePolicySelfTest'],
         runPadMapBakeSchedulerSelfTest        : ['Runs lightweight Pad map bake scheduler self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadMapBakeSchedulerSelfTest'],
         runPadMapRenderReusePlanSelfTest      : ['Runs lightweight Pad map rendered overlap reuse self tests.', 'com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadMapRenderReusePlanSelfTest'],
         runPadMapViewProfileStabilizerSelfTest: ['Runs lightweight Pad map view profile stabilization self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapViewProfileStabilizerSelfTest'],

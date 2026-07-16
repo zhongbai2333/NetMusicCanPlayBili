@@ -29,8 +29,9 @@ public class DolbyAudioHandler {
     private static final double EC3_FRAMES_PER_SECOND = 48000.0 / 1536.0;
     private static final int MAX_FRAMES_PER_TICK = 8;
     private static final int PREBUFFER_FRAMES = Integer.getInteger("ncpb.bili.audio.openal.dolby_prebuffer_frames", 8);
-    private static final boolean MUTE_MAIN_WHEN_RELAYS_STARTED = Boolean.parseBoolean(
-            System.getProperty("ncpb.bili.audio.relay.mute_main_when_started", "true"));
+    private static final boolean MUTE_MAIN_WHEN_RELAYS_CONNECTED = Boolean.parseBoolean(
+            System.getProperty("ncpb.bili.audio.relay.mute_main_when_connected",
+                    System.getProperty("ncpb.bili.audio.relay.mute_main_when_started", "true")));
     private static final long AUDIO_CATCH_UP_START_TICKS = Long.getLong(
             "bili.audio.sync.catch_up_start_ticks", 8L);
     private static final long AUDIO_CATCH_UP_FULL_TICKS = Long.getLong(
@@ -860,7 +861,9 @@ public class DolbyAudioHandler {
         }
         sa.updatePositions(bedPositions, objectPositions, lp, forward);
         float d = distance(lp, mp), g = spatialGainForDistance(d, userVolume);
-        float gv = MUTE_MAIN_WHEN_RELAYS_STARTED && allRelaysStarted() ? 0f : g * gameVolume();
+        float gv = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays.size())
+                ? 0f
+                : g * gameVolume();
         for (int ch = 0; ch < numBedChannels; ch++)
             sa.setBedGain(ch, channelGain(ch, gv));
         for (int o = 0; o < numObjects; o++)
@@ -1089,17 +1092,6 @@ public class DolbyAudioHandler {
 
     private static float distance(float[] a, float[] b) {
         return AudioUtils.distance(a, b);
-    }
-
-    /** 所有音响 relay 是否都已度过初始静音期，正在输出真实 PCM */
-    private boolean allRelaysStarted() {
-        if (relays.isEmpty())
-            return false;
-        for (SpeakerAudioRelay relay : relays) {
-            if (!relay.isStarted())
-                return false;
-        }
-        return true;
     }
 
     private float[] forwardToMachine(float[] mp, float[] lp) {

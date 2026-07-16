@@ -1,21 +1,27 @@
-# Embedded FFmpeg native libraries
+﻿# Embedded FFmpeg native libraries
 
 The native libraries in this directory are sourced from:
 
-- Release: `media-min-v27`
+- Release: `media-min-v34`
 - Repository: <https://github.com/zhongbai2333/FFmpeg>
-- Release URL: <https://github.com/zhongbai2333/FFmpeg/releases/tag/media-min-v27>
-- Source commit: `1bc8edee1ae54f2793faee4b789ff7de044221b7`
+- Release URL: <https://github.com/zhongbai2333/FFmpeg/releases/tag/media-min-v34>
+- Source commit: `9ee517059dc158de7928a640756d9ad9769089eb`
 
 Release asset SHA-256 checksums:
 
 | Platform | Asset | SHA-256 |
 | --- | --- | --- |
-| Linux ARM64 | `ffmpeg-media-linux-arm64.tar.gz` | `3d72b2952bba4bf9eb52737c76d8abf5f3843bbb3ce63fbf4ec3dfdece30c63e` |
-| Linux x86_64 | `ffmpeg-media-linux-x86_64.tar.gz` | `b0be2e9d4dbf5fdf8e32c8381cc2e97e9c4da888cb764e8953703a299fe3024f` |
-| macOS ARM64 | `ffmpeg-media-macos-arm64.tar.gz` | `af93f0fc801c3dacb98add89c807f51b310dae8d1cb55be001efc40705c27033` |
-| macOS x86_64 | `ffmpeg-media-macos-x86_64.tar.gz` | `3a6e1f6f7cc623a49fd2e84bfd63a86347edc5ea760275d1cb9fd5c0d0b9efda` |
-| Windows ARM64 | `ffmpeg-media-windows-arm64.tar.gz` | `d141461c5d7456084c83404a65409a08bf974e7d268b0d700fc3c14be3d0233b` |
-| Windows x86_64 | `ffmpeg-media-windows-x86_64.tar.gz` | `d0885c6d2aac0f179360397ad414d5e8182f4e2ff0b7deceb20b5e8b72767cb7` |
+| Linux ARM64 | `ffmpeg-media-linux-arm64.tar.gz` | `4cd833c6bd0b3d98827aa7454ac66006ec02a96e13e728b13369d00d3ae38ac4` |
+| Linux x86_64 | `ffmpeg-media-linux-x86_64.tar.gz` | `abddfb0bf517b911cb04296ec0f24ff508bdf7332641cee524070496e8202f50` |
+| macOS ARM64 | `ffmpeg-media-macos-arm64.tar.gz` | `28db3b8eff925d06d17ff8e6735b0beb6e063e7244377626aef3ca5627992682` |
+| macOS x86_64 | `ffmpeg-media-macos-x86_64.tar.gz` | `123806577d3460e54e01cd2edc1d083f124146f08a55e53404c4ba322f0b5cd6` |
+| Windows ARM64 | `ffmpeg-media-windows-arm64.tar.gz` | `ec9377976d0aeed3a288011551280c4c9eb442f3b0f074f2bea095aecb473dc1` |
+| Windows x86_64 | `ffmpeg-media-windows-x86_64.tar.gz` | `c3d99aecee29257bb217f611d9118cc6176063cb0e3e37064dd2ba695e08e6ab` |
 
 The archives were verified before extraction. Each platform directory is copied as a complete set; FFmpeg and JNI libraries must not be mixed between releases.
+
+`libswresample` is intentionally not bundled. The media JNI wrappers consume
+decoded planar-float audio directly and link only against `libavcodec`,
+`libavutil`, and (for video conversion) `libswscale`. Windows builds also
+include the required architecture-matched `libiconv-2.dll` and
+`libwinpthread-1.dll` runtime libraries.

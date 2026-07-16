@@ -29,11 +29,11 @@ public class Eac3NativeDecoder implements AutoCloseable {
 
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final Pattern WINDOWS_FFMPEG_LIB = Pattern
-            .compile("^(avutil|swresample|swscale|avcodec)-(\\d+)\\.dll$");
+            .compile("^(avutil|swscale|avcodec)-(\\d+)\\.dll$");
     private static final Pattern MACOS_FFMPEG_LIB = Pattern
-            .compile("^lib(avutil|swresample|swscale|avcodec)\\.(\\d+)\\.dylib$");
+            .compile("^lib(avutil|swscale|avcodec)\\.(\\d+)\\.dylib$");
     private static final Pattern LINUX_FFMPEG_LIB = Pattern
-            .compile("^lib(avutil|swresample|swscale|avcodec)\\.so\\.(\\d+)$");
+            .compile("^lib(avutil|swscale|avcodec)\\.so\\.(\\d+)$");
 
     private static volatile boolean loaderInitialized;
     private static volatile boolean nativeAvailable;
@@ -171,8 +171,9 @@ public class Eac3NativeDecoder implements AutoCloseable {
         }
 
         NativeLibrarySet libraries = discoverNativeLibraries(platformDir, os, isWindows);
-        // Windows 工具链运行时依赖原则上应由 FFmpeg 构建端消除；这里保留可选预加载兜底。
-        String[] runtimeLibs = isWindows ? new String[] { "libwinpthread-1" } : new String[0];
+        // Windows MinGW 运行时依赖必须先显式加载；FFmpeg x64/ARM64 构建均依赖
+        // libiconv，avutil 还可能依赖 libwinpthread。顺序保持在 FFmpeg DLL 之前。
+        String[] runtimeLibs = isWindows ? new String[] { "libiconv-2", "libwinpthread-1" } : new String[0];
         boolean[] runtimeLibPresent = new boolean[runtimeLibs.length];
 
         // ── 提取到 config 目录（避免 temp 被杀软拦截 DLL 加载；平台子目录隔离多版本）──
@@ -263,7 +264,7 @@ public class Eac3NativeDecoder implements AutoCloseable {
         boolean isMac = os.contains("mac") || os.contains("darwin");
         Pattern ffmpegPattern = isWindows ? WINDOWS_FFMPEG_LIB : (isMac ? MACOS_FFMPEG_LIB : LINUX_FFMPEG_LIB);
         List<String> ffmpeg = new ArrayList<>();
-        for (String base : List.of("avutil", "swresample", "swscale", "avcodec")) {
+        for (String base : List.of("avutil", "swscale", "avcodec")) {
             ffmpeg.add(selectVersionedLibrary(resourceNames, ffmpegPattern, base, platformDir));
         }
 

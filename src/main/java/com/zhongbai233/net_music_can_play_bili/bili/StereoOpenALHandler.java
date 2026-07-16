@@ -18,6 +18,9 @@ import java.util.concurrent.TimeUnit;
  * 将解码后的 float32 PCM 送入 2 声道 OpenAL 管线，复用 Dolby 链路的空间定位能力
  */
 public class StereoOpenALHandler {
+    private static final boolean MUTE_MAIN_WHEN_RELAYS_CONNECTED = Boolean.parseBoolean(
+            System.getProperty("ncpb.bili.audio.relay.mute_main_when_connected",
+                    System.getProperty("ncpb.bili.audio.relay.mute_main_when_started", "true")));
 
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int SAMPLES_PER_BLOCK = 256;
@@ -222,7 +225,9 @@ public class StereoOpenALHandler {
                 float gain = spatialGainForDistance(distance, userVolume);
                 lastDistance = distance;
                 lastGain = gain;
-                float gv = allRelaysStarted() ? 0f : gain * gameVolume();
+                float gv = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays.size())
+                        ? 0f
+                        : gain * gameVolume();
                 spatialAudio.setBedGain(0, gv);
                 spatialAudio.setBedGain(1, gv);
             }
@@ -364,17 +369,6 @@ public class StereoOpenALHandler {
         double ratio = Math.min(1.0D, behindTicks / (double) fullTicks);
         int extra = (int) Math.round((MAX_BLOCKS_PER_TICK - base) * ratio);
         return Math.max(base, Math.min(MAX_BLOCKS_PER_TICK, base + extra));
-    }
-
-    /** 所有音响 relay 是否都已度过初始静音期，正在输出真实 PCM */
-    private boolean allRelaysStarted() {
-        if (relays.isEmpty())
-            return false;
-        for (SpeakerAudioRelay relay : relays) {
-            if (!relay.isStarted())
-                return false;
-        }
-        return true;
     }
 
     private static float gameVolume() {
