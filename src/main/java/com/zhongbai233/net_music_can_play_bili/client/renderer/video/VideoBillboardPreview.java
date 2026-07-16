@@ -308,6 +308,9 @@ public final class VideoBillboardPreview {
     public static void startRgbaPreviewAt(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             String sessionId, long startOffsetMillis, long totalMillis, boolean preferNative, String decoderOverride,
             UUID sourceId) {
+        if (!com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection.allowMediaStart()) {
+            return;
+        }
         String normalized = sessionId != null ? sessionId : "";
         if (normalized.isBlank()) {
             startInternal(videoUrl, targetWidth, targetHeight, fps, codecId, preferNative, decoderOverride,
@@ -446,6 +449,10 @@ public final class VideoBillboardPreview {
     private static void startOrUpdateInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             String sessionId, long startOffsetMillis, long totalMillis, Collection<BlockPos> anchorPositions,
             VideoPlaybackAnchor anchor, boolean preferNative, String decoderOverride) {
+        if (!com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection.allowMediaStart()) {
+            stopIfSession(sessionId);
+            return;
+        }
         List<BlockPos> projectors = immutablePositions(anchorPositions);
         boolean hasHolographicConsumer = hasHolographicTurntableConsumer(anchor);
         if (projectors.isEmpty() && !hasHolographicConsumer) {
@@ -480,6 +487,9 @@ public final class VideoBillboardPreview {
             boolean preferNative, String decoderOverride, String sessionId, long startOffsetMillis,
             long totalMillis, Collection<BlockPos> anchorPositions, boolean catchUpDropsEnabled,
             boolean forceRgbaOutput) {
+        if (!com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection.allowMediaStart()) {
+            return;
+        }
         if (videoUrl == null || videoUrl.isBlank()) {
             return;
         }

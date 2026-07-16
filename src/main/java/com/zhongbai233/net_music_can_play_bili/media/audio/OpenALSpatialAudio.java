@@ -161,7 +161,7 @@ public class OpenALSpatialAudio {
     }
 
     /** 送入一帧内单个 256-sample block 的床声道 PCM。每帧调用 6 次（6 个 block） */
-    public void updateBedBlock(float[][] pcmBlock) {
+    public synchronized void updateBedBlock(float[][] pcmBlock) {
         if (!initialized)
             return;
         for (int ch = 0; ch < Math.min(numBeds, pcmBlock.length); ch++) {
@@ -170,7 +170,7 @@ public class OpenALSpatialAudio {
     }
 
     /** 从完整帧 [channel][1536] PCM 中取 offset 处的 256-sample block */
-    public void updateBedFrameBlock(float[][] pcmByChannel, int offset) {
+    public synchronized void updateBedFrameBlock(float[][] pcmByChannel, int offset) {
         if (!initialized)
             return;
         for (int ch = 0; ch < Math.min(numBeds, pcmByChannel.length); ch++) {
@@ -179,7 +179,7 @@ public class OpenALSpatialAudio {
     }
 
     /** 送入一个 256-sample block 的对象 PCM */
-    public void updateObjectBlock(float[][] objBlock) {
+    public synchronized void updateObjectBlock(float[][] objBlock) {
         if (!initialized)
             return;
         for (int obj = 0; obj < numObjects; obj++) {
@@ -189,7 +189,7 @@ public class OpenALSpatialAudio {
     }
 
     /** 从完整帧 [object][1536] PCM 中取 offset 处的 256-sample block */
-    public void updateObjectFrameBlock(float[][] objByChannel, int offset) {
+    public synchronized void updateObjectFrameBlock(float[][] objByChannel, int offset) {
         if (!initialized)
             return;
         for (int obj = 0; obj < numObjects; obj++) {
@@ -202,7 +202,7 @@ public class OpenALSpatialAudio {
      * 将排队的 PCM block 推入 OpenAL buffer
      * 在整帧 6 个 block 都 enqueue 后调用
      */
-    public void pumpQueuedAudio() {
+    public synchronized void pumpQueuedAudio() {
         if (!initialized || deviceLost)
             return;
         if (!ensureOpenAlContext("pumpQueuedAudio"))
@@ -216,7 +216,7 @@ public class OpenALSpatialAudio {
     }
 
     /** 更新所有声源的 3D 位置及 listener */
-    public void updatePositions(float[][] bedPositions, float[][] objectPositions,
+    public synchronized void updatePositions(float[][] bedPositions, float[][] objectPositions,
             float[] listenerPos, float[] listenerForward) {
         if (!initialized || listenerPos == null || listenerPos.length < 3)
             return;
@@ -240,8 +240,8 @@ public class OpenALSpatialAudio {
     }
 
     /** 设置指定 bed 声道的增益 */
-    public void setBedGain(int channel, float gain) {
-        if (channel < numBeds) {
+    public synchronized void setBedGain(int channel, float gain) {
+        if (initialized && !deviceLost && channel >= 0 && bedSources != null && channel < bedSources.length) {
             if (!ensureOpenAlContext("setBedGain"))
                 return;
             float clamped = clampGain(gain);
@@ -252,8 +252,8 @@ public class OpenALSpatialAudio {
     }
 
     /** 设置指定对象的增益 */
-    public void setObjectGain(int obj, float gain) {
-        if (obj < numObjects) {
+    public synchronized void setObjectGain(int obj, float gain) {
+        if (initialized && !deviceLost && obj >= 0 && objectSources != null && obj < objectSources.length) {
             if (!ensureOpenAlContext("setObjectGain"))
                 return;
             float clamped = clampGain(gain);
@@ -271,7 +271,7 @@ public class OpenALSpatialAudio {
         return numObjects;
     }
 
-    public long getConsumedSamples() {
+    public synchronized long getConsumedSamples() {
         long baseSamples = mediaConsumedBuffers * (long) SAMPLES_PER_BUFFER;
         if (!initialized || deviceLost || !ensureOpenAlContext("getConsumedSamples")) {
             return baseSamples;
@@ -306,7 +306,7 @@ public class OpenALSpatialAudio {
      * 需要从对外暴露的“可听媒体时间”里扣除，避免视频先跑。
      * </p>
      */
-    public long getOutputDelaySamples() {
+    public synchronized long getOutputDelaySamples() {
         if (!initialized || deviceLost || !ensureOpenAlContext("getOutputDelaySamples")) {
             return 0L;
         }
@@ -344,7 +344,7 @@ public class OpenALSpatialAudio {
      * 
      * @return flush 后 primary source 已真实消费的媒体 sample 数
      */
-    public long flushQueuedAudio() {
+    public synchronized long flushQueuedAudio() {
         long consumedSamples = getConsumedSamples();
         if (!initialized || deviceLost || !ensureOpenAlContext("flushQueuedAudio")) {
             return consumedSamples;
@@ -369,7 +369,7 @@ public class OpenALSpatialAudio {
      * 用于音频输出端已经堆积了明显过期的 buffer 时，丢弃旧声音并让后续同步诊断以新的媒体位置为基准。
      * </p>
      */
-    public long flushQueuedAudio(long mediaPositionSamples) {
+    public synchronized long flushQueuedAudio(long mediaPositionSamples) {
         long consumedSamples = flushQueuedAudio();
         long baselineSamples = Math.max(consumedSamples, Math.max(0L, mediaPositionSamples));
         mediaConsumedBuffers = baselineSamples / SAMPLES_PER_BUFFER;
@@ -380,7 +380,7 @@ public class OpenALSpatialAudio {
      * 立即停止所有 OpenAL source 并丢弃待播放队列，用于同一唱片机切换到新播放 session 时
      * 先把旧音频从实际输出端硬切掉，再异步释放 native 资源。
      */
-    public void hardStopOutput() {
+    public synchronized void hardStopOutput() {
         if (!initialized || deviceLost || !ensureOpenAlContext("hardStopOutput")) {
             return;
         }
@@ -485,6 +485,8 @@ public class OpenALSpatialAudio {
     }
 
     private void clearLocalReferences() {
+        numBeds = 0;
+        numObjects = 0;
         bedSources = null;
         objectSources = null;
         bedBuffers = null;

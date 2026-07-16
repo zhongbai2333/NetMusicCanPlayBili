@@ -27,6 +27,9 @@ public final class SyncedMediaPlaybackLauncher {
     public static LaunchResult prepare(String rawUrl, String playUrl, String songName, boolean allowDolby,
             boolean enableLyrics, String sessionId, long elapsedMillis, long totalMillis, BlockPos pos,
             UUID ownerId) {
+        if (!com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection.allowMediaStart()) {
+            return null;
+        }
         ClientMediaPreparer.PreparedMedia prepared = ClientMediaPreparer.prepareAudioOnly(rawUrl, playUrl, songName,
                 allowDolby);
         return fromPrepared(rawUrl, songName, prepared, playUrl, sessionId, elapsedMillis, totalMillis, pos, ownerId);
@@ -35,6 +38,9 @@ public final class SyncedMediaPlaybackLauncher {
     public static LaunchResult fromPrepared(String rawUrl, String songName, ClientMediaPreparer.PreparedMedia prepared,
             String fallbackPlayUrl, String sessionId, long elapsedMillis, long totalMillis, BlockPos pos,
             UUID ownerId) {
+        if (!com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection.allowMediaStart()) {
+            return null;
+        }
         String playUrl = prepared != null ? prepared.playUrl() : fallbackPlayUrl;
         LyricRecord lyricRecord = prepared != null ? prepared.lyricRecord() : null;
         String syncedPlayUrl = PlaybackSync.withSync(playUrl, sessionId, Math.max(0L, elapsedMillis),
@@ -46,7 +52,8 @@ public final class SyncedMediaPlaybackLauncher {
 
     public static void play(LaunchResult launch, String songName,
             BiFunction<URL, LyricRecord, SoundInstance> soundFactory) {
-        if (launch == null || launch.playUrl() == null || launch.playUrl().isBlank()) {
+        if (!com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection.allowMediaStart()
+                || launch == null || launch.playUrl() == null || launch.playUrl().isBlank()) {
             return;
         }
         LyricRecord lyricRecord = launch.lyricRecord();

@@ -256,6 +256,10 @@ final class VideoPlaybackInstance {
                 }
                 warnIfUploadPumpStalled();
             }
+        } catch (OutOfMemoryError error) {
+            com.zhongbai233.net_music_can_play_bili.client.ClientMediaLifecycleHandler
+                .tripMemoryProtection("video decoder allocation failed: " + error.getMessage());
+            LOGGER.error("视频会话内存分配失败并触发熔断: session={}", sessionId, error);
         } catch (Exception e) {
             if (gen != generation.get() || (!running && isInterruptedWait(e))) {
                 return;
@@ -434,6 +438,10 @@ final class VideoPlaybackInstance {
             if (uploaded) {
                 lastUploadedPtsNanos = frame.ptsNanos();
             }
+        } catch (OutOfMemoryError error) {
+            com.zhongbai233.net_music_can_play_bili.client.ClientMediaLifecycleHandler
+                    .tripMemoryProtection("video texture allocation failed: " + error.getMessage());
+            LOGGER.error("视频纹理内存分配失败并触发熔断: session={}", sessionId, error);
         } finally {
             frame.close();
         }

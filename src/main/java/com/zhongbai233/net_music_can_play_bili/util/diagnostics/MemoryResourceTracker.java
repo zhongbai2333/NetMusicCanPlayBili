@@ -9,6 +9,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * objects.
  */
 public final class MemoryResourceTracker {
+    private static final boolean DIAGNOSTICS_ENABLED = Boolean.parseBoolean(
+            System.getProperty("ncpb.memory.diagnostics", "false"));
+    private static final boolean PROTECTION_ENABLED = Boolean.parseBoolean(
+            System.getProperty("ncpb.memory.protection", "true"));
+    private static final boolean TRACKING_ENABLED = DIAGNOSTICS_ENABLED || PROTECTION_ENABLED;
+
     public enum Category {
         DECODER_NV12("decoderNv12"),
         TEXTURE_STAGING("textureStaging"),
@@ -30,18 +36,29 @@ public final class MemoryResourceTracker {
     }
 
     private static final Map<Category, Counter> COUNTERS = new EnumMap<>(Category.class);
+    private static final Usage EMPTY_USAGE = new Usage(0L, 0L, 0L, 0L);
 
     static {
-        for (Category category : Category.values()) {
-            COUNTERS.put(category, new Counter());
+        if (TRACKING_ENABLED) {
+            for (Category category : Category.values()) {
+                COUNTERS.put(category, new Counter());
+            }
         }
     }
 
     private MemoryResourceTracker() {
     }
 
+    public static boolean enabled() {
+        return DIAGNOSTICS_ENABLED;
+    }
+
+    public static boolean trackingEnabled() {
+        return TRACKING_ENABLED;
+    }
+
     public static void allocated(Category category, long bytes) {
-        if (bytes <= 0L) {
+        if (!TRACKING_ENABLED || bytes <= 0L) {
             return;
         }
         Counter counter = COUNTERS.get(category);
@@ -51,7 +68,7 @@ public final class MemoryResourceTracker {
     }
 
     public static void freed(Category category, long bytes) {
-        if (bytes <= 0L) {
+        if (!TRACKING_ENABLED || bytes <= 0L) {
             return;
         }
         Counter counter = COUNTERS.get(category);
@@ -63,6 +80,9 @@ public final class MemoryResourceTracker {
     }
 
     public static Usage usage(Category category) {
+        if (!TRACKING_ENABLED) {
+            return EMPTY_USAGE;
+        }
         Counter counter = COUNTERS.get(category);
         return new Usage(counter.current.get(), counter.peak.get(), counter.allocations.get(), counter.frees.get());
     }

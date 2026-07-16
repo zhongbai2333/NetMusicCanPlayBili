@@ -4,6 +4,7 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import org.slf4j.Logger;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
@@ -204,25 +205,25 @@ public final class ChunkPrefetchInputStream extends InputStream {
                     lastError = e;
                     if (attempt < PER_HOST_ATTEMPTS) {
                         LOGGER.warn(
-                                "CDN returned empty audio chunk, retrying same host {} attempt={}/{} range={}-{}: {}",
+                                "CDN returned empty media chunk, retrying same host {} attempt={}/{} range={}-{}: {}",
                                 safeHost(candidate), attempt + 1, PER_HOST_ATTEMPTS, nextStart, end, e.getMessage());
                         backoffBeforeRetry();
                         continue;
                     }
                     if (i + 1 < candidates.size()) {
-                        LOGGER.warn("CDN returned empty audio chunk, retrying alternate host {} -> {} range={}-{}: {}",
+                        LOGGER.warn("CDN returned empty media chunk, retrying alternate host {} -> {} range={}-{}: {}",
                                 safeHost(candidate), safeHost(candidates.get(i + 1)), nextStart, end, e.getMessage());
                     }
                 } catch (IOException e) {
                     lastError = e;
                     if (attempt < PER_HOST_ATTEMPTS) {
-                        LOGGER.warn("CDN audio chunk failed, retrying same host {} attempt={}/{} range={}-{}: {}",
+                        LOGGER.warn("CDN media chunk failed, retrying same host {} attempt={}/{} range={}-{}: {}",
                                 safeHost(candidate), attempt + 1, PER_HOST_ATTEMPTS, nextStart, end, e.getMessage());
                         backoffBeforeRetry();
                         continue;
                     }
                     if (i + 1 < candidates.size()) {
-                        LOGGER.warn("CDN audio chunk failed, retrying alternate host {} -> {} range={}-{}: {}",
+                        LOGGER.warn("CDN media chunk failed, retrying alternate host {} -> {} range={}-{}: {}",
                                 safeHost(candidate), safeHost(candidates.get(i + 1)), nextStart, end, e.getMessage());
                     }
                 }
@@ -262,30 +263,18 @@ public final class ChunkPrefetchInputStream extends InputStream {
                     totalLength = response.totalLength();
                 }
                 long requestedLength = end - nextStart + 1;
-                long received = copyResponse(response.body(), response.contentLength(), requestedLength);
+                long expectedLength = validatePartialResponse(response, nextStart, end, requestedLength);
+                byte[] chunk = readCompleteRangeChunk(response.body(), expectedLength);
+                long received = chunk.length;
+                spool.write(chunk, 0, chunk.length);
                 LOGGER.trace("HTTP chunk received: range={}-{} received={} cached={} host={}",
                         nextStart, end, received, spool.cachedLength(), safeHost(requestUrl));
-                if (received == 0) {
-                    CdnHealthTracker.recordFailure(requestUrl, CdnHealthTracker.FailureKind.EMPTY);
-                    outcomeRecorded = true;
-                    throw new EmptyCdnResponseException("0 bytes for range " + nextStart + "-" + end
-                            + " host=" + safeHost(requestUrl));
-                }
                 long newNextStart = nextStart + received;
                 CdnHealthTracker.recordSuccess(requestUrl, System.currentTimeMillis() - started, received);
                 outcomeRecorded = true;
                 if (totalLength > 0 && newNextStart >= totalLength) {
                     spool.complete();
                     return newNextStart;
-                }
-                long expectedLength = response.contentLength() > 0 ? response.contentLength() : requestedLength;
-                if (received < expectedLength) {
-                    if (totalLength > 0 && newNextStart < totalLength) {
-                        CdnHealthTracker.recordFailure(requestUrl, CdnHealthTracker.FailureKind.SHORT_READ);
-                        outcomeRecorded = true;
-                        throw new IOException("CDN range chunk ended early at " + newNextStart + " of " + totalLength);
-                    }
-                    spool.complete();
                 }
                 return newNextStart;
             }
@@ -294,7 +283,7 @@ public final class ChunkPrefetchInputStream extends InputStream {
                 totalLength = response.contentLength();
                 LOGGER.debug("HTTP prefetch mode: sequential GET, contentLength={} host={}", totalLength,
                         safeHost(requestUrl));
-                long received = copyResponse(response.body(), -1L, Long.MAX_VALUE);
+                long received = copyResponseToSpool(response.body(), -1L, Long.MAX_VALUE);
                 if (received == 0L) {
                     CdnHealthTracker.recordFailure(requestUrl, CdnHealthTracker.FailureKind.EMPTY);
                     outcomeRecorded = true;
@@ -319,7 +308,76 @@ public final class ChunkPrefetchInputStream extends InputStream {
         }
     }
 
-    private long copyResponse(InputStream body, long contentLength, long maxBytes) throws IOException {
+    private long validatePartialResponse(HttpRangeClient.CdnResponse response, long requestedStart,
+            long requestedEnd, long requestedLength) throws IOException {
+        if (response.rangeStart() >= 0L && response.rangeStart() != requestedStart) {
+            throw new IOException("CDN Content-Range starts at " + response.rangeStart()
+                    + " instead of requested " + requestedStart);
+        }
+        if (response.rangeEndInclusive() >= 0L
+                && (response.rangeEndInclusive() < requestedStart || response.rangeEndInclusive() > requestedEnd)) {
+            throw new IOException("CDN Content-Range ends at " + response.rangeEndInclusive()
+                    + " outside requested " + requestedStart + "-" + requestedEnd);
+        }
+        if (response.rangeEndInclusive() >= 0L && response.rangeEndInclusive() < requestedEnd
+                && (response.totalLength() <= 0L || response.rangeEndInclusive() + 1L < response.totalLength())) {
+            throw new IOException("CDN Content-Range ended early at " + response.rangeEndInclusive()
+                    + " before requested " + requestedEnd);
+        }
+        long contentRangeLength = response.rangeStart() >= 0L && response.rangeEndInclusive() >= response.rangeStart()
+                ? response.rangeEndInclusive() - response.rangeStart() + 1L
+                : -1L;
+        long expectedLength = contentRangeLength > 0L
+                ? contentRangeLength
+                : response.contentLength() > 0L ? response.contentLength() : requestedLength;
+        if (response.contentLength() > 0L && contentRangeLength > 0L
+                && response.contentLength() != contentRangeLength) {
+            throw new IOException("CDN Content-Length " + response.contentLength()
+                    + " does not match Content-Range length " + contentRangeLength);
+        }
+        if (expectedLength <= 0L || expectedLength > requestedLength || expectedLength > Integer.MAX_VALUE) {
+            throw new IOException("invalid CDN range response length " + expectedLength
+                    + " for requested " + requestedStart + "-" + requestedEnd);
+        }
+        return expectedLength;
+    }
+
+    /**
+     * Reads one bounded Range response transactionally. Nothing reaches the shared
+     * playback spool unless this method returns the complete chunk.
+     */
+    static byte[] readCompleteChunk(InputStream body, long expectedLength) throws IOException {
+        if (expectedLength <= 0L || expectedLength > Integer.MAX_VALUE) {
+            throw new IOException("invalid bounded chunk length " + expectedLength);
+        }
+        ByteArrayOutputStream chunk = new ByteArrayOutputStream((int) expectedLength);
+        byte[] buffer = new byte[Math.min(COPY_BUFFER_SIZE, (int) expectedLength)];
+        long remaining = expectedLength;
+        while (remaining > 0L) {
+            int n = body.read(buffer, 0, (int) Math.min(buffer.length, remaining));
+            if (n < 0) {
+                throw new IOException("CDN range chunk ended early: expected " + expectedLength
+                        + ", got " + chunk.size());
+            }
+            if (n == 0) {
+                continue;
+            }
+            chunk.write(buffer, 0, n);
+            remaining -= n;
+        }
+        return chunk.toByteArray();
+    }
+
+    private byte[] readCompleteRangeChunk(InputStream body, long expectedLength) throws IOException {
+        activeBody.set(body);
+        try {
+            return readCompleteChunk(body, expectedLength);
+        } finally {
+            activeBody.compareAndSet(body, null);
+        }
+    }
+
+    private long copyResponseToSpool(InputStream body, long contentLength, long maxBytes) throws IOException {
         activeBody.set(body);
         byte[] buffer = new byte[COPY_BUFFER_SIZE];
         long copied = 0L;
@@ -436,7 +494,7 @@ public final class ChunkPrefetchInputStream extends InputStream {
                 mode = Mode.SEQUENTIAL;
                 totalLength = response.contentLength();
                 LOGGER.debug("HTTP prefetch mode: full GET, contentLength={}", totalLength);
-                long received = copyResponse(response.body(), response.contentLength(), Long.MAX_VALUE);
+                long received = copyResponseToSpool(response.body(), response.contentLength(), Long.MAX_VALUE);
                 if (received == 0L) {
                     throw new EmptyCdnResponseException("0 bytes for full GET host=" + safeHost(url));
                 }

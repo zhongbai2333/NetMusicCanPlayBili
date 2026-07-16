@@ -86,6 +86,10 @@ public final class MP4HandheldVideoClient {
             stop(deviceId, "等待横屏播放");
             return false;
         }
+        if (!com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection.allowMediaStart()) {
+            stop(deviceId, "视频内存保护冷却中");
+            return false;
+        }
         HandheldMediaPlayback playback = activeProfile.playback(deviceId);
         if (!playback.hasPlayableVideoSource()) {
             stop(deviceId, "等待播放同步");
@@ -460,6 +464,13 @@ public final class MP4HandheldVideoClient {
     private static void startDecoder(UUID deviceId, DeviceVideoState state,
             HandheldMediaPlayback playback, PlaybackKey key,
             ResolvedVideoStream stream) {
+        if (!com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection.allowMediaStart()) {
+            synchronized (state.lifecycleLock) {
+                state.resolvingKey = PlaybackKey.EMPTY;
+                state.statusText = "视频内存保护冷却中";
+            }
+            return;
+        }
         long elapsedMillis = Math.max(0L, playback.timeline().mediaMillis());
         long totalMillis = Math.max(0L, playback.timeline().totalMillis());
         VideoSession session = new VideoSession(key, elapsedMillis);
@@ -480,6 +491,10 @@ public final class MP4HandheldVideoClient {
             }
         }, EXECUTOR)
                 .whenComplete((ignored, error) -> {
+                    if (containsOutOfMemory(error)) {
+                        com.zhongbai233.net_music_can_play_bili.client.ClientMediaLifecycleHandler
+                                .tripMemoryProtection("handheld video decoder allocation failed");
+                    }
                     synchronized (state.lifecycleLock) {
                         if (state.activeSession == session) {
                             state.activeSession = null;
@@ -492,6 +507,15 @@ public final class MP4HandheldVideoClient {
                         }
                     }
                 });
+    }
+
+    private static boolean containsOutOfMemory(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            if (current instanceof OutOfMemoryError) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void decodeLoop(UUID deviceId, DeviceVideoState state, VideoSession session,

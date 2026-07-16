@@ -51,6 +51,17 @@ neoForge {
             // 内存诊断：低频输出 JVM、进程提交以及本模组显式 native/PBO 分配。
             jvmProp 'ncpb.memory.diagnostics', prop('ncpbMemoryDiagnostics', 'false')
             jvmProp 'ncpb.memory.report_interval_ms', prop('ncpbMemoryReportIntervalMs', '5000')
+            // 媒体资源硬预算保护默认开启；连续超限时停止媒体，冷却且回落到低水位后自动恢复。
+            jvmProp 'ncpb.memory.protection', prop('ncpbMemoryProtection', 'true')
+            jvmProp 'ncpb.memory.protection.owned_native_mib', prop('ncpbMemoryOwnedNativeLimitMiB', '512')
+            jvmProp 'ncpb.memory.protection.gpu_pbo_mib', prop('ncpbMemoryGpuPboLimitMiB', '512')
+            jvmProp 'ncpb.memory.protection.ffmpeg_mib', prop('ncpbMemoryFfmpegLimitMiB', '1024')
+            jvmProp 'ncpb.memory.protection.d3d11_logical_mib', prop('ncpbMemoryD3d11LimitMiB', '2048')
+            jvmProp 'ncpb.memory.protection.d3d11_surfaces', prop('ncpbMemoryD3d11SurfaceLimit', '256')
+            jvmProp 'ncpb.memory.protection.sample_interval_ms', prop('ncpbMemoryProtectionSampleIntervalMs', '2000')
+            jvmProp 'ncpb.memory.protection.consecutive_samples', prop('ncpbMemoryProtectionConsecutiveSamples', '15')
+            jvmProp 'ncpb.memory.protection.cooldown_ms', prop('ncpbMemoryProtectionCooldownMs', '60000')
+            jvmProp 'ncpb.memory.protection.recovery_ratio', prop('ncpbMemoryProtectionRecoveryRatio', '0.65')
 
             // 默认播放器优先使用已验证的 NV12 双平面路径；需要排查时可通过 -PncpbVideoRenderBackend=rgba/yuv420 回退。
             jvmProp 'ncpb.video.iris.force_yuv_shader', prop('ncpbIrisForceYuvShader', 'true')
@@ -171,8 +182,10 @@ neoForge {
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 def lightweightSelfTests = [
+    runChunkPrefetchInputStreamSelfTest     : ['Runs bounded HTTP Range transactional read regression tests.', 'com.zhongbai233.net_music_can_play_bili.media.stream.ChunkPrefetchInputStreamSelfTest'],
         runPadMapStyleSelfTest                : ['Runs lightweight Pad map style post-processing self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.tools.PadMapStyleSelfTest'],
         runPureLogicSelfTest                  : ['Runs lightweight pure logic self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.tools.PureLogicSelfTest'],
+        runMemoryCircuitBreakerSelfTest        : ['Runs memory circuit breaker state transition self tests.', 'com.zhongbai233.net_music_can_play_bili.client.diagnostics.MemoryCircuitBreakerSelfTest'],
         runPadMapBakeSchedulerSelfTest        : ['Runs lightweight Pad map bake scheduler self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadMapBakeSchedulerSelfTest'],
         runPadMapRenderReusePlanSelfTest      : ['Runs lightweight Pad map rendered overlap reuse self tests.', 'com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadMapRenderReusePlanSelfTest'],
         runPadMapViewProfileStabilizerSelfTest: ['Runs lightweight Pad map view profile stabilization self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapViewProfileStabilizerSelfTest'],

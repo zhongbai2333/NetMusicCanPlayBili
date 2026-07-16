@@ -18,8 +18,7 @@ import java.util.Locale;
 /** Low-frequency JVM, process and mod-owned native memory diagnostics. */
 public final class ClientMemoryDiagnostics {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final boolean ENABLED = Boolean.parseBoolean(
-            System.getProperty("ncpb.memory.diagnostics", "false"));
+    private static final boolean ENABLED = MemoryResourceTracker.enabled();
     private static final long REPORT_INTERVAL_NANOS = Math.max(1_000L,
             Long.getLong("ncpb.memory.report_interval_ms", 5_000L)) * 1_000_000L;
     private static volatile long nextReportNanoTime;
