@@ -57,7 +57,15 @@ public final class LinkHelper {
 
     /** 清除物品上的链接数据和光效 */
     public static void clearLinkFromItem(ItemStack stack) {
-        stack.remove(DataComponents.CUSTOM_DATA);
+        stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY, existing -> existing.update(tag -> {
+            tag.remove(LINK_X);
+            tag.remove(LINK_Y);
+            tag.remove(LINK_Z);
+        }));
+        CustomData remaining = stack.get(DataComponents.CUSTOM_DATA);
+        if (remaining != null && remaining.isEmpty()) {
+            stack.remove(DataComponents.CUSTOM_DATA);
+        }
         stack.remove(DataComponents.ENCHANTMENT_GLINT_OVERRIDE);
     }
 

@@ -4,6 +4,8 @@ import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponentMap;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.ValueInput;
@@ -189,6 +191,14 @@ public class VideoProjectorBlockEntity extends SyncedBlockEntity {
         }
         if (level != null && level.isClientSide() && oldPreferredQuality != preferredQuality) {
             com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient.refreshProjector(worldPosition);
+        }
+    }
+
+    @Override
+    protected void collectImplicitComponents(DataComponentMap.Builder components) {
+        super.collectImplicitComponents(components);
+        if (linkedTurntablePos != null) {
+            components.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true);
         }
     }
 

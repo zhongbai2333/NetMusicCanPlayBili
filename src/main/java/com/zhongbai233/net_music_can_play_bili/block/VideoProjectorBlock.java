@@ -92,12 +92,12 @@ public class VideoProjectorBlock extends Block implements EntityBlock {
     public void setPlacedBy(Level level, BlockPos pos, BlockState state, LivingEntity placer, ItemStack stack) {
         super.setPlacedBy(level, pos, state, placer, stack);
         if (!level.isClientSide()) {
-            applyLinkedPosition(level, pos, stack);
+            applyLinkedPosition(level, pos, stack, placer);
         }
     }
 
     /** 从物品 NBT 读取远程连接目标并写入视频投影仪方块实体 */
-    private static void applyLinkedPosition(Level level, BlockPos pos, ItemStack stack) {
+    private static void applyLinkedPosition(Level level, BlockPos pos, ItemStack stack, LivingEntity placer) {
         BlockPos linkedPos = LinkHelper.readLinkFromItem(stack);
         if (linkedPos == null) {
             return;
@@ -105,8 +105,10 @@ public class VideoProjectorBlock extends Block implements EntityBlock {
         BlockEntity be = level.getBlockEntity(pos);
         if (be instanceof VideoProjectorBlockEntity projector) {
             projector.linkTo(linkedPos);
-            LinkHelper.clearLinkFromItem(stack);
-            clearLinkedBlockEntityData(stack);
+            if (!(placer instanceof Player player) || !player.isCreative()) {
+                LinkHelper.clearLinkFromItem(stack);
+                clearLinkedBlockEntityData(stack);
+            }
         }
     }
 

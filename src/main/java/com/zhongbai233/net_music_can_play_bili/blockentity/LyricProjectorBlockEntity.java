@@ -4,6 +4,8 @@ import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponentMap;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
@@ -218,6 +220,14 @@ public class LyricProjectorBlockEntity extends SyncedBlockEntity {
         this.projectionDistanceZ = input.getFloatOr(PROJ_DISTANCE_Z, 0.0F);
         this.projectionMode = input.getIntOr(PROJ_MODE, 0);
         this.allowAi = input.getBooleanOr(ALLOW_AI, false);
+    }
+
+    @Override
+    protected void collectImplicitComponents(DataComponentMap.Builder components) {
+        super.collectImplicitComponents(components);
+        if (linkedTurntablePos != null) {
+            components.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true);
+        }
     }
 
 }

@@ -103,18 +103,20 @@ public class SpeakerBlock extends Block implements EntityBlock {
     public void setPlacedBy(Level level, BlockPos pos, BlockState state, LivingEntity placer, ItemStack stack) {
         super.setPlacedBy(level, pos, state, placer, stack);
         if (!level.isClientSide()) {
-            applyLinkedPosition(level, pos, stack);
+            applyLinkedPosition(level, pos, stack, placer);
         }
     }
 
-    private static void applyLinkedPosition(Level level, BlockPos pos, ItemStack stack) {
+    private static void applyLinkedPosition(Level level, BlockPos pos, ItemStack stack, LivingEntity placer) {
         BlockPos linkedPos = LinkHelper.readLinkFromItem(stack);
         if (linkedPos == null)
             return;
         BlockEntity be = level.getBlockEntity(pos);
         if (be instanceof SpeakerBlockEntity speaker) {
             speaker.linkTo(linkedPos);
-            LinkHelper.clearLinkFromItem(stack);
+            if (!(placer instanceof Player player) || !player.isCreative()) {
+                LinkHelper.clearLinkFromItem(stack);
+            }
         }
     }
 
