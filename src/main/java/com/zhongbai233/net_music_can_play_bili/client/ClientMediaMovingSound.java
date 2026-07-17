@@ -6,10 +6,10 @@ import com.zhongbai233.net_music_can_play_bili.client.audio.SyncedMediaSound;
 import com.zhongbai233.net_music_can_play_bili.client.audio.SyncedStreamRecoveryRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaAudioRouting;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
-import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackLifecycle;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundHandle;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundLifecyclePolicy;
-import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaStreamRecovery;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaRetryHandler;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
@@ -80,7 +80,7 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
 
     @Override
     public void tick() {
-        if (ClientMediaStreamRecovery.isPending(sourceId, sessionId)) {
+        if (ClientMediaRetryHandler.isPending(sourceId, sessionId)) {
             stop();
             return;
         }
@@ -114,7 +114,7 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
         updatePositionAndAttenuation();
         if (lyricRecord != null) {
             lyricRecord.updateCurrentLine(lyricTick);
-            ClientMediaPlaybackLifecycle.updateLyric(sourceId, sessionId, lyricRecord, lyricTick);
+            ClientMediaPlaybackRegistry.updateLyric(sourceId, sessionId, lyricRecord, lyricTick);
         }
     }
 

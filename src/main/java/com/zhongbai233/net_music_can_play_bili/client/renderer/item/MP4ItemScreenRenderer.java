@@ -106,16 +106,9 @@ public final class MP4ItemScreenRenderer {
         textureFor(deviceId).renderFrameStart(deviceId);
     }
 
-    public interface ArmRenderer {
-        void renderMapHand(PoseStack poseStack, SubmitNodeCollector collector, int light, HumanoidArm arm);
-
-        void renderPlayerArm(PoseStack poseStack, SubmitNodeCollector collector, int light, float equipProgress,
-                float swingProgress, HumanoidArm arm);
-    }
-
     public static void renderMapLike(AbstractClientPlayer player, float partialTick, float pitch,
             InteractionHand hand, ItemStack stack, float swingProgress, float equipProgress, PoseStack poseStack,
-            SubmitNodeCollector collector, int light, ArmRenderer armRenderer) {
+            SubmitNodeCollector collector, int light, HandheldArmRenderer armRenderer) {
         boolean mainHand = hand == InteractionHand.MAIN_HAND;
         HumanoidArm arm = mainHand ? player.getMainArm() : player.getMainArm().getOpposite();
 
@@ -137,7 +130,7 @@ public final class MP4ItemScreenRenderer {
     }
 
     private static void renderFocusedHand(AbstractClientPlayer player, float partialTick, PoseStack poseStack,
-            SubmitNodeCollector collector, int light, HumanoidArm arm, ArmRenderer armRenderer) {
+            SubmitNodeCollector collector, int light, HumanoidArm arm, HandheldArmRenderer armRenderer) {
         if (player.isInvisible()) {
             return;
         }
@@ -161,7 +154,7 @@ public final class MP4ItemScreenRenderer {
     }
 
     private static void applyOneHandedMapPose(HumanoidArm arm, float swingProgress, float equipProgress,
-            PoseStack poseStack, SubmitNodeCollector collector, int light, ArmRenderer armRenderer) {
+            PoseStack poseStack, SubmitNodeCollector collector, int light, HandheldArmRenderer armRenderer) {
         float side = arm == HumanoidArm.RIGHT ? 1.0F : -1.0F;
         poseStack.translate(side * 0.055F, -0.105F, 0.0F);
         Minecraft minecraft = Minecraft.getInstance();

@@ -28,8 +28,6 @@ import java.util.regex.Pattern;
  * B站 API 客户端：BV/AV 解析、视频信息、DASH 音频流地址
  */
 public final class BiliApiClient {
-    private static final Logger LOGGER = LogUtils.getLogger();
-
     private static final Pattern BV_FULL_RE = Pattern.compile("^[Bb][Vv][0-9A-Za-z]{10}$");
     private static final Pattern AV_FULL_RE = Pattern.compile("^av(\\d+)$", Pattern.CASE_INSENSITIVE);
     private static final Pattern BV_ANYWHERE_RE = Pattern.compile("[Bb][Vv][0-9A-Za-z]{10}");
@@ -45,6 +43,10 @@ public final class BiliApiClient {
     private static final int[] DOLBY_AUDIO_ORDER = { 30250, 30251, 30280, 30232, 30216 };
     private static final int[] BEST_AUDIO_ORDER = { 30250, 30251, 30280, 30232, 30216 };
     private static final Duration SHORT_LINK_TIMEOUT = Duration.ofSeconds(5);
+    private static final HttpClient SHORT_LINK_HTTP = HttpClient.newBuilder()
+            .connectTimeout(SHORT_LINK_TIMEOUT)
+            .followRedirects(HttpClient.Redirect.ALWAYS)
+            .build();
     // B站 SESSDATA Cookie，扫码登录后自动获取
     public static volatile String sessdata = System.getProperty("ncpb.bili.sessdata", "");
     // 扫码登录返回的完整 Web Cookie，可包含 buvid/bili_jct/DedeUserID 等降低风控概率的字段。
@@ -164,28 +166,20 @@ public final class BiliApiClient {
         if (!matcher.find()) {
             return safeFallback;
         }
-        try {
-            return Math.max(1, Integer.parseInt(matcher.group(1)));
-        } catch (NumberFormatException ignored) {
-            return safeFallback;
-        }
+        return parsePositivePageOrDefault(matcher.group(1), safeFallback);
     }
 
     private static String expandBiliShortLink(String raw) {
         try {
             URI uri = URI.create(raw.startsWith("http://") || raw.startsWith("https://") ? raw : "https://" + raw);
-            HttpClient client = HttpClient.newBuilder()
-                    .connectTimeout(SHORT_LINK_TIMEOUT)
-                    .followRedirects(HttpClient.Redirect.ALWAYS)
-                    .build();
             HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
                     .timeout(SHORT_LINK_TIMEOUT)
                     .GET();
             BiliRequestHeaders.applyWebApiHeaders(builder);
             HttpRequest req = builder.build();
-            return client.send(req, HttpResponse.BodyHandlers.discarding()).uri().toString();
+            return SHORT_LINK_HTTP.send(req, HttpResponse.BodyHandlers.discarding()).uri().toString();
         } catch (Exception e) {
-            LOGGER.debug("B站短链展开失败: {}", raw, e);
+            logger().debug("B站短链展开失败: {}", raw, e);
             return null;
         }
     }
@@ -211,9 +205,17 @@ public final class BiliApiClient {
 
         int page = 1;
         if (matcher.group(2) != null && !matcher.group(2).isBlank()) {
-            page = Math.max(1, Integer.parseInt(matcher.group(2)));
+            page = parsePositivePageOrDefault(matcher.group(2), 1);
         }
         return new VideoSelection(videoId, page);
+    }
+
+    private static int parsePositivePageOrDefault(String rawPage, int fallback) {
+        try {
+            return Math.max(1, Integer.parseInt(rawPage));
+        } catch (NumberFormatException ignored) {
+            return Math.max(1, fallback);
+        }
     }
 
     public static String formatStoredVideoSelection(VideoId videoId, int page) {
@@ -509,7 +511,7 @@ public final class BiliApiClient {
             selectedCandidates = BiliCdnSelector.orderCandidates(streams.get(selectedQuality));
             selectedUrl = BiliCdnSelector.selectPreferred(selectedCandidates);
         }
-        LOGGER.debug(
+        logger().debug(
                 "B站音频流选择摘要: id={} cid={} preference={} effectivePreference={} allowDolby={} dolbyConfig={} nativeDolby={} dashDolby={} qualities={} selected={}({}) candidateCount={} host={}",
                 id.asInputText(), cid, configuredAudioPreference, effectiveAudioPreference, allowDolby,
                 BiliConfig.dolbyEnabled, nativeDolbyAvailable, dashHasDolby, streams.keySet(), selectedQuality,
@@ -692,7 +694,7 @@ public final class BiliApiClient {
                     .orElseThrow(() -> new RuntimeException("该视频没有可用 DASH 视频流"));
             reason = "fallback-lowest-available-above-ceiling";
         }
-        LOGGER.debug(
+        logger().debug(
                 "B站视频流选择摘要: id={} cid={} qualityCeiling={} available={} selected={} codec={} size={}x{} fps={} reason={} host={}",
                 id.asInputText(), cid, qualityLabel(preferredQuality),
                 streams.stream().map(stream -> qualityLabel(stream.quality())).distinct().toList(),
@@ -1061,5 +1063,16 @@ public final class BiliApiClient {
         int sec = (totalMilliseconds % 60000) / 1000;
         int milliseconds = totalMilliseconds % 1000;
         return String.format("[%02d:%02d.%03d]", minutes, sec, milliseconds);
+    }
+
+    private static Logger logger() {
+        return LoggerHolder.INSTANCE;
+    }
+
+    private static final class LoggerHolder {
+        private static final Logger INSTANCE = LogUtils.getLogger();
+
+        private LoggerHolder() {
+        }
     }
 }

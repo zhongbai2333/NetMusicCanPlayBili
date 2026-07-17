@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.media.stream;
 
+import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
+
 import java.net.URL;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -12,21 +14,27 @@ import java.util.concurrent.ConcurrentHashMap;
  * </p>
  */
 public final class CdnHealthTracker {
-    private static final boolean ENABLED = Boolean.parseBoolean(
-            System.getProperty("ncpb.bili.cdn_health.enabled", "true"));
-    private static final long STALE_AFTER_MILLIS = Math.max(10_000L, Long.getLong(
-            "bili.cdn_health.stale_after_ms", 10L * 60L * 1000L));
-    private static final double SUCCESS_DECAY = clamp01(parseDouble("bili.cdn_health.success_decay", 0.72D));
+    private static final boolean ENABLED = NcpbSystemProperties.booleanValue(
+            "ncpb.bili.cdn_health.enabled", true);
+    private static final long STALE_AFTER_MILLIS = Math.max(10_000L, NcpbSystemProperties.longValue(
+            "ncpb.bili.cdn_health.stale_after_ms", "bili.cdn_health.stale_after_ms", 10L * 60L * 1000L));
+    private static final double SUCCESS_DECAY = clamp01(NcpbSystemProperties.doubleValue(
+            "ncpb.bili.cdn_health.success_decay", "bili.cdn_health.success_decay", 0.72D));
     private static final double FAILURE_PENALTY = Math.max(0.0D,
-            parseDouble("bili.cdn_health.failure_penalty", 4.0D));
+            NcpbSystemProperties.doubleValue("ncpb.bili.cdn_health.failure_penalty",
+                    "bili.cdn_health.failure_penalty", 4.0D));
     private static final double EMPTY_PENALTY = Math.max(0.0D,
-            parseDouble("bili.cdn_health.empty_penalty", 6.0D));
+            NcpbSystemProperties.doubleValue("ncpb.bili.cdn_health.empty_penalty",
+                    "bili.cdn_health.empty_penalty", 6.0D));
     private static final double SHORT_READ_PENALTY = Math.max(0.0D,
-            parseDouble("bili.cdn_health.short_read_penalty", 3.0D));
+            NcpbSystemProperties.doubleValue("ncpb.bili.cdn_health.short_read_penalty",
+                    "bili.cdn_health.short_read_penalty", 3.0D));
     private static final double HTTP_RETRYABLE_PENALTY = Math.max(0.0D,
-            parseDouble("bili.cdn_health.http_retryable_penalty", 5.0D));
+            NcpbSystemProperties.doubleValue("ncpb.bili.cdn_health.http_retryable_penalty",
+                    "bili.cdn_health.http_retryable_penalty", 5.0D));
     private static final double MAX_PENALTY = Math.max(1.0D,
-            parseDouble("bili.cdn_health.max_penalty", 64.0D));
+            NcpbSystemProperties.doubleValue("ncpb.bili.cdn_health.max_penalty",
+                    "bili.cdn_health.max_penalty", 64.0D));
 
     private static final ConcurrentHashMap<String, HostHealth> HEALTH_BY_HOST = new ConcurrentHashMap<>();
 
@@ -107,15 +115,6 @@ public final class CdnHealthTracker {
             return 0.72D;
         }
         return Math.max(0.0D, Math.min(1.0D, value));
-    }
-
-    private static double parseDouble(String key, double fallback) {
-        try {
-            double value = Double.parseDouble(System.getProperty(key, Double.toString(fallback)));
-            return Double.isFinite(value) ? value : fallback;
-        } catch (NumberFormatException ignored) {
-            return fallback;
-        }
     }
 
     public enum FailureKind {

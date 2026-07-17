@@ -566,6 +566,11 @@ public final class MP4HandheldVideoClient {
                     displayedFrames++;
                     continue;
                 }
+                if (!firstFrameAccepted) {
+                    LOGGER.debug("MP4 横屏视频首帧已接受: session={} target={}x{} pts={}ms offset={}ms",
+                            session.key.sessionId(), decodeSize.width(), decodeSize.height(),
+                            framePtsNanos / 1_000_000L, elapsedMillis);
+                }
                 firstFrameAccepted = true;
                 if (!waitForDecodeLead(deviceId, state, session, framePtsNanos)) {
                     decoded.close();

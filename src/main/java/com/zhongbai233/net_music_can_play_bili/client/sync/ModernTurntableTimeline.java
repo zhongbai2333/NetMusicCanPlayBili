@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.VisualTimelineSmoother;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import net.minecraft.client.Minecraft;
@@ -27,7 +28,13 @@ public final class ModernTurntableTimeline {
             "ncpb.turntable.timeline.audio_anchor_max_lead_ms", 500L);
     private static final long CLOCK_PRUNE_INTERVAL_NANOS = Math.max(1_000L,
             Long.getLong("ncpb.turntable.timeline.clock_prune_interval_ms", 30_000L)) * 1_000_000L;
+    private static final long VISUAL_HARD_SYNC_MILLIS = Long.getLong(
+            "ncpb.turntable.timeline.visual_hard_sync_ms", 500L);
+    private static final long VISUAL_MAX_CORRECTION_MILLIS = Long.getLong(
+            "ncpb.turntable.timeline.visual_max_correction_ms", 20L);
+    private static final double VISUAL_CORRECTION_RATIO = parseVisualCorrectionRatio();
     private static final ConcurrentHashMap<BlockPos, MediaTimelineClock> CLOCKS = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<BlockPos, VisualState> VISUAL_CLOCKS = new ConcurrentHashMap<>();
     private static volatile long lastClockPruneNanos;
 
     private ModernTurntableTimeline() {
@@ -35,7 +42,7 @@ public final class ModernTurntableTimeline {
 
     public static long mediaMillis(BlockPos turntablePos) {
         TimelineSnapshot snapshot = snapshot(turntablePos);
-        return snapshot.localMillis();
+        return snapshot.mediaMillis();
     }
 
     /**
@@ -49,7 +56,7 @@ public final class ModernTurntableTimeline {
      */
     public static long visualMillis(BlockPos turntablePos) {
         TimelineSnapshot snapshot = snapshot(turntablePos);
-        return snapshot.pacingMillis();
+        return snapshot.visualMillis();
     }
 
     /**
@@ -98,11 +105,20 @@ public final class ModernTurntableTimeline {
             return existing;
         });
         long pacingMillis = clock != null ? clock.pacingMillis() : serverMillis;
-        long localMillis = audioAnchoredMillis(key, pacingMillis, timelineTotalMillis);
-        localMillis = clamp(localMillis, timelineTotalMillis);
+        long mediaMillis = audioAnchoredMillis(key, pacingMillis, timelineTotalMillis);
+        mediaMillis = clamp(mediaMillis, timelineTotalMillis);
         pacingMillis = clamp(pacingMillis, timelineTotalMillis);
-        return new TimelineSnapshot(sessionId, localMillis, serverMillis, pacingMillis, timelineTotalMillis,
-                localMillis - serverMillis);
+        long nowNanos = System.nanoTime();
+        VisualState visualState = VISUAL_CLOCKS.compute(key, (ignored, existing) -> {
+            if (existing == null || !existing.sessionId().equals(sessionId)) {
+                return new VisualState(sessionId, new VisualTimelineSmoother(VISUAL_HARD_SYNC_MILLIS,
+                        VISUAL_MAX_CORRECTION_MILLIS, VISUAL_CORRECTION_RATIO));
+            }
+            return existing;
+        });
+        long visualMillis = visualState.smoother().sample(mediaMillis, timelineTotalMillis, nowNanos);
+        return new TimelineSnapshot(sessionId, mediaMillis, visualMillis, serverMillis, pacingMillis,
+                timelineTotalMillis, mediaMillis - serverMillis);
     }
 
     private static long audioAnchoredMillis(BlockPos turntablePos, long fallbackMillis, long totalMillis) {
@@ -126,6 +142,7 @@ public final class ModernTurntableTimeline {
     public static void forget(BlockPos turntablePos) {
         if (turntablePos != null) {
             CLOCKS.remove(turntablePos);
+            VISUAL_CLOCKS.remove(turntablePos);
         }
     }
 
@@ -134,11 +151,13 @@ public final class ModernTurntableTimeline {
             return;
         }
         CLOCKS.entrySet().removeIf(entry -> entry.getValue().isForSession(sessionId));
+        VISUAL_CLOCKS.entrySet().removeIf(entry -> entry.getValue().sessionId().equals(sessionId));
     }
 
     /** 客户端断连/切世界时主动清空本地媒体时钟。 */
     public static void clear() {
         CLOCKS.clear();
+        VISUAL_CLOCKS.clear();
         lastClockPruneNanos = 0L;
     }
 
@@ -185,6 +204,7 @@ public final class ModernTurntableTimeline {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft == null || minecraft.level == null || CLOCKS.isEmpty()) {
             CLOCKS.clear();
+            VISUAL_CLOCKS.clear();
             return;
         }
         CLOCKS.entrySet().removeIf(entry -> {
@@ -194,11 +214,32 @@ public final class ModernTurntableTimeline {
                     || !entry.getValue().isForSession(turntable.getPlaybackSyncMetadata(
                             minecraft.level.getGameTime()).sessionId());
         });
+        VISUAL_CLOCKS.keySet().removeIf(pos -> !CLOCKS.containsKey(pos));
     }
 
-    public record TimelineSnapshot(String sessionId, long localMillis, long serverMillis, long pacingMillis,
-            long totalMillis,
-            long localDriftMillis) {
-        public static final TimelineSnapshot EMPTY = new TimelineSnapshot("", -1L, -1L, -1L, 0L, 0L);
+    private static double parseVisualCorrectionRatio() {
+        try {
+            double value = Double.parseDouble(System.getProperty(
+                    "ncpb.turntable.timeline.visual_correction_ratio", "0.20"));
+            return Double.isFinite(value) ? Math.max(0.0D, Math.min(1.0D, value)) : 0.20D;
+        } catch (NumberFormatException ignored) {
+            return 0.20D;
+        }
+    }
+
+    private record VisualState(String sessionId, VisualTimelineSmoother smoother) {
+        private VisualState {
+            sessionId = sessionId != null ? sessionId : "";
+        }
+    }
+
+    public record TimelineSnapshot(String sessionId, long mediaMillis, long visualMillis, long serverMillis,
+            long pacingMillis, long totalMillis, long mediaDriftMillis) {
+        public static final TimelineSnapshot EMPTY = new TimelineSnapshot("", -1L, -1L, -1L, -1L, 0L, 0L);
+
+        /** 兼容旧诊断调用；新代码应使用 mediaMillis()。 */
+        public long localMillis() {
+            return mediaMillis;
+        }
     }
 }

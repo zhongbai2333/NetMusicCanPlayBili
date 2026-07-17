@@ -21,6 +21,7 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
     private final int frameBytes;
     private final byte[] carry;
     private final byte[] skipBuffer = new byte[SKIP_BUFFER_SIZE];
+    private byte[] tapBuffer = new byte[0];
     private final long initialSkipBytes;
     private long skipBytesRemaining;
     private int carryLength;
@@ -74,9 +75,7 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
             return n;
         }
 
-        byte[] realPcm = new byte[n];
-        System.arraycopy(b, off, realPcm, 0, n);
-        tap(realPcm, n);
+        tap(b, off, n);
         Arrays.fill(b, off, off + n, (byte) 0);
         return n;
     }
@@ -132,33 +131,46 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
         }
     }
 
-    private void tap(byte[] pcm, int length) {
+    private void tap(byte[] pcm, int offset, int length) {
         if (stereo == null || length <= 0) {
             return;
         }
-        byte[] combined = new byte[carryLength + length];
+        int combinedLength = carryLength + length;
+        ensureTapCapacity(combinedLength);
         if (carryLength > 0) {
-            System.arraycopy(carry, 0, combined, 0, carryLength);
+            System.arraycopy(carry, 0, tapBuffer, 0, carryLength);
         }
-        System.arraycopy(pcm, 0, combined, carryLength, length);
+        System.arraycopy(pcm, offset, tapBuffer, carryLength, length);
 
-        int aligned = combined.length - (combined.length % frameBytes);
+        int aligned = combinedLength - (combinedLength % frameBytes);
         if (aligned > 0) {
-            byte[] alignedPcm = new byte[aligned];
-            System.arraycopy(combined, 0, alignedPcm, 0, aligned);
-            float[][] planar = StereoOpenALHandler.pcmToFloatPlanar(alignedPcm, getFormat());
-            if (!firstDiagnostics && alignedPcm.length >= frameBytes * DIAGNOSTIC_MIN_FRAMES) {
+            float[][] planar = StereoOpenALHandler.pcmToFloatPlanar(tapBuffer, 0, aligned, getFormat());
+            if (!firstDiagnostics && aligned >= frameBytes * DIAGNOSTIC_MIN_FRAMES) {
                 firstDiagnostics = true;
-                logFirstPcmDiagnostics(alignedPcm.length, planar);
+                logFirstPcmDiagnostics(aligned, planar);
             }
             stereo.enqueuePcm(planar);
         }
 
-        int remain = combined.length - aligned;
+        int remain = combinedLength - aligned;
         if (remain > 0) {
-            System.arraycopy(combined, aligned, carry, 0, remain);
+            System.arraycopy(tapBuffer, aligned, carry, 0, remain);
         }
         carryLength = remain;
+    }
+
+    private void ensureTapCapacity(int required) {
+        if (tapBuffer.length >= required) {
+            return;
+        }
+        int capacity = Math.max(4096, tapBuffer.length);
+        while (capacity < required && capacity <= Integer.MAX_VALUE / 2) {
+            capacity *= 2;
+        }
+        if (capacity < required) {
+            capacity = required;
+        }
+        tapBuffer = new byte[capacity];
     }
 
     private void finishInput() {

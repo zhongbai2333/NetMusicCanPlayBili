@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.bili;
 
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
+import com.zhongbai233.net_music_can_play_bili.media.sync.AudioStartupSync;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientMinecartAudioAnchors;
@@ -127,8 +128,9 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 sync.elapsedMillis(),
                 sync.totalMillis(),
                 ownerId,
-                minecartAnchor != null ? minecartAnchor.entityUuid() : null);
-            closeStaleModernStreams(context.pos(), context.sessionId(), context.minecartUuid());
+                minecartAnchor != null ? minecartAnchor.entityUuid() : null,
+                System.nanoTime());
+        closeStaleModernStreams(context.pos(), context.sessionId(), context.minecartUuid());
         String key = contextKey(url);
         ALLOWED_URLS.compute(key, (ignored, queue) -> {
             PlaybackContextQueue contexts = queue != null ? queue : new PlaybackContextQueue();
@@ -187,7 +189,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 playbackContext = new PlaybackContext(
                         null, 0L, fallbackSync.sessionId(),
                         fallbackSync.elapsedMillis(), fallbackSync.totalMillis(), null,
-                        ClientMinecartAudioAnchors.entityUuid(fallbackSync.sessionId()));
+                        ClientMinecartAudioAnchors.entityUuid(fallbackSync.sessionId()), System.nanoTime());
             }
         }
 
@@ -234,7 +236,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         worker.start();
         ActiveStreamControl streamControl = null;
         if (modernTurntable && playbackContext != null) {
-                streamControl = new ActiveStreamControl(url, playbackContext.pos(), playbackContext.sessionId(),
+            streamControl = new ActiveStreamControl(url, playbackContext.pos(), playbackContext.sessionId(),
                     playbackContext.minecartUuid(), closed,
                     bodyRef, worker, fallbackPipe, pipelineRef, formatReady);
         }
@@ -515,16 +517,50 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             float startOffsetSeconds)
             throws UnsupportedAudioFileException, IOException {
         AudioInputStream pcm = toPcmStream(stream);
-        skipBestEffort(pcm, skipBytes(pcm.getFormat(), startOffsetSeconds));
+        StartupSeekResult seek = skipToCurrentPlayback(pcm, pcm.getFormat(), playbackContext, startOffsetSeconds);
         pcm = requireReadablePcm(pcm, "no decoded PCM after HTTP seek");
         StereoOpenALHandler stereo = new StereoOpenALHandler();
         stereo.setSampleRate((int) pcm.getFormat().getSampleRate());
-        ClientAudioOutputRegistry.registerStereo(stereo, playbackContext.pos(), playbackContext.startOffsetSeconds(),
+        ClientAudioOutputRegistry.registerStereo(stereo, playbackContext.pos(), seek.timelineOffsetSeconds(),
                 playbackContext.sessionId(), playbackContext.ownerId());
+        LOGGER.debug(
+                "HTTP 音频起播追赶完成: session={} captured={}ms effective={}ms setup={}ms passes={} offset={}s",
+                playbackContext.sessionId(), playbackContext.elapsedMillis(), seek.timelineOffsetMillis(),
+                AudioStartupSync.elapsedSinceCaptureMillis(playbackContext.capturedNanos(), System.nanoTime()),
+                seek.passes(), startOffsetSeconds);
         return new OpenALTappedAudioInputStream(pcm, stereo, () -> {
             ClientAudioOutputRegistry.unregisterStereo(stereo);
             stereo.cleanup();
         });
+    }
+
+    private static StartupSeekResult skipToCurrentPlayback(AudioInputStream stream, AudioFormat format,
+            PlaybackContext playbackContext, float initialSkipSeconds) throws IOException {
+        long bytesPerSecond = Math.max(1L, Math.round(format.getSampleRate()) * (long) format.getFrameSize());
+        long initialSkipBytes = skipBytes(format, initialSkipSeconds);
+        long skippedBytes = 0L;
+        int passes = 0;
+        byte[] buffer = new byte[64 * 1024];
+        while (passes < 4) {
+            long setupMillis = AudioStartupSync.elapsedSinceCaptureMillis(playbackContext.capturedNanos(),
+                    System.nanoTime());
+            long targetBytes = saturatedAdd(initialSkipBytes, millisToBytes(bytesPerSecond, setupMillis));
+            long remaining = Math.max(0L, targetBytes - skippedBytes);
+            if (remaining <= bytesPerSecond / 20L) {
+                break;
+            }
+            long skippedThisPass = skipBestEffort(stream, remaining, buffer);
+            skippedBytes = saturatedAdd(skippedBytes, skippedThisPass);
+            passes++;
+            if (skippedThisPass < remaining) {
+                break;
+            }
+        }
+        long compensatedBytes = Math.max(0L, skippedBytes - initialSkipBytes);
+        long compensatedMillis = Math.round(compensatedBytes * 1000.0D / bytesPerSecond);
+        long timelineOffsetMillis = AudioStartupSync.compensatedOffsetMillis(playbackContext.elapsedMillis(),
+                playbackContext.totalMillis(), compensatedMillis);
+        return new StartupSeekResult(timelineOffsetMillis, passes);
     }
 
     private static AudioInputStream applyStartOffset(AudioInputStream stream, float startOffsetSeconds)
@@ -580,14 +616,34 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
 
     private static void skipBestEffort(AudioInputStream stream, long bytesToSkip) throws IOException {
         byte[] buffer = new byte[64 * 1024];
+        skipBestEffort(stream, bytesToSkip, buffer);
+    }
+
+    private static long skipBestEffort(AudioInputStream stream, long bytesToSkip, byte[] buffer) throws IOException {
         long remaining = Math.max(0L, bytesToSkip);
         while (remaining > 0L) {
             int n = stream.read(buffer, 0, (int) Math.min(buffer.length, remaining));
             if (n < 0) {
-                return;
+                break;
             }
             remaining -= n;
         }
+        return Math.max(0L, bytesToSkip) - remaining;
+    }
+
+    private static long millisToBytes(long bytesPerSecond, long millis) {
+        if (bytesPerSecond <= 0L || millis <= 0L) {
+            return 0L;
+        }
+        double bytes = bytesPerSecond * (millis / 1000.0D);
+        return bytes >= Long.MAX_VALUE ? Long.MAX_VALUE : Math.round(bytes);
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        if (right > Long.MAX_VALUE - left) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     private static void cleanupAllowedUrls(long now) {
@@ -771,10 +827,19 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             }
             Fmp4RangeSeekSupport.SidxEntry selected = null;
             for (Fmp4RangeSeekSupport.SidxEntry entry : sidx.entries()) {
-                if (entry.timeSeconds() <= targetSeconds + FMP4_TARGET_EPSILON_SECONDS) {
-                    selected = entry;
-                } else {
+                if (entry.timeSeconds() > targetSeconds + FMP4_TARGET_EPSILON_SECONDS) {
                     break;
+                }
+                if (entry.startsWithSap()) {
+                    selected = entry;
+                }
+            }
+            if (selected == null) {
+                for (Fmp4RangeSeekSupport.SidxEntry entry : sidx.entries()) {
+                    if (entry.timeSeconds() > targetSeconds + FMP4_TARGET_EPSILON_SECONDS) {
+                        break;
+                    }
+                    selected = entry;
                 }
             }
             if (selected == null) {
@@ -793,6 +858,13 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 }
                 byte[] probeBytes = probe.bytes();
                 Fmp4RangeSeekSupport.MoofCandidate candidate = probe.candidate();
+                if (Fmp4RangeSeekSupport.isAfterTargetCandidate(candidate, targetSeconds,
+                    FMP4_TARGET_EPSILON_SECONDS)) {
+                    LOGGER.debug("音频fMP4 SidxSeek 命中目标之后 fragment，回退 Moof RangeSeek: target={}s fragment={}s byte={}",
+                        targetSeconds, candidate.fragmentSeconds(), selected.byteStart());
+                    closeQuietly(range);
+                    return null;
+                }
                 double fragmentSeconds = !Double.isNaN(candidate.fragmentSeconds())
                         ? candidate.fragmentSeconds()
                         : selected.timeSeconds();
@@ -807,6 +879,8 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                         "音频fMP4 SidxSeek: target={}s fragment={}s residual={}s timelineStart={}s byte={} totalBytes={} host={}",
                         targetSeconds, fragmentSeconds, residualSeconds, playbackContext.startOffsetSeconds(),
                         selected.byteStart(), init.contentLength(), url.getHost());
+                    LOGGER.debug("音频fMP4 SidxSeek 选择: target={}s selectedFragment={}s startsWithSap={} byte={}",
+                        targetSeconds, fragmentSeconds, selected.startsWithSap(), selected.byteStart());
                 return new Fmp4StreamStart(combined, residualSeconds);
             } catch (IOException | RuntimeException e) {
                 closeQuietly(range);
@@ -1438,8 +1512,14 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             long createdAtMillis) {
     }
 
-        private record PlaybackContext(BlockPos pos, long expiresAtMillis, String sessionId, long elapsedMillis,
-            long totalMillis, UUID ownerId, UUID minecartUuid) {
+    private record StartupSeekResult(long timelineOffsetMillis, int passes) {
+        float timelineOffsetSeconds() {
+            return timelineOffsetMillis / 1000.0f;
+        }
+    }
+
+    private record PlaybackContext(BlockPos pos, long expiresAtMillis, String sessionId, long elapsedMillis,
+            long totalMillis, UUID ownerId, UUID minecartUuid, long capturedNanos) {
         float startOffsetSeconds() {
             return Math.max(0L, elapsedMillis) / 1000.0f;
         }

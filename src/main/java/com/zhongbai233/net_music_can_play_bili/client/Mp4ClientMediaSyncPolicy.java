@@ -5,6 +5,7 @@ import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputReg
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaAudioRouting;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackSessions;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPrepareLauncher;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundHandle;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundRegistry;
@@ -26,7 +27,8 @@ final class Mp4ClientMediaSyncPolicy implements ClientMediaSyncPolicy {
 
     @Override
     public void stop(UUID sourceId) {
-        MP4ClientMediaSessions.stop(sourceId);
+        ClientMediaPlaybackSessions.stop(sourceId,
+            deviceId -> MP4HandheldVideoClient.stop(deviceId, "播放已停止"));
     }
 
     @Override

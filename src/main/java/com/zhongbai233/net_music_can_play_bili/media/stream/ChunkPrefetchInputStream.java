@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.media.stream;
 
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import org.slf4j.Logger;
 
@@ -13,25 +14,25 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public final class ChunkPrefetchInputStream extends InputStream {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int COPY_BUFFER_SIZE = Integer.getInteger(
-            "bili.media.prefetch.copy_buffer_bytes", 256 * 1024);
+    private static final int COPY_BUFFER_SIZE = NcpbSystemProperties.intValue(
+            "ncpb.media.prefetch.copy_buffer_bytes", "bili.media.prefetch.copy_buffer_bytes", 256 * 1024);
 
-    public static final int DEFAULT_CHUNK_SIZE = Integer.getInteger(
-            "bili.media.prefetch.chunk_bytes", 4 * 1024 * 1024);
-    public static final int DEFAULT_LOW_WATER = Integer.getInteger(
-            "bili.media.prefetch.low_water_bytes", 8 * 1024 * 1024);
-    public static final int DEFAULT_HIGH_WATER = Integer.getInteger(
-            "bili.media.prefetch.high_water_bytes", 32 * 1024 * 1024);
-    private static final long STARTUP_PREBUFFER_BYTES = Math.max(0L, Long.getLong(
-            "bili.media.prefetch.startup_bytes", 768L * 1024L));
-    private static final long SEEK_STARTUP_PREBUFFER_BYTES = Math.max(0L, Long.getLong(
-            "bili.media.prefetch.seek_startup_bytes", 384L * 1024L));
-    private static final long STARTUP_PREBUFFER_MAX_WAIT_MILLIS = Math.max(0L, Long.getLong(
-            "bili.media.prefetch.startup_max_wait_ms", 1_500L));
-    private static final int PER_HOST_ATTEMPTS = Math.max(1, Integer.getInteger(
-            "bili.media.prefetch.per_host_attempts", 2));
-    private static final long RETRY_BACKOFF_MILLIS = Math.max(0L, Long.getLong(
-            "bili.media.prefetch.retry_backoff_ms", 350L));
+    public static final int DEFAULT_CHUNK_SIZE = NcpbSystemProperties.intValue(
+            "ncpb.media.prefetch.chunk_bytes", "bili.media.prefetch.chunk_bytes", 4 * 1024 * 1024);
+    public static final int DEFAULT_LOW_WATER = NcpbSystemProperties.intValue(
+            "ncpb.media.prefetch.low_water_bytes", "bili.media.prefetch.low_water_bytes", 8 * 1024 * 1024);
+    public static final int DEFAULT_HIGH_WATER = NcpbSystemProperties.intValue(
+            "ncpb.media.prefetch.high_water_bytes", "bili.media.prefetch.high_water_bytes", 32 * 1024 * 1024);
+    private static final long STARTUP_PREBUFFER_BYTES = Math.max(0L, NcpbSystemProperties.longValue(
+            "ncpb.media.prefetch.startup_bytes", "bili.media.prefetch.startup_bytes", 768L * 1024L));
+    private static final long SEEK_STARTUP_PREBUFFER_BYTES = Math.max(0L, NcpbSystemProperties.longValue(
+            "ncpb.media.prefetch.seek_startup_bytes", "bili.media.prefetch.seek_startup_bytes", 384L * 1024L));
+    private static final long STARTUP_PREBUFFER_MAX_WAIT_MILLIS = Math.max(0L, NcpbSystemProperties.longValue(
+            "ncpb.media.prefetch.startup_max_wait_ms", "bili.media.prefetch.startup_max_wait_ms", 1_500L));
+    private static final int PER_HOST_ATTEMPTS = Math.max(1, NcpbSystemProperties.intValue(
+            "ncpb.media.prefetch.per_host_attempts", "bili.media.prefetch.per_host_attempts", 2));
+    private static final long RETRY_BACKOFF_MILLIS = Math.max(0L, NcpbSystemProperties.longValue(
+            "ncpb.media.prefetch.retry_backoff_ms", "bili.media.prefetch.retry_backoff_ms", 350L));
 
     private final URL url;
     private final HttpRangeClient client;

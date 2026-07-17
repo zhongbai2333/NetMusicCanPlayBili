@@ -130,7 +130,8 @@ public final class ClientMediaLifecycleHandler {
         com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker.stopAllSounds();
         com.zhongbai233.net_music_can_play_bili.client.MP4Client.clearCachedStates();
         com.zhongbai233.net_music_can_play_bili.client.PadClient.clearCachedDocuments();
-        com.zhongbai233.net_music_can_play_bili.client.MP4ClientMediaSessions.clearAll();
+        com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackSessions.clearAll(
+            com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient::clearAll);
         com.zhongbai233.net_music_can_play_bili.client.MP4FocusState.resetAll();
         com.zhongbai233.net_music_can_play_bili.client.PadFocusState.resetAll();
         com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer.releaseAll();

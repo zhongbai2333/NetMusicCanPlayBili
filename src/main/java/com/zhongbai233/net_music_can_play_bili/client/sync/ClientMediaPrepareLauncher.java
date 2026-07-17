@@ -4,8 +4,10 @@ import com.zhongbai233.net_music_can_play_bili.client.audio.ClientMediaPreparer;
 import com.zhongbai233.net_music_can_play_bili.client.audio.SyncedMediaPlaybackLauncher;
 import net.minecraft.client.Minecraft;
 
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -13,6 +15,8 @@ import java.util.concurrent.TimeUnit;
  * playback.
  */
 public final class ClientMediaPrepareLauncher {
+    private static final Set<String> SCHEDULED_PREPARES = ConcurrentHashMap.newKeySet();
+
     private ClientMediaPrepareLauncher() {
     }
 
@@ -21,7 +25,7 @@ public final class ClientMediaPrepareLauncher {
         if (payload == null || sourceId == null || policy == null) {
             return;
         }
-        if (!ClientMediaPrepareTracker.markScheduled(sourceId, payload.sessionId(), payload.headphoneRouted())) {
+        if (!markScheduled(sourceId, payload.sessionId(), payload.headphoneRouted())) {
             policy.onPrepareDuplicate(payload, sourceId);
             return;
         }
@@ -36,7 +40,7 @@ public final class ClientMediaPrepareLauncher {
             return prepared;
         }).completeOnTimeout(null, Math.max(3L, policy.prepareTimeoutSeconds()), TimeUnit.SECONDS)
                 .whenComplete((prepared, error) -> {
-                    ClientMediaPrepareTracker.complete(sourceId, payload.sessionId(), payload.headphoneRouted());
+                    complete(sourceId, payload.sessionId(), payload.headphoneRouted());
                     Minecraft client = Minecraft.getInstance();
                     client.execute(() -> finishPrepareOnClient(payload, sourceId, policy, loadLyrics, prepared, error));
                 });
@@ -72,5 +76,27 @@ public final class ClientMediaPrepareLauncher {
         policy.onLaunch(payload, sourceId, startOffsetMillis, launch.playUrl());
         SyncedMediaPlaybackLauncher.play(launch, payload.songName(),
                 (url, lyricRecord) -> policy.createSound(sourceId, payload, url, lyricRecord, startOffsetMillis));
+    }
+
+    static void removeScheduledForDevice(UUID sourceId) {
+        if (sourceId != null) {
+            SCHEDULED_PREPARES.removeIf(key -> key.startsWith(sourceId + ":"));
+        }
+    }
+
+    static void clearScheduled() {
+        SCHEDULED_PREPARES.clear();
+    }
+
+    private static boolean markScheduled(UUID sourceId, String sessionId, boolean headphoneRouted) {
+        return SCHEDULED_PREPARES.add(prepareKey(sourceId, sessionId, headphoneRouted));
+    }
+
+    private static void complete(UUID sourceId, String sessionId, boolean headphoneRouted) {
+        SCHEDULED_PREPARES.remove(prepareKey(sourceId, sessionId, headphoneRouted));
+    }
+
+    private static String prepareKey(UUID sourceId, String sessionId, boolean headphoneRouted) {
+        return String.valueOf(sourceId) + ':' + sessionId + ':' + headphoneRouted;
     }
 }

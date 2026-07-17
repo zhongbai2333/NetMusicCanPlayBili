@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.media.stream;
 
+import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
+
 import java.io.Closeable;
 import java.io.EOFException;
 import java.io.IOException;
@@ -19,8 +21,8 @@ import java.nio.file.Path;
  * 大幅降低下载线程与解析线程之间的锁竞争
  */
 public final class TempFileByteSpool implements Closeable {
-    private static final long READ_WAIT_TIMEOUT_MILLIS = Long.getLong(
-            "bili.media.spool.read_wait_timeout_ms", 30_000L);
+    private static final long READ_WAIT_TIMEOUT_MILLIS = NcpbSystemProperties.longValue(
+            "ncpb.media.spool.read_wait_timeout_ms", "bili.media.spool.read_wait_timeout_ms", 30_000L);
 
     private final Path path;
     private final RandomAccessFile readFile;

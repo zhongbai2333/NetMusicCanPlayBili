@@ -162,9 +162,12 @@ public final class Fmp4RangeSeekSupport {
             long size = ref & 0x7FFF_FFFFL;
             long duration = readUInt32(data, p);
             p += 4;
-            p += 4; // SAP
+            long sap = readUInt32(data, p);
+            p += 4;
+            boolean startsWithSap = (sap & 0x8000_0000L) != 0L;
             if (!referenceType && size > 0L) {
-                entries.add(new SidxEntry(currentTime / (double) timescale, currentByte, currentByte + size - 1L));
+                entries.add(new SidxEntry(currentTime / (double) timescale, currentByte, currentByte + size - 1L,
+                        startsWithSap));
             }
             currentTime += duration;
             currentByte += size;
@@ -280,7 +283,7 @@ public final class Fmp4RangeSeekSupport {
     public record SidxIndex(long timescale, List<SidxEntry> entries) {
     }
 
-    public record SidxEntry(double timeSeconds, long byteStart, long byteEnd) {
+    public record SidxEntry(double timeSeconds, long byteStart, long byteEnd, boolean startsWithSap) {
     }
 
     public record MoofCandidate(int offset, double fragmentSeconds) {

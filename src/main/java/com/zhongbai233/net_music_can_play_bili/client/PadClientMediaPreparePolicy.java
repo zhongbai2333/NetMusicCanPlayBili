@@ -6,6 +6,7 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientMediaPreparer;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaAudioRouting;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackSessions;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPreparePolicy;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import net.minecraft.client.Minecraft;
@@ -41,7 +42,8 @@ final class PadClientMediaPreparePolicy implements ClientMediaPreparePolicy {
 
     @Override
     public void stop(UUID sourceId) {
-        PadClientMediaSessions.stop(sourceId);
+        ClientMediaPlaybackSessions.stop(sourceId,
+            deviceId -> MP4HandheldVideoClient.stop(deviceId, "Pad 播放已停止"));
     }
 
     @Override

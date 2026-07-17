@@ -2111,8 +2111,16 @@ public final class VideoBillboardPreview {
     }
 
     private static void renderPreviewYuvImmediate(RenderLevelStageEvent event, String route) {
+        // This method is only the legacy/global preview fallback. The normal
+        // synchronized projector path is rendered by VideoPlaybackInstance in
+        // SubmitCustomGeometryEvent. Do not emit an Iris warning merely because
+        // AfterLevel/AfterTranslucentBlocks fired: those events fire without
+        // Iris and before a preview session may even exist.
+        if (!shouldDrawYuvImmediateWithIris()) {
+            return;
+        }
         if (loggedYuvImmediateStage.compareAndSet(false, true)) {
-            LOGGER.warn("Iris/YUV: 当前非投影预览 immediate 绘制阶段为 '{}'，坐标模式为 '{}'，pose='{}'，route={}",
+            LOGGER.info("Iris/YUV: 启用非投影预览 immediate 绘制，shaderpack=true，阶段='{}'，坐标模式='{}'，pose='{}'，route={}",
                     YUV_IMMEDIATE_STAGE, YUV_IMMEDIATE_COORDS, YUV_IMMEDIATE_POSE, route);
         }
         Minecraft minecraft = Minecraft.getInstance();

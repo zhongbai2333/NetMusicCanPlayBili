@@ -156,9 +156,9 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
         super.setRemoved();
         if (level instanceof ServerLevel serverLevel) {
             AudioLinkIndex.unregisterSpeaker(serverLevel, worldPosition);
+        } else if (level != null && level.isClientSide()) {
+            ClientAudioOutputRegistry.clearMachineOverrideForSpeaker(worldPosition);
         }
-        // 客户端和服务端均需清理 relay 和链接状态，防止长时间运行服务器内存泄漏
-        ClientAudioOutputRegistry.clearMachineOverrideForSpeaker(worldPosition);
     }
 
     /** 此音响的独立音频 relay（客户端） */

@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.mixin;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.item.HandheldArmRenderer;
 import com.zhongbai233.net_music_can_play_bili.init.ModItems;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.renderer.SubmitNodeCollector;
@@ -27,7 +28,7 @@ public abstract class ItemInHandRendererMixin {
             SubmitNodeCollector collector, int light, CallbackInfo ci) {
         if (stack.is(ModItems.MP4.get())) {
             MP4ItemScreenRenderer.renderMapLike(player, partialTick, pitch, hand, stack, swingProgress, equipProgress,
-                    poseStack, collector, light, new MP4ItemScreenRenderer.ArmRenderer() {
+                    poseStack, collector, light, new HandheldArmRenderer() {
                         @Override
                         public void renderMapHand(PoseStack poseStack, SubmitNodeCollector collector, int light,
                                 HumanoidArm arm) {
@@ -46,7 +47,7 @@ public abstract class ItemInHandRendererMixin {
         }
         if (stack.is(ModItems.PAD.get())) {
             PadItemScreenRenderer.renderMapLike(player, partialTick, pitch, hand, stack, swingProgress, equipProgress,
-                    poseStack, collector, light, new PadItemScreenRenderer.ArmRenderer() {
+                    poseStack, collector, light, new HandheldArmRenderer() {
                         @Override
                         public void renderMapHand(PoseStack poseStack, SubmitNodeCollector collector, int light,
                                 HumanoidArm arm) {

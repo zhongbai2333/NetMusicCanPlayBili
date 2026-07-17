@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.tools;
 
 import com.zhongbai233.net_music_can_play_bili.bili.Mp3FrameSync;
+import com.zhongbai233.net_music_can_play_bili.bili.StereoOpenALHandler;
 import com.zhongbai233.net_music_can_play_bili.blockentity.TurntableComparatorSignal;
 import com.zhongbai233.net_music_can_play_bili.blockentity.TurntableExtractionMode;
 import com.zhongbai233.net_music_can_play_bili.blockentity.TurntableRedstoneMode;
@@ -11,6 +12,9 @@ import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeHeaders;
 import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4StreamParser;
 import com.zhongbai233.net_music_can_play_bili.media.stream.MediaNetworkFailureClassifier;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.AudioStartupSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.AudioSyncPolicy;
+import com.zhongbai233.net_music_can_play_bili.media.sync.VisualTimelineSmoother;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseExecutor;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 
@@ -24,6 +28,8 @@ import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+
+import javax.sound.sampled.AudioFormat;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.AABB;
@@ -49,6 +55,10 @@ public final class PureLogicSelfTest {
         closesMediaResourcesOffCallerThread();
         togglesPadDocumentLockWithoutForkingContent();
         preservesMinecartPlaybackSyncMetadata();
+        compensatesAudioStartupLatency();
+        convertsPcmSlicesWithoutCopying();
+        appliesSharedAudioSyncPolicy();
+        smoothsVisualTimelineWithoutGoingBackwards();
         mapsTurntableProgressToComparatorSignal();
         mapsTurntableRedstoneModes();
         mapsTurntableExtractionModes();
@@ -277,6 +287,109 @@ public final class PureLogicSelfTest {
         }
         if (!"https://cdn.example.invalid/audio.m4a".equals(PlaybackSync.strip(transferred))) {
             throw new AssertionError("stripping sync metadata should restore the clean target URL");
+        }
+    }
+
+    private static void compensatesAudioStartupLatency() {
+        long capturedNanos = 10_000_000_000L;
+        long nowNanos = capturedNanos + 17_431_999_999L;
+        long compensated = AudioStartupSync.compensatedElapsedMillis(173_064L, 300_000L,
+                capturedNanos, nowNanos);
+        if (compensated != 190_495L) {
+            throw new AssertionError("audio startup latency compensation mismatch: " + compensated);
+        }
+        long clamped = AudioStartupSync.compensatedElapsedMillis(295_000L, 300_000L,
+                capturedNanos, nowNanos);
+        if (clamped != 300_000L) {
+            throw new AssertionError("audio startup compensation should clamp to duration: " + clamped);
+        }
+        long actualSkipped = AudioStartupSync.compensatedOffsetMillis(173_064L, 300_000L, 17_431L);
+        if (actualSkipped != 190_495L) {
+            throw new AssertionError("actual PCM skip compensation mismatch: " + actualSkipped);
+        }
+        if (AudioStartupSync.elapsedSinceCaptureMillis(capturedNanos, capturedNanos - 1L) != 0L) {
+            throw new AssertionError("backwards monotonic timestamps must not create negative setup latency");
+        }
+    }
+
+    private static void convertsPcmSlicesWithoutCopying() {
+        byte[] pcm16 = { 99, 98, 0x00, (byte) 0x80, (byte) 0xFF, 0x7F, 97 };
+        AudioFormat stereo16 = new AudioFormat(48_000, 16, 2, true, false);
+        float[][] sliced16 = StereoOpenALHandler.pcmToFloatPlanar(pcm16, 2, 4, stereo16);
+        assertNear(-1.0f, sliced16[0][0], "16-bit left");
+        assertNear(32767.0f / 32768.0f, sliced16[1][0], "16-bit right");
+
+        byte[] pcm24 = { 11, 22, 0x00, 0x00, (byte) 0x80, (byte) 0xFF, (byte) 0xFF, 0x7F, 33 };
+        AudioFormat stereo24 = new AudioFormat(48_000, 24, 2, true, false);
+        float[][] sliced24 = StereoOpenALHandler.pcmToFloatPlanar(pcm24, 2, 6, stereo24);
+        assertNear(-1.0f, sliced24[0][0], "24-bit left");
+        assertNear(8388607.0f / 8388608.0f, sliced24[1][0], "24-bit right");
+
+        byte[] pcm32be = { 44, (byte) 0x80, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 55 };
+        AudioFormat stereo32be = new AudioFormat(48_000, 32, 2, true, true);
+        float[][] sliced32 = StereoOpenALHandler.pcmToFloatPlanar(pcm32be, 1, 8, stereo32be);
+        assertNear(-1.0f, sliced32[0][0], "32-bit big-endian left");
+        assertNear(0.5f, sliced32[1][0], "32-bit big-endian right");
+
+        try {
+            StereoOpenALHandler.pcmToFloatPlanar(pcm16, 2, pcm16.length, stereo16);
+            throw new AssertionError("out-of-range PCM slice should be rejected");
+        } catch (IndexOutOfBoundsException expected) {
+            // Expected: public slice API must fail fast instead of reading past the input
+            // buffer.
+        }
+    }
+
+    private static void appliesSharedAudioSyncPolicy() {
+        AudioSyncPolicy policy = new AudioSyncPolicy(8L, 28L, 40L, 8L, 12L);
+        if (policy.isAhead(10L, 9L, 15L) || !policy.isAhead(28L, 27L, 15L)) {
+            throw new AssertionError("audio ahead classification failed");
+        }
+        if (!policy.shouldFlushAhead(28L, 20L, 15L) || policy.shouldFlushAhead(27L, 20L, 15L)) {
+            throw new AssertionError("audio ahead flush threshold failed");
+        }
+        if (!policy.shouldFlushOutputLag(4L, 44L, 45L)
+                || policy.shouldFlushOutputLag(4L, 30L, 45L)) {
+            throw new AssertionError("audio output lag flush guard failed");
+        }
+        int base = policy.allowedUnits(2.0D, 8, 10L, 15L);
+        int catchUp = policy.allowedUnits(2.0D, 8, 10L, 30L);
+        int legacyExpected = 2 + (int) Math.round((8 - 2) * Math.min(1.0D, 20.0D / 28.0D));
+        if (base != 2 || catchUp != legacyExpected || catchUp > 8) {
+            throw new AssertionError("audio catch-up budget failed: base=" + base + " catchUp=" + catchUp);
+        }
+    }
+
+    private static void smoothsVisualTimelineWithoutGoingBackwards() {
+        VisualTimelineSmoother smoother = new VisualTimelineSmoother(500L, 20L, 0.20D);
+        long start = 1_000_000_000L;
+        if (smoother.sample(1_000L, 10_000L, start) != 1_000L) {
+            throw new AssertionError("visual timeline initial anchor failed");
+        }
+        long advanced = smoother.sample(1_016L, 10_000L, start + 16_000_000L);
+        if (advanced < 1_016L || advanced > 1_020L) {
+            throw new AssertionError("visual timeline interpolation failed: " + advanced);
+        }
+        long nonDecreasing = smoother.sample(980L, 10_000L, start + 32_000_000L);
+        if (nonDecreasing < advanced) {
+            throw new AssertionError("visual timeline moved backwards");
+        }
+        long frozen = smoother.sample(0L, 10_000L, start + 48_000_000L);
+        if (frozen != nonDecreasing) {
+            throw new AssertionError("visual timeline hard rewind was not frozen: " + frozen);
+        }
+        long hardSynced = smoother.sample(2_000L, 10_000L, start + 64_000_000L);
+        if (hardSynced != 2_000L) {
+            throw new AssertionError("visual timeline hard sync failed: " + hardSynced);
+        }
+        if (smoother.sample(12_000L, 10_000L, start + 80_000_000L) > 10_000L) {
+            throw new AssertionError("visual timeline exceeded duration");
+        }
+    }
+
+    private static void assertNear(float expected, float actual, String label) {
+        if (Math.abs(expected - actual) > 1.0e-6f) {
+            throw new AssertionError(label + " expected " + expected + ", got " + actual);
         }
     }
 

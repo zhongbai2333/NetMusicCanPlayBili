@@ -1,7 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.client;
 
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
-import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackLifecycle;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
@@ -21,14 +20,14 @@ final class MP4QueueCompletionPolicy {
     public void onCompleted(UUID deviceId, String sessionId) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.player == null || !ClientMediaPlayback.isCurrent(deviceId, sessionId)) {
-            ClientMediaPlaybackLifecycle.finish(deviceId, sessionId);
+            ClientMediaPlaybackRegistry.finishSession(deviceId, sessionId);
             return;
         }
         ClientMediaPlaybackRegistry.ActivePlayback active = ClientMediaPlaybackRegistry.get(deviceId);
         ItemStack stack = MP4Item.findByDeviceId(minecraft.player, deviceId);
         if (active == null || !(stack.getItem() instanceof MP4Item)
                 || active.sourceLocation().sourceType() != ClientMediaSyncPayload.SOURCE_PLAYER) {
-            ClientMediaPlaybackLifecycle.finish(deviceId, sessionId);
+            ClientMediaPlaybackRegistry.finishSession(deviceId, sessionId);
             return;
         }
         int queueSize = MP4FocusState.queueSize();

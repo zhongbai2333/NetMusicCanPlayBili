@@ -1,11 +1,18 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
+import com.zhongbai233.net_music_can_play_bili.media.sync.VisualTimelineSmoother;
 
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** 客户端媒体时间线只读视图，统一本地时钟、OpenAL 可听进度和包同步兜底。 */
 public final class ClientMediaTimelineView {
+    private static final long AUDIO_ANCHOR_MAX_LAG_MILLIS = Long.getLong(
+            "ncpb.media.timeline.audio_anchor_max_lag_ms", 2_000L);
+    private static final long AUDIO_ANCHOR_MAX_LEAD_MILLIS = Long.getLong(
+            "ncpb.media.timeline.audio_anchor_max_lead_ms", 500L);
+    private static final ConcurrentHashMap<UUID, VisualState> VISUAL_STATES = new ConcurrentHashMap<>();
     private final String sessionId;
     private final long mediaMillis;
     private final long visualMillis;
@@ -83,12 +90,13 @@ public final class ClientMediaTimelineView {
             ClientAudioOutputRegistry.AudioTimeline audioTimeline = ClientAudioOutputRegistry
                     .getOwnerAudioTimeline(ownerId);
             long audibleMillis = matchingAudibleMillis(audioTimeline, expected, total);
-            if (audibleMillis >= 0L) {
+            if (isSafeAudioAnchor(audibleMillis, pacing)) {
                 media = audibleMillis;
-                visual = audibleMillis;
-                pacing = audibleMillis;
                 anchored = true;
             }
+            visual = smoothVisual(ownerId, expected, media, total);
+        } else if (ownerId != null) {
+            VISUAL_STATES.remove(ownerId);
         }
         media = clamp(media, total);
         visual = clamp(visual, total);
@@ -165,6 +173,44 @@ public final class ClientMediaTimelineView {
             return -1L;
         }
         return clamp(audibleMillis, totalMillis);
+    }
+
+    public static void forget(UUID ownerId) {
+        if (ownerId != null) {
+            VISUAL_STATES.remove(ownerId);
+        }
+    }
+
+    public static void clearVisualStates() {
+        VISUAL_STATES.clear();
+    }
+
+    private static boolean isSafeAudioAnchor(long audibleMillis, long pacingMillis) {
+        if (audibleMillis < 0L || pacingMillis < 0L) {
+            return false;
+        }
+        long lag = pacingMillis - audibleMillis;
+        return lag <= Math.max(0L, AUDIO_ANCHOR_MAX_LAG_MILLIS)
+                && -lag <= Math.max(0L, AUDIO_ANCHOR_MAX_LEAD_MILLIS);
+    }
+
+    private static long smoothVisual(UUID ownerId, String sessionId, long mediaMillis, long totalMillis) {
+        if (ownerId == null) {
+            return clamp(mediaMillis, totalMillis);
+        }
+        VisualState state = VISUAL_STATES.compute(ownerId, (ignored, existing) -> {
+            if (existing == null || !existing.sessionId().equals(sessionId)) {
+                return new VisualState(sessionId, new VisualTimelineSmoother(500L, 20L, 0.20D));
+            }
+            return existing;
+        });
+        return state.smoother().sample(mediaMillis, totalMillis, System.nanoTime());
+    }
+
+    private record VisualState(String sessionId, VisualTimelineSmoother smoother) {
+        private VisualState {
+            sessionId = sessionId != null ? sessionId : "";
+        }
     }
 
     private static long clamp(long millis, long totalMillis) {

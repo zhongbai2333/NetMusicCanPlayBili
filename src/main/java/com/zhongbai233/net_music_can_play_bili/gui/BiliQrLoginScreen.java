@@ -34,7 +34,7 @@ public class BiliQrLoginScreen extends Screen {
     private int pollTick;
     private int closeTick = -1;
     private volatile boolean done;
-    private int loadGeneration;
+    private volatile int loadGeneration;
     private boolean removed;
 
     public BiliQrLoginScreen() {

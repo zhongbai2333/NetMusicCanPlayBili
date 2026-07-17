@@ -5,6 +5,7 @@ import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 import com.zhongbai233.net_music_can_play_bili.client.PlaybackLatencyBench;
 import com.zhongbai233.net_music_can_play_bili.media.audio.OpenALSpatialAudio;
 import com.zhongbai233.net_music_can_play_bili.media.codec.*;
+import com.zhongbai233.net_music_can_play_bili.media.sync.AudioSyncPolicy;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.LifecycleClose;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 
@@ -32,16 +33,11 @@ public class DolbyAudioHandler {
     private static final boolean MUTE_MAIN_WHEN_RELAYS_CONNECTED = Boolean.parseBoolean(
             System.getProperty("ncpb.bili.audio.relay.mute_main_when_connected",
                     System.getProperty("ncpb.bili.audio.relay.mute_main_when_started", "true")));
-    private static final long AUDIO_CATCH_UP_START_TICKS = Long.getLong(
-            "bili.audio.sync.catch_up_start_ticks", 8L);
-    private static final long AUDIO_CATCH_UP_FULL_TICKS = Long.getLong(
-            "bili.audio.sync.catch_up_full_ticks", 28L);
-    private static final long OUTPUT_LAG_FLUSH_TICKS = Long.getLong(
-            "bili.audio.timeline.flush_output_lag_ticks", 40L);
-    private static final long OUTPUT_LAG_FED_NEAR_TARGET_TICKS = Long.getLong(
-            "bili.audio.timeline.output_lag_fed_near_target_ticks", 8L);
-    private static final int RAW_QUEUE_CAPACITY = 512;
-    private static final int PROCESSED_QUEUE_CAPACITY = 512;
+    private static final AudioSyncPolicy SYNC_POLICY = AudioSyncPolicy.fromSystemProperties();
+    private static final int RAW_QUEUE_CAPACITY = Math.max(32,
+            Integer.getInteger("ncpb.bili.audio.dolby.raw_queue_capacity", 128));
+    private static final int PROCESSED_QUEUE_CAPACITY = Math.max(PREBUFFER_FRAMES,
+            Integer.getInteger("ncpb.bili.audio.dolby.processed_queue_capacity", 64));
 
     private final BlockingQueue<byte[]> rawQueue = new LinkedBlockingQueue<>(RAW_QUEUE_CAPACITY);
     private final BlockingQueue<ProcessedFrame> processedQueue = new LinkedBlockingQueue<>(PROCESSED_QUEUE_CAPACITY);
@@ -75,6 +71,8 @@ public class DolbyAudioHandler {
 
     private int frameCount;
     private int nullPcmCount;
+    private volatile int rawQueueHighWater;
+    private volatile int processedQueueHighWater;
     /** 已喂入 OpenAL 的 E-AC-3 帧总数（在 feedOpenAL 中递增） */
     private long totalFramesFedToOpenAL;
     private boolean didFirstDiag;
@@ -96,6 +94,7 @@ public class DolbyAudioHandler {
         try {
             while (!closed) {
                 if (rawQueue.offer(ec3Frame, 250, TimeUnit.MILLISECONDS)) {
+                    rawQueueHighWater = Math.max(rawQueueHighWater, rawQueue.size());
                     PlaybackLatencyBench.markAudioQueued(this, "dolby", rawQueue.size(),
                             totalFramesFedToOpenAL * 1536L, 48000);
                     return true;
@@ -150,8 +149,12 @@ public class DolbyAudioHandler {
         boolean audioAhead = isAheadOfTarget(targetRelativeTicks);
         if (!audioAhead) {
             int allowedFrames = allowedFramesForTarget(targetRelativeTicks);
-            while (processed < allowedFrames && (pf = processedQueue.poll()) != null) {
-                feedOpenAL(pf);
+            while (processed < allowedFrames && (pf = processedQueue.peek()) != null) {
+                FeedResult result = feedOpenAL(pf);
+                if (result == FeedResult.RETRY) {
+                    break;
+                }
+                processedQueue.poll();
                 processed++;
             }
         }
@@ -181,26 +184,19 @@ public class DolbyAudioHandler {
     }
 
     private boolean isAheadOfTarget(long targetRelativeTicks) {
-        if (targetRelativeTicks == Long.MAX_VALUE || !playbackStarted) {
+        if (!playbackStarted) {
             return false;
         }
-        long fedTicks = getFedPositionTicks();
-        if (fedTicks >= 0L && fedTicks > targetRelativeTicks) {
-            return true;
-        }
-        long audibleTicks = getPositionTicks();
-        return audibleTicks >= 0L && audibleTicks > targetRelativeTicks;
+        return SYNC_POLICY.isAhead(getFedPositionTicks(), getPositionTicks(), targetRelativeTicks);
     }
 
     private boolean hardFlushIfAhead(long targetRelativeTicks) {
         if (targetRelativeTicks == Long.MAX_VALUE || !playbackStarted || spatialAudio == null) {
             return false;
         }
-        long toleranceTicks = Long.getLong("ncpb.bili.audio.timeline.flush_ahead_ticks", 12L);
         long fedTicks = getFedPositionTicks();
         long audibleTicks = getPositionTicks();
-        if ((fedTicks >= 0L && fedTicks - targetRelativeTicks > toleranceTicks)
-                || (audibleTicks >= 0L && audibleTicks - targetRelativeTicks > toleranceTicks)) {
+        if (SYNC_POLICY.shouldFlushAhead(fedTicks, audibleTicks, targetRelativeTicks)) {
             long consumedSamples = spatialAudio.flushQueuedAudio();
             totalFramesFedToOpenAL = Math.max(0L, consumedSamples / 1536L);
             for (SpeakerAudioRelay relay : relays) {
@@ -215,19 +211,10 @@ public class DolbyAudioHandler {
         if (targetRelativeTicks == Long.MAX_VALUE || !playbackStarted || spatialAudio == null) {
             return false;
         }
-        long lagThreshold = Math.max(0L, OUTPUT_LAG_FLUSH_TICKS);
-        if (lagThreshold <= 0L) {
-            return false;
-        }
         long audibleTicks = getPositionTicks();
         long fedTicks = getFedPositionTicks();
-        if (audibleTicks < 0L || fedTicks < 0L) {
-            return false;
-        }
         long audibleLag = targetRelativeTicks - audibleTicks;
-        long fedDistance = targetRelativeTicks - fedTicks;
-        if (audibleLag <= lagThreshold
-                || fedDistance > Math.max(0L, OUTPUT_LAG_FED_NEAR_TARGET_TICKS)) {
+        if (!SYNC_POLICY.shouldFlushOutputLag(audibleTicks, fedTicks, targetRelativeTicks)) {
             return false;
         }
         long targetFrames = ticksToEc3Frames(Math.max(0L, targetRelativeTicks));
@@ -243,29 +230,17 @@ public class DolbyAudioHandler {
     }
 
     private int allowedFramesForTarget(long targetRelativeTicks) {
-        int base = Math.min((int) frameBudget, MAX_FRAMES_PER_TICK);
-        if (targetRelativeTicks == Long.MAX_VALUE || !playbackStarted) {
-            return base;
-        }
-        long positionTicks = getFedPositionTicks();
-        if (positionTicks < 0L) {
-            return base;
-        }
-        long behindTicks = targetRelativeTicks - positionTicks;
-        if (behindTicks <= AUDIO_CATCH_UP_START_TICKS) {
-            return base;
-        }
-        long fullTicks = Math.max(AUDIO_CATCH_UP_START_TICKS + 1L, AUDIO_CATCH_UP_FULL_TICKS);
-        double ratio = Math.min(1.0D, behindTicks / (double) fullTicks);
-        int extra = (int) Math.round((MAX_FRAMES_PER_TICK - base) * ratio);
-        return Math.max(base, Math.min(MAX_FRAMES_PER_TICK, base + extra));
+        return SYNC_POLICY.allowedUnits(frameBudget, MAX_FRAMES_PER_TICK, getFedPositionTicks(), targetRelativeTicks);
     }
 
     public List<String> describeSources(float[] machinePos, float[] listenerPos) {
         List<String> lines = new ArrayList<>();
-        lines.add(String.format("Dolby: initialized=%s beds=%d objects=%d JOC音频=%s rawQ=%d procQ=%d frames=%d",
+        int pendingBlocks = spatialAudio != null ? spatialAudio.pendingMediaBlocks() : 0;
+        lines.add(String.format(
+                "Dolby: initialized=%s beds=%d objects=%d JOC音频=%s rawQ=%d/%d peak=%d procQ=%d/%d peak=%d openalPending=%d frames=%d",
                 initialized, numBedChannels, numObjects, BiliConfig.dolbyJocEnabled ? "on" : "off",
-                rawQueue.size(), processedQueue.size(), frameCount));
+                rawQueue.size(), RAW_QUEUE_CAPACITY, rawQueueHighWater,
+                processedQueue.size(), PROCESSED_QUEUE_CAPACITY, processedQueueHighWater, pendingBlocks, frameCount));
         if (machinePos != null && listenerPos != null) {
             float yaw = (float) Math.atan2(machinePos[0] - listenerPos[0], machinePos[2] - listenerPos[2]);
             float distance = distance(listenerPos, machinePos);
@@ -447,6 +422,7 @@ public class DolbyAudioHandler {
 
                 if (pf != null) {
                     processedQueue.put(pf);
+                    processedQueueHighWater = Math.max(processedQueueHighWater, processedQueue.size());
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -574,9 +550,9 @@ public class DolbyAudioHandler {
         return new ProcessedFrame(pcmCh, objPcmCh, oamd, channels, objCount);
     }
 
-    private void feedOpenAL(ProcessedFrame pf) {
+    private FeedResult feedOpenAL(ProcessedFrame pf) {
         if (closed)
-            return;
+            return FeedResult.DROP;
         int chs = pf.channels, objs = Math.max(0, Math.min(pf.objCount, BiliConfig.dolbyMaxObjectSources()));
         int targetObjects = BiliConfig.dolbyJocEnabled ? objs : 0;
         if (!initialized || numBedChannels != chs || targetObjects > numObjects) {
@@ -592,7 +568,7 @@ public class DolbyAudioHandler {
                 next.cleanup();
                 spatialAudio = null;
                 initialized = false;
-                return;
+                return FeedResult.DROP;
             }
             spatialAudio = next;
             PlaybackLatencyBench.markAudioOpenAlInitialized(this, "dolby", 48000);
@@ -611,21 +587,24 @@ public class DolbyAudioHandler {
         }
         OpenALSpatialAudio sa = spatialAudio;
         if (sa == null)
-            return;
+            return FeedResult.DROP;
         if (pf.oamd != null)
             updateObjectOffsets(pf.oamd);
         float[][] pc = pf.pcmCh;
-        for (int blk = 0; blk < 6; blk++) {
-            int off = blk * 256;
-            sa.updateBedFrameBlock(pc, off);
-            if (numObjects > 0) {
-                sa.updateObjectFrameBlock(pf.objPcmCh, off);
-            }
+        if (!sa.updateFrame(pc, pf.objPcmCh, 6)) {
+            return FeedResult.RETRY;
         }
         totalFramesFedToOpenAL++;
         PlaybackLatencyBench.markAudioFed(this, "dolby", 1, totalFramesFedToOpenAL * 1536L,
                 processedQueue.size(), 48000);
         feedRelays(pf);
+        return FeedResult.FED;
+    }
+
+    private enum FeedResult {
+        FED,
+        RETRY,
+        DROP
     }
 
     /**

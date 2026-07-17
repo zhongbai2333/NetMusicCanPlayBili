@@ -14,8 +14,8 @@ public final class ClientMediaPlaybackSessions {
         }
         ClientMediaPlaybackRegistry.remove(deviceId);
         ClientMediaSoundRegistry.remove(deviceId);
-        ClientMediaStreamRecovery.removeForDevice(deviceId);
-        ClientMediaPrepareTracker.removeForDevice(deviceId);
+        ClientMediaRetryHandler.removePendingForDevice(deviceId);
+        ClientMediaPrepareLauncher.removeScheduledForDevice(deviceId);
         if (carrierStopHook != null) {
             carrierStopHook.accept(deviceId);
         }
@@ -24,8 +24,8 @@ public final class ClientMediaPlaybackSessions {
     public static void clearAll(Runnable carrierClearHook) {
         ClientMediaPlaybackRegistry.clear();
         ClientMediaSoundRegistry.clear();
-        ClientMediaStreamRecovery.clear();
-        ClientMediaPrepareTracker.clear();
+        ClientMediaRetryHandler.clearPending();
+        ClientMediaPrepareLauncher.clearScheduled();
         if (carrierClearHook != null) {
             carrierClearHook.run();
         }

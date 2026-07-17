@@ -414,29 +414,31 @@ public final class ModernTurntableVideoClient {
             int sourceWidth = stream.sourceWidth();
             int sourceHeight = stream.sourceHeight();
             int fps = stream.fps();
-            long elapsedMillis = normalizedElapsedMillis(sync);
-            logDecision(sync.sessionId(), "resolved-start", turntablePos, elapsedMillis, qualityCeiling,
-                    projectorPositions.size(), requestId,
-                    "qualityCeiling=" + qualityCeiling + " actualQuality=" + stream.quality() + " title='"
-                            + stream.title() + "' size=" + sourceWidth + "x" + sourceHeight + " fps=" + fps);
             // 这里记录的是“本次请求已满足的偏好档位”，不是 B 站实际返回的 qn。
             // 例如投影仪请求 127，但当前视频最高只有 116；后续同步包仍会继续请求 127。
             // 如果把 active/pending 写成 116，就会把“允许降级到 116”误判成 quality ceiling
             // changed，导致播放器反复重建。
             ACTIVE_QUALITY_CEILING_BY_SESSION.put(sync.sessionId(), qualityCeiling);
-            PENDING_REQUEST_BY_SESSION.put(sync.sessionId(),
-                    new PendingVideoRequest(elapsedMillis, qualityCeiling, requestId));
+                PENDING_REQUEST_BY_SESSION.put(sync.sessionId(), new PendingVideoRequest(
+                    normalizedElapsedMillis(sync), qualityCeiling, requestId));
             Minecraft.getInstance().execute(() -> {
                 if (!isLatestRequestForTurntable(sync.sessionId(), requestId, turntablePos)) {
                     return;
                 }
+                PlaybackSync.Metadata launchSync = currentPlaybackMetadata(turntablePos, sync);
+                long elapsedMillis = normalizedElapsedMillis(launchSync);
+                logDecision(sync.sessionId(), "resolved-start", turntablePos, elapsedMillis, qualityCeiling,
+                    projectorPositions.size(), requestId,
+                    "qualityCeiling=" + qualityCeiling + " actualQuality=" + stream.quality() + " title='"
+                        + stream.title() + "' size=" + sourceWidth + "x" + sourceHeight + " fps=" + fps
+                        + " launchTimelineRefreshed=" + (launchSync != sync));
                 VideoBillboardPreview.startSynced(stream.url(), sourceWidth,
-                        sourceHeight, fps, stream.codecId(), sync.sessionId(), elapsedMillis, sync.totalMillis(),
+                    sourceHeight, fps, stream.codecId(), launchSync.sessionId(), elapsedMillis,
+                    launchSync.totalMillis(),
                         projectorPositions,
                         turntablePos,
                         PREFER_NATIVE, DECODER_OVERRIDE.isBlank() ? null : DECODER_OVERRIDE);
-                PENDING_REQUEST_BY_SESSION.remove(sync.sessionId(),
-                        new PendingVideoRequest(elapsedMillis, qualityCeiling, requestId));
+                PENDING_REQUEST_BY_SESSION.remove(sync.sessionId());
             });
         } catch (Exception e) {
             if (isLatestRequest(sync.sessionId(), requestId)) {
@@ -450,6 +452,20 @@ public final class ModernTurntableVideoClient {
         long base = Math.max(0L, sync.elapsedMillis());
         long total = Math.max(0L, sync.totalMillis());
         return normalizeMillis(base, total);
+    }
+
+    private static PlaybackSync.Metadata currentPlaybackMetadata(BlockPos turntablePos,
+            PlaybackSync.Metadata fallback) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (turntablePos == null || minecraft.level == null) {
+            return fallback;
+        }
+        BlockEntity blockEntity = minecraft.level.getBlockEntity(turntablePos);
+        if (!(blockEntity instanceof ModernTurntableBlockEntity turntable) || !turntable.isPlaying()) {
+            return fallback;
+        }
+        PlaybackSync.Metadata current = turntable.getPlaybackSyncMetadata(minecraft.level.getGameTime());
+        return current.hasSession() && fallback.sessionId().equals(current.sessionId()) ? current : fallback;
     }
 
     private static long normalizeMillis(long value, long totalMillis) {

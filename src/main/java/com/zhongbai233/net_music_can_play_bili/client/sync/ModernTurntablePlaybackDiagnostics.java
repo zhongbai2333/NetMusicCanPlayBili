@@ -52,7 +52,7 @@ public final class ModernTurntablePlaybackDiagnostics {
         }
 
         ModernTurntableTimeline.TimelineSnapshot timeline = ModernTurntableTimeline.snapshot(turntablePos);
-        long localMillis = timeline.localMillis();
+        long localMillis = timeline.mediaMillis();
         long serverMillis = timeline.serverMillis();
 
         VideoBillboardPreview.VideoSyncStatus video = VideoBillboardPreview.getSyncStatus(sessionId);
@@ -62,8 +62,9 @@ public final class ModernTurntablePlaybackDiagnostics {
         long subtitleMillis = subtitleMillis(turntable);
 
         LOGGER.debug(
-                "播放管线关键时间: local={} server={} pacing={} localDrift={} video={} expectedVideo={} videoQueued={} audio={} audioMain={} audioMainFed={} audioRelay={} audioRelayCount={}/{} expectedAudio={} subtitle={} expectedSubtitle={} driftVideo={} driftAudio={} driftAudioFed={} session={} audioSession={}",
-                formatMillis(localMillis), formatMillis(serverMillis), formatMillis(timeline.pacingMillis()),
+                "播放管线关键时间: media={} visual={} server={} pacing={} mediaDrift={} video={} expectedVideo={} videoQueued={} audio={} audioMain={} audioMainFed={} audioRelay={} audioRelayCount={}/{} expectedAudio={} subtitle={} expectedSubtitle={} driftVideo={} driftAudio={} driftAudioFed={} session={} audioSession={}",
+                formatMillis(localMillis), formatMillis(timeline.visualMillis()), formatMillis(serverMillis),
+                formatMillis(timeline.pacingMillis()),
                 formatDelta(localMillis, serverMillis),
                 formatMillis(videoMillis), formatMillis(localMillis), formatMillis(video.queuedMediaMillis()),
                 formatMillis(audioMillis), formatMillis(audio.mainMillis()), formatMillis(audio.mainFedMillis()),

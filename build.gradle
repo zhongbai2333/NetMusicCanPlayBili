@@ -180,6 +180,9 @@ neoForge {
 
 // 加入数据生成输出资源。
 sourceSets.main.resources { srcDir 'src/generated/resources' }
+// 显式声明测试目录，确保 Gradle/Buildship 在多根工作区中稳定导入测试源码模型。
+sourceSets.test.java.setSrcDirs(['src/test/java'])
+sourceSets.test.resources.setSrcDirs(['src/test/resources'])
 
 def lightweightSelfTests = [
     runChunkPrefetchInputStreamSelfTest     : ['Runs bounded HTTP Range transactional read regression tests.', 'com.zhongbai233.net_music_can_play_bili.media.stream.ChunkPrefetchInputStreamSelfTest'],
@@ -286,6 +289,15 @@ tasks.register("runWithRenderDoc", Exec) {
 dependencies {
     compileOnly "maven.modrinth:net-music:mCrjhdSq"
     compileOnly "maven.modrinth:iris:YEGDGnJM"
+
+    testImplementation platform('org.junit:junit-bom:5.13.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testRuntimeOnly 'com.google.code.gson:gson:2.13.1'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
 }
 
 // 用 Gradle 属性展开模组元数据模板。

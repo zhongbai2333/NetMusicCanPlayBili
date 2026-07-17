@@ -55,6 +55,7 @@ public final class ClientMediaPlaybackRegistry {
         if (sourceId != null) {
             ACTIVE.remove(sourceId);
             removeAudioStartedForSource(sourceId);
+            ClientMediaTimelineView.forget(sourceId);
         }
     }
 
@@ -64,11 +65,31 @@ public final class ClientMediaPlaybackRegistry {
         }
         ACTIVE.computeIfPresent(sourceId, (ignored, active) -> sessionId.equals(active.sessionId()) ? null : active);
         STARTED_AUDIO_SESSIONS.remove(sessionKey(sourceId, sessionId));
+        ClientMediaTimelineView.forget(sourceId);
+    }
+
+    public static void finishSession(UUID sourceId, String sessionId) {
+        if (sourceId == null || sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        finish(sourceId, sessionId);
+        ClientMediaSoundRegistry.finish(sourceId, sessionId);
+    }
+
+    public static void updateLyric(UUID sourceId, String sessionId, LyricRecord record, int lyricTick) {
+        if (sourceId == null || record == null || !isCurrent(sourceId, sessionId)) {
+            return;
+        }
+        String current = currentLineAt(record.getLyrics(), lyricTick);
+        String translated = currentLineAt(record.getTransLyrics(), lyricTick);
+        ACTIVE.computeIfPresent(sourceId,
+                (ignored, active) -> active.withLyrics(record, current, translated));
     }
 
     public static void clear() {
         ACTIVE.clear();
         STARTED_AUDIO_SESSIONS.clear();
+        ClientMediaTimelineView.clearVisualStates();
     }
 
     public static boolean isCurrent(UUID sourceId, String sessionId) {

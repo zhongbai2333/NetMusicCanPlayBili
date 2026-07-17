@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.bili;
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 
 import com.zhongbai233.net_music_can_play_bili.media.audio.OpenALSpatialAudio;
+import com.zhongbai233.net_music_can_play_bili.media.sync.AudioSyncPolicy;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.LifecycleClose;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import com.mojang.logging.LogUtils;
@@ -27,14 +28,7 @@ public class StereoOpenALHandler {
     private static final int QUEUE_CAPACITY = 512;
     private static final int PREBUFFER_BLOCKS = 96;
     private static final int MAX_BLOCKS_PER_TICK = 64;
-    private static final long AUDIO_CATCH_UP_START_TICKS = Long.getLong(
-            "bili.audio.sync.catch_up_start_ticks", 8L);
-    private static final long AUDIO_CATCH_UP_FULL_TICKS = Long.getLong(
-            "bili.audio.sync.catch_up_full_ticks", 28L);
-    private static final long OUTPUT_LAG_FLUSH_TICKS = Long.getLong(
-            "bili.audio.timeline.flush_output_lag_ticks", 40L);
-    private static final long OUTPUT_LAG_FED_NEAR_TARGET_TICKS = Long.getLong(
-            "bili.audio.timeline.output_lag_fed_near_target_ticks", 8L);
+    private static final AudioSyncPolicy SYNC_POLICY = AudioSyncPolicy.fromSystemProperties();
     private static final float[][] BED_POSITIONS = {
             { -0.5f, 0, 0.866f }, { 0.5f, 0, 0.866f },
     };
@@ -53,6 +47,7 @@ public class StereoOpenALHandler {
     private volatile OpenALSpatialAudio spatialAudio;
     private volatile boolean initialized;
     private int frameCount;
+    private volatile int pcmQueueHighWater;
     private int sampleRate = 48000;
     private float[][] pendingBlock = new float[2][SAMPLES_PER_BLOCK];
     private int pendingSamples;
@@ -78,12 +73,12 @@ public class StereoOpenALHandler {
         if (samples <= 0)
             return false;
         boolean queuedAny = false;
+        float crossfeed = BiliConfig.stereoCrossfeedAmount();
+        float keep = 1.0f - crossfeed;
         for (int sample = 0; sample < samples && !closed; sample++) {
             float left = sampleAt(stereoBlock, 0, sample);
             float right = sampleAt(stereoBlock, 1, sample);
-            float crossfeed = BiliConfig.stereoCrossfeedAmount();
             if (crossfeed > 0.0f) {
-                float keep = 1.0f - crossfeed;
                 pendingBlock[0][pendingSamples] = softClip(left * keep + right * crossfeed);
                 pendingBlock[1][pendingSamples] = softClip(right * keep + left * crossfeed);
             } else {
@@ -119,6 +114,7 @@ public class StereoOpenALHandler {
             while (!closed) {
                 if (pcmQueue.offer(block, 250, TimeUnit.MILLISECONDS)) {
                     frameCount++;
+                    pcmQueueHighWater = Math.max(pcmQueueHighWater, pcmQueue.size());
                     return true;
                 }
             }
@@ -196,9 +192,16 @@ public class StereoOpenALHandler {
         int allowed = isAheadOfTarget(targetRelativeTicks) ? 0 : allowedBlocksForTarget(targetRelativeTicks);
         int fed = 0;
         float[][] block;
-        while (fed < allowed && (block = pcmQueue.poll()) != null) {
+        OpenALSpatialAudio output = spatialAudio;
+        if (output == null) {
+            return;
+        }
+        while (fed < allowed && (block = pcmQueue.peek()) != null) {
+            if (!output.updateBedBlock(block)) {
+                break;
+            }
+            pcmQueue.poll();
             updateAudioLevel(block);
-            spatialAudio.updateBedBlock(block);
             fed++;
             feedRelays(block);
         }
@@ -239,26 +242,19 @@ public class StereoOpenALHandler {
     }
 
     private boolean isAheadOfTarget(long targetRelativeTicks) {
-        if (targetRelativeTicks == Long.MAX_VALUE || !started) {
+        if (!started) {
             return false;
         }
-        long fedTicks = getFedPositionTicks();
-        if (fedTicks >= 0L && fedTicks > targetRelativeTicks) {
-            return true;
-        }
-        long audibleTicks = getPositionTicks();
-        return audibleTicks >= 0L && audibleTicks > targetRelativeTicks;
+        return SYNC_POLICY.isAhead(getFedPositionTicks(), getPositionTicks(), targetRelativeTicks);
     }
 
     private boolean hardFlushIfAhead(long targetRelativeTicks) {
         if (targetRelativeTicks == Long.MAX_VALUE || !started || spatialAudio == null) {
             return false;
         }
-        long toleranceTicks = Long.getLong("ncpb.bili.audio.timeline.flush_ahead_ticks", 12L);
         long fedTicks = getFedPositionTicks();
         long audibleTicks = getPositionTicks();
-        if ((fedTicks >= 0L && fedTicks - targetRelativeTicks > toleranceTicks)
-                || (audibleTicks >= 0L && audibleTicks - targetRelativeTicks > toleranceTicks)) {
+        if (SYNC_POLICY.shouldFlushAhead(fedTicks, audibleTicks, targetRelativeTicks)) {
             long consumedSamples = spatialAudio.flushQueuedAudio();
             totalSamplesFed = Math.max(0L, consumedSamples);
             for (SpeakerAudioRelay relay : relays) {
@@ -273,19 +269,10 @@ public class StereoOpenALHandler {
         if (targetRelativeTicks == Long.MAX_VALUE || !started || spatialAudio == null) {
             return false;
         }
-        long lagThreshold = Math.max(0L, OUTPUT_LAG_FLUSH_TICKS);
-        if (lagThreshold <= 0L) {
-            return false;
-        }
         long audibleTicks = getPositionTicks();
         long fedTicks = getFedPositionTicks();
-        if (audibleTicks < 0L || fedTicks < 0L) {
-            return false;
-        }
         long audibleLag = targetRelativeTicks - audibleTicks;
-        long fedDistance = targetRelativeTicks - fedTicks;
-        if (audibleLag <= lagThreshold
-                || fedDistance > Math.max(0L, OUTPUT_LAG_FED_NEAR_TARGET_TICKS)) {
+        if (!SYNC_POLICY.shouldFlushOutputLag(audibleTicks, fedTicks, targetRelativeTicks)) {
             return false;
         }
         long targetSamples = Math.max(0L, targetRelativeTicks) * samplesPerTick();
@@ -353,22 +340,7 @@ public class StereoOpenALHandler {
     }
 
     private int allowedBlocksForTarget(long targetRelativeTicks) {
-        int base = Math.min((int) frameBudget, MAX_BLOCKS_PER_TICK);
-        if (targetRelativeTicks == Long.MAX_VALUE || !started) {
-            return base;
-        }
-        long positionTicks = getFedPositionTicks();
-        if (positionTicks < 0L) {
-            return base;
-        }
-        long behindTicks = targetRelativeTicks - positionTicks;
-        if (behindTicks <= AUDIO_CATCH_UP_START_TICKS) {
-            return base;
-        }
-        long fullTicks = Math.max(AUDIO_CATCH_UP_START_TICKS + 1L, AUDIO_CATCH_UP_FULL_TICKS);
-        double ratio = Math.min(1.0D, behindTicks / (double) fullTicks);
-        int extra = (int) Math.round((MAX_BLOCKS_PER_TICK - base) * ratio);
-        return Math.max(base, Math.min(MAX_BLOCKS_PER_TICK, base + extra));
+        return SYNC_POLICY.allowedUnits(frameBudget, MAX_BLOCKS_PER_TICK, getFedPositionTicks(), targetRelativeTicks);
     }
 
     private static float gameVolume() {
@@ -535,8 +507,10 @@ public class StereoOpenALHandler {
 
     public List<String> describeState() {
         return List.of(String.format(
-                "Stereo OpenAL: initialized=%s started=%s sampleRate=%d queue=%d pendingSamples=%d blocks=%d distance=%.2f gain=%.3f volume=%.2f level=%.3f",
-                initialized, started, sampleRate, pcmQueue.size(), pendingSamples, frameCount, lastDistance, lastGain,
+                "Stereo OpenAL: initialized=%s started=%s sampleRate=%d queue=%d/%d peak=%d openalPending=%d pendingSamples=%d blocks=%d distance=%.2f gain=%.3f volume=%.2f level=%.3f",
+                initialized, started, sampleRate, pcmQueue.size(), QUEUE_CAPACITY, pcmQueueHighWater,
+                spatialAudio != null ? spatialAudio.pendingMediaBlocks() : 0, pendingSamples, frameCount, lastDistance,
+                lastGain,
                 userVolume, audioLevel()));
     }
 
@@ -578,14 +552,20 @@ public class StereoOpenALHandler {
 
     /** 将 16-bit 交错 PCM (short[]) 转换为 float32 planar [2][samples] */
     public static float[][] shortToFloatPlanar(byte[] pcmBytes, int channels) {
+        return shortToFloatPlanar(pcmBytes, 0, pcmBytes.length, channels);
+    }
+
+    public static float[][] shortToFloatPlanar(byte[] pcmBytes, int offset, int length, int channels) {
+        java.util.Objects.requireNonNull(pcmBytes, "pcmBytes");
+        java.util.Objects.checkFromIndexSize(offset, length, pcmBytes.length);
         int bytesPerSample = 2;
         int sourceChannels = Math.max(1, channels);
         int outChannels = Math.min(2, sourceChannels);
-        int samples = pcmBytes.length / (bytesPerSample * sourceChannels);
+        int samples = Math.max(0, length) / (bytesPerSample * sourceChannels);
         float[][] planar = new float[outChannels][samples];
         for (int s = 0; s < samples; s++) {
             for (int ch = 0; ch < outChannels; ch++) {
-                int idx = (s * sourceChannels + ch) * 2;
+                int idx = offset + (s * sourceChannels + ch) * 2;
                 short val = (short) ((pcmBytes[idx + 1] << 8) | (pcmBytes[idx] & 0xFF));
                 planar[ch][s] = val / 32768f;
             }
@@ -595,25 +575,33 @@ public class StereoOpenALHandler {
 
     /** 根据 AudioFormat 自动选择位深度（16/24/32 bit）转换 PCM */
     public static float[][] pcmToFloatPlanar(byte[] pcmBytes, javax.sound.sampled.AudioFormat format) {
+        return pcmToFloatPlanar(pcmBytes, 0, pcmBytes.length, format);
+    }
+
+    public static float[][] pcmToFloatPlanar(byte[] pcmBytes, int offset, int length,
+            javax.sound.sampled.AudioFormat format) {
+        java.util.Objects.requireNonNull(pcmBytes, "pcmBytes");
+        java.util.Objects.requireNonNull(format, "format");
+        java.util.Objects.checkFromIndexSize(offset, length, pcmBytes.length);
         int bits = format.getSampleSizeInBits();
         int sourceChannels = Math.max(1, format.getChannels());
         int outChannels = Math.min(2, sourceChannels);
         boolean bigEndian = format.isBigEndian();
 
         if (bits <= 16) {
-            return shortToFloatPlanar(pcmBytes, sourceChannels);
+            return shortToFloatPlanar(pcmBytes, offset, length, sourceChannels);
         }
 
         // 24-bit 或 32-bit: 使用 int 精度读取
         int bytesPerSample = bits / 8;
         if (bytesPerSample < 2)
             bytesPerSample = 2;
-        int samples = pcmBytes.length / (bytesPerSample * sourceChannels);
+        int samples = Math.max(0, length) / (bytesPerSample * sourceChannels);
 
         float[][] planar = new float[outChannels][samples];
         for (int s = 0; s < samples; s++) {
             for (int ch = 0; ch < outChannels; ch++) {
-                int idx = (s * sourceChannels + ch) * bytesPerSample;
+                int idx = offset + (s * sourceChannels + ch) * bytesPerSample;
                 int val;
                 if (bytesPerSample == 3) {
                     // 24 位 PCM。

@@ -2,7 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.client;
 
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundHandle;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundLifecyclePolicy;
-import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackLifecycle;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaRetryHandler;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundRegistry;
 
@@ -33,6 +33,6 @@ final class MP4MediaSoundLifecyclePolicy implements ClientMediaSoundLifecyclePol
 
     @Override
     public void finish(UUID deviceId, String sessionId) {
-        ClientMediaPlaybackLifecycle.finish(deviceId, sessionId);
+        ClientMediaPlaybackRegistry.finishSession(deviceId, sessionId);
     }
 }

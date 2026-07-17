@@ -161,12 +161,17 @@ public class OpenALSpatialAudio {
     }
 
     /** 送入一帧内单个 256-sample block 的床声道 PCM。每帧调用 6 次（6 个 block） */
-    public synchronized void updateBedBlock(float[][] pcmBlock) {
-        if (!initialized)
-            return;
-        for (int ch = 0; ch < Math.min(numBeds, pcmBlock.length); ch++) {
+    public synchronized boolean updateBedBlock(float[][] pcmBlock) {
+        if (!initialized || pcmBlock == null)
+            return false;
+        int channels = Math.min(numBeds, pcmBlock.length);
+        if (channels <= 0 || !hasPendingCapacity(bedPending, channels)) {
+            return false;
+        }
+        for (int ch = 0; ch < channels; ch++) {
             enqueuePending(bedPending[ch], pcmBlock[ch]);
         }
+        return true;
     }
 
     /** 从完整帧 [channel][1536] PCM 中取 offset 处的 256-sample block */
@@ -196,6 +201,31 @@ public class OpenALSpatialAudio {
             float[] pcm = (objByChannel != null && obj < objByChannel.length) ? objByChannel[obj] : null;
             enqueuePending(objPending[obj], pcm, offset);
         }
+    }
+
+    /**
+     * 原子排入一整帧的床声道和对象 PCM；容量不足时不修改任何 pending 队列。
+     */
+    public synchronized boolean updateFrame(float[][] pcmByChannel, float[][] objByChannel, int blockCount) {
+        if (!initialized || pcmByChannel == null || blockCount <= 0) {
+            return false;
+        }
+        int bedChannels = Math.min(numBeds, pcmByChannel.length);
+        if (bedChannels <= 0 || !hasPendingCapacity(bedPending, bedChannels, blockCount)
+                || (numObjects > 0 && !hasPendingCapacity(objPending, numObjects, blockCount))) {
+            return false;
+        }
+        for (int block = 0; block < blockCount; block++) {
+            int offset = block * SAMPLES_PER_BUFFER;
+            for (int ch = 0; ch < bedChannels; ch++) {
+                enqueuePending(bedPending[ch], pcmByChannel[ch], offset);
+            }
+            for (int obj = 0; obj < numObjects; obj++) {
+                float[] pcm = objByChannel != null && obj < objByChannel.length ? objByChannel[obj] : null;
+                enqueuePending(objPending[obj], pcm, offset);
+            }
+        }
+        return true;
     }
 
     /**
@@ -269,6 +299,23 @@ public class OpenALSpatialAudio {
 
     public int getNumObjects() {
         return numObjects;
+    }
+
+    /** 所有声道中最大的 Java pending block 深度。 */
+    public synchronized int pendingMediaBlocks() {
+        return Math.max(maxPendingSize(bedPending), maxPendingSize(objPending));
+    }
+
+    private static int maxPendingSize(ArrayDeque<float[]>[] queues) {
+        int max = 0;
+        if (queues != null) {
+            for (ArrayDeque<float[]> queue : queues) {
+                if (queue != null) {
+                    max = Math.max(max, queue.size());
+                }
+            }
+        }
+        return max;
     }
 
     public synchronized long getConsumedSamples() {
@@ -574,6 +621,22 @@ public class OpenALSpatialAudio {
             System.arraycopy(pcm, 0, copy, 0, Math.min(SAMPLES_PER_BUFFER, pcm.length));
         }
         queue.offerLast(copy);
+    }
+
+    private static boolean hasPendingCapacity(ArrayDeque<float[]>[] queues, int count) {
+        return hasPendingCapacity(queues, count, 1);
+    }
+
+    private static boolean hasPendingCapacity(ArrayDeque<float[]>[] queues, int count, int requiredBlocks) {
+        if (queues == null || count <= 0 || count > queues.length) {
+            return false;
+        }
+        for (int i = 0; i < count; i++) {
+            if (queues[i] == null || queues[i].size() > MAX_PENDING_BLOCKS - requiredBlocks) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void enqueuePending(ArrayDeque<float[]> queue, float[] pcm, int offset) {

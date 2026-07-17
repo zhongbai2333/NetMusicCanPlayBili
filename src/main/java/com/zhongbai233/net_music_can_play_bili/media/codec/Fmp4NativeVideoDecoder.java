@@ -62,7 +62,9 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             "bili.video.native.seek.auto_offset_ms", 5_000L);
     private static final double FMP4_FALLBACK_MAX_RESIDUAL_SECONDS = Double.parseDouble(
             System.getProperty("ncpb.video.native.seek.fallback_max_residual_seconds", "-1.0"));
-    private static final int FMP4_STREAM_RECOVERY_ATTEMPTS = Integer.getInteger(
+        private static final long FMP4_SAFE_NO_COPY_DROP_GUARD_NANOS = Math.max(0L,
+            Long.getLong("bili.video.native.seek.no_copy_drop_guard_ms", 1_000L) * 1_000_000L);
+        private static final int FMP4_STREAM_RECOVERY_ATTEMPTS = Integer.getInteger(
             "bili.video.native.stream_recovery_attempts", 3);
     private static final byte[] DECODE_ONLY_FRAME = new byte[0];
     private static final boolean REUSE_OUTPUT_BUFFERS = Boolean.parseBoolean(
@@ -111,6 +113,14 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private final java.util.ArrayDeque<Long> pendingDecodedPtsNanos = new java.util.ArrayDeque<>();
     private volatile IOException failure;
     private Thread worker;
+    private int parsedMoofCount;
+    private int parsedSampleCount;
+    private int sentPacketCount;
+    private boolean decoderStageLogged;
+    private int receivedFrameCount;
+    private int droppedFrameCount;
+    private boolean dropStageLogged;
+    private boolean outputStageLogged;
 
     public Fmp4NativeVideoDecoder(String videoUrl, int codecId, int targetWidth, int targetHeight, int maxFrames)
             throws IOException {
@@ -276,6 +286,9 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         Fmp4StreamStart seekStart = openStreamStart(offsetMillis);
         InputStream stream = activateInput(seekStart.stream());
         try (stream) {
+            LOGGER.debug("视频 fMP4 解码流开始: offset={}ms fragment={}s residual={}s output={} target={}x{} codecId={}",
+                    offsetMillis, seekStart.fragmentSeconds(), seekStart.residualSeconds(), outputFormat,
+                    targetWidth, targetHeight, codecId);
             fallbackFramesToDrop = Math.max(0, Math.round(seekStart.residualSeconds() * fps));
             timelineStartNanos = Math.max(0L, Math.round(seekStart.fragmentSeconds() * 1_000_000_000.0D));
             dropBeforeMediaPtsNanos = Math.max(0L, offsetMillis * 1_000_000L);
@@ -291,6 +304,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     nalLengthSize = config.nalLengthSize();
                     int videoTimescale = Fmp4ToMp4Converter.parseVideoTimescale(moovData);
                     streamTimescale = videoTimescale > 0 ? videoTimescale : parseResult.timescale;
+                        LOGGER.debug("视频 fMP4 moov 已解析: configBytes={} nalLengthSize={} timescale={} moovBytes={}",
+                            decoderConfig.length, nalLengthSize, streamTimescale, moovData.length);
                 }
 
                 @Override
@@ -302,6 +317,14 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                             : sampleSizes != null ? sampleSizes : new int[0];
                     pendingSamplePtsNanos = table.ptsNanos();
                     pendingSampleIndex = 0;
+                        parsedMoofCount++;
+                        parsedSampleCount += pendingSampleSizes.length;
+                        if (parsedMoofCount <= 2) {
+                        LOGGER.debug("视频 fMP4 moof 已解析: index={} samples={} firstSampleBytes={} firstPtsNanos={}",
+                            parsedMoofCount, pendingSampleSizes.length,
+                            pendingSampleSizes.length > 0 ? pendingSampleSizes[0] : 0,
+                            pendingSamplePtsNanos.length > 0 ? pendingSamplePtsNanos[0] : -1L);
+                        }
                 }
 
                 @Override
@@ -310,9 +333,14 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                         throw new IOException("mdat arrived before video decoder config");
                     }
                     if (pendingSampleSizes.length == 0) {
+                        LOGGER.debug("视频 fMP4 mdat 无样本表: bytes={}", size);
                         byte[] all = Fmp4StreamParser.readFully(payload, size);
                         decodeSample(all, nextSamplePtsNanos());
                         return;
+                    }
+                    if (parsedMoofCount <= 2) {
+                        LOGGER.debug("视频 fMP4 mdat 开始: bytes={} samples={} parsedSamples={}", size,
+                                pendingSampleSizes.length, parsedSampleCount);
                     }
                     for (int sampleSize : pendingSampleSizes) {
                         if (closed.get() || totalFrames >= maxFrames) {
@@ -524,14 +552,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             if (sidx == null || sidx.entries().isEmpty()) {
                 return null;
             }
-            Fmp4RangeSeekSupport.SidxEntry selected = null;
-            for (Fmp4RangeSeekSupport.SidxEntry entry : sidx.entries()) {
-                if (entry.timeSeconds() <= targetSeconds + 0.05D) {
-                    selected = entry;
-                } else {
-                    break;
-                }
-            }
+            Fmp4RangeSeekSupport.SidxEntry selected = selectVideoSidxEntry(sidx.entries(), targetSeconds);
             if (selected == null) {
                 selected = sidx.entries().get(0);
             }
@@ -545,6 +566,13 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                 return null;
             }
             Fmp4RangeSeekSupport.MoofCandidate candidate = probe.candidate();
+                if (Fmp4RangeSeekSupport.isAfterTargetCandidate(candidate, targetSeconds,
+                    FMP4_TARGET_EPSILON_SECONDS)) {
+                LOGGER.debug("视频fMP4 SidxSeek 命中目标之后 fragment，回退 Moof RangeSeek: target={}s fragment={}s byte={}",
+                    targetSeconds, candidate.fragmentSeconds(), selected.byteStart());
+                closeQuietly(stream);
+                return null;
+                }
             double fragmentSeconds = !Double.isNaN(candidate.fragmentSeconds()) ? candidate.fragmentSeconds()
                     : selected.timeSeconds();
             float residualSeconds = (float) Math.max(0.0D, targetSeconds - fragmentSeconds);
@@ -558,12 +586,39 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     "视频fMP4 SidxSeek: target={}s fragment={}s residual={}s timelineStart={}s byte={} totalBytes={} probe={}ms host={}",
                     playbackSeconds, fragmentSeconds, residualSeconds, startOffsetMillis / 1000.0D,
                     selected.byteStart(), init.contentLength(), (System.nanoTime() - seekStartNanos) / 1_000_000L,
-                    videoUrl.getHost());
+                        videoUrl.getHost());
+                    LOGGER.debug("视频fMP4 SidxSeek 选择: target={}s selectedFragment={}s startsWithSap={} byte={}",
+                        playbackSeconds, fragmentSeconds, selected.startsWithSap(), selected.byteStart());
             return new Fmp4StreamStart(combined, residualSeconds, fragmentSeconds);
         } catch (IOException | RuntimeException e) {
             LOGGER.debug("Native video fMP4 sidx seek unavailable: {}", e.getMessage());
             return null;
         }
+    }
+
+    private static Fmp4RangeSeekSupport.SidxEntry selectVideoSidxEntry(
+            List<Fmp4RangeSeekSupport.SidxEntry> entries, float targetSeconds) {
+        Fmp4RangeSeekSupport.SidxEntry selected = null;
+        boolean sawEntryBeforeTarget = false;
+        for (Fmp4RangeSeekSupport.SidxEntry entry : entries) {
+            if (entry.timeSeconds() > targetSeconds + 0.05D) {
+                break;
+            }
+            sawEntryBeforeTarget = true;
+            if (entry.startsWithSap()) {
+                selected = entry;
+            }
+        }
+        if (selected == null && sawEntryBeforeTarget) {
+            LOGGER.warn("视频 fMP4 SIDX 未找到目标前 SAP fragment，兼容使用最近 fragment: target={}s", targetSeconds);
+            for (Fmp4RangeSeekSupport.SidxEntry entry : entries) {
+                if (entry.timeSeconds() > targetSeconds + 0.05D) {
+                    break;
+                }
+                selected = entry;
+            }
+        }
+        return selected;
     }
 
     private static byte[] readAllBytes(InputStream stream, long maxBytes) throws IOException {
@@ -707,8 +762,15 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         writeLengthPrefixedSampleAsAnnexB(mp4Sample, nalLengthSize, annexB);
         byte[] packet = annexB.toByteArray();
         if (!decoder.sendPacket(packet, samplePtsNanos)) {
+            LOGGER.error("视频 native sendPacket 失败: codecId={} sampleBytes={} packetBytes={} ptsNanos={} sentPackets={} parsedMoofs={}",
+                codecId, mp4Sample.length, packet.length, samplePtsNanos, sentPacketCount, parsedMoofCount);
             throw new IOException(
                     "VideoNativeDecoder.sendPacket failed codecId=" + codecId + ", packet=" + packet.length);
+        }
+        sentPacketCount++;
+        if (sentPacketCount <= 3) {
+            LOGGER.debug("视频 native packet 已发送: index={} sampleBytes={} packetBytes={} ptsNanos={}",
+                sentPacketCount, mp4Sample.length, packet.length, samplePtsNanos);
         }
         pendingDecodedPtsNanos.addLast(samplePtsNanos);
         drainFrames();
@@ -727,6 +789,11 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             DecodedFrame frame = getNextOutputFrame();
             long nativeGetNs = System.nanoTime() - nativeStartNs;
             if (frame == null) {
+                if (!decoderStageLogged && sentPacketCount <= 3) {
+                    decoderStageLogged = true;
+                    LOGGER.debug("视频 native 暂无输出帧: sentPackets={} parsedMoofs={} pendingPts={} nativeGet={}us",
+                            sentPacketCount, parsedMoofCount, pendingDecodedPtsNanos.size(), nativeGetNs / 1_000L);
+                }
                 return;
             }
             boolean enqueued = false;
@@ -742,7 +809,18 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                         : timelineStartNanos + Math.round((totalFrames + 1) * 1_000_000_000.0D / fps);
                 lastDecodedMediaPtsNanos = mediaPtsNanos;
                 if (shouldDropDecodedFrame(mediaPtsNanos, samplePtsNanos >= 0L)) {
-                    totalFrames++;
+                    droppedFrameCount++;
+                    if (!dropStageLogged && droppedFrameCount <= 3) {
+                        dropStageLogged = true;
+                        LOGGER.debug("视频 native 输出帧被目标 PTS 丢弃: dropIndex={} samplePts={}ms target={}ms realPts={} pendingPts={}",
+                                droppedFrameCount, samplePtsNanos / 1_000_000L,
+                                dropBeforeMediaPtsNanos / 1_000_000L, samplePtsNanos >= 0L,
+                                pendingDecodedPtsNanos.size());
+                    }
+                    // A seek-preroll frame was received from FFmpeg but is not
+                    // an output frame. Do not consume maxFrames or advance the
+                    // decoder's output-frame estimate before the first frame at
+                    // the requested media position is accepted.
                     continue;
                 }
                 long relativePtsNanos = mediaPtsNanos - startOffsetMillis * 1_000_000L;
@@ -772,18 +850,24 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     }
 
     private boolean drainDropFrameNoOutput() {
+        boolean hasPendingRealPts = !pendingDecodedPtsNanos.isEmpty()
+            && pendingDecodedPtsNanos.peekFirst() != null
+            && pendingDecodedPtsNanos.peekFirst().longValue() >= 0L;
         boolean shouldDropByPts = dropBeforeMediaPtsNanos > 0L
-                && !pendingDecodedPtsNanos.isEmpty()
-                && pendingDecodedPtsNanos.peekFirst() != null
-                && pendingDecodedPtsNanos.peekFirst().longValue() >= 0L
-                && pendingDecodedPtsNanos.peekFirst().longValue() + 1_000_000L < dropBeforeMediaPtsNanos;
-        boolean shouldDropByFallback = fallbackFramesToDrop > 0;
+            && hasPendingRealPts
+                && pendingDecodedPtsNanos.peekFirst().longValue()
+                    + FMP4_SAFE_NO_COPY_DROP_GUARD_NANOS + 1_000_000L < dropBeforeMediaPtsNanos;
+        // Sample PTS is authoritative for fMP4. The frame-count estimate is
+        // only safe for streams/native builds that do not expose output PTS;
+        // applying both can discard the first frame at an intra-fragment seek.
+        boolean shouldDropByFallback = fallbackFramesToDrop > 0 && !hasPendingRealPts;
         if (!shouldDropByPts && !shouldDropByFallback) {
             return false;
         }
         if (!decoder.receiveFrameNoCopy()) {
             return false;
         }
+        receivedFrameCount++;
         Long fallbackPtsNanos = pendingDecodedPtsNanos.isEmpty() ? null : pendingDecodedPtsNanos.removeFirst();
         long samplePtsNanos = decoder.lastFramePtsNanos();
         if (samplePtsNanos < 0L && fallbackPtsNanos != null) {
@@ -798,7 +882,14 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         if (shouldDropByFallback && fallbackFramesToDrop > 0) {
             fallbackFramesToDrop--;
         }
-        totalFrames++;
+        droppedFrameCount++;
+        if (!dropStageLogged && droppedFrameCount <= 3) {
+            dropStageLogged = true;
+            LOGGER.debug("视频 native 无拷贝输出帧被目标 PTS 丢弃: dropIndex={} samplePts={}ms target={}ms realPts={} pendingPts={}",
+                    droppedFrameCount, samplePtsNanos / 1_000_000L,
+                    dropBeforeMediaPtsNanos / 1_000_000L, samplePtsNanos >= 0L,
+                    pendingDecodedPtsNanos.size());
+        }
         return true;
     }
 
@@ -848,11 +939,24 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     }
 
     private DecodedFrame getNextOutputFrame() {
-        return switch (outputFormat) {
+        long startedNs = System.nanoTime();
+        if (!outputStageLogged) {
+            LOGGER.debug("视频 native 开始取输出帧: format={} target={}x{} received={} dropped={} sent={}",
+                    outputFormat, targetWidth, targetHeight, receivedFrameCount, droppedFrameCount,
+                    sentPacketCount);
+        }
+        DecodedFrame frame = switch (outputFormat) {
             case NV12 -> getNextNv12Frame();
             case YUV420P -> getNextYuv420Frame();
             case RGBA -> getNextRgbaFrame();
         };
+        if (!outputStageLogged) {
+            outputStageLogged = true;
+            LOGGER.debug("视频 native 完成取输出帧: frame={} elapsed={}ms received={} dropped={} sent={}",
+                    frame != null, (System.nanoTime() - startedNs) / 1_000_000L,
+                    receivedFrameCount, droppedFrameCount, sentPacketCount);
+        }
+        return frame;
     }
 
     private void drainFramesNoOutput() {

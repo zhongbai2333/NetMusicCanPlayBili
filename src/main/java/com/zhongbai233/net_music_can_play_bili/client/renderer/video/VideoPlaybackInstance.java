@@ -27,6 +27,7 @@ import java.util.Collection;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -42,6 +43,8 @@ final class VideoPlaybackInstance {
             "bili.video.pipeline.audio_latency_compensation_ms", 0L);
     private static final long CHASE_WINDOW_MILLIS = Long.getLong("ncpb.video.pipeline.chase_window_ms", 10_000L);
     private static final long SLOWDOWN_WINDOW_MILLIS = Long.getLong("ncpb.video.pipeline.slowdown_window_ms", 2_500L);
+        private static final long DECODER_RESTART_CLOSE_TIMEOUT_MILLIS = Long.getLong(
+            "ncpb.video.pipeline.decoder_restart_close_timeout_ms", 3_000L);
     private static final boolean OFFSCREEN_PAUSE_DECODE = Boolean.parseBoolean(
             System.getProperty("ncpb.video.offscreen.pause_decode", "true"));
     private static final long OFFSCREEN_GRACE_NANOS = Long.getLong("ncpb.video.offscreen.grace_ms", 500L)
@@ -105,6 +108,8 @@ final class VideoPlaybackInstance {
     private volatile Identifier frontTextureId;
     private volatile Identifier backTextureId;
     private volatile boolean firstFrameLogged;
+    private volatile boolean firstFrameQueuedLogged;
+    private volatile boolean firstFrameUploadedLogged;
     private volatile boolean firstSubmitLogged;
     private volatile boolean firstYuvImmediateLogged;
     private volatile long firstDecodedNanoTime;
@@ -171,6 +176,8 @@ final class VideoPlaybackInstance {
         running = true;
         hasFrame = false;
         firstFrameLogged = false;
+        firstFrameQueuedLogged = false;
+        firstFrameUploadedLogged = false;
         firstSubmitLogged = false;
         firstYuvImmediateLogged = false;
         firstDecodedNanoTime = 0L;
@@ -248,11 +255,18 @@ final class VideoPlaybackInstance {
                 if (!firstFrameLogged) {
                     firstFrameLogged = true;
                     firstDecodedNanoTime = System.nanoTime();
+                    LOGGER.info("视频实例首个解码帧已获得: session={}, pts={}ms, wait={}ms, startOffset={}ms",
+                            sessionId, ptsNanos / 1_000_000L, waitNs / 1_000_000L, effectiveStartOffsetMillis);
                 }
                 if (!frameQueue.offer(new DecodedVideoFrame(frameIndex, ptsNanos, frame),
                         () -> running && gen == generation.get())) {
                     frame.close();
                     break;
+                }
+                if (!firstFrameQueuedLogged) {
+                    firstFrameQueuedLogged = true;
+                    LOGGER.info("视频实例首个解码帧已入队: session={}, pts={}ms, queue={}",
+                            sessionId, ptsNanos / 1_000_000L, frameQueue.size());
                 }
                 warnIfUploadPumpStalled();
             }
@@ -446,6 +460,11 @@ final class VideoPlaybackInstance {
             frame.close();
         }
         if (uploaded) {
+            if (!firstFrameUploadedLogged) {
+                firstFrameUploadedLogged = true;
+                LOGGER.info("视频实例首个解码帧已上传: session={}, pts={}ms, format={}，target={}x{}",
+                        sessionId, frame.ptsNanos() / 1_000_000L, frame.frame().format(), targetWidth, targetHeight);
+            }
             recordAdaptiveUploadCost(uploadNs);
         }
     }
@@ -529,6 +548,8 @@ final class VideoPlaybackInstance {
         targetHeight = nextHeight;
         hasFrame = preserveVisibleFrame;
         firstFrameLogged = false;
+        firstFrameQueuedLogged = false;
+        firstFrameUploadedLogged = false;
         firstDecodedNanoTime = 0L;
         startupBufferReady = false;
         networkFailure = false;
@@ -546,7 +567,16 @@ final class VideoPlaybackInstance {
         // replace this instance. The generation guard prevents the old worker from
         // publishing state.
         running = true;
-        CompletableFuture.allOf(closeCompletion, nativeTermination, oldDecodeExit).thenRun(() -> {
+        CompletableFuture<Void> closeBarrier = CompletableFuture.allOf(closeCompletion, nativeTermination, oldDecodeExit)
+                .orTimeout(Math.max(1L, DECODER_RESTART_CLOSE_TIMEOUT_MILLIS), TimeUnit.MILLISECONDS)
+                .handle((ignored, error) -> {
+                    if (error != null && gen == generation.get() && running) {
+                        LOGGER.warn("旧视频解码器关闭超时，允许新 generation 启动: session={}, timeout={}ms",
+                                sessionId, DECODER_RESTART_CLOSE_TIMEOUT_MILLIS);
+                    }
+                    return null;
+                });
+        closeBarrier.thenRun(() -> {
             if (gen != generation.get() || !running || !hasVideoConsumer()) {
                 return;
             }
@@ -1254,6 +1284,7 @@ final class VideoPlaybackInstance {
                 frame.close();
             }
             frames.clear();
+            latestPtsNanos = -1L;
             notifyAll();
         }
 

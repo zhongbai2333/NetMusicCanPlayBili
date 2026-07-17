@@ -5,6 +5,7 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliRequestHeaders;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliWbiSigner;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliCdnSelector;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
 import org.slf4j.Logger;
 
 import java.io.IOException;
@@ -20,8 +21,8 @@ import java.util.Optional;
 public final class HttpRangeClient {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_REDIRECTS = 5;
-    private static final long REQUEST_TIMEOUT_SECONDS = Math.max(5L, Long.getLong(
-            "bili.media.http.request_timeout_seconds", 30L));
+    private static final long REQUEST_TIMEOUT_SECONDS = Math.max(5L, NcpbSystemProperties.longValue(
+            "ncpb.media.http.request_timeout_seconds", "bili.media.http.request_timeout_seconds", 30L));
 
     public CdnResponse get(URL url) throws IOException {
         return send(url, null, null);
