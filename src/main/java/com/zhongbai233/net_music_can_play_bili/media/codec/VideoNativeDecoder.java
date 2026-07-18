@@ -33,6 +33,7 @@ public class VideoNativeDecoder implements AutoCloseable {
     private final int targetHeight;
     private boolean open;
     private String requestedHwaccel = DEFAULT_HWACCEL;
+    private String actualHwaccel = "not-opened";
     private int originalWidth;
     private int originalHeight;
     private long totalFrames;
@@ -120,7 +121,9 @@ public class VideoNativeDecoder implements AutoCloseable {
                     isHwaccelRequested() ? requestedHwaccel : "none");
             return false;
         }
-        queryActualHwaccel(handle);
+        actualHwaccel = queryActualHwaccel(handle);
+        LOGGER.debug("VideoNativeDecoder 已打开: codecId={}, requestedHwaccel={}, actualHwaccel={}, target={}x{}",
+                codecId, requestedHwaccel, actualHwaccel, targetWidth, targetHeight);
         open = true;
         return true;
     }
@@ -220,7 +223,11 @@ public class VideoNativeDecoder implements AutoCloseable {
         }
         try {
             int status = VideoJni.getVideoFrameInto(handle, output);
-            if (status <= 0) {
+            if (status < 0) {
+                throw new IllegalStateException("native RGBA output failed: codecId=" + codecId
+                        + ", hwaccel=" + actualHwaccel + ", target=" + targetWidth + "x" + targetHeight);
+            }
+            if (status == 0) {
                 return false;
             }
             onFrameDecoded(output.length, false);
@@ -320,7 +327,11 @@ public class VideoNativeDecoder implements AutoCloseable {
         output.clear();
         try {
             int status = VideoJni.getVideoFrameNv12IntoDirect(handle, output);
-            if (status <= 0) {
+            if (status < 0) {
+                throw new IllegalStateException("native NV12 direct output failed: codecId=" + codecId
+                        + ", hwaccel=" + actualHwaccel + ", target=" + targetWidth + "x" + targetHeight);
+            }
+            if (status == 0) {
                 return false;
             }
             int byteLength = Math.max(1, getOutputWidth()) * Math.max(1, getOutputHeight()) * 3 / 2;
@@ -363,7 +374,11 @@ public class VideoNativeDecoder implements AutoCloseable {
         }
         try {
             int status = VideoJni.receiveFrameNoCopy(handle);
-            if (status <= 0) {
+            if (status < 0) {
+                throw new IllegalStateException("native receiveFrameNoCopy failed: codecId=" + codecId
+                        + ", hwaccel=" + actualHwaccel);
+            }
+            if (status == 0) {
                 return false;
             }
             totalFrames++;

@@ -133,7 +133,7 @@ final class Nv12PboUploader implements AutoCloseable {
             if (slot == null) {
                 if (!loggedBackpressure) {
                     loggedBackpressure = true;
-                    LOGGER.info("NV12/PBO: {} 环形缓冲繁忙，本帧回退普通上传以限制驱动内存", label);
+                    LOGGER.debug("NV12/PBO: {} 环形缓冲繁忙，本帧回退普通上传以限制驱动内存", label);
                 }
                 return false;
             }
@@ -171,7 +171,7 @@ final class Nv12PboUploader implements AutoCloseable {
             slot.fence = GL32C.glFenceSync(GL32C.GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
             if (!loggedFirstUpload) {
                 loggedFirstUpload = true;
-                LOGGER.info("NV12/PBO: 首次通过有界环形 PBO 上传 {}: {}x{}, format={}, bytes={}, pbo={}",
+                LOGGER.debug("NV12/PBO: 首次通过有界环形 PBO 上传 {}: {}x{}, format={}, bytes={}, pbo={}",
                         label, width, height, glFormatName(format), bytes, slot.pbo);
             }
             return true;

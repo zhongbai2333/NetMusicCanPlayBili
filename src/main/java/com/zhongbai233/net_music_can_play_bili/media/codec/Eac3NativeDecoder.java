@@ -7,7 +7,10 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.CodeSource;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -171,14 +174,16 @@ public class Eac3NativeDecoder implements AutoCloseable {
         }
 
         NativeLibrarySet libraries = discoverNativeLibraries(platformDir, os, isWindows);
+        String bundleFingerprint = nativeBundleFingerprint();
         // Windows MinGW 运行时依赖必须先显式加载；FFmpeg x64/ARM64 构建均依赖
         // libiconv，avutil 还可能依赖 libwinpthread。顺序保持在 FFmpeg DLL 之前。
         String[] runtimeLibs = isWindows ? new String[] { "libiconv-2", "libwinpthread-1" } : new String[0];
         boolean[] runtimeLibPresent = new boolean[runtimeLibs.length];
 
         // ── 提取到 config 目录（避免 temp 被杀软拦截 DLL 加载；平台子目录隔离多版本）──
-        Path nativeDir = gameConfigDir().resolve("net_music_can_play_bili").resolve("natives")
+        Path platformNativeDir = gameConfigDir().resolve("net_music_can_play_bili").resolve("natives")
                 .resolve(platformDir);
+        Path nativeDir = platformNativeDir.resolve(bundleFingerprint);
         Files.createDirectories(nativeDir);
 
         // ── 提取所有文件；如果 jar 内资源更新，覆盖 config 中旧版本，避免用户残留旧 DLL ──
@@ -193,22 +198,33 @@ public class Eac3NativeDecoder implements AutoCloseable {
             extractEmbeddedNative(platformDir, fileName, nativeDir.resolve(fileName), true);
         }
 
+        // 当前 bundle 已完整提取后再清理旧指纹目录。失败只影响磁盘整洁度，不能阻断 native 加载。
+        try {
+            NativeBundleDirectories.pruneObsoleteBundles(platformNativeDir, bundleFingerprint);
+        } catch (IOException cleanupError) {
+            LOGGER.warn("清理旧 FFmpeg native bundle 失败: path={}", platformNativeDir, cleanupError);
+        }
+
         // ── 加载所有库 ──
         // 可选运行时依赖必须先显式加载；Windows 不保证会从当前 DLL 所在目录解析二级依赖。
         for (int i = 0; i < runtimeLibs.length; i++) {
             if (runtimeLibPresent[i]) {
                 String fn = nativeFileName(runtimeLibs[i], os, isWindows);
+                LOGGER.debug("加载 native 运行时依赖: {}", nativeDir.resolve(fn));
                 System.load(nativeDir.resolve(fn).toAbsolutePath().toString());
             }
         }
         for (String fn : libraries.ffmpegLibraries()) {
+            LOGGER.debug("加载 FFmpeg native 库: {}", nativeDir.resolve(fn));
             System.load(nativeDir.resolve(fn).toAbsolutePath().toString());
         }
         for (String fn : libraries.jniLibraries()) {
+            LOGGER.debug("加载 JNI native 库: {}", nativeDir.resolve(fn));
             System.load(nativeDir.resolve(fn).toAbsolutePath().toString());
         }
 
-        LOGGER.info("FFmpeg native 库提取并加载: {}", nativeDir);
+        LOGGER.info("FFmpeg native 库提取并加载: os={}, arch={}, bundle={}, path={}",
+                os, arch, bundleFingerprint, nativeDir);
     }
 
     private static boolean extractEmbeddedNative(String platformDir, String fileName, Path target, boolean required)
@@ -228,13 +244,61 @@ public class Eac3NativeDecoder implements AutoCloseable {
                 bundled = source.readAllBytes();
             }
             if (!Files.exists(target) || !Arrays.equals(Files.readAllBytes(target), bundled)) {
-                Files.write(target, bundled);
+                writeNativeAtomically(target, bundled);
             }
             return true;
         }
     }
 
+    /**
+     * 使用全新 inode 发布 native 文件。macOS 会缓存 Mach-O 的代码签名验证状态，不能用
+     * TRUNCATE_EXISTING 原地覆盖旧 dylib，否则旧版本的 vnode/扩展属性可能影响新签名。
+     */
+    private static void writeNativeAtomically(Path target, byte[] bundled) throws IOException {
+        Path temp = Files.createTempFile(target.getParent(), target.getFileName().toString() + ".", ".tmp");
+        boolean moved = false;
+        try {
+            Files.write(temp, bundled);
+            temp.toFile().setReadable(true, false);
+            temp.toFile().setExecutable(true, false);
+            try {
+                Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+            moved = true;
+        } finally {
+            if (!moved) {
+                Files.deleteIfExists(temp);
+            }
+        }
+    }
+
+    /**
+     * README 记录整套六平台 native 的发布版本和校验和，以其内容指纹作为 bundle 目录名。
+     * 更新 native 时必须同步更新该文件，确保任何平台都切换到全新路径。
+     */
+    private static String nativeBundleFingerprint() throws IOException {
+        String resPath = "/native/README.md";
+        try (InputStream in = Eac3NativeDecoder.class.getResourceAsStream(resPath)) {
+            InputStream source = in != null ? in : openFilesystemNativeResource("README.md");
+            if (source == null) {
+                throw new IOException("内嵌 native 指纹文件缺失: " + resPath);
+            }
+            try (source) {
+                byte[] digest = MessageDigest.getInstance("SHA-256").digest(source.readAllBytes());
+                return java.util.HexFormat.of().formatHex(digest, 0, 8);
+            } catch (NoSuchAlgorithmException impossible) {
+                throw new IllegalStateException("JVM 缺少 SHA-256", impossible);
+            }
+        }
+    }
+
     private static InputStream openFilesystemNativeResource(String platformDir, String fileName) throws IOException {
+        return openFilesystemNativeResource(platformDir + "/" + fileName);
+    }
+
+    private static InputStream openFilesystemNativeResource(String relativeResourcePath) throws IOException {
         CodeSource codeSource = Eac3NativeDecoder.class.getProtectionDomain().getCodeSource();
         if (codeSource == null || codeSource.getLocation() == null) {
             return null;
@@ -244,7 +308,7 @@ public class Eac3NativeDecoder implements AutoCloseable {
             if (workspace == null) {
                 return null;
             }
-            Path relative = Path.of("native", platformDir, fileName);
+            Path relative = Path.of("native").resolve(relativeResourcePath.replace('/', java.io.File.separatorChar));
             for (Path root : List.of(workspace.resolve("build").resolve("resources").resolve("main"),
                     workspace.resolve("src").resolve("main").resolve("resources"))) {
                 Path candidate = root.resolve(relative);

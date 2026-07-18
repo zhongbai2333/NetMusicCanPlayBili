@@ -43,7 +43,7 @@ final class VideoPlaybackInstance {
             "bili.video.pipeline.audio_latency_compensation_ms", 0L);
     private static final long CHASE_WINDOW_MILLIS = Long.getLong("ncpb.video.pipeline.chase_window_ms", 10_000L);
     private static final long SLOWDOWN_WINDOW_MILLIS = Long.getLong("ncpb.video.pipeline.slowdown_window_ms", 2_500L);
-        private static final long DECODER_RESTART_CLOSE_TIMEOUT_MILLIS = Long.getLong(
+    private static final long DECODER_RESTART_CLOSE_TIMEOUT_MILLIS = Long.getLong(
             "ncpb.video.pipeline.decoder_restart_close_timeout_ms", 3_000L);
     private static final boolean OFFSCREEN_PAUSE_DECODE = Boolean.parseBoolean(
             System.getProperty("ncpb.video.offscreen.pause_decode", "true"));
@@ -108,9 +108,6 @@ final class VideoPlaybackInstance {
     private volatile Identifier frontTextureId;
     private volatile Identifier backTextureId;
     private volatile boolean firstFrameLogged;
-    private volatile boolean firstFrameQueuedLogged;
-    private volatile boolean firstFrameUploadedLogged;
-    private volatile boolean firstSubmitLogged;
     private volatile boolean firstYuvImmediateLogged;
     private volatile long firstDecodedNanoTime;
     private volatile boolean startupBufferReady;
@@ -163,7 +160,7 @@ final class VideoPlaybackInstance {
         this.frontTextureId = firstTextureId;
         this.backTextureId = secondTextureId;
         replaceProjectors(projectorPositions);
-        LOGGER.info("视频会话创建: session={}, {}x{} @ {}fps, renderBackend={}, decodeFormat={}", sessionId,
+        LOGGER.debug("视频会话创建: session={}, {}x{} @ {}fps, renderBackend={}, decodeFormat={}", sessionId,
                 this.targetWidth, this.targetHeight, this.fps, VideoBillboardPreview.RENDER_BACKEND,
                 VideoBillboardPreview.YUV_DECODE_BACKEND
                         ? (VideoBillboardPreview.isCustomYuvShaderAvailable()
@@ -176,9 +173,6 @@ final class VideoPlaybackInstance {
         running = true;
         hasFrame = false;
         firstFrameLogged = false;
-        firstFrameQueuedLogged = false;
-        firstFrameUploadedLogged = false;
-        firstSubmitLogged = false;
         firstYuvImmediateLogged = false;
         firstDecodedNanoTime = 0L;
         startupBufferReady = false;
@@ -240,7 +234,7 @@ final class VideoPlaybackInstance {
                 VideoBillboardPreview.DecodedFrame frame = VideoBillboardPreview.nextDecodedFrame(dec);
                 long waitNs = System.nanoTime() - waitStartNs;
                 if (frameIndex == 0L && waitNs > 2_000_000_000L) {
-                    LOGGER.warn("视频流水线首帧等待耗时较长: session={}, wait={}ms, startOffset={}ms, queue={}",
+                    LOGGER.debug("视频流水线首帧等待耗时较长: session={}, wait={}ms, startOffset={}ms, queue={}",
                             sessionId, waitNs / 1_000_000L, effectiveStartOffsetMillis, frameQueue.size());
                 }
                 if (frame == null) {
@@ -255,7 +249,7 @@ final class VideoPlaybackInstance {
                 if (!firstFrameLogged) {
                     firstFrameLogged = true;
                     firstDecodedNanoTime = System.nanoTime();
-                    LOGGER.info("视频实例首个解码帧已获得: session={}, pts={}ms, wait={}ms, startOffset={}ms",
+                    LOGGER.debug("视频实例首个解码帧已获得: session={}, pts={}ms, wait={}ms, startOffset={}ms",
                             sessionId, ptsNanos / 1_000_000L, waitNs / 1_000_000L, effectiveStartOffsetMillis);
                 }
                 if (!frameQueue.offer(new DecodedVideoFrame(frameIndex, ptsNanos, frame),
@@ -263,16 +257,11 @@ final class VideoPlaybackInstance {
                     frame.close();
                     break;
                 }
-                if (!firstFrameQueuedLogged) {
-                    firstFrameQueuedLogged = true;
-                    LOGGER.info("视频实例首个解码帧已入队: session={}, pts={}ms, queue={}",
-                            sessionId, ptsNanos / 1_000_000L, frameQueue.size());
-                }
                 warnIfUploadPumpStalled();
             }
         } catch (OutOfMemoryError error) {
             com.zhongbai233.net_music_can_play_bili.client.ClientMediaLifecycleHandler
-                .tripMemoryProtection("video decoder allocation failed: " + error.getMessage());
+                    .tripMemoryProtection("video decoder allocation failed: " + error.getMessage());
             LOGGER.error("视频会话内存分配失败并触发熔断: session={}", sessionId, error);
         } catch (Exception e) {
             if (gen != generation.get() || (!running && isInterruptedWait(e))) {
@@ -460,11 +449,6 @@ final class VideoPlaybackInstance {
             frame.close();
         }
         if (uploaded) {
-            if (!firstFrameUploadedLogged) {
-                firstFrameUploadedLogged = true;
-                LOGGER.info("视频实例首个解码帧已上传: session={}, pts={}ms, format={}，target={}x{}",
-                        sessionId, frame.ptsNanos() / 1_000_000L, frame.frame().format(), targetWidth, targetHeight);
-            }
             recordAdaptiveUploadCost(uploadNs);
         }
     }
@@ -548,8 +532,6 @@ final class VideoPlaybackInstance {
         targetHeight = nextHeight;
         hasFrame = preserveVisibleFrame;
         firstFrameLogged = false;
-        firstFrameQueuedLogged = false;
-        firstFrameUploadedLogged = false;
         firstDecodedNanoTime = 0L;
         startupBufferReady = false;
         networkFailure = false;
@@ -567,7 +549,8 @@ final class VideoPlaybackInstance {
         // replace this instance. The generation guard prevents the old worker from
         // publishing state.
         running = true;
-        CompletableFuture<Void> closeBarrier = CompletableFuture.allOf(closeCompletion, nativeTermination, oldDecodeExit)
+        CompletableFuture<Void> closeBarrier = CompletableFuture
+                .allOf(closeCompletion, nativeTermination, oldDecodeExit)
                 .orTimeout(Math.max(1L, DECODER_RESTART_CLOSE_TIMEOUT_MILLIS), TimeUnit.MILLISECONDS)
                 .handle((ignored, error) -> {
                     if (error != null && gen == generation.get() && running) {
@@ -841,9 +824,6 @@ final class VideoPlaybackInstance {
     }
 
     void submit(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera) {
-        if (!firstSubmitLogged) {
-            firstSubmitLogged = true;
-        }
         boolean renderable = false;
         boolean prewarm = false;
         for (BlockPos pos : projectorPositions) {
@@ -981,7 +961,7 @@ final class VideoPlaybackInstance {
         markVisibility(drew, prewarm);
         if (drew && !firstYuvImmediateLogged) {
             firstYuvImmediateLogged = true;
-            LOGGER.warn("Iris/YUV: session={} 的投影仪 YUV 使用实例纹理 immediate 绘制，route={}, texture={}x{}",
+            LOGGER.debug("Iris/YUV: session={} 的投影仪 YUV 使用实例纹理 immediate 绘制，route={}, texture={}x{}",
                     sessionId, route, yuvTextureSet.width(), yuvTextureSet.height());
         }
     }

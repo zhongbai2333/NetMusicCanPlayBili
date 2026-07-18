@@ -169,7 +169,7 @@ public final class IrisShaderpackCompat {
                     IrisDirectCompat.assignYuvPipeline(pipeline, programName);
                 }
                 assignedPipelines.add(pipelineId);
-                LOGGER.info("已将视频 {} pipeline 分配给 {}。可用 -D{} 或 -D{} 覆盖 Iris 映射；多平面 YUV 开关 -D{}",
+                LOGGER.debug("已将视频 {} pipeline 分配给 {}。可用 -D{} 或 -D{} 覆盖 Iris 映射；多平面 YUV 开关 -D{}",
                         texturedProbe ? "TEXTURED 单采样可见性探针" : "YUV",
                         !configuredYuvShaderKeyName().isBlank() && !texturedProbe
                                 ? "ShaderKey." + configuredYuvShaderKeyName()
@@ -205,7 +205,7 @@ public final class IrisShaderpackCompat {
                 }
                 IrisDirectCompat.isShaderPackInUse();
                 available = true;
-                LOGGER.info("检测到 Iris API，启用 shaderpack 兼容检测");
+                LOGGER.debug("检测到 Iris API，启用 shaderpack 兼容检测");
             } catch (LinkageError e) {
                 available = false;
             } catch (RuntimeException e) {

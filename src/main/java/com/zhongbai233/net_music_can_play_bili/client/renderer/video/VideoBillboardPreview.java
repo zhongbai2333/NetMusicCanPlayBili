@@ -2120,7 +2120,7 @@ public final class VideoBillboardPreview {
             return;
         }
         if (loggedYuvImmediateStage.compareAndSet(false, true)) {
-            LOGGER.info("Iris/YUV: 启用非投影预览 immediate 绘制，shaderpack=true，阶段='{}'，坐标模式='{}'，pose='{}'，route={}",
+            LOGGER.debug("Iris/YUV: 启用非投影预览 immediate 绘制，shaderpack=true，阶段='{}'，坐标模式='{}'，pose='{}'，route={}",
                     YUV_IMMEDIATE_STAGE, YUV_IMMEDIATE_COORDS, YUV_IMMEDIATE_POSE, route);
         }
         Minecraft minecraft = Minecraft.getInstance();
@@ -2188,7 +2188,7 @@ public final class VideoBillboardPreview {
                 || "relative".equals(YUV_IMMEDIATE_COORDS);
         if (!loggedProjectorYuvImmediate) {
             loggedProjectorYuvImmediate = true;
-            LOGGER.warn("Iris/YUV: shaderpack 下投影仪 YUV 改用 immediate 绘制阶段 '{}'，坐标模式 '{}'，route={}",
+            LOGGER.debug("Iris/YUV: shaderpack 下投影仪 YUV 改用 immediate 绘制阶段 '{}'，坐标模式 '{}'，route={}",
                     YUV_IMMEDIATE_STAGE, YUV_IMMEDIATE_COORDS, route);
         }
 
@@ -2766,13 +2766,13 @@ public final class VideoBillboardPreview {
                 || IrisShaderpackCompat.shouldUseSingleSamplerProbe()
                 || IrisShaderpackCompat.isTexturedProbeProgram()) {
             if (loggedIrisYuvRenderType.compareAndSet(false, true)) {
-                LOGGER.info(
+                LOGGER.debug(
                         "Iris/YUV: 首个视频 YUV draw 使用 TEXTURED probe RenderType，绑定 Sampler0/1/2=Y plane，占位规避 shaderpack sampler 校验；非真彩 YUV");
             }
             return YuvVideoRenderTypes.yOnlyTexturedProbeEntity(frame.yTexture());
         }
         if (loggedIrisYuvRenderType.compareAndSet(false, true)) {
-            LOGGER.info("Iris/YUV: 首个视频 YUV draw 使用 {} RenderType", frame.format());
+            LOGGER.debug("Iris/YUV: 首个视频 YUV draw 使用 {} RenderType", frame.format());
         }
         if (frame.format() == Fmp4NativeVideoDecoder.DecodedFrame.Format.NV12) {
             return YuvVideoRenderTypes.nv12Entity(frame.yTexture(), frame.uTexture(), frame.vTexture());
@@ -2786,13 +2786,13 @@ public final class VideoBillboardPreview {
                 || IrisShaderpackCompat.shouldUseSingleSamplerProbe()
                 || IrisShaderpackCompat.isTexturedProbeProgram()) {
             if (loggedIrisYuvRenderType.compareAndSet(false, true)) {
-                LOGGER.info(
+                LOGGER.debug(
                         "Iris/YUV: 首个视频 YUV draw 使用 TEXTURED probe RenderType，绑定 Sampler0/1/2=Y plane，占位规避 shaderpack sampler 校验；非真彩 YUV");
             }
             return YuvVideoRenderTypes.yOnlyTexturedProbeEntity(textures.yId());
         }
         if (loggedIrisYuvRenderType.compareAndSet(false, true)) {
-            LOGGER.info("Iris/YUV: 首个视频 YUV draw 使用 {} RenderType", textures.format());
+            LOGGER.debug("Iris/YUV: 首个视频 YUV draw 使用 {} RenderType", textures.format());
         }
         if (textures.format() == Fmp4NativeVideoDecoder.DecodedFrame.Format.NV12) {
             return YuvVideoRenderTypes.nv12Entity(textures.yId(), textures.uId(), textures.vId());

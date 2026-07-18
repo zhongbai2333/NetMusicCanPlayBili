@@ -791,7 +791,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                             range);
                     lastRange = null;
                     InputStream combined = new SequenceInputStream(new ByteArrayInputStream(init.bytes()), tail);
-                    LOGGER.info(
+                    LOGGER.debug(
                             "音频fMP4 RangeSeek: target={}s fragment={}s residual={}s timelineStart={}s byte={} totalBytes={} cost={}ms host={}",
                             targetSeconds, candidate.fragmentSeconds(), residualSeconds,
                             playbackContext.startOffsetSeconds(), absoluteMoofOffset, contentLength,
@@ -859,9 +859,9 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 byte[] probeBytes = probe.bytes();
                 Fmp4RangeSeekSupport.MoofCandidate candidate = probe.candidate();
                 if (Fmp4RangeSeekSupport.isAfterTargetCandidate(candidate, targetSeconds,
-                    FMP4_TARGET_EPSILON_SECONDS)) {
+                        FMP4_TARGET_EPSILON_SECONDS)) {
                     LOGGER.debug("音频fMP4 SidxSeek 命中目标之后 fragment，回退 Moof RangeSeek: target={}s fragment={}s byte={}",
-                        targetSeconds, candidate.fragmentSeconds(), selected.byteStart());
+                            targetSeconds, candidate.fragmentSeconds(), selected.byteStart());
                     closeQuietly(range);
                     return null;
                 }
@@ -875,11 +875,11 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                                 probeBytes.length - candidate.offset()),
                         range);
                 InputStream combined = new SequenceInputStream(new ByteArrayInputStream(init.bytes()), tail);
-                LOGGER.info(
+                LOGGER.debug(
                         "音频fMP4 SidxSeek: target={}s fragment={}s residual={}s timelineStart={}s byte={} totalBytes={} host={}",
                         targetSeconds, fragmentSeconds, residualSeconds, playbackContext.startOffsetSeconds(),
                         selected.byteStart(), init.contentLength(), url.getHost());
-                    LOGGER.debug("音频fMP4 SidxSeek 选择: target={}s selectedFragment={}s startsWithSap={} byte={}",
+                LOGGER.debug("音频fMP4 SidxSeek 选择: target={}s selectedFragment={}s startsWithSap={} byte={}",
                         targetSeconds, fragmentSeconds, selected.startsWithSap(), selected.byteStart());
                 return new Fmp4StreamStart(combined, residualSeconds);
             } catch (IOException | RuntimeException e) {
