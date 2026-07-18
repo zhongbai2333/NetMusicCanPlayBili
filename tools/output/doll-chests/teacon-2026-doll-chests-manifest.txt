@@ -1,0 +1,230 @@
+TeaCon 2026 玩家玩偶分箱清单（包含 builder）
+总人数：211
+箱子数：8
+
+箱子 1（~1 ~ ~，27/27）
+  槽位 00: _AftRaining_ [builder]
+  槽位 01: _hawah_
+  槽位 02: _IMG_
+  槽位 03: 17NULL
+  槽位 04: 3944Realms
+  槽位 05: 66jack
+  槽位 06: AbraHam_0624
+  槽位 07: Abslb
+  槽位 08: AkiraHane
+  槽位 09: ALTNOIR [builder]
+  槽位 10: AmanitaBot [builder]
+  槽位 11: amberisfrozen
+  槽位 12: Amotassic
+  槽位 13: anjisuan608
+  槽位 14: Anouk_176
+  槽位 15: Apot2s
+  槽位 16: Aruku448 [builder]
+  槽位 17: aurora_creeper [builder]
+  槽位 18: Aurora_Feather
+  槽位 19: azurePh03nix [builder]
+  槽位 20: Bai_Qian_114514 [builder]
+  槽位 21: baka4n
+  槽位 22: BlackRuaByte
+  槽位 23: BloCamLimb [builder]
+  槽位 24: BloomyBanana
+  槽位 25: Burning_TNT
+  槽位 26: Cake_AL
+
+箱子 2（~3 ~ ~，27/27）
+  槽位 00: CandySanjo
+  槽位 01: Cat_Fur [builder]
+  槽位 02: CC2001
+  槽位 03: CcendercatcC
+  槽位 04: cdy12 [builder]
+  槽位 05: ChiyukiRuon [builder]
+  槽位 06: Chlamydomonos
+  槽位 07: Chloe_Prime
+  槽位 08: chromiuming
+  槽位 09: chxxyy [builder]
+  槽位 10: co0olaz [builder]
+  槽位 11: CR_019
+  槽位 12: creepebucket
+  槽位 13: Crystal1921
+  槽位 14: CyberSakana [builder]
+  槽位 15: DancingSnow
+  槽位 16: Drazzilb_DZ
+  槽位 17: Durin_Skeleton
+  槽位 18: Enderman_zz
+  槽位 19: ESENsNess
+  槽位 20: Fff_ff
+  槽位 21: Flechazo_____ [builder]
+  槽位 22: flilx1397
+  槽位 23: Forest_E233 [builder]
+  槽位 24: Fx_yu
+  槽位 25: gengyoubo
+  槽位 26: Geometry_coco
+
+箱子 3（~5 ~ ~，27/27）
+  槽位 00: Glyceryl6
+  槽位 01: Green_YIce [builder]
+  槽位 02: GTriXylitol [builder]
+  槽位 03: Gugle
+  槽位 04: gyxx_xc
+  槽位 05: hailuo1001
+  槽位 06: haohao0407
+  槽位 07: haoooo_
+  槽位 08: Harry_hq
+  槽位 09: Hedonie [builder]
+  槽位 10: Helium_04
+  槽位 11: Hureherd
+  槽位 12: HyswxObsidian [builder]
+  槽位 13: I_am_a_lolikong
+  槽位 14: ice_berry [builder]
+  槽位 15: idyllic_bean
+  槽位 16: Infinity_rain
+  槽位 17: InitAuther97 [builder]
+  槽位 18: ishland [builder]
+  槽位 19: Jerry_Lee_ [builder]
+  槽位 20: jianzoushihu
+  槽位 21: Jon_Ho
+  槽位 22: JueYing_KuangSa [builder]
+  槽位 23: Justcnds [builder]
+  槽位 24: kaguya154
+  槽位 25: kanyED1 [builder]
+  槽位 26: Katuria
+
+箱子 4（~7 ~ ~，27/27）
+  槽位 00: khjxiaogu
+  槽位 01: KilaBash
+  槽位 02: KING_VITIONNOT
+  槽位 03: Kirara_Fantasia [builder]
+  槽位 04: KISIN_REIMU
+  槽位 05: KochiyaSanaeNya
+  槽位 06: KunoSayo [builder]
+  槽位 07: La_Fi
+  槽位 08: langyo
+  槽位 09: lcy0x1
+  槽位 10: Leaden_TP
+  槽位 11: LenyuCoffee [builder]
+  槽位 12: Lex_Eden [builder]
+  槽位 13: Lexsteam
+  槽位 14: Linngdu664
+  槽位 15: Litt1eBai
+  槽位 16: Liuyue_awa
+  槽位 17: liziluyu
+  槽位 18: Loci_Natit
+  槽位 19: LocusAzzurro
+  槽位 20: lostmyself8
+  槽位 21: Louis_Quepierts
+  槽位 22: luoxueyasha
+  槽位 23: Lupinuz
+  槽位 24: Lyuuke
+  槽位 25: LYZdelight
+  槽位 26: Maker_MC
+
+箱子 5（~9 ~ ~，27/27）
+  槽位 00: MalayP
+  槽位 01: MarbleGateKeeper
+  槽位 02: MC_HuangTao
+  槽位 03: Meo_LoBSter
+  槽位 04: MercuryGryph [builder]
+  槽位 05: MewKooo
+  槽位 06: Mo_bing_ [builder]
+  槽位 07: mosquitozzi [builder]
+  槽位 08: MOYunRu
+  槽位 09: Mr_RadoVAN [builder]
+  槽位 10: mrqx0195
+  槽位 11: MSDNicrosoft
+  槽位 12: Mulatram_UwU
+  槽位 13: Murasame_chaan
+  槽位 14: Mutsumi621 [builder]
+  槽位 15: MuyeNaiNai
+  槽位 16: MUYU_Twilighter
+  槽位 17: NeptuneTADASHI
+  槽位 18: NightFish2009
+  槽位 19: nyachuletaxiaoE
+  槽位 20: Pajang_Forever
+  槽位 21: PENPEN__ [builder]
+  槽位 22: Pigeon_Nian [builder]
+  槽位 23: QiuShui1012
+  槽位 24: QiuYeQAQ2024
+  槽位 25: QSwOrDZ
+  槽位 26: QuinnSS
+
+箱子 6（~11 ~ ~，27/27）
+  槽位 00: R3944Realms
+  槽位 01: redColmula55
+  槽位 02: Renyigesai
+  槽位 03: RinOArdo_ [builder]
+  槽位 04: Royling
+  槽位 05: Ryan100C
+  槽位 06: Sakura_Dawn
+  槽位 07: Sam_Chai
+  槽位 08: Seraph_JACK
+  槽位 09: shen_hu
+  槽位 10: Shiroi_Sakana
+  槽位 11: ShuiXi_233 [builder]
+  槽位 12: Si_hen
+  槽位 13: SiyinoXinyuan
+  槽位 14: skyinr
+  槽位 15: slmpc
+  槽位 16: Souiken [builder]
+  槽位 17: SShakusora
+  槽位 18: Stargazer_Iris [builder]
+  槽位 19: Steverjava
+  槽位 20: Strange_Smell
+  槽位 21: Suika_Hinata [builder]
+  槽位 22: Tairitsu1980 [builder]
+  槽位 23: tartaric_acid
+  槽位 24: TedXenon [builder]
+  槽位 25: theabab2333
+  槽位 26: TheLawF
+
+箱子 7（~13 ~ ~，27/27）
+  槽位 00: toi_et_moi
+  槽位 01: triple_bpig
+  槽位 02: Txt_Text
+  槽位 03: ugnjhjf
+  槽位 04: USS_Shenzhou
+  槽位 05: Viola_Siemens
+  槽位 06: Vo1dEX_ [builder]
+  槽位 07: Volloval [builder]
+  槽位 08: vvvbbbcz
+  槽位 09: WangXiaoJin
+  槽位 10: WeiAL
+  槽位 11: WhiseNT
+  槽位 12: Whyte_V
+  槽位 13: wither_1234014
+  槽位 14: WN_Shengshi [builder]
+  槽位 15: WolfHeadDraculta [builder]
+  槽位 16: Xe_Kr
+  槽位 17: Xiao_Pang_xie
+  槽位 18: Xiao_Tin
+  槽位 19: XiaoDengPiaoPiao
+  槽位 20: xiaomian124
+  槽位 21: xingchen124
+  槽位 22: Xiris177
+  槽位 23: xkball
+  槽位 24: xuan_su [builder]
+  槽位 25: xypp
+  槽位 26: y271727uy [builder]
+
+箱子 8（~15 ~ ~，22/27）
+  槽位 00: Yakon0705
+  槽位 01: Yang120
+  槽位 02: yhz_cake
+  槽位 03: Youmu_Konpaku7 [builder]
+  槽位 04: YSBBBB
+  槽位 05: yuricat
+  槽位 06: Yuuia
+  槽位 07: YuYi_gy [builder]
+  槽位 08: Zbx1425
+  槽位 09: Zershyan
+  槽位 10: zhaodaxiazhansh
+  槽位 11: zhenshiz
+  槽位 12: zhenzhen0915 [builder]
+  槽位 13: zhifan
+  槽位 14: zhongbai233
+  槽位 15: ZhuRuoLing [builder]
+  槽位 16: zhuyuetin [builder]
+  槽位 17: zijianniubi
+  槽位 18: Zn_xin2xx [builder]
+  槽位 19: Zoshsgahdnkc
+  槽位 20: zx1316
+  槽位 21: zzzz_ustc
