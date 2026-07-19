@@ -35,7 +35,7 @@ public final class PadMapSampler {
     public static PadMapSnapshot sample(Level level, int centerX, int centerZ, float zoom) {
         int width = DEFAULT_WIDTH;
         int height = DEFAULT_HEIGHT;
-        int cellSize = cellSizeForZoom(zoom);
+        int cellSize = PadMapSamplingPolicy.cellSizeForZoom(zoom);
         PadMapTileKind[] tiles = new PadMapTileKind[width * height];
         int halfW = width / 2;
         int halfH = height / 2;
@@ -102,19 +102,6 @@ public final class PadMapSampler {
             return PadMapTileKind.INDOOR_FLOOR;
         }
         return PadMapTileKind.GRASS;
-    }
-
-    static int cellSizeForZoom(float zoom) {
-        if (zoom >= 3.0F) {
-            return 1;
-        }
-        if (zoom >= 1.5F) {
-            return 1;
-        }
-        if (zoom >= 0.75F) {
-            return 1;
-        }
-        return 4;
     }
 
     public static PadMapTileKind classifyCell(Level level, BlockPos.MutableBlockPos mutable, int worldX,
@@ -221,7 +208,7 @@ public final class PadMapSampler {
      */
     private static PadMapTileKind classifyColumn(Level level, BlockPos.MutableBlockPos mutable, int x, int z) {
         int y = level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) - 1;
-        if (!isSurfaceHeightReady(level.getMinY(), y)) {
+        if (!PadMapSamplingPolicy.isSurfaceHeightReady(level.getMinY(), y)) {
             return PadMapTileKind.UNKNOWN;
         }
         mutable.set(x, y, z);
@@ -265,10 +252,6 @@ public final class PadMapSampler {
     }
 
     /** 最低高度以下没有可分类的表面，通常表示客户端列数据尚未同步完成。 */
-    static boolean isSurfaceHeightReady(int minY, int surfaceY) {
-        return surfaceY >= minY;
-    }
-
     /** 无碰撞覆盖物的直接归类;返回 null 表示继续向下找实体方块。 */
     private static PadMapTileKind classifySoftCover(BlockState state) {
         if (state.is(BlockTags.CROPS)) {

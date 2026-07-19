@@ -5,7 +5,6 @@ final class PadMapDiskCacheFormat {
     // v18 淘汰可能在客户端列尚未同步时被错误持久化为 GRASS 的旧采样。
     static final Header CELLS = new Header(0x4E504D43, 18);
     static final Header SNAPSHOT = new Header(0x4E504D53, 18);
-    static final Header CHUNKS = new Header(0x4E504B43, 18);
 
     private PadMapDiskCacheFormat() {
     }

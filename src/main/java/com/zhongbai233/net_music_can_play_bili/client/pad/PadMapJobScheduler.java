@@ -2,6 +2,9 @@ package com.zhongbai233.net_music_can_play_bili.client.pad;
 
 /** Scheduling policy for Pad map sampling jobs. */
 final class PadMapJobScheduler {
+    record JobView(int centerX, int centerZ, int floorY, PadMapViewProfile profile, float zoom) {
+    }
+
     private final int recenterBlocks;
     private final int indoorRecenterBlocks;
     private final int maxJobLagChunks;
@@ -19,7 +22,7 @@ final class PadMapJobScheduler {
         this.fastChunksPerTick = Math.max(1, fastChunksPerTick);
     }
 
-    boolean shouldCancel(PadMapClientCache.Job job, int playerX, int playerY, int playerZ,
+    boolean shouldCancel(JobView job, int playerX, int playerY, int playerZ,
             PadMapViewProfile profile, float zoom) {
         if (job == null) {
             return false;
@@ -28,10 +31,10 @@ final class PadMapJobScheduler {
             return true;
         }
         return chunkDistance(playerX, job.centerX()) >= maxJobLagChunks
-            || chunkDistance(playerZ, job.centerZ()) >= maxJobLagChunks;
+                || chunkDistance(playerZ, job.centerZ()) >= maxJobLagChunks;
     }
 
-    int chunksPerTick(PadMapClientCache.Job job, int playerX, int playerZ) {
+    int chunksPerTick(JobView job, int playerX, int playerZ) {
         if (job == null) {
             return chunksPerTick;
         }
@@ -61,7 +64,7 @@ final class PadMapJobScheduler {
     boolean canSeedPrevious(PadMapSnapshot completed, PadMapViewProfile completedProfile, PadMapViewProfile profile,
             float zoom) {
         return profile == completedProfile && completed != null
-                && completed.cellSizeBlocks() == PadMapSampler.cellSizeForZoom(zoom);
+                && completed.cellSizeBlocks() == PadMapSamplingPolicy.cellSizeForZoom(zoom);
     }
 
     private int chunkDistance(int a, int b) {

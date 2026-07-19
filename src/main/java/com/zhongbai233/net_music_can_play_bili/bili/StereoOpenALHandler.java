@@ -41,6 +41,9 @@ public class StereoOpenALHandler {
     private volatile boolean closed;
     private volatile boolean started;
     private long totalSamplesFed;
+    private volatile long totalInputSamples;
+    private volatile long discardInputUntilSample;
+    private volatile boolean resetPendingInput;
     private long lastFrameFeedNanos;
     private double frameBudget;
 
@@ -72,10 +75,24 @@ public class StereoOpenALHandler {
         int samples = sampleCount(stereoBlock);
         if (samples <= 0)
             return false;
+        if (resetPendingInput) {
+            pendingBlock = new float[2][SAMPLES_PER_BLOCK];
+            pendingSamples = 0;
+            resetPendingInput = false;
+        }
         boolean queuedAny = false;
         float crossfeed = BiliConfig.stereoCrossfeedAmount();
         float keep = 1.0f - crossfeed;
         for (int sample = 0; sample < samples && !closed; sample++) {
+            if (resetPendingInput) {
+                pendingBlock = new float[2][SAMPLES_PER_BLOCK];
+                pendingSamples = 0;
+                resetPendingInput = false;
+            }
+            long inputSample = totalInputSamples++;
+            if (inputSample < discardInputUntilSample) {
+                continue;
+            }
             float left = sampleAt(stereoBlock, 0, sample);
             float right = sampleAt(stereoBlock, 1, sample);
             if (crossfeed > 0.0f) {
@@ -186,6 +203,9 @@ public class StereoOpenALHandler {
         if (hardFlushIfAhead(targetRelativeTicks)) {
             frameBudget = Math.min(frameBudget, 1.0D);
         }
+        if (hardDropDecodedBacklog(targetRelativeTicks)) {
+            frameBudget = Math.min(frameBudget, 1.0D);
+        }
         if (hardFlushIfOutputLagging(targetRelativeTicks)) {
             frameBudget = Math.min(frameBudget, 1.0D);
         }
@@ -284,6 +304,32 @@ public class StereoOpenALHandler {
         LOGGER.warn(
                 "Stereo OpenAL 输出队列落后过多，已丢弃待播放缓冲以追赶: audible={}ticks target={}ticks fed={}ticks lag={}ticks",
                 audibleTicks, targetRelativeTicks, fedTicks, audibleLag);
+        return true;
+    }
+
+    private boolean hardDropDecodedBacklog(long targetRelativeTicks) {
+        if (targetRelativeTicks == Long.MAX_VALUE || !started || spatialAudio == null) {
+            return false;
+        }
+        long audibleTicks = getPositionTicks();
+        long fedTicks = getFedPositionTicks();
+        if (!SYNC_POLICY.shouldDropDecodedBacklog(audibleTicks, fedTicks, targetRelativeTicks)) {
+            return false;
+        }
+        long targetSamples = Math.max(0L, targetRelativeTicks) * samplesPerTick();
+        long inputSamples = totalInputSamples;
+        long baselineSamples = Math.max(targetSamples, inputSamples);
+        discardInputUntilSample = Math.max(discardInputUntilSample, baselineSamples);
+        resetPendingInput = true;
+        pcmQueue.clear();
+        spatialAudio.flushQueuedAudio(baselineSamples);
+        totalSamplesFed = baselineSamples;
+        for (SpeakerAudioRelay relay : relays) {
+            relay.flushQueuedAudio();
+        }
+        LOGGER.warn(
+                "Stereo OpenAL 解码与输出同时落后，已丢弃陈旧 PCM 追赶: audible={}ticks target={}ticks fed={}ticks input={}samples baseline={}samples",
+                audibleTicks, targetRelativeTicks, fedTicks, inputSamples, baselineSamples);
         return true;
     }
 
@@ -451,6 +497,9 @@ public class StereoOpenALHandler {
         pcmQueue.clear();
         pendingBlock = new float[2][SAMPLES_PER_BLOCK];
         pendingSamples = 0;
+        totalInputSamples = 0L;
+        discardInputUntilSample = 0L;
+        resetPendingInput = false;
         OpenALSpatialAudio sa = spatialAudio;
         if (sa != null) {
             sa.hardStopOutput();
@@ -550,82 +599,4 @@ public class StereoOpenALHandler {
         }
     }
 
-    /** 将 16-bit 交错 PCM (short[]) 转换为 float32 planar [2][samples] */
-    public static float[][] shortToFloatPlanar(byte[] pcmBytes, int channels) {
-        return shortToFloatPlanar(pcmBytes, 0, pcmBytes.length, channels);
-    }
-
-    public static float[][] shortToFloatPlanar(byte[] pcmBytes, int offset, int length, int channels) {
-        java.util.Objects.requireNonNull(pcmBytes, "pcmBytes");
-        java.util.Objects.checkFromIndexSize(offset, length, pcmBytes.length);
-        int bytesPerSample = 2;
-        int sourceChannels = Math.max(1, channels);
-        int outChannels = Math.min(2, sourceChannels);
-        int samples = Math.max(0, length) / (bytesPerSample * sourceChannels);
-        float[][] planar = new float[outChannels][samples];
-        for (int s = 0; s < samples; s++) {
-            for (int ch = 0; ch < outChannels; ch++) {
-                int idx = offset + (s * sourceChannels + ch) * 2;
-                short val = (short) ((pcmBytes[idx + 1] << 8) | (pcmBytes[idx] & 0xFF));
-                planar[ch][s] = val / 32768f;
-            }
-        }
-        return planar;
-    }
-
-    /** 根据 AudioFormat 自动选择位深度（16/24/32 bit）转换 PCM */
-    public static float[][] pcmToFloatPlanar(byte[] pcmBytes, javax.sound.sampled.AudioFormat format) {
-        return pcmToFloatPlanar(pcmBytes, 0, pcmBytes.length, format);
-    }
-
-    public static float[][] pcmToFloatPlanar(byte[] pcmBytes, int offset, int length,
-            javax.sound.sampled.AudioFormat format) {
-        java.util.Objects.requireNonNull(pcmBytes, "pcmBytes");
-        java.util.Objects.requireNonNull(format, "format");
-        java.util.Objects.checkFromIndexSize(offset, length, pcmBytes.length);
-        int bits = format.getSampleSizeInBits();
-        int sourceChannels = Math.max(1, format.getChannels());
-        int outChannels = Math.min(2, sourceChannels);
-        boolean bigEndian = format.isBigEndian();
-
-        if (bits <= 16) {
-            return shortToFloatPlanar(pcmBytes, offset, length, sourceChannels);
-        }
-
-        // 24-bit 或 32-bit: 使用 int 精度读取
-        int bytesPerSample = bits / 8;
-        if (bytesPerSample < 2)
-            bytesPerSample = 2;
-        int samples = Math.max(0, length) / (bytesPerSample * sourceChannels);
-
-        float[][] planar = new float[outChannels][samples];
-        for (int s = 0; s < samples; s++) {
-            for (int ch = 0; ch < outChannels; ch++) {
-                int idx = offset + (s * sourceChannels + ch) * bytesPerSample;
-                int val;
-                if (bytesPerSample == 3) {
-                    // 24 位 PCM。
-                    int b0 = pcmBytes[idx] & 0xFF;
-                    int b1 = pcmBytes[idx + 1] & 0xFF;
-                    int b2 = pcmBytes[idx + 2] & 0xFF;
-                    val = bigEndian ? ((b0 << 16) | (b1 << 8) | b2) : ((b2 << 16) | (b1 << 8) | b0);
-                    int sign = bigEndian ? b0 : b2;
-                    if ((sign & 0x80) != 0)
-                        val |= 0xFF000000; // 符号扩展
-                    planar[ch][s] = val / 8388608f;
-                } else {
-                    // 32 位 PCM。
-                    int b0 = pcmBytes[idx] & 0xFF;
-                    int b1 = pcmBytes[idx + 1] & 0xFF;
-                    int b2 = pcmBytes[idx + 2] & 0xFF;
-                    int b3 = pcmBytes[idx + 3] & 0xFF;
-                    val = bigEndian
-                            ? ((b0 << 24) | (b1 << 16) | (b2 << 8) | b3)
-                            : ((b3 << 24) | (b2 << 16) | (b1 << 8) | b0);
-                    planar[ch][s] = val / 2147483648f;
-                }
-            }
-        }
-        return planar;
-    }
 }

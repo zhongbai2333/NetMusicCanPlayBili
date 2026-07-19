@@ -237,9 +237,5 @@ public final class ModernTurntableTimeline {
             long pacingMillis, long totalMillis, long mediaDriftMillis) {
         public static final TimelineSnapshot EMPTY = new TimelineSnapshot("", -1L, -1L, -1L, -1L, 0L, 0L);
 
-        /** 兼容旧诊断调用；新代码应使用 mediaMillis()。 */
-        public long localMillis() {
-            return mediaMillis;
-        }
     }
 }

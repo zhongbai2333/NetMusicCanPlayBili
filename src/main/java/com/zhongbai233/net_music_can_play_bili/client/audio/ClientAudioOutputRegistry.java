@@ -13,7 +13,6 @@ import org.slf4j.Logger;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
@@ -32,13 +31,11 @@ public class ClientAudioOutputRegistry {
     private static final ConcurrentMap<UUID, BlockPos> MINECART_KEYS = new ConcurrentHashMap<>();
     private static final ConcurrentMap<UUID, Float> OWNER_VOLUMES = new ConcurrentHashMap<>();
 
-    private static final ConcurrentMap<BlockPos, BlockPos> MACHINE_OVERRIDES = new ConcurrentHashMap<>();
     /** 音响 relay 注册表：speakerPos → relay */
     private static final ConcurrentMap<BlockPos, SpeakerAudioRelay> RELAYS = new ConcurrentHashMap<>();
     /** relay → turntable 反向映射 */
     private static final ConcurrentMap<BlockPos, BlockPos> RELAY_TURNTABLE = new ConcurrentHashMap<>();
 
-    private static volatile float[] fallbackMachinePos;
     private static volatile float[] listenerPos;
 
     public static void register(DolbyAudioHandler handler) {
@@ -286,25 +283,10 @@ public class ClientAudioOutputRegistry {
         return resolveMachinePos(entry.pos(), entry.machinePos(), entry.ownerId());
     }
 
-    /** 将指定唱片机的音频输出重定向到音响位置 */
-    public static void setMachineOverride(BlockPos turntablePos, BlockPos speakerPos) {
-        // 保留 API 兼容旧调用；多音响模式下不再把主 handler 移到某个音响，避免后注册音响独占主输出。
-        if (turntablePos == null || speakerPos == null)
-            return;
-    }
-
-    /** 清除指定唱片机的音频位置重定向 */
-    public static void clearMachineOverride(BlockPos turntablePos) {
-        if (turntablePos == null)
-            return;
-        MACHINE_OVERRIDES.remove(turntablePos);
-    }
-
     /** 清除指向此音响的所有音频位置重定向 */
     public static void clearMachineOverrideForSpeaker(BlockPos speakerPos) {
         if (speakerPos == null)
             return;
-        MACHINE_OVERRIDES.entrySet().removeIf(e -> e.getValue().equals(speakerPos));
         RELAY_TURNTABLE.remove(speakerPos);
         SpeakerAudioRelay relay = RELAYS.remove(speakerPos);
         if (relay != null) {
@@ -322,7 +304,7 @@ public class ClientAudioOutputRegistry {
     public static void registerRelay(BlockPos speakerPos, BlockPos turntablePos, SpeakerAudioRelay relay) {
         if (speakerPos == null || turntablePos == null || relay == null)
             return;
-        relay.setSpeakerPos(AudioUtils.centerFor(speakerPos, fallbackMachinePos));
+        relay.setSpeakerPos(AudioUtils.centerFor(speakerPos));
         SpeakerAudioRelay old = RELAYS.put(speakerPos, relay);
         RELAY_TURNTABLE.put(speakerPos, turntablePos);
         if (old != null) {
@@ -372,26 +354,6 @@ public class ClientAudioOutputRegistry {
         if (stereo != null) {
             stereo.handler().setUserVolume(volume);
         }
-    }
-
-    public static void updatePositions(float[] machinePos, float[] listenerPos) {
-        updatePositions(listenerPos);
-    }
-
-    public static void setMachinePos(double x, double y, double z) {
-        fallbackMachinePos = new float[] { (float) x, (float) y, (float) z };
-    }
-
-    public static float[] getMachinePos() {
-        DolbyEntry dolby = firstValue(DOLBY_HANDLERS);
-        if (dolby != null) {
-            return AudioUtils.copyPos3(dolby.machinePos());
-        }
-        StereoEntry stereo = firstValue(STEREO_HANDLERS);
-        if (stereo != null) {
-            return AudioUtils.copyPos3(stereo.machinePos());
-        }
-        return AudioUtils.copyPos3(fallbackMachinePos);
     }
 
     public static float[] getListenerPos() {
@@ -693,8 +655,6 @@ public class ClientAudioOutputRegistry {
         STEREO_HANDLERS.clear();
         RELAYS.clear();
         RELAY_TURNTABLE.clear();
-        MACHINE_OVERRIDES.clear();
-        fallbackMachinePos = null;
         listenerPos = null;
         ClientMinecartAudioAnchors.clear();
         MINECART_KEYS.clear();
@@ -827,13 +787,6 @@ public class ClientAudioOutputRegistry {
         return current;
     }
 
-    private static <T> T firstValue(Map<?, T> map) {
-        for (T value : map.values()) {
-            return value;
-        }
-        return null;
-    }
-
     private static float turntableVolume(BlockPos pos) {
         if (!isRealWorldKey(pos)) {
             return 1.0F;
@@ -867,8 +820,8 @@ public class ClientAudioOutputRegistry {
     private static BlockPos keyFor(BlockPos pos, UUID ownerId, String sessionId) {
         UUID minecartUuid = ClientMinecartAudioAnchors.entityUuid(sessionId);
         if (minecartUuid != null) {
-            return MINECART_KEYS.computeIfAbsent(minecartUuid, ignored ->
-                    new BlockPos(Integer.MIN_VALUE + 2, 0, ANONYMOUS_COUNTER.getAndIncrement()));
+            return MINECART_KEYS.computeIfAbsent(minecartUuid,
+                    ignored -> new BlockPos(Integer.MIN_VALUE + 2, 0, ANONYMOUS_COUNTER.getAndIncrement()));
         }
         return keyFor(pos, ownerId);
     }
@@ -878,7 +831,7 @@ public class ClientAudioOutputRegistry {
     }
 
     private static float[] centerFor(BlockPos pos) {
-        return AudioUtils.centerFor(pos, fallbackMachinePos);
+        return AudioUtils.centerFor(pos);
     }
 
     private interface AudioEntry {

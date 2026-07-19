@@ -36,14 +36,6 @@ public class ConfigSlider extends AbstractSliderButton {
         return value;
     }
 
-    public float getMin() {
-        return min;
-    }
-
-    public float getMax() {
-        return max;
-    }
-
     @Override
     protected void updateMessage() {
         setMessage(Component.literal(fmt(min + (float) value * (max - min))));

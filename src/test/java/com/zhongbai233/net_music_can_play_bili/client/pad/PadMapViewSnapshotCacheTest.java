@@ -1,0 +1,69 @@
+package com.zhongbai233.net_music_can_play_bili.client.pad;
+
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+
+class PadMapViewSnapshotCacheTest {
+    @Test
+    void restoresOutdoorAfterIndoorRoundTrip() {
+        PadMapViewSnapshotCache cache = new PadMapViewSnapshotCache();
+        PadMapSnapshot outdoor = snapshot(0, -64, 0, 1, PadMapTileKind.GRASS);
+        PadMapSnapshot indoor = snapshot(0, 70, 0, 1, PadMapTileKind.INDOOR_FLOOR);
+        cache.put(PadMapViewProfile.OUTDOOR, outdoor);
+        cache.put(PadMapViewProfile.INDOOR, indoor);
+        if (cache.get(PadMapViewProfile.OUTDOOR, -64, 1) != outdoor) {
+            throw new AssertionError("outdoor snapshot must survive an indoor round trip");
+        }
+    }
+
+    @Test
+    void isolatesIndoorFloorsAndCellSizes() {
+        PadMapViewSnapshotCache cache = new PadMapViewSnapshotCache();
+        PadMapSnapshot floor64 = snapshot(0, 64, 0, 1, PadMapTileKind.INDOOR_FLOOR);
+        PadMapSnapshot floor80 = snapshot(0, 80, 0, 1, PadMapTileKind.BUILDING);
+        cache.put(PadMapViewProfile.INDOOR, floor64);
+        cache.put(PadMapViewProfile.INDOOR, floor80);
+        if (cache.get(PadMapViewProfile.INDOOR, 64, 1) != floor64
+                || cache.get(PadMapViewProfile.INDOOR, 80, 1) != floor80
+                || cache.get(PadMapViewProfile.INDOOR, 64, 4) != null) {
+            throw new AssertionError("floors and cell sizes must use independent snapshot slots");
+        }
+    }
+
+    @Test
+    void invalidatesInactiveSnapshots() {
+        PadMapViewSnapshotCache cache = new PadMapViewSnapshotCache();
+        PadMapSnapshot outdoor = snapshot(8, -64, 8, 1, PadMapTileKind.GRASS);
+        cache.put(PadMapViewProfile.OUTDOOR, outdoor);
+        cache.invalidate(List.of(new PadMapDirtyChunkTracker.Key("overworld", 0, 0)));
+        PadMapSnapshot invalidated = cache.get(PadMapViewProfile.OUTDOOR, -64, 1);
+        if (invalidated == null || invalidated.tile(0, 0) != PadMapTileKind.UNKNOWN) {
+            throw new AssertionError("dirty updates must invalidate inactive profile snapshots");
+        }
+    }
+
+    @Test
+    void evictsLeastRecentlyUsedSnapshot() {
+        PadMapViewSnapshotCache cache = new PadMapViewSnapshotCache(2);
+        PadMapSnapshot floor64 = snapshot(0, 64, 0, 1, PadMapTileKind.INDOOR_FLOOR);
+        PadMapSnapshot floor80 = snapshot(0, 80, 0, 1, PadMapTileKind.BUILDING);
+        PadMapSnapshot floor96 = snapshot(0, 96, 0, 1, PadMapTileKind.ROCK);
+        cache.put(PadMapViewProfile.INDOOR, floor64);
+        cache.put(PadMapViewProfile.INDOOR, floor80);
+        cache.get(PadMapViewProfile.INDOOR, 64, 1);
+        cache.put(PadMapViewProfile.INDOOR, floor96);
+        if (cache.get(PadMapViewProfile.INDOOR, 80, 1) != null
+                || cache.get(PadMapViewProfile.INDOOR, 64, 1) != floor64
+                || cache.get(PadMapViewProfile.INDOOR, 96, 1) != floor96) {
+            throw new AssertionError("snapshot cache must evict its least recently used floor");
+        }
+    }
+
+    private static PadMapSnapshot snapshot(int centerX, int centerY, int centerZ, int cellSize,
+            PadMapTileKind kind) {
+        PadMapTileKind[] tiles = new PadMapTileKind[16 * 16];
+        java.util.Arrays.fill(tiles, kind);
+        return new PadMapSnapshot(centerX, centerY, centerZ, cellSize, 16, 16, tiles, 1.0F);
+    }
+}

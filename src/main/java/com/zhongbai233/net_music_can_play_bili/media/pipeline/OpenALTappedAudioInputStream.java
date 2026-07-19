@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.media.pipeline;
 
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.StereoOpenALHandler;
+import com.zhongbai233.net_music_can_play_bili.media.audio.PcmPlanarConverter;
 import org.slf4j.Logger;
 
 import javax.sound.sampled.AudioFormat;
@@ -144,7 +145,7 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
 
         int aligned = combinedLength - (combinedLength % frameBytes);
         if (aligned > 0) {
-            float[][] planar = StereoOpenALHandler.pcmToFloatPlanar(tapBuffer, 0, aligned, getFormat());
+            float[][] planar = PcmPlanarConverter.convert(tapBuffer, 0, aligned, getFormat());
             if (!firstDiagnostics && aligned >= frameBytes * DIAGNOSTIC_MIN_FRAMES) {
                 firstDiagnostics = true;
                 logFirstPcmDiagnostics(aligned, planar);

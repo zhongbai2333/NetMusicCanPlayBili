@@ -5,7 +5,6 @@ import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import org.slf4j.Logger;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
@@ -343,36 +342,10 @@ public final class ChunkPrefetchInputStream extends InputStream {
         return expectedLength;
     }
 
-    /**
-     * Reads one bounded Range response transactionally. Nothing reaches the shared
-     * playback spool unless this method returns the complete chunk.
-     */
-    static byte[] readCompleteChunk(InputStream body, long expectedLength) throws IOException {
-        if (expectedLength <= 0L || expectedLength > Integer.MAX_VALUE) {
-            throw new IOException("invalid bounded chunk length " + expectedLength);
-        }
-        ByteArrayOutputStream chunk = new ByteArrayOutputStream((int) expectedLength);
-        byte[] buffer = new byte[Math.min(COPY_BUFFER_SIZE, (int) expectedLength)];
-        long remaining = expectedLength;
-        while (remaining > 0L) {
-            int n = body.read(buffer, 0, (int) Math.min(buffer.length, remaining));
-            if (n < 0) {
-                throw new IOException("CDN range chunk ended early: expected " + expectedLength
-                        + ", got " + chunk.size());
-            }
-            if (n == 0) {
-                continue;
-            }
-            chunk.write(buffer, 0, n);
-            remaining -= n;
-        }
-        return chunk.toByteArray();
-    }
-
     private byte[] readCompleteRangeChunk(InputStream body, long expectedLength) throws IOException {
         activeBody.set(body);
         try {
-            return readCompleteChunk(body, expectedLength);
+            return CompleteChunkReader.read(body, expectedLength, COPY_BUFFER_SIZE);
         } finally {
             activeBody.compareAndSet(body, null);
         }

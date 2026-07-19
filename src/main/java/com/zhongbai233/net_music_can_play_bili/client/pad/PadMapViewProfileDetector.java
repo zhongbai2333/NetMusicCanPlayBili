@@ -48,15 +48,10 @@ final class PadMapViewProfileDetector {
                 }
             }
         }
-        return isIndoorEvidence(ceiling, artificialCeiling, artificial, ceilingMinHits, artificialMinHits)
-                ? PadMapViewProfile.INDOOR
-                : PadMapViewProfile.OUTDOOR;
-    }
-
-    static boolean isIndoorEvidence(int ceilingHits, int artificialCeilingHits, int nearbyArtificialHits,
-            int ceilingMinHits, int artificialMinHits) {
-        return ceilingHits >= ceilingMinHits
-                && (artificialCeilingHits >= ceilingMinHits || nearbyArtificialHits >= artificialMinHits);
+        return PadMapViewProfilePolicy.isIndoorEvidence(
+                ceiling, artificialCeiling, artificial, ceilingMinHits, artificialMinHits)
+                        ? PadMapViewProfile.INDOOR
+                        : PadMapViewProfile.OUTDOOR;
     }
 
     int normalizeIndoorFloorY(Level level, BlockPos playerPos) {

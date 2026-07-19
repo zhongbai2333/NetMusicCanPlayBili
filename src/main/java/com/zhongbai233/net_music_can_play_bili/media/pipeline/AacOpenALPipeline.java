@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.media.pipeline;
 
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.bili.StereoOpenALHandler;
+import com.zhongbai233.net_music_can_play_bili.media.audio.PcmPlanarConverter;
 import net.minecraft.core.BlockPos;
 
 import javax.sound.sampled.AudioFormat;
@@ -89,7 +90,7 @@ public final class AacOpenALPipeline extends AbstractAudioPipeline {
     private void enqueuePcm(byte[] pcm, AudioFormat format) {
         byte[] audible = applySkip(pcm);
         if (audible.length > 0) {
-            stereo.enqueuePcm(StereoOpenALHandler.shortToFloatPlanar(audible, format.getChannels()));
+            stereo.enqueuePcm(PcmPlanarConverter.from16Bit(audible, format.getChannels()));
         }
     }
 

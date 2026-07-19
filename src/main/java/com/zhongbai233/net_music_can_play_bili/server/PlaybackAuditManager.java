@@ -20,10 +20,8 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.net.URI;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 /** 现代化唱片机和 MP4 设备的服务端播放审计状态与源粒子。 */
 public final class PlaybackAuditManager {
@@ -31,8 +29,9 @@ public final class PlaybackAuditManager {
     private static final int PARTICLE_INTERVAL_TICKS = 8;
     private static final long REPORT_NOTIFY_COOLDOWN_TICKS = 20L * 45L;
     private static final int REPORT_OP_REMINDER_LIMIT = 5;
-    private static final Map<String, ActiveSource> SOURCES = new ConcurrentHashMap<>();
-    private static final Map<String, ReportState> REPORTS = new ConcurrentHashMap<>();
+    private static final PlaybackSourceRegistry<ActiveSource> SOURCES = new PlaybackSourceRegistry<>();
+    private static final PlaybackReportTracker<UUID> REPORTS = new PlaybackReportTracker<>(
+            REPORT_NOTIFY_COOLDOWN_TICKS, REPORT_OP_REMINDER_LIMIT);
 
     private PlaybackAuditManager() {
     }
@@ -81,7 +80,7 @@ public final class PlaybackAuditManager {
             return List.of();
         }
         prune(server);
-        List<ActiveSource> result = new ArrayList<>(SOURCES.values());
+        List<ActiveSource> result = new ArrayList<>(SOURCES.snapshot());
         result.sort(Comparator
                 .comparing((ActiveSource source) -> source.kind().displayName())
                 .thenComparing(source -> source.levelKey().toString())
@@ -124,38 +123,30 @@ public final class PlaybackAuditManager {
             return ReportResult.EMPTY;
         }
         long now = reporter.level().getGameTime();
-        ReportState state = REPORTS.compute(source.key(), (key, existing) -> {
-            ReportState safe = existing != null ? existing : new ReportState(now);
-            safe.record(reporter, now);
-            return safe;
-        });
-        boolean firstReport = state.totalReports() == 1;
-        boolean reachedOpLimit = state.totalReports() >= REPORT_OP_REMINDER_LIMIT;
-        boolean shouldNotifyOps = firstReport
-                || (!state.opReminderLimitReached()
-                        && now - state.lastNotifiedGameTime() >= REPORT_NOTIFY_COOLDOWN_TICKS)
-                || (reachedOpLimit && !state.opReminderLimitReached());
-        if (!shouldNotifyOps) {
-            return new ReportResult(false, true, state.totalReports(), state.uniqueReporterCount(), false,
-                    state.opReminderLimitReached());
+        PlaybackReportTracker.Decision<UUID> decision = REPORTS.record(source.key(), reporter.getUUID(), now);
+        PlaybackReportTracker.Snapshot<UUID> state = decision.snapshot();
+        if (!decision.shouldNotify()) {
+            return new ReportResult(false, decision.merged(), state.totalReports(), state.uniqueReporterCount(), false,
+                    state.reminderLimitReached());
         }
 
         MutableComponent message = reportMessage(server, source, reporter.getDisplayName().copy(), reason, state,
                 true);
-        if (reachedOpLimit && !state.opReminderLimitReached()) {
+        if (decision.reachedLimit() && !state.reminderLimitReached()) {
             message.append(Component.literal("\n  ").withStyle(ChatFormatting.DARK_GRAY))
                     .append(Component.literal("该音源举报已达到 OP 提醒上限，后续同源举报将静默合并")
                             .withStyle(ChatFormatting.RED, ChatFormatting.BOLD));
         }
         int notified = broadcastToOnlineOps(server, message);
         server.sendSystemMessage(message);
-        state.markNotified(now, reachedOpLimit);
-        return new ReportResult(notified > 0, !firstReport, state.totalReports(), state.uniqueReporterCount(),
-                reachedOpLimit, state.opReminderLimitReached());
+        PlaybackReportTracker.Snapshot<UUID> notifiedState = REPORTS.markNotified(source.key(), now,
+                decision.reachedLimit());
+        return new ReportResult(notified > 0, decision.merged(), notifiedState.totalReports(),
+                notifiedState.uniqueReporterCount(), decision.reachedLimit(), notifiedState.reminderLimitReached());
     }
 
     private static MutableComponent reportMessage(MinecraftServer server, ActiveSource source, Component reporterName,
-            String reason, ReportState state, boolean includeSuppressed) {
+            String reason, PlaybackReportTracker.Snapshot<UUID> state, boolean includeSuppressed) {
         MutableComponent message = Component.literal("[音源举报] ").withStyle(ChatFormatting.RED, ChatFormatting.BOLD)
                 .append(reporterName.copy().withStyle(ChatFormatting.YELLOW))
                 .append(Component.literal(" 举报 ").withStyle(ChatFormatting.GRAY))
@@ -169,7 +160,7 @@ public final class PlaybackAuditManager {
                         + state.uniqueReporterCount() + " 人").withStyle(ChatFormatting.GOLD))
                 .append(Component.literal("\n  ").withStyle(ChatFormatting.DARK_GRAY))
                 .append(source.describe(server));
-        int suppressed = Math.max(0, state.totalReports() - state.notifiedReportCount() - 1);
+        int suppressed = state.suppressedReportCount();
         if (includeSuppressed && suppressed > 0) {
             message.append(Component.literal("\n  ").withStyle(ChatFormatting.DARK_GRAY))
                     .append(Component.literal("已合并未单独提醒的同源举报：" + suppressed + " 次")
@@ -202,8 +193,8 @@ public final class PlaybackAuditManager {
             return;
         }
         prune(server);
-        List<PendingReport> pendingReports = REPORTS.entrySet().stream()
-                .map(entry -> new PendingReport(SOURCES.get(entry.getKey()), entry.getValue()))
+        List<PendingReport> pendingReports = REPORTS.snapshots().stream()
+                .map(entry -> new PendingReport(SOURCES.get(entry.sourceKey()), entry.snapshot()))
                 .filter(report -> report.source() != null && report.state().totalReports() > 0)
                 .sorted(Comparator.comparingLong(report -> report.state().lastReportGameTime()))
                 .toList();
@@ -312,11 +303,11 @@ public final class PlaybackAuditManager {
     }
 
     private static void prune(MinecraftServer server) {
-        SOURCES.values().removeIf(source -> {
+        SOURCES.removeIf(source -> {
             ServerLevel level = server.getLevel(source.levelKey());
             return level == null || level.getGameTime() - source.lastSeenGameTime() > STALE_AFTER_TICKS;
         });
-        REPORTS.keySet().removeIf(key -> !SOURCES.containsKey(key));
+        REPORTS.retainSources(SOURCES.keys());
     }
 
     private static void spawnSourceNoteParticle(ServerLevel level, double x, double y, double z, long gameTime) {
@@ -427,54 +418,6 @@ public final class PlaybackAuditManager {
         private static final ReportResult EMPTY = new ReportResult(false, false, 0, 0, false, false);
     }
 
-    private record PendingReport(ActiveSource source, ReportState state) {
-    }
-
-    private static final class ReportState {
-        private final java.util.Set<UUID> reporterIds = ConcurrentHashMap.newKeySet();
-        private int totalReports;
-        private int notifiedReportCount;
-        private long lastNotifiedGameTime = Long.MIN_VALUE;
-        private long lastReportGameTime;
-        private boolean opReminderLimitReached;
-
-        private ReportState(long createdGameTime) {
-        }
-
-        private void record(ServerPlayer reporter, long now) {
-            totalReports++;
-            lastReportGameTime = now;
-            reporterIds.add(reporter.getUUID());
-        }
-
-        private void markNotified(long now, boolean limitReached) {
-            lastNotifiedGameTime = now;
-            notifiedReportCount = totalReports;
-            opReminderLimitReached |= limitReached;
-        }
-
-        private int totalReports() {
-            return totalReports;
-        }
-
-        private int uniqueReporterCount() {
-            return reporterIds.size();
-        }
-
-        private int notifiedReportCount() {
-            return notifiedReportCount;
-        }
-
-        private long lastNotifiedGameTime() {
-            return lastNotifiedGameTime;
-        }
-
-        private long lastReportGameTime() {
-            return lastReportGameTime;
-        }
-
-        private boolean opReminderLimitReached() {
-            return opReminderLimitReached;
-        }
+    private record PendingReport(ActiveSource source, PlaybackReportTracker.Snapshot<UUID> state) {
     }
 }

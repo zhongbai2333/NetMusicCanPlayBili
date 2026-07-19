@@ -72,7 +72,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./gradlew runPadMapStyleSelfTest build --stacktrace -Pmod_version="${{ steps.meta.outputs.mod_version }}"
+          ./gradlew build --stacktrace -Pmod_version="${{ steps.meta.outputs.mod_version }}"
 
       - name: Bundle artifact
         id: bundle

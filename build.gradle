@@ -184,46 +184,6 @@ sourceSets.main.resources { srcDir 'src/generated/resources' }
 sourceSets.test.java.setSrcDirs(['src/test/java'])
 sourceSets.test.resources.setSrcDirs(['src/test/resources'])
 
-def lightweightSelfTests = [
-    runChunkPrefetchInputStreamSelfTest     : ['Runs bounded HTTP Range transactional read regression tests.', 'com.zhongbai233.net_music_can_play_bili.media.stream.ChunkPrefetchInputStreamSelfTest'],
-        runPadMapStyleSelfTest                : ['Runs lightweight Pad map style post-processing self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.tools.PadMapStyleSelfTest'],
-        runPureLogicSelfTest                  : ['Runs lightweight pure logic self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.tools.PureLogicSelfTest'],
-        runMemoryCircuitBreakerSelfTest        : ['Runs memory circuit breaker state transition self tests.', 'com.zhongbai233.net_music_can_play_bili.client.diagnostics.MemoryCircuitBreakerSelfTest'],
-        runSpeakerRelayMutePolicySelfTest      : ['Runs speaker relay takeover mute policy self tests.', 'com.zhongbai233.net_music_can_play_bili.bili.SpeakerRelayMutePolicySelfTest'],
-        runPadMapBakeSchedulerSelfTest        : ['Runs lightweight Pad map bake scheduler self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadMapBakeSchedulerSelfTest'],
-        runPadMapRenderReusePlanSelfTest      : ['Runs lightweight Pad map rendered overlap reuse self tests.', 'com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadMapRenderReusePlanSelfTest'],
-        runPadMapViewProfileStabilizerSelfTest: ['Runs lightweight Pad map view profile stabilization self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapViewProfileStabilizerSelfTest'],
-        runPadMapViewProfileDetectorSelfTest  : ['Runs lightweight Pad map indoor evidence detection self tests.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapViewProfileDetectorSelfTest'],
-        runPadMapViewSnapshotCacheSelfTest    : ['Runs lightweight Pad map profile snapshot cache self tests.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapViewSnapshotCacheSelfTest'],
-        runPadMapJobSchedulerSelfTest         : ['Runs lightweight Pad map job scheduler self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapJobSchedulerSelfTest'],
-        runPadMapDirtyChunkTrackerSelfTest    : ['Runs lightweight Pad map dirty chunk tracker self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapDirtyChunkTrackerSelfTest'],
-        runPadMapDirtyInvalidationSelfTest    : ['Runs lightweight Pad map dirty invalidation self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapDirtyInvalidationSelfTest'],
-        runPadMapDiskCachePathsSelfTest       : ['Runs lightweight Pad map disk cache path self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapDiskCachePathsSelfTest'],
-        runPadMapDiskCacheFormatSelfTest      : ['Runs lightweight Pad map disk cache format self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapDiskCacheFormatSelfTest'],
-        runPadMapSnapshotDiskCodecSelfTest    : ['Runs lightweight Pad map snapshot disk codec self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSnapshotDiskCodecSelfTest'],
-        runPadMapCellDiskCodecSelfTest        : ['Runs lightweight Pad map cell disk codec self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapCellDiskCodecSelfTest'],
-        runPadMapChunkDiskCodecSelfTest       : ['Runs lightweight Pad map chunk disk codec self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapChunkDiskCodecSelfTest'],
-        runPadMapSamplePlanSelfTest           : ['Runs lightweight Pad map sample planning self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSamplePlanSelfTest'],
-        runPadMapSamplerLogicSelfTest         : ['Runs lightweight Pad map sampler readiness self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSamplerLogicSelfTest'],
-        runPadMapSnapshotSeederSelfTest       : ['Runs lightweight Pad map snapshot seeder self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSnapshotSeederSelfTest'],
-        runPadMapJobProgressSelfTest          : ['Runs lightweight Pad map job progress self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapJobProgressSelfTest'],
-        runPadMapSnapshotComposerSelfTest     : ['Runs lightweight Pad map snapshot composer self tests without launching Minecraft.', 'com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSnapshotComposerSelfTest']
-]
-
-lightweightSelfTests.each { taskName, config ->
-    tasks.register(taskName, JavaExec) {
-        group = 'verification'
-        description = config[0]
-        classpath = sourceSets.main.runtimeClasspath
-        mainClass = config[1]
-    }
-}
-
-tasks.named('check') {
-    dependsOn lightweightSelfTests.keySet()
-}
-
-
 tasks.register("runWithRenderDoc", Exec) {
     def javaExecTask = tasks.withType(JavaExec).named("runClient").get()
     def javaHome = javaExecTask.javaLauncher.get().metadata.installationPath.asFile.absolutePath

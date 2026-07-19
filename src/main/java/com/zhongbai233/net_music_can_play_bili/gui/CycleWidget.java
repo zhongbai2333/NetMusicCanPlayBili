@@ -32,10 +32,6 @@ public class CycleWidget extends AbstractWidget {
         return options.get(index);
     }
 
-    public int currentIndex() {
-        return index;
-    }
-
     @Override
     public void extractWidgetRenderState(GuiGraphicsExtractor g, int mx, int my, float pt) {
         // 由主题方法统一绘制

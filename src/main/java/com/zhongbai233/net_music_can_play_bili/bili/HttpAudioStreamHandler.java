@@ -75,6 +75,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     private static final double FMP4_TARGET_EPSILON_SECONDS = 0.05D;
     private static final int MAX_HTTP_REDIRECTS = 5;
     private static final long RANGE_SEEK_PREROLL_BYTES = 256 * 1024L;
+    private static final int MP3_SEEK_FADE_MILLIS = 80;
     private static final long FMP4_SEEK_PREROLL_BYTES = 256 * 1024L;
     private static final long ALLOWED_URL_TTL_MILLIS = TimeUnit.MINUTES.toMillis(10);
     private static final long SEGMENT_BASE_TTL_MILLIS = TimeUnit.MINUTES.toMillis(30);
@@ -333,10 +334,19 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         try {
             LOGGER.debug("Falling back to NetMusic direct HTTP handler for non-fMP4 URL: {}", url);
             float startOffsetSeconds = playbackContext != null ? playbackContext.startOffsetSeconds() : 0f;
+            // MP3 Layer III 帧可能依赖之前的 bit reservoir，且第三方源的编码器、
+            // HTTP Range 实现不可控。自定义源必须从文件头建立完整解码状态，再丢弃
+            // 已播放的 PCM；否则部分 MP3SPI/JLayer 组合会持续输出损坏音频。
             if (playbackContext != null && startOffsetSeconds > 1.0f && isNativeNetMusicHost(url)) {
                 AudioInputStream ranged = tryOpenModernRangedMp3Stream(url, playbackContext);
                 if (ranged != null) {
                     return ranged;
+                }
+            }
+            if (playbackContext != null && startOffsetSeconds > 1.0f && !isNativeNetMusicHost(url)) {
+                AudioInputStream strict = tryOpenStrictCustomMp3Stream(url, playbackContext, startOffsetSeconds);
+                if (strict != null) {
+                    return strict;
                 }
             }
 
@@ -371,7 +381,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             RangedResource resource = probeRangedResource(url);
             long contentLength = resource.contentLength();
             if (contentLength <= 0L) {
-                LOGGER.debug("NetEase range seek unavailable: no content length for {}", url);
+                LOGGER.debug("MP3 range seek unavailable: no content length for {}", url);
                 return null;
             }
 
@@ -385,17 +395,64 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             InputStream aligned = alignMp3Frame(ranged, rangeOffset);
             BufferedInputStream buffered = new BufferedInputStream(aligned, MP3_SYNC_SCAN_BYTES);
             AudioInputStream stream = AudioSystem.getAudioInputStream(buffered);
-            LOGGER.debug("NetEase range seek: offset={}s total={}s content={} byte={} residual={}s host={}",
+            LOGGER.debug("MP3 range seek: offset={}s total={}s content={} byte={} residual={}s host={}",
                     playbackContext.startOffsetSeconds(), totalMillis / 1000.0f, contentLength, rangeOffset,
                     residualSeconds, resource.url().getHost());
             return openModernFallbackStream(stream, playbackContext, residualSeconds);
         } catch (UnsupportedAudioFileException | IOException e) {
-            LOGGER.debug("NetEase range seek failed, falling back to decoded skip: {}", e.getMessage());
+            LOGGER.debug("MP3 range seek failed, falling back to decoded skip: {}", e.getMessage());
             return null;
         } catch (RuntimeException e) {
-            LOGGER.debug("NetEase range seek unavailable, falling back to decoded skip: {}", e.toString());
+            LOGGER.debug("MP3 range seek unavailable, falling back to decoded skip: {}", e.toString());
             return null;
         }
+    }
+
+    private static AudioInputStream tryOpenStrictCustomMp3Stream(URL url, PlaybackContext playbackContext,
+            float startOffsetSeconds) throws IOException, UnsupportedAudioFileException {
+        InputStream body = null;
+        InputStream aligned = null;
+        AudioInputStream encoded = null;
+        try {
+            body = openHttpRangeStream(url, 0L);
+            byte[] probe = body.readNBytes(MP3_SYNC_SCAN_BYTES);
+            int sync = Mp3FrameSync.findFrameSync(probe, probe.length);
+            if (sync < 0) {
+                closeQuietly(body);
+                body = null;
+                if (isLikelyMp3Url(url)) {
+                    throw new UnsupportedAudioFileException(
+                            "custom MP3 did not contain consecutive valid frames near the file head");
+                }
+                return null;
+            }
+            aligned = new SequenceInputStream(
+                    new ByteArrayInputStream(probe, sync, probe.length - sync), body);
+            body = null;
+            encoded = AudioSystem.getAudioInputStream(
+                    new BufferedInputStream(aligned, MP3_SYNC_SCAN_BYTES));
+            aligned = null;
+            LOGGER.debug("Custom MP3 safe seek: decodeFromHead=true target={}s frameOffset={} host={}",
+                    startOffsetSeconds, sync, url.getHost());
+            AudioInputStream result = openModernFallbackStream(encoded, playbackContext, startOffsetSeconds);
+            encoded = null;
+            return result;
+        } catch (UnsupportedAudioFileException | IOException e) {
+            closeQuietly(encoded);
+            closeQuietly(aligned);
+            closeQuietly(body);
+            throw e;
+        } catch (RuntimeException e) {
+            closeQuietly(encoded);
+            closeQuietly(aligned);
+            closeQuietly(body);
+            throw new IOException("custom MP3 safe seek failed", e);
+        }
+    }
+
+    private static boolean isLikelyMp3Url(URL url) {
+        String path = url != null ? url.getPath() : null;
+        return path != null && path.toLowerCase(java.util.Locale.ROOT).endsWith(".mp3");
     }
 
     private static RangedResource probeRangedResource(URL url) throws IOException {
@@ -436,7 +493,11 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         try {
             HttpResponse<InputStream> response = sendHttpRequest(url, rangeOffset, false, 0);
             int status = response.statusCode();
-            if (status == 206 || (rangeOffset == 0L && status == 200)) {
+            boolean validPartialResponse = status == 206 && response.headers().firstValue("Content-Range")
+                    .map(HttpRangeHeaders::parseContentRange)
+                    .map(range -> range.isKnown() && range.start() == rangeOffset)
+                    .orElse(false);
+            if (validPartialResponse || (rangeOffset == 0L && status == 200)) {
                 InputStream body = response.body();
                 if (body == null) {
                     throw new IOException("empty audio response body");
@@ -519,6 +580,9 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         AudioInputStream pcm = toPcmStream(stream);
         StartupSeekResult seek = skipToCurrentPlayback(pcm, pcm.getFormat(), playbackContext, startOffsetSeconds);
         pcm = requireReadablePcm(pcm, "no decoded PCM after HTTP seek");
+        if (startOffsetSeconds > 0f) {
+            pcm = PcmFadeInAudioInputStream.wrap(pcm, MP3_SEEK_FADE_MILLIS);
+        }
         StereoOpenALHandler stereo = new StereoOpenALHandler();
         stereo.setSampleRate((int) pcm.getFormat().getSampleRate());
         ClientAudioOutputRegistry.registerStereo(stereo, playbackContext.pos(), seek.timelineOffsetSeconds(),

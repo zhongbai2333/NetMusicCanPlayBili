@@ -13,9 +13,6 @@ public final class AudioUtils {
     public static final float MAX_AUDIBLE_DISTANCE = 64.0f;
     /** 超出设计听距后用于客户端平滑淡入淡出的额外距离比例。 */
     public static final float AUDIBLE_FADE_FRACTION = 0.20f;
-    /** @deprecated 使用 {@link #MAX_AUDIBLE_DISTANCE}。 */
-    @Deprecated
-    public static final float SPEAKER_MAX_AUDIBLE_DISTANCE = MAX_AUDIBLE_DISTANCE;
 
     private AudioUtils() {
     }
@@ -36,12 +33,12 @@ public final class AudioUtils {
         return new float[] { pos[0], pos[1], pos[2] };
     }
 
-    /** 从 BlockPos 计算方块中心坐标，支持 fallback */
-    public static float[] centerFor(BlockPos pos, float[] fallbackMachinePos) {
+    /** 从 BlockPos 计算方块中心坐标。 */
+    public static float[] centerFor(BlockPos pos) {
         if (pos != null) {
             return new float[] { pos.getX() + 0.5f, pos.getY() + 0.5f, pos.getZ() + 0.5f };
         }
-        return fallbackMachinePos != null ? copyPos3(fallbackMachinePos) : new float[] { 0.0f, 0.0f, 0.0f };
+        return new float[] { 0.0f, 0.0f, 0.0f };
     }
 
     /** 两点间欧氏距离 */
@@ -83,11 +80,6 @@ public final class AudioUtils {
         float remaining = clampGain((fadeEnd - d) / fadeDistance);
         float fadeGain = remaining * remaining * (3.0f - 2.0f * remaining);
         return baseGain * fadeGain;
-    }
-
-    /** 音响衰减兼容入口。 */
-    public static float speakerGainForDistance(float d, float volume) {
-        return spatialGainForDistance(d, volume);
     }
 
     /** 格式化坐标为可读字符串 */

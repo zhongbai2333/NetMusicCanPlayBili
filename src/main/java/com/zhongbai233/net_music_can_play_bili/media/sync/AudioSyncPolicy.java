@@ -40,6 +40,15 @@ public record AudioSyncPolicy(long catchUpStartTicks, long catchUpFullTicks, lon
                 && targetTicks - fedTicks <= fedNearTargetTicks;
     }
 
+    public boolean shouldDropDecodedBacklog(long audibleTicks, long fedTicks, long targetTicks) {
+        if (!isFiniteTarget(targetTicks) || outputLagFlushTicks <= 0L || audibleTicks < 0L || fedTicks < 0L) {
+            return false;
+        }
+        return targetTicks - audibleTicks > outputLagFlushTicks
+                && targetTicks - fedTicks > fedNearTargetTicks
+                && fedTicks - audibleTicks > outputLagFlushTicks;
+    }
+
     public int allowedUnits(double budget, int maxPerTick, long fedTicks, long targetTicks) {
         int max = Math.max(0, maxPerTick);
         int base = Math.min(Math.max(0, (int) budget), max);

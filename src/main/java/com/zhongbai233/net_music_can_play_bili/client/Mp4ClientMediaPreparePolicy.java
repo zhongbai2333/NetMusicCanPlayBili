@@ -61,20 +61,8 @@ final class Mp4ClientMediaPreparePolicy implements ClientMediaPreparePolicy {
     }
 
     @Override
-    public void loadLyricsAsync(UUID sourceId, String sessionId, String rawUrl, String songName) {
-        ClientMediaPreparer.buildLyricAsync(rawUrl, songName).whenComplete((record, error) -> {
-            if (error != null) {
-                LOGGER.debug("MP4 客户端歌词后台解析失败: source={} session={} song='{}' reason={}", sourceId,
-                        sessionId, songName, error.toString());
-                return;
-            }
-            if (record == null) {
-                return;
-            }
-            Minecraft.getInstance().execute(() -> ClientMediaPlaybackRegistry.computeIfPresent(sourceId,
-                    (ignored, active) -> sessionId.equals(active.sessionId()) ? active.withLyrics(record, "", "")
-                            : active));
-        });
+    public String lyricLogLabel() {
+        return "MP4";
     }
 
     @Override

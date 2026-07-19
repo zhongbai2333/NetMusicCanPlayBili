@@ -27,10 +27,6 @@ final class PadMapDiskCachePaths {
         return cacheRoot(minecraft, syncedWorldScopeId).resolve("snapshot.bin");
     }
 
-    static Path chunks(Minecraft minecraft, String syncedWorldScopeId) {
-        return cacheRoot(minecraft, syncedWorldScopeId).resolve("chunks.bin");
-    }
-
     static Path cacheRoot(Minecraft minecraft, String syncedWorldScopeId) {
         return minecraft.gameDirectory.toPath()
                 .resolve(CACHE_ROOT_FOLDER)
