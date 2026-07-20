@@ -37,32 +37,17 @@ public final class HttpRangeClient {
 
     /** 只请求指定 URL，不走等价 CDN fallback；供已自行做 CDN race 的调用方使用。 */
     public CdnResponse getRangeDirect(URL url, long start, long endInclusive) throws IOException {
-        return getRangeDirect(url, start, endInclusive, true);
-    }
-
-    public CdnResponse getRangeDirect(URL url, long start, long endInclusive, boolean persistCdnSuccess)
-            throws IOException {
         if (start < 0 || endInclusive < start) {
             throw new IllegalArgumentException("invalid range: " + start + "-" + endInclusive);
         }
-        long started = System.currentTimeMillis();
-        try {
-            CdnResponse response = send(url, start, endInclusive, 0);
-            BiliRequestHeaders.recordBiliCdnResponse(url, response.statusCode());
-            if (response.statusCode() == 200 || response.statusCode() == 206) {
-                CdnHealthTracker.recordSuccess(url, System.currentTimeMillis() - started,
-                        Math.max(0L, response.contentLength()));
-                if (persistCdnSuccess) {
-                    BiliCdnSelector.recordSuccess(url.toString());
-                }
-            } else if (isRetryableStatus(response.statusCode())) {
-                CdnHealthTracker.recordFailure(url, CdnHealthTracker.FailureKind.HTTP_RETRYABLE);
-            }
-            return response;
-        } catch (IOException e) {
-            CdnHealthTracker.recordFailure(url, CdnHealthTracker.FailureKind.IO);
-            throw e;
+        CdnResponse response = send(url, start, endInclusive, 0);
+        BiliRequestHeaders.recordBiliCdnResponse(url, response.statusCode());
+        if (isRetryableStatus(response.statusCode())) {
+            CdnHealthTracker.recordFailure(url, response.statusCode() == 403
+                    ? CdnHealthTracker.FailureKind.HTTP_FORBIDDEN
+                    : CdnHealthTracker.FailureKind.HTTP_RETRYABLE);
         }
+        return response;
     }
 
     private CdnResponse send(URL url, Long start, Long endInclusive) throws IOException {
@@ -74,14 +59,20 @@ public final class HttpRangeClient {
                 long started = System.currentTimeMillis();
                 CdnResponse response = send(candidate, start, endInclusive, 0);
                 BiliRequestHeaders.recordBiliCdnResponse(candidate, response.statusCode());
-                if (isRetryableStatus(response.statusCode()) && i + 1 < candidates.size()) {
-                    CdnHealthTracker.recordFailure(candidate, CdnHealthTracker.FailureKind.HTTP_RETRYABLE);
-                    response.close();
-                    LOGGER.warn("CDN range request returned HTTP {}, retrying alternate host {} -> {} range={}-{}{}",
-                            response.statusCode(), safeHost(candidate), safeHost(candidates.get(i + 1)),
-                            start != null ? start : 0L, endInclusive != null ? endInclusive : -1L,
-                            bili403Hint(response.statusCode(), candidate));
-                    continue;
+                if (isRetryableStatus(response.statusCode())) {
+                    CdnHealthTracker.recordFailure(candidate, response.statusCode() == 403
+                            ? CdnHealthTracker.FailureKind.HTTP_FORBIDDEN
+                            : CdnHealthTracker.FailureKind.HTTP_RETRYABLE);
+                    if (i + 1 < candidates.size()) {
+                        int status = response.statusCode();
+                        response.close();
+                        LOGGER.warn(
+                                "CDN range request returned HTTP {}, retrying alternate host {} -> {} range={}-{}{}",
+                                status, safeHost(candidate), safeHost(candidates.get(i + 1)),
+                                start != null ? start : 0L, endInclusive != null ? endInclusive : -1L,
+                                bili403Hint(status, candidate));
+                        continue;
+                    }
                 }
                 if (response.statusCode() == 200 || response.statusCode() == 206) {
                     CdnHealthTracker.recordSuccess(candidate, System.currentTimeMillis() - started,

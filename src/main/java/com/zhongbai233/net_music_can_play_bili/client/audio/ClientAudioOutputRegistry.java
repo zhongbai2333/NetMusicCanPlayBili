@@ -5,7 +5,6 @@ import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioHandler;
 import com.zhongbai233.net_music_can_play_bili.bili.SpeakerAudioRelay;
 import com.zhongbai233.net_music_can_play_bili.bili.StereoOpenALHandler;
-import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
@@ -23,11 +22,9 @@ public class ClientAudioOutputRegistry {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_ACTIVE_TURNTABLES = 16;
     private static final long CLEANUP_TIMEOUT_MILLIS = 2_000L;
-    private static final long AUDIO_SYNC_AHEAD_TOLERANCE_TICKS = Long.getLong(
-            "bili.audio.openal.ahead_tolerance_ticks", 0L);
     private static final AtomicInteger ANONYMOUS_COUNTER = new AtomicInteger();
-    private static final ConcurrentMap<BlockPos, DolbyEntry> DOLBY_HANDLERS = new ConcurrentHashMap<>();
-    private static final ConcurrentMap<BlockPos, StereoEntry> STEREO_HANDLERS = new ConcurrentHashMap<>();
+    private static final BoundedConcurrentStore<BlockPos, AudioEntry> OUTPUTS = new BoundedConcurrentStore<>(
+            MAX_ACTIVE_TURNTABLES);
     private static final ConcurrentMap<UUID, BlockPos> MINECART_KEYS = new ConcurrentHashMap<>();
     private static final ConcurrentMap<UUID, Float> OWNER_VOLUMES = new ConcurrentHashMap<>();
 
@@ -61,30 +58,25 @@ public class ClientAudioOutputRegistry {
         }
         BlockPos key = keyFor(pos, ownerId, sessionId);
         String normalizedSessionId = normalizeSessionId(sessionId);
-        hardStopIfSessionChanged(key, normalizedSessionId);
-        DolbyEntry entry = new DolbyEntry(key, centerFor(pos), handler, System.currentTimeMillis(),
-                startOffsetTicks(startOffsetSeconds), normalizedSessionId, ownerId);
-        handler.setUserVolume(ownerId != null ? OWNER_VOLUMES.getOrDefault(ownerId, 1.0F) : turntableVolume(key));
-        closeStereoAt(key);
-        DolbyEntry old = DOLBY_HANDLERS.put(key, entry);
-        if (old != null) {
-            hardStopAndCleanup(old);
+        if (!ClientAudioOutputPolicy.isCurrentSession(pos, normalizedSessionId)) {
+            handler.hardStopOutput();
+            handler.cleanup();
+            return;
         }
+        AudioEntry entry = new AudioEntry(key, centerFor(pos), handler, OutputKind.DOLBY, System.currentTimeMillis(),
+                startOffsetTicks(startOffsetSeconds), normalizedSessionId, ownerId);
+        handler.setUserVolume(ownerId != null ? OWNER_VOLUMES.getOrDefault(ownerId, 1.0F)
+                : ClientAudioOutputPolicy.volume(pos));
+        cleanupAfterPut(OUTPUTS.put(key, entry, entry.createdAtMillis()));
         // 自动连接已注册的音响 relay
         connectPendingRelays(key, handler);
-        enforceActiveLimit();
     }
 
     public static void unregister(DolbyAudioHandler handler) {
         if (handler == null) {
             return;
         }
-        DOLBY_HANDLERS.entrySet().removeIf(entry -> {
-            if (entry.getValue().handler() == handler) {
-                return true;
-            }
-            return false;
-        });
+        unregisterOutput(handler);
     }
 
     public static void registerStereo(StereoOpenALHandler handler) {
@@ -111,32 +103,22 @@ public class ClientAudioOutputRegistry {
         }
         BlockPos key = keyFor(pos, ownerId, sessionId);
         String normalizedSessionId = normalizeSessionId(sessionId);
-        hardStopIfSessionChanged(key, normalizedSessionId);
-        StereoEntry entry = new StereoEntry(key, centerFor(pos), handler, System.currentTimeMillis(),
-                startOffsetTicks(startOffsetSeconds), normalizedSessionId, ownerId);
-        handler.setUserVolume(ownerId != null ? OWNER_VOLUMES.getOrDefault(ownerId, 1.0F) : turntableVolume(key));
-        closeDolbyAt(key);
-        StereoEntry old = STEREO_HANDLERS.put(key, entry);
-        if (old != null) {
-            hardStopAndCleanup(old);
+        if (!ClientAudioOutputPolicy.isCurrentSession(pos, normalizedSessionId)) {
+            handler.hardStopOutput();
+            handler.cleanup();
+            return;
         }
+        AudioEntry entry = new AudioEntry(key, centerFor(pos), handler, OutputKind.STEREO, System.currentTimeMillis(),
+                startOffsetTicks(startOffsetSeconds), normalizedSessionId, ownerId);
+        handler.setUserVolume(ownerId != null ? OWNER_VOLUMES.getOrDefault(ownerId, 1.0F)
+                : ClientAudioOutputPolicy.volume(pos));
+        cleanupAfterPut(OUTPUTS.put(key, entry, entry.createdAtMillis()));
         // 自动连接已注册的音响 relay
         connectPendingRelays(key, handler);
-        enforceActiveLimit();
     }
 
     /** handler 创建时自动连接已注册的音响 relay */
-    private static void connectPendingRelays(BlockPos handlerKey, DolbyAudioHandler handler) {
-        for (var entry : RELAYS.entrySet()) {
-            BlockPos speakerPos = entry.getKey();
-            BlockPos linkedTurntable = RELAY_TURNTABLE.get(speakerPos);
-            if (linkedTurntable != null && linkedTurntable.equals(handlerKey)) {
-                handler.addRelay(entry.getValue());
-            }
-        }
-    }
-
-    private static void connectPendingRelays(BlockPos handlerKey, StereoOpenALHandler handler) {
+    private static void connectPendingRelays(BlockPos handlerKey, AudioOutputHandle handler) {
         for (var entry : RELAYS.entrySet()) {
             BlockPos speakerPos = entry.getKey();
             BlockPos linkedTurntable = RELAY_TURNTABLE.get(speakerPos);
@@ -150,12 +132,11 @@ public class ClientAudioOutputRegistry {
         if (handler == null) {
             return;
         }
-        STEREO_HANDLERS.entrySet().removeIf(entry -> {
-            if (entry.getValue().handler() == handler) {
-                return true;
-            }
-            return false;
-        });
+        unregisterOutput(handler);
+    }
+
+    private static void unregisterOutput(AudioOutputHandle handler) {
+        OUTPUTS.removeIf(entry -> entry.output() == handler);
     }
 
     public static void updatePositions(float[] listenerPos) {
@@ -165,14 +146,17 @@ public class ClientAudioOutputRegistry {
 
         float[] currentListenerPos = AudioUtils.copyPos3(listenerPos);
         ClientAudioOutputRegistry.listenerPos = currentListenerPos;
-        for (DolbyEntry entry : DOLBY_HANDLERS.values()) {
+        for (AudioEntry entry : OUTPUTS.values()) {
+            if (discardIfStaleOutput(entry)) {
+                continue;
+            }
             if (entry.ownerId() == null) {
-                entry.handler().setUserVolume(turntableVolume(entry.pos()));
+                entry.output().setUserVolume(ClientAudioOutputPolicy.volume(entry.pos()));
             }
             if (isRealWorldKey(entry.pos())
                     && com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
                             .linkedTurntableOutOfRange(entry.pos())) {
-                if (DOLBY_HANDLERS.remove(entry.pos(), entry)) {
+                if (OUTPUTS.remove(entry.pos(), entry)) {
                     hardStopAndCleanup(entry);
                 }
                 continue;
@@ -180,7 +164,7 @@ public class ClientAudioOutputRegistry {
             if (isRealWorldKey(entry.pos())
                     && com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
                             .suppressesTurntable(entry.pos())) {
-                entry.handler().tick(entry.machinePos(), currentListenerPos, Long.MIN_VALUE, false);
+                entry.output().tick(entry.machinePos(), currentListenerPos, Long.MIN_VALUE, false);
                 continue;
             }
             float[] pos = resolveMachinePos(entry);
@@ -189,33 +173,7 @@ public class ClientAudioOutputRegistry {
                             .handlesTurntable(entry.pos())) {
                 pos = currentListenerPos;
             }
-            entry.handler().tick(pos, currentListenerPos, targetRelativeTicks(entry), followsLocalPlayerFront(entry));
-        }
-        for (StereoEntry entry : STEREO_HANDLERS.values()) {
-            if (entry.ownerId() == null) {
-                entry.handler().setUserVolume(turntableVolume(entry.pos()));
-            }
-            if (isRealWorldKey(entry.pos())
-                    && com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
-                            .linkedTurntableOutOfRange(entry.pos())) {
-                if (STEREO_HANDLERS.remove(entry.pos(), entry)) {
-                    hardStopAndCleanup(entry);
-                }
-                continue;
-            }
-            if (isRealWorldKey(entry.pos())
-                    && com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
-                            .suppressesTurntable(entry.pos())) {
-                entry.handler().tick(entry.machinePos(), currentListenerPos, Long.MIN_VALUE, false);
-                continue;
-            }
-            float[] pos = resolveMachinePos(entry);
-            if (isRealWorldKey(entry.pos())
-                    && com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
-                            .handlesTurntable(entry.pos())) {
-                pos = currentListenerPos;
-            }
-            entry.handler().tick(pos, currentListenerPos, targetRelativeTicks(entry), followsLocalPlayerFront(entry));
+            entry.output().tick(pos, currentListenerPos, targetRelativeTicks(entry), followsLocalPlayerFront(entry));
         }
     }
 
@@ -237,20 +195,27 @@ public class ClientAudioOutputRegistry {
     }
 
     private static long targetRelativeTicks(AudioEntry entry) {
-        if (entry != null && ClientMinecartAudioAnchors.isMoving(entry.sessionId())) {
-            return Long.MAX_VALUE;
+        return entry != null
+                ? ClientAudioOutputPolicy.targetRelativeTicks(entry.pos(), entry.sessionId(), entry.startOffsetTicks())
+                : Long.MAX_VALUE;
+    }
+
+    /**
+     * 新 session 的网络播放已开始但新音频流尚未完成解码时，旧 handler 仍可能存在几百毫秒。
+     * 不应把新唱片机时间轴传给旧 PCM 队列，否则会触发数百万 sample 的错误追赶并输出白噪音。
+     */
+    private static boolean discardIfStaleOutput(AudioEntry entry) {
+        if (entry == null || !isRealWorldKey(entry.pos()) || entry.sessionId().isBlank()) {
+            return false;
         }
-        var mc = net.minecraft.client.Minecraft.getInstance();
-        if (mc == null || mc.level == null || entry == null || entry.pos() == null
-                || entry.pos().getX() == Integer.MIN_VALUE) {
-            return Long.MAX_VALUE;
+        if (ClientAudioOutputPolicy.isCurrentSession(entry.pos(), entry.sessionId())) {
+            return false;
         }
-        if (!(mc.level.getBlockEntity(entry.pos()) instanceof ModernTurntableBlockEntity turntable)
-                || !turntable.isPlaying()) {
-            return Long.MAX_VALUE;
+        if (OUTPUTS.remove(entry.pos(), entry)) {
+            LOGGER.debug("丢弃等待新音频流期间的旧输出: pos={} oldSession={}", entry.pos(), entry.sessionId());
+            hardStopAndCleanup(entry);
         }
-        long targetTicks = turntable.getPlaybackElapsedMillis(mc.level.getGameTime()) / 50L;
-        return Math.max(0L, targetTicks - entry.startOffsetTicks() + AUDIO_SYNC_AHEAD_TOLERANCE_TICKS);
+        return true;
     }
 
     private static long startOffsetTicks(float startOffsetSeconds) {
@@ -291,11 +256,8 @@ public class ClientAudioOutputRegistry {
         SpeakerAudioRelay relay = RELAYS.remove(speakerPos);
         if (relay != null) {
             relay.cleanup();
-            for (DolbyEntry entry : DOLBY_HANDLERS.values()) {
-                entry.handler().removeRelay(relay);
-            }
-            for (StereoEntry entry : STEREO_HANDLERS.values()) {
-                entry.handler().removeRelay(relay);
+            for (AudioEntry entry : OUTPUTS.values()) {
+                entry.output().removeRelay(relay);
             }
         }
     }
@@ -309,21 +271,14 @@ public class ClientAudioOutputRegistry {
         RELAY_TURNTABLE.put(speakerPos, turntablePos);
         if (old != null) {
             old.cleanup();
-            for (DolbyEntry entry : DOLBY_HANDLERS.values()) {
-                entry.handler().removeRelay(old);
-            }
-            for (StereoEntry entry : STEREO_HANDLERS.values()) {
-                entry.handler().removeRelay(old);
+            for (AudioEntry entry : OUTPUTS.values()) {
+                entry.output().removeRelay(old);
             }
         }
         BlockPos key = keyFor(turntablePos);
-        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
-        if (dolby != null) {
-            dolby.handler().addRelay(relay);
-        }
-        StereoEntry stereo = STEREO_HANDLERS.get(key);
-        if (stereo != null) {
-            stereo.handler().addRelay(relay);
+        AudioEntry output = OUTPUTS.get(key);
+        if (output != null) {
+            output.output().addRelay(relay);
         }
     }
 
@@ -344,15 +299,13 @@ public class ClientAudioOutputRegistry {
         if (turntablePos == null)
             return;
         BlockPos key = keyFor(turntablePos);
-        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
-        if (dolby != null) {
-            dolby.handler().setChannelMask(channelMask);
-            dolby.handler().setUserVolume(volume);
-            dolby.handler().setForceStaticJoc(autoMixJoc);
-        }
-        StereoEntry stereo = STEREO_HANDLERS.get(key);
-        if (stereo != null) {
-            stereo.handler().setUserVolume(volume);
+        AudioEntry entry = OUTPUTS.get(key);
+        if (entry != null) {
+            entry.output().setUserVolume(volume);
+            if (entry.output() instanceof DolbyAudioHandler dolby) {
+                dolby.setChannelMask(channelMask);
+                dolby.setForceStaticJoc(autoMixJoc);
+            }
         }
     }
 
@@ -361,7 +314,7 @@ public class ClientAudioOutputRegistry {
     }
 
     public static boolean isActive() {
-        return !DOLBY_HANDLERS.isEmpty() || !STEREO_HANDLERS.isEmpty();
+        return !OUTPUTS.isEmpty();
     }
 
     public static void setOwnerVolume(UUID ownerId, float volume) {
@@ -370,14 +323,9 @@ public class ClientAudioOutputRegistry {
         }
         float clamped = AudioUtils.clampGain(volume);
         OWNER_VOLUMES.put(ownerId, clamped);
-        for (DolbyEntry dolby : DOLBY_HANDLERS.values()) {
-            if (ownerId.equals(dolby.ownerId())) {
-                dolby.handler().setUserVolume(clamped);
-            }
-        }
-        for (StereoEntry stereo : STEREO_HANDLERS.values()) {
-            if (ownerId.equals(stereo.ownerId())) {
-                stereo.handler().setUserVolume(clamped);
+        for (AudioEntry entry : OUTPUTS.values()) {
+            if (ownerId.equals(entry.ownerId())) {
+                entry.output().setUserVolume(clamped);
             }
         }
     }
@@ -387,15 +335,8 @@ public class ClientAudioOutputRegistry {
             return 0.0f;
         }
         BlockPos key = keyFor(pos);
-        StereoEntry stereo = STEREO_HANDLERS.get(key);
-        if (stereo != null) {
-            return stereo.handler().audioLevel();
-        }
-        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
-        if (dolby != null) {
-            return dolby.handler().audioLevel();
-        }
-        return 0.0f;
+        AudioEntry entry = OUTPUTS.get(key);
+        return entry != null ? entry.output().audioLevel() : 0.0F;
     }
 
     /** 获取指定位置立体声 OpenAL 管线的歌词播放位置（tick），未开始播放返回 -1 */
@@ -403,11 +344,11 @@ public class ClientAudioOutputRegistry {
         if (pos == null) {
             return -1L;
         }
-        StereoEntry entry = STEREO_HANDLERS.get(keyFor(pos));
-        if (entry == null) {
+        AudioEntry entry = OUTPUTS.get(keyFor(pos));
+        if (entry == null || entry.kind() != OutputKind.STEREO) {
             return -1L;
         }
-        return entry.handler().getPositionTicks();
+        return entry.output().getPositionTicks();
     }
 
     public static long getAnyPositionTicks(BlockPos pos) {
@@ -415,17 +356,8 @@ public class ClientAudioOutputRegistry {
             return -1L;
         }
         BlockPos key = keyFor(pos);
-        StereoEntry stereo = STEREO_HANDLERS.get(key);
-        if (stereo != null) {
-            long ticks = stereo.handler().getPositionTicks();
-            if (ticks >= 0L)
-                return ticks;
-        }
-        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
-        if (dolby != null) {
-            return dolby.handler().getPositionTicks();
-        }
-        return -1L;
+        AudioEntry entry = OUTPUTS.get(key);
+        return entry != null ? entry.output().getPositionTicks() : -1L;
     }
 
     public static long getAnyMediaMillis(BlockPos pos) {
@@ -434,21 +366,12 @@ public class ClientAudioOutputRegistry {
         }
         BlockPos key = keyFor(pos);
         long relayMillis = getRelayMediaMillis(key);
-        StereoEntry stereo = STEREO_HANDLERS.get(key);
-        if (stereo != null) {
-            long positionMillis = stereo.handler().getPositionMillis();
+        AudioEntry entry = OUTPUTS.get(key);
+        if (entry != null) {
+            long positionMillis = entry.output().getPositionMillis();
             if (positionMillis >= 0L) {
-                long mainMillis = adjustedAudibleMillis(stereo.startOffsetTicks(), positionMillis,
-                        stereo.handler().getOutputDelayMillis());
-                return relayMillis >= 0L ? Math.max(mainMillis, relayMillis) : mainMillis;
-            }
-        }
-        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
-        if (dolby != null) {
-            long positionMillis = dolby.handler().getPositionMillis();
-            if (positionMillis >= 0L) {
-                long mainMillis = adjustedAudibleMillis(dolby.startOffsetTicks(), positionMillis,
-                        dolby.handler().getOutputDelayMillis());
+                long mainMillis = adjustedAudibleMillis(entry.startOffsetTicks(), positionMillis,
+                        entry.output().getOutputDelayMillis());
                 return relayMillis >= 0L ? Math.max(mainMillis, relayMillis) : mainMillis;
             }
         }
@@ -464,31 +387,17 @@ public class ClientAudioOutputRegistry {
         long mainMillis = -1L;
         long mainFedMillis = -1L;
         String mainSessionId = "";
-        StereoEntry stereo = STEREO_HANDLERS.get(key);
-        if (stereo != null) {
-            mainSessionId = stereo.sessionId();
-            long positionMillis = stereo.handler().getPositionMillis();
+        AudioEntry entry = OUTPUTS.get(key);
+        if (entry != null) {
+            mainSessionId = entry.sessionId();
+            long positionMillis = entry.output().getPositionMillis();
             if (positionMillis >= 0L) {
-                mainMillis = adjustedAudibleMillis(stereo.startOffsetTicks(), positionMillis,
-                        stereo.handler().getOutputDelayMillis());
+                mainMillis = adjustedAudibleMillis(entry.startOffsetTicks(), positionMillis,
+                        entry.output().getOutputDelayMillis());
             }
-            long fedMillis = stereo.handler().getFedPositionMillis();
+            long fedMillis = entry.output().getFedPositionMillis();
             if (fedMillis >= 0L) {
-                mainFedMillis = Math.max(0L, startOffsetMillis(stereo.startOffsetTicks()) + fedMillis);
-            }
-        } else {
-            DolbyEntry dolby = DOLBY_HANDLERS.get(key);
-            if (dolby != null) {
-                mainSessionId = dolby.sessionId();
-                long positionMillis = dolby.handler().getPositionMillis();
-                if (positionMillis >= 0L) {
-                    mainMillis = adjustedAudibleMillis(dolby.startOffsetTicks(), positionMillis,
-                            dolby.handler().getOutputDelayMillis());
-                }
-                long fedMillis = dolby.handler().getFedPositionMillis();
-                if (fedMillis >= 0L) {
-                    mainFedMillis = Math.max(0L, startOffsetMillis(dolby.startOffsetTicks()) + fedMillis);
-                }
+                mainFedMillis = Math.max(0L, startOffsetMillis(entry.startOffsetTicks()) + fedMillis);
             }
         }
         long combinedMillis = mainMillis >= 0L ? mainMillis : relayTimeline.mediaMillis();
@@ -500,37 +409,21 @@ public class ClientAudioOutputRegistry {
         if (ownerId == null) {
             return AudioTimeline.EMPTY;
         }
-        StereoEntry stereo = STEREO_HANDLERS.values().stream()
-                .filter(entry -> ownerId.equals(entry.ownerId()))
-                .max(Comparator.comparingLong(entry -> entry.createdAtMillis()))
+        AudioEntry entry = OUTPUTS.values().stream()
+                .filter(candidate -> ownerId.equals(candidate.ownerId()))
+                .max(Comparator.comparingLong(candidate -> candidate.createdAtMillis()))
                 .orElse(null);
-        if (stereo != null) {
-            long positionMillis = stereo.handler().getPositionMillis();
+        if (entry != null) {
+            long positionMillis = entry.output().getPositionMillis();
             long audibleMillis = positionMillis >= 0L
-                    ? adjustedAudibleMillis(stereo.startOffsetTicks(), positionMillis,
-                            stereo.handler().getOutputDelayMillis())
+                    ? adjustedAudibleMillis(entry.startOffsetTicks(), positionMillis,
+                            entry.output().getOutputDelayMillis())
                     : -1L;
-            long fedMillis = stereo.handler().getFedPositionMillis();
+            long fedMillis = entry.output().getFedPositionMillis();
             long mainFedMillis = fedMillis >= 0L
-                    ? Math.max(0L, startOffsetMillis(stereo.startOffsetTicks()) + fedMillis)
+                    ? Math.max(0L, startOffsetMillis(entry.startOffsetTicks()) + fedMillis)
                     : -1L;
-            return new AudioTimeline(audibleMillis, mainFedMillis, -1L, audibleMillis, 0, 0, stereo.sessionId());
-        }
-        DolbyEntry dolby = DOLBY_HANDLERS.values().stream()
-                .filter(entry -> ownerId.equals(entry.ownerId()))
-                .max(Comparator.comparingLong(entry -> entry.createdAtMillis()))
-                .orElse(null);
-        if (dolby != null) {
-            long positionMillis = dolby.handler().getPositionMillis();
-            long audibleMillis = positionMillis >= 0L
-                    ? adjustedAudibleMillis(dolby.startOffsetTicks(), positionMillis,
-                            dolby.handler().getOutputDelayMillis())
-                    : -1L;
-            long fedMillis = dolby.handler().getFedPositionMillis();
-            long mainFedMillis = fedMillis >= 0L
-                    ? Math.max(0L, startOffsetMillis(dolby.startOffsetTicks()) + fedMillis)
-                    : -1L;
-            return new AudioTimeline(audibleMillis, mainFedMillis, -1L, audibleMillis, 0, 0, dolby.sessionId());
+            return new AudioTimeline(audibleMillis, mainFedMillis, -1L, audibleMillis, 0, 0, entry.sessionId());
         }
         return AudioTimeline.EMPTY;
     }
@@ -600,15 +493,21 @@ public class ClientAudioOutputRegistry {
         public long audibleMillis() {
             return mainMillis >= 0L ? mainMillis : relayMillis;
         }
+
+        /** 显式语义 accessor，避免调用方把输出 session 与播放命令 session 混淆。 */
+        public String audioSessionId() {
+            return sessionId;
+        }
+
+        /** 已送入主输出队列的媒体位置。 */
+        public long fedMillis() {
+            return mainFedMillis;
+        }
     }
 
     private static long startOffsetTicksFor(BlockPos key) {
-        StereoEntry stereo = STEREO_HANDLERS.get(key);
-        if (stereo != null) {
-            return stereo.startOffsetTicks();
-        }
-        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
-        return dolby != null ? dolby.startOffsetTicks() : 0L;
+        AudioEntry entry = OUTPUTS.get(key);
+        return entry != null ? entry.startOffsetTicks() : 0L;
     }
 
     public static List<String> describeActiveSources() {
@@ -618,23 +517,23 @@ public class ClientAudioOutputRegistry {
         }
 
         List<String> lines = new ArrayList<>();
-        lines.add(String.format("Active OpenAL turntables: dolby=%d stereo=%d",
-                DOLBY_HANDLERS.size(), STEREO_HANDLERS.size()));
+        long dolbyCount = OUTPUTS.values().stream().filter(entry -> entry.kind() == OutputKind.DOLBY).count();
+        long stereoCount = OUTPUTS.size() - dolbyCount;
+        lines.add(String.format("Active OpenAL turntables: dolby=%d stereo=%d", dolbyCount, stereoCount));
 
-        DOLBY_HANDLERS.values().stream()
+        OUTPUTS.values().stream()
                 .sorted(Comparator.comparingLong(entry -> entry.createdAtMillis()))
                 .forEach(entry -> {
-                    lines.add(String.format("Dolby @ %s", AudioUtils.fmtPos(entry.machinePos())));
-                    for (String line : entry.handler().describeSources(entry.machinePos(), listener)) {
-                        lines.add("  " + line);
-                    }
-                });
-        STEREO_HANDLERS.values().stream()
-                .sorted(Comparator.comparingLong(entry -> entry.createdAtMillis()))
-                .forEach(entry -> {
-                    lines.add(String.format("Stereo @ %s", AudioUtils.fmtPos(entry.machinePos())));
-                    for (String line : entry.handler().describeState()) {
-                        lines.add("  " + line);
+                    lines.add(String.format("%s @ %s", entry.kind().displayName(),
+                            AudioUtils.fmtPos(entry.machinePos())));
+                    if (entry.output() instanceof DolbyAudioHandler dolby) {
+                        for (String line : dolby.describeSources(entry.machinePos(), listener)) {
+                            lines.add("  " + line);
+                        }
+                    } else if (entry.output() instanceof StereoOpenALHandler stereo) {
+                        for (String line : stereo.describeState()) {
+                            lines.add("  " + line);
+                        }
                     }
                 });
         return lines;
@@ -642,17 +541,13 @@ public class ClientAudioOutputRegistry {
 
     public static void cleanup() {
         List<Runnable> cleanupTasks = new ArrayList<>();
-        for (DolbyEntry entry : DOLBY_HANDLERS.values()) {
-            cleanupTasks.add(entry::cleanup);
-        }
-        for (StereoEntry entry : STEREO_HANDLERS.values()) {
+        for (AudioEntry entry : OUTPUTS.values()) {
             cleanupTasks.add(entry::cleanup);
         }
         for (SpeakerAudioRelay relay : RELAYS.values()) {
             cleanupTasks.add(relay::cleanup);
         }
-        DOLBY_HANDLERS.clear();
-        STEREO_HANDLERS.clear();
+        OUTPUTS.clear();
         RELAYS.clear();
         RELAY_TURNTABLE.clear();
         listenerPos = null;
@@ -703,100 +598,25 @@ public class ClientAudioOutputRegistry {
         }
     }
 
-    private static void closeDolbyAt(BlockPos key) {
-        DolbyEntry old = DOLBY_HANDLERS.remove(key);
-        if (old != null) {
-            hardStopAndCleanup(old);
-        }
-    }
-
-    private static void closeStereoAt(BlockPos key) {
-        StereoEntry old = STEREO_HANDLERS.remove(key);
-        if (old != null) {
-            hardStopAndCleanup(old);
-        }
-    }
-
-    private static void hardStopIfSessionChanged(BlockPos key, String newSessionId) {
-        if (key == null || key.getX() == Integer.MIN_VALUE || newSessionId.isBlank()) {
-            return;
-        }
-        DolbyEntry dolby = DOLBY_HANDLERS.get(key);
-        if (dolby != null && !dolby.sessionId().isBlank() && !newSessionId.equals(dolby.sessionId())) {
-            if (DOLBY_HANDLERS.remove(key, dolby)) {
-                LOGGER.debug("音频会话切换，硬停旧 Dolby 输出: pos={} oldSession={} newSession={}", key, dolby.sessionId(),
-                        newSessionId);
-                hardStopAndCleanup(dolby);
-            }
-        }
-        StereoEntry stereo = STEREO_HANDLERS.get(key);
-        if (stereo != null && !stereo.sessionId().isBlank() && !newSessionId.equals(stereo.sessionId())) {
-            if (STEREO_HANDLERS.remove(key, stereo)) {
-                LOGGER.debug("音频会话切换，硬停旧 Stereo 输出: pos={} oldSession={} newSession={}", key,
-                        stereo.sessionId(), newSessionId);
-                hardStopAndCleanup(stereo);
-            }
-        }
-    }
-
     private static void hardStopAndCleanup(AudioEntry entry) {
         if (entry == null) {
             return;
         }
         try {
-            entry.hardStopOutput();
+            entry.output().hardStopOutput();
         } catch (Throwable t) {
             LOGGER.debug("OpenAL hard-stop failed before cleanup: {}", t.toString());
         }
-        entry.cleanup();
+        entry.output().cleanup();
     }
 
-    private static void enforceActiveLimit() {
-        while (DOLBY_HANDLERS.size() + STEREO_HANDLERS.size() > MAX_ACTIVE_TURNTABLES) {
-            AudioEntry oldest = oldestEntry();
-            if (oldest == null) {
-                return;
-            }
-            if (oldest instanceof DolbyEntry dolby) {
-                if (DOLBY_HANDLERS.remove(dolby.pos(), dolby)) {
-                    dolby.cleanup();
-                }
-            } else if (oldest instanceof StereoEntry stereo) {
-                if (STEREO_HANDLERS.remove(stereo.pos(), stereo)) {
-                    stereo.cleanup();
-                }
-            }
+    private static void cleanupAfterPut(BoundedConcurrentStore.PutResult<AudioEntry> result) {
+        if (result.replaced() != null) {
+            hardStopAndCleanup(result.replaced());
         }
-    }
-
-    private static AudioEntry oldestEntry() {
-        AudioEntry oldest = null;
-        for (AudioEntry entry : DOLBY_HANDLERS.values()) {
-            oldest = older(oldest, entry);
+        for (AudioEntry evicted : result.evicted()) {
+            hardStopAndCleanup(evicted);
         }
-        for (AudioEntry entry : STEREO_HANDLERS.values()) {
-            oldest = older(oldest, entry);
-        }
-        return oldest;
-    }
-
-    private static AudioEntry older(AudioEntry current, AudioEntry candidate) {
-        if (current == null || candidate.createdAtMillis() < current.createdAtMillis()) {
-            return candidate;
-        }
-        return current;
-    }
-
-    private static float turntableVolume(BlockPos pos) {
-        if (!isRealWorldKey(pos)) {
-            return 1.0F;
-        }
-        var mc = net.minecraft.client.Minecraft.getInstance();
-        if (mc != null && mc.level != null
-                && mc.level.getBlockEntity(pos) instanceof ModernTurntableBlockEntity turntable) {
-            return turntable.getVolume();
-        }
-        return 1.0F;
     }
 
     private static BlockPos keyFor(BlockPos pos) {
@@ -834,49 +654,25 @@ public class ClientAudioOutputRegistry {
         return AudioUtils.centerFor(pos);
     }
 
-    private interface AudioEntry {
-        BlockPos pos();
-
-        float[] machinePos();
-
-        long createdAtMillis();
-
-        long startOffsetTicks();
-
-        String sessionId();
-
-        UUID ownerId();
-
-        void hardStopOutput();
-
-        void cleanup();
-    }
-
-    private record DolbyEntry(BlockPos pos, float[] machinePos, DolbyAudioHandler handler, long createdAtMillis,
-            long startOffsetTicks, String sessionId, UUID ownerId)
-            implements AudioEntry {
-        @Override
-        public void hardStopOutput() {
-            handler.hardStopOutput();
-        }
-
-        @Override
-        public void cleanup() {
-            handler.cleanup();
+    private record AudioEntry(BlockPos pos, float[] machinePos, AudioOutputHandle output, OutputKind kind,
+            long createdAtMillis, long startOffsetTicks, String sessionId, UUID ownerId) {
+        private void cleanup() {
+            output.cleanup();
         }
     }
 
-    private record StereoEntry(BlockPos pos, float[] machinePos, StereoOpenALHandler handler, long createdAtMillis,
-            long startOffsetTicks, String sessionId, UUID ownerId)
-            implements AudioEntry {
-        @Override
-        public void hardStopOutput() {
-            handler.hardStopOutput();
+    private enum OutputKind {
+        DOLBY("Dolby"),
+        STEREO("Stereo");
+
+        private final String displayName;
+
+        OutputKind(String displayName) {
+            this.displayName = displayName;
         }
 
-        @Override
-        public void cleanup() {
-            handler.cleanup();
+        private String displayName() {
+            return displayName;
         }
     }
 

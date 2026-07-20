@@ -17,7 +17,7 @@ public final class Fmp4StreamParser {
             Integer.getInteger("ncpb.media.fmp4.max_buffered_payload_bytes", 64 * 1024 * 1024));
     private static final int SKIP_BUFFER_SIZE = 8192;
 
-    public void parse(InputStream source, AtomicBoolean closed, Callback callback)
+    public ContainerKind parse(InputStream source, AtomicBoolean closed, Callback callback)
             throws IOException, UnsupportedAudioFileException {
         PushbackInputStream in = new PushbackInputStream(source, FORMAT_SNIFF_SIZE);
         byte[] sniff = new byte[12];
@@ -33,10 +33,10 @@ public final class Fmp4StreamParser {
 
         if (isRawEac3) {
             callback.onRawEac3(in);
-            return;
+            return ContainerKind.RAW_EAC3;
         }
         if (!isFmp4) {
-            throw new UnsupportedAudioFileException("unsupported HTTP audio stream: not fMP4 or raw E-AC-3");
+            return ContainerKind.OTHER_AUDIO;
         }
 
         BoxHeader box;
@@ -61,13 +61,20 @@ public final class Fmp4StreamParser {
                     BoundedInputStream payload = new BoundedInputStream(in, box.dataSize);
                     callback.onMdat(payload, box.dataSize);
                     if (closed.get()) {
-                        return;
+                        return ContainerKind.FMP4;
                     }
                     payload.drain();
                 }
                 default -> skipFully(in, box.dataSize);
             }
         }
+        return ContainerKind.FMP4;
+    }
+
+    public enum ContainerKind {
+        FMP4,
+        RAW_EAC3,
+        OTHER_AUDIO
     }
 
     public static byte[] readFully(InputStream in, long length) throws IOException {

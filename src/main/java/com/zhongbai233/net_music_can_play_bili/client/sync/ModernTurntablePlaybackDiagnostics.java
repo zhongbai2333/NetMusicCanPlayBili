@@ -51,7 +51,7 @@ public final class ModernTurntablePlaybackDiagnostics {
             return;
         }
 
-        ModernTurntableTimeline.TimelineSnapshot timeline = ModernTurntableTimeline.snapshot(turntablePos);
+        ModernTurntableTimeline.TimelineSnapshot timeline = PlaybackClock.snapshot(turntablePos);
         long localMillis = timeline.mediaMillis();
         long serverMillis = timeline.serverMillis();
 
@@ -67,16 +67,16 @@ public final class ModernTurntablePlaybackDiagnostics {
                 formatMillis(timeline.pacingMillis()),
                 formatDelta(localMillis, serverMillis),
                 formatMillis(videoMillis), formatMillis(localMillis), formatMillis(video.queuedMediaMillis()),
-                formatMillis(audioMillis), formatMillis(audio.mainMillis()), formatMillis(audio.mainFedMillis()),
+                formatMillis(audioMillis), formatMillis(audio.mainMillis()), formatMillis(audio.fedMillis()),
                 formatMillis(audio.relayMillis()),
                 audio.relayStartedCount(), audio.relayRegisteredCount(), formatMillis(localMillis),
                 formatMillis(subtitleMillis), formatMillis(localMillis),
                 formatDelta(videoMillis, localMillis), formatDelta(audioMillis, localMillis),
-                formatDelta(audio.mainFedMillis(), localMillis), sessionId, audio.sessionId());
-        debugIfAudioSessionMoved(sessionId, audio.sessionId(), turntablePos, audioMillis, localMillis);
+                formatDelta(audio.fedMillis(), localMillis), sessionId, audio.audioSessionId());
+        debugIfAudioSessionMoved(sessionId, audio.audioSessionId(), turntablePos, audioMillis, localMillis);
         warnIfLargeDrift(sessionId, localMillis, serverMillis, videoMillis, video.queuedMediaMillis(), audioMillis,
-                audio.mainFedMillis(), timeline.pacingMillis());
-        debugIfPerceptibleAvDrift(sessionId, videoMillis, audioMillis, audio.mainFedMillis());
+                audio.fedMillis(), timeline.pacingMillis());
+        debugIfPerceptibleAvDrift(sessionId, videoMillis, audioMillis, audio.fedMillis());
     }
 
     public static void finish(String sessionId) {

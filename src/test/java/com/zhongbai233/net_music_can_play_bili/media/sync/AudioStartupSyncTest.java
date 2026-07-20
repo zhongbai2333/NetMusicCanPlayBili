@@ -17,4 +17,13 @@ class AudioStartupSyncTest {
         assertEquals(190_495L, AudioStartupSync.compensatedOffsetMillis(173_064L, 300_000L, 17_431L));
         assertEquals(0L, AudioStartupSync.elapsedSinceCaptureMillis(capturedNanos, capturedNanos - 1L));
     }
+
+    @Test
+    void clampsAsyncPrepareLatencyAndSaturatesOverflow() {
+        assertEquals(25_000L, AudioStartupSync.compensatedOffsetMillis(20_000L, 60_000L, 5_000L));
+        assertEquals(60_000L, AudioStartupSync.compensatedOffsetMillis(58_000L, 60_000L, 5_000L));
+        assertEquals(5_000L, AudioStartupSync.compensatedOffsetMillis(-1L, 0L, 5_000L));
+        assertEquals(Long.MAX_VALUE,
+                AudioStartupSync.compensatedOffsetMillis(Long.MAX_VALUE - 10L, 0L, 50L));
+    }
 }

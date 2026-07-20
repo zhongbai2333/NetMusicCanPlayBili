@@ -8,10 +8,13 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliAudioResolver;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSubtitleLyricService;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import org.slf4j.Logger;
 
 import java.net.URI;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -26,6 +29,10 @@ import java.util.regex.Pattern;
 public final class ClientMediaPreparer {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final Pattern NET_EASE_MP3_URL = Pattern.compile("^.*?\\?id=(\\d+)\\.mp3$");
+    private static final int AUDIO_PREPARE_THREADS = Math.max(1,
+            Integer.getInteger("ncpb.bili.audio.prepare_threads", 2));
+    private static final ExecutorService AUDIO_PREPARE_EXECUTOR = Executors.newFixedThreadPool(
+            AUDIO_PREPARE_THREADS, NetMusicThreadFactory.daemon("BiliAudioPrepare"));
 
     private ClientMediaPreparer() {
     }
@@ -39,6 +46,13 @@ public final class ClientMediaPreparer {
 
     public static PreparedMedia prepareAudioOnly(String rawUrl, String playUrl, String songName, boolean allowDolby) {
         return new PreparedMedia(resolvePlayableUrl(rawUrl, playUrl, songName, allowDolby), null);
+    }
+
+    /** B站直链刷新会访问网络，必须通过此入口移出 Minecraft 客户端线程。 */
+    public static CompletableFuture<PreparedMedia> prepareAudioOnlyAsync(String rawUrl, String playUrl,
+            String songName, boolean allowDolby) {
+        return CompletableFuture.supplyAsync(
+                () -> prepareAudioOnly(rawUrl, playUrl, songName, allowDolby), AUDIO_PREPARE_EXECUTOR);
     }
 
     public static CompletableFuture<LyricRecord> buildLyricAsync(String rawUrl, String songName) {

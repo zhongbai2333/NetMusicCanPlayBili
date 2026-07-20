@@ -92,12 +92,12 @@ public class ModernTurntableScreen extends BlackGoldScreen {
                 btn -> sendAction(ModernTurntableControlPacket.Action.CYCLE_REDSTONE_MODE), GOLD));
 
         extractionModeButton = addRenderableWidget(new BlackGoldButton(
-            bx + T_BOX_W - PAD - 126, controlsY - BTN_H - 6, 126, BTN_H,
-            Component.literal("提取：播完提取"),
-            btn -> sendAction(ModernTurntableControlPacket.Action.CYCLE_EXTRACTION_MODE), GOLD));
+                bx + T_BOX_W - PAD - 126, controlsY - BTN_H - 6, 126, BTN_H,
+                Component.literal("提取：播完提取"),
+                btn -> sendAction(ModernTurntableControlPacket.Action.CYCLE_EXTRACTION_MODE), GOLD));
 
         volumeSlider = addRenderableWidget(
-            new VolumeSlider(bx + T_BOX_W - PAD - 110, controlsY, 110, BTN_H));
+                new VolumeSlider(bx + T_BOX_W - PAD - 110, controlsY, 110, BTN_H));
 
         refreshWidgets();
     }
@@ -138,6 +138,22 @@ public class ModernTurntableScreen extends BlackGoldScreen {
 
         drawProgressOverlay(g, bx, by);
         drawVolumeOverlay(g, bx, by);
+    }
+
+    @Override
+    public boolean mouseClicked(MouseButtonEvent event, boolean cancelled) {
+        if (cancelled) {
+            return false;
+        }
+        int bx = boxX(), by = boxY();
+        int cx = bx + T_BOX_W - CLOSE_SIZE - 8;
+        int cy = by + (T_HEADER_H - CLOSE_SIZE) / 2;
+        if (event.x() >= cx && event.x() <= cx + CLOSE_SIZE
+                && event.y() >= cy && event.y() <= cy + CLOSE_SIZE) {
+            onClose();
+            return true;
+        }
+        return super.mouseClicked(event, cancelled);
     }
 
     @Override

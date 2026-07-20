@@ -187,15 +187,15 @@ public final class ModernTurntableVideoClient {
         if (projectors.isEmpty() && !holographicConsumer) {
             // MinecartRevolution 的投影仪 BE 位于模拟 level，无法通过 Minecraft.level 扫描到。
             // BER 已经建立并维持同一唱片机会话时，周期全量同步不应把它误判成无 consumer。
-                if (VideoBillboardPreview.hasSessionForTurntable(turntablePos, sessionId)
+            if (VideoBillboardPreview.hasSessionForTurntable(turntablePos, sessionId)
                     && (VideoBillboardPreview.isSessionRunning(sessionId)
-                        || VideoBillboardPreview.hasNetworkFailure(sessionId))) {
+                            || VideoBillboardPreview.hasNetworkFailure(sessionId))) {
                 ACTIVE_SESSION_IDS.add(sessionId);
                 rememberActiveSession(immutableTurntablePos, sessionId);
                 logDecision(sessionId, "reuse-simulated-projector", turntablePos, sync.elapsedMillis(), 0, 0, 0L,
-                    VideoBillboardPreview.hasNetworkFailure(sessionId)
-                        ? "network-failed session is retained for manual retry on a BER-backed simulated projector"
-                        : "running session is retained for a BER-backed simulated projector");
+                        VideoBillboardPreview.hasNetworkFailure(sessionId)
+                                ? "network-failed session is retained for manual retry on a BER-backed simulated projector"
+                                : "running session is retained for a BER-backed simulated projector");
                 return;
             }
             logDecision(sessionId, "stop-no-projector", turntablePos, sync.elapsedMillis(), 0, 0, 0L,
@@ -222,8 +222,8 @@ public final class ModernTurntableVideoClient {
             ACTIVE_SESSION_IDS.add(sessionId);
             rememberActiveSession(immutableTurntablePos, sessionId);
             logDecision(sessionId, "hold-network-failure", turntablePos, elapsedMillis, qualityCeiling,
-                projectorPositions.size(), 0L,
-                "same session is held at the network error placeholder until explicit retry");
+                    projectorPositions.size(), 0L,
+                    "same session is held at the network error placeholder until explicit retry");
             return;
         }
         String existingForTurntable = immutableTurntablePos != null
@@ -375,11 +375,11 @@ public final class ModernTurntableVideoClient {
             return false;
         }
         ClientAudioOutputRegistry.AudioTimeline timeline = ClientAudioOutputRegistry.getAudioTimeline(turntablePos);
-        String audioSessionId = timeline.sessionId();
+        String audioSessionId = timeline.audioSessionId();
         if (audioSessionId != null && !audioSessionId.isBlank() && !audioSessionId.equals(sessionId)) {
             return false;
         }
-        return timeline.audibleMillis() >= 0L || timeline.mainFedMillis() >= 0L;
+        return timeline.audibleMillis() >= 0L || timeline.fedMillis() >= 0L;
     }
 
     private static void rememberActiveSession(BlockPos turntablePos, String sessionId) {
@@ -419,7 +419,7 @@ public final class ModernTurntableVideoClient {
             // 如果把 active/pending 写成 116，就会把“允许降级到 116”误判成 quality ceiling
             // changed，导致播放器反复重建。
             ACTIVE_QUALITY_CEILING_BY_SESSION.put(sync.sessionId(), qualityCeiling);
-                PENDING_REQUEST_BY_SESSION.put(sync.sessionId(), new PendingVideoRequest(
+            PENDING_REQUEST_BY_SESSION.put(sync.sessionId(), new PendingVideoRequest(
                     normalizedElapsedMillis(sync), qualityCeiling, requestId));
             Minecraft.getInstance().execute(() -> {
                 if (!isLatestRequestForTurntable(sync.sessionId(), requestId, turntablePos)) {
@@ -428,13 +428,13 @@ public final class ModernTurntableVideoClient {
                 PlaybackSync.Metadata launchSync = currentPlaybackMetadata(turntablePos, sync);
                 long elapsedMillis = normalizedElapsedMillis(launchSync);
                 logDecision(sync.sessionId(), "resolved-start", turntablePos, elapsedMillis, qualityCeiling,
-                    projectorPositions.size(), requestId,
-                    "qualityCeiling=" + qualityCeiling + " actualQuality=" + stream.quality() + " title='"
-                        + stream.title() + "' size=" + sourceWidth + "x" + sourceHeight + " fps=" + fps
-                        + " launchTimelineRefreshed=" + (launchSync != sync));
+                        projectorPositions.size(), requestId,
+                        "qualityCeiling=" + qualityCeiling + " actualQuality=" + stream.quality() + " title='"
+                                + stream.title() + "' size=" + sourceWidth + "x" + sourceHeight + " fps=" + fps
+                                + " launchTimelineRefreshed=" + (launchSync != sync));
                 VideoBillboardPreview.startSynced(stream.url(), sourceWidth,
-                    sourceHeight, fps, stream.codecId(), launchSync.sessionId(), elapsedMillis,
-                    launchSync.totalMillis(),
+                        sourceHeight, fps, stream.codecId(), launchSync.sessionId(), elapsedMillis,
+                        launchSync.totalMillis(),
                         projectorPositions,
                         turntablePos,
                         PREFER_NATIVE, DECODER_OVERRIDE.isBlank() ? null : DECODER_OVERRIDE);

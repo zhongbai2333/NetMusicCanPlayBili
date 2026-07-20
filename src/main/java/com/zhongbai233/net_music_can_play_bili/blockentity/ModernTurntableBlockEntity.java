@@ -53,6 +53,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
     private static final String STARTED_TIME_TAG = "StartedGameTime";
     private static final String ELAPSED_SECONDS_TAG = "ElapsedSeconds";
     private static final String ELAPSED_TICKS_TAG = "ElapsedTicks";
+    private static final String SEEK_GENERATION_TAG = "SeekGeneration";
     private static final String OWNER_TAG = "PlaybackOwner";
     private static final String REPEAT_ONE_TAG = "RepeatOne";
     private static final String REDSTONE_MODE_TAG = "RedstoneMode";
@@ -952,6 +953,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
                 : saveElapsedTicks(storedElapsedTicks());
         output.putInt(ELAPSED_SECONDS_TAG, (int) (elapsedTicks / 20L));
         output.putLong(ELAPSED_TICKS_TAG, elapsedTicks);
+        output.putInt(SEEK_GENERATION_TAG, seekGeneration);
         if (playbackOwnerId != null) {
             output.putString(OWNER_TAG, playbackOwnerId.toString());
         }
@@ -975,6 +977,7 @@ public class ModernTurntableBlockEntity extends BlockEntity {
         startedGameTime = input.getLongOr(STARTED_TIME_TAG, 0L);
         savedElapsedSeconds = input.getIntOr(ELAPSED_SECONDS_TAG, 0);
         savedElapsedTicks = input.getLongOr(ELAPSED_TICKS_TAG, (long) savedElapsedSeconds * 20L);
+        seekGeneration = Math.max(0, input.getIntOr(SEEK_GENERATION_TAG, 0));
         playbackOwnerId = parseUuid(input.getStringOr(OWNER_TAG, ""));
         repeatOne = input.getBooleanOr(REPEAT_ONE_TAG, false);
         redstoneMode = TurntableRedstoneMode.byName(input.getStringOr(REDSTONE_MODE_TAG, "ignore"));

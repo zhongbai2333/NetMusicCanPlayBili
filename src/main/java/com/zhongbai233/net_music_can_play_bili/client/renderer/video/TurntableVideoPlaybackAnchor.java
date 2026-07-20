@@ -1,6 +1,5 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
-import com.zhongbai233.net_music_can_play_bili.client.sync.ModernTurntableTimeline;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.Vec3;
@@ -68,22 +67,23 @@ final class TurntableVideoPlaybackAnchor implements VideoPlaybackAnchor {
             implements MediaVideoTimeline {
         @Override
         public long mediaMillis() {
-            return ModernTurntableTimeline.mediaMillis(turntablePos);
+            return com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackClock.mediaMillis(turntablePos);
         }
 
         @Override
         public long visualMillis() {
-            return ModernTurntableTimeline.visualMillis(turntablePos);
+            return com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackClock.visualMillis(turntablePos);
         }
 
         @Override
         public long pacingMillis() {
-            return ModernTurntableTimeline.pacingMillis(turntablePos);
+            return com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackClock.pacingMillis(turntablePos);
         }
 
         @Override
         public long relativeNanos(long absoluteStartMillis) {
-            return ModernTurntableTimeline.relativeNanos(turntablePos, absoluteStartMillis);
+            return com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackClock.relativeNanos(turntablePos,
+                    absoluteStartMillis);
         }
 
         @Override

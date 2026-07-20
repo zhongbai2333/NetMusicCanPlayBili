@@ -18,7 +18,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
-public class DolbyAudioHandler {
+public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bili.client.audio.AudioOutputHandle {
 
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final float SPATIAL_RADIUS = 1.5f;

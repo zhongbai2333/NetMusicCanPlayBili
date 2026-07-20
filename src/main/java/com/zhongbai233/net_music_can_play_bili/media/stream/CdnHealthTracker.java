@@ -18,6 +18,8 @@ public final class CdnHealthTracker {
             "ncpb.bili.cdn_health.enabled", true);
     private static final long STALE_AFTER_MILLIS = Math.max(10_000L, NcpbSystemProperties.longValue(
             "ncpb.bili.cdn_health.stale_after_ms", "bili.cdn_health.stale_after_ms", 10L * 60L * 1000L));
+    private static final long FORBIDDEN_COOLDOWN_MILLIS = Math.max(1_000L, NcpbSystemProperties.longValue(
+            "ncpb.bili.cdn_health.forbidden_cooldown_ms", "bili.cdn_health.forbidden_cooldown_ms", 60_000L));
     private static final double SUCCESS_DECAY = clamp01(NcpbSystemProperties.doubleValue(
             "ncpb.bili.cdn_health.success_decay", "bili.cdn_health.success_decay", 0.72D));
     private static final double FAILURE_PENALTY = Math.max(0.0D,
@@ -57,7 +59,8 @@ public final class CdnHealthTracker {
                     ? latency
                     : health.latencyMillis() * 0.8D + latency * 0.2D;
             double penalty = Math.max(0.0D, health.penalty() * SUCCESS_DECAY - 0.25D);
-            return new HostHealth(penalty, ewmaLatency, health.successes() + 1, health.failures(), now);
+            return new HostHealth(penalty, ewmaLatency, health.successes() + 1, health.failures(), now,
+                    health.cooldownUntilMillis() <= now ? 0L : health.cooldownUntilMillis());
         });
     }
 
@@ -72,6 +75,7 @@ public final class CdnHealthTracker {
         double delta = switch (kind) {
             case EMPTY -> EMPTY_PENALTY;
             case SHORT_READ -> SHORT_READ_PENALTY;
+            case HTTP_FORBIDDEN -> HTTP_RETRYABLE_PENALTY * 2.0D;
             case HTTP_RETRYABLE -> HTTP_RETRYABLE_PENALTY;
             case IO -> FAILURE_PENALTY;
         };
@@ -79,8 +83,30 @@ public final class CdnHealthTracker {
         HEALTH_BY_HOST.compute(host, (ignored, existing) -> {
             HostHealth health = existing != null ? existing.fresh(now) : HostHealth.initial(now);
             double penalty = Math.min(MAX_PENALTY, health.penalty() + delta);
-            return new HostHealth(penalty, health.latencyMillis(), health.successes(), health.failures() + 1, now);
+            long cooldownUntil = kind == FailureKind.HTTP_FORBIDDEN
+                    ? now + FORBIDDEN_COOLDOWN_MILLIS
+                    : health.cooldownUntilMillis();
+            return new HostHealth(penalty, health.latencyMillis(), health.successes(), health.failures() + 1, now,
+                    cooldownUntil);
         });
+    }
+
+    public static boolean isCoolingDown(URL url) {
+        if (!ENABLED) {
+            return false;
+        }
+        String host = host(url);
+        HostHealth health = host != null ? HEALTH_BY_HOST.get(host) : null;
+        return health != null && health.cooldownUntilMillis() > System.currentTimeMillis();
+    }
+
+    public static long cooldownUntilMillis(URL url) {
+        if (!ENABLED) {
+            return 0L;
+        }
+        String host = host(url);
+        HostHealth health = host != null ? HEALTH_BY_HOST.get(host) : null;
+        return health != null ? health.cooldownUntilMillis() : 0L;
     }
 
     public static double score(URL url) {
@@ -121,13 +147,14 @@ public final class CdnHealthTracker {
         IO,
         EMPTY,
         SHORT_READ,
+        HTTP_FORBIDDEN,
         HTTP_RETRYABLE
     }
 
     private record HostHealth(double penalty, double latencyMillis, long successes, long failures,
-            long updatedAtMillis) {
+            long updatedAtMillis, long cooldownUntilMillis) {
         static HostHealth initial(long now) {
-            return new HostHealth(0.0D, 0.0D, 0L, 0L, now);
+            return new HostHealth(0.0D, 0.0D, 0L, 0L, now, 0L);
         }
 
         HostHealth fresh(long now) {
@@ -137,7 +164,7 @@ public final class CdnHealthTracker {
             }
             double staleRatio = Math.min(1.0D, age / (double) STALE_AFTER_MILLIS);
             return new HostHealth(penalty * (1.0D - staleRatio * 0.5D), latencyMillis, successes, failures,
-                    updatedAtMillis);
+                    updatedAtMillis, cooldownUntilMillis);
         }
     }
 }

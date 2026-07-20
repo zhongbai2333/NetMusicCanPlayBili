@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
  * 立体声音频的 OpenAL 空间播放器
  * 将解码后的 float32 PCM 送入 2 声道 OpenAL 管线，复用 Dolby 链路的空间定位能力
  */
-public class StereoOpenALHandler {
+public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_bili.client.audio.AudioOutputHandle {
     private static final boolean MUTE_MAIN_WHEN_RELAYS_CONNECTED = Boolean.parseBoolean(
             System.getProperty("ncpb.bili.audio.relay.mute_main_when_connected",
                     System.getProperty("ncpb.bili.audio.relay.mute_main_when_started", "true")));

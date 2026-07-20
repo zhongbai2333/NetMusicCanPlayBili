@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.bili;
 
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
 import org.slf4j.Logger;
 
 import java.net.URL;
@@ -30,7 +31,8 @@ public final class BiliRequestHeaders {
             ThreadLocalRandom.current().nextInt(DESKTOP_USER_AGENT_PRESETS.length));
     private static final AtomicInteger BILI_CDN_403_COUNT = new AtomicInteger();
     private static final int UA_SWITCH_403_THRESHOLD = Math.max(1,
-            Integer.getInteger("ncpb.ncpb.bili.user_agent.switch_403_threshold", 3));
+            NcpbSystemProperties.intValue("ncpb.bili.user_agent.switch_403_threshold",
+                    "ncpb.ncpb.bili.user_agent.switch_403_threshold", 3));
 
     private BiliRequestHeaders() {
     }

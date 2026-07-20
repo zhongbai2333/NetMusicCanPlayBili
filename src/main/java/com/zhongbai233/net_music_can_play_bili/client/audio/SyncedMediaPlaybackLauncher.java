@@ -5,6 +5,7 @@ import com.github.tartaricacid.netmusic.client.audio.MusicPlayManager;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackRequest;
 import net.minecraft.core.BlockPos;
 import net.minecraft.client.resources.sounds.SoundInstance;
 
@@ -38,28 +39,40 @@ public final class SyncedMediaPlaybackLauncher {
     public static LaunchResult fromPrepared(String rawUrl, String songName, ClientMediaPreparer.PreparedMedia prepared,
             String fallbackPlayUrl, String sessionId, long elapsedMillis, long totalMillis, BlockPos pos,
             UUID ownerId) {
+        return fromPrepared(rawUrl, songName, prepared, fallbackPlayUrl, sessionId, elapsedMillis, totalMillis, pos,
+                ownerId, null);
+    }
+
+    public static LaunchResult fromPrepared(String rawUrl, String songName, ClientMediaPreparer.PreparedMedia prepared,
+            String fallbackPlayUrl, String sessionId, long elapsedMillis, long totalMillis, BlockPos pos,
+            UUID ownerId, PlaybackSync.MinecartAnchor minecartAnchor) {
         if (!com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection.allowMediaStart()) {
             return null;
         }
         String playUrl = prepared != null ? prepared.playUrl() : fallbackPlayUrl;
         LyricRecord lyricRecord = prepared != null ? prepared.lyricRecord() : null;
-        String syncedPlayUrl = PlaybackSync.withSync(playUrl, sessionId, Math.max(0L, elapsedMillis),
-                Math.max(0L, totalMillis));
-        HttpAudioStreamHandler.allowUrl(syncedPlayUrl, pos, ownerId);
-        BiliPlaybackDiagnostics.beginPlayback(songName, rawUrl, syncedPlayUrl);
-        return new LaunchResult(syncedPlayUrl, lyricRecord);
+        PlaybackRequest playbackRequest = PlaybackRequest.now(playUrl, pos, sessionId,
+                Math.max(0L, elapsedMillis), Math.max(0L, totalMillis), ownerId,
+                minecartAnchor != null ? minecartAnchor.entityUuid() : null);
+        HttpAudioStreamHandler.RegisteredRequest request = HttpAudioStreamHandler.registerRequest(playbackRequest);
+        BiliPlaybackDiagnostics.beginPlayback(songName, rawUrl, request.url());
+        return new LaunchResult(request.url(), lyricRecord, request.requestToken());
     }
 
-    public static void play(LaunchResult launch, String songName,
+    public static boolean play(LaunchResult launch, String songName,
             BiFunction<URL, LyricRecord, SoundInstance> soundFactory) {
         if (!com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection.allowMediaStart()
                 || launch == null || launch.playUrl() == null || launch.playUrl().isBlank()) {
-            return;
+            return false;
         }
         LyricRecord lyricRecord = launch.lyricRecord();
         MusicPlayManager.play(launch.playUrl(), songName, url -> soundFactory.apply(url, lyricRecord));
+        return true;
     }
 
-    public record LaunchResult(String playUrl, LyricRecord lyricRecord) {
+    public record LaunchResult(String playUrl, LyricRecord lyricRecord, String requestToken) {
+        public LaunchResult(String playUrl, LyricRecord lyricRecord) {
+            this(playUrl, lyricRecord, "");
+        }
     }
 }

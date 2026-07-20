@@ -9,6 +9,7 @@ public final class PlaybackSync {
     private static final String SESSION_KEY = "nmb_session=";
     private static final String ELAPSED_MS_KEY = "nmb_elapsed_ms=";
     private static final String TOTAL_MS_KEY = "nmb_total_ms=";
+    private static final String REQUEST_KEY = "nmb_request=";
     private static final String MINECART_ENTITY_KEY = "nmb_minecart_entity=";
     private static final String MINECART_UUID_KEY = "nmb_minecart_uuid=";
 
@@ -51,6 +52,30 @@ public final class PlaybackSync {
         }
         String separator = value.indexOf('#') >= 0 ? "&" : "#";
         return value + separator + MINECART_ENTITY_KEY + entityId + "&" + MINECART_UUID_KEY + entityUuid;
+    }
+
+    public static String withRequestToken(String value, String requestToken) {
+        if (value == null || value.isBlank() || requestToken == null || requestToken.isBlank()) {
+            return value;
+        }
+        String separator = value.indexOf('#') >= 0 ? "&" : "#";
+        return value + separator + REQUEST_KEY + requestToken;
+    }
+
+    public static String parseRequestToken(String value) {
+        if (value == null) {
+            return "";
+        }
+        int hash = value.indexOf('#');
+        if (hash < 0 || hash == value.length() - 1) {
+            return "";
+        }
+        for (String part : value.substring(hash + 1).split("&")) {
+            if (part.startsWith(REQUEST_KEY)) {
+                return part.substring(REQUEST_KEY.length());
+            }
+        }
+        return "";
     }
 
     public static MinecartAnchor parseMinecartAnchor(String value) {
@@ -123,6 +148,7 @@ public final class PlaybackSync {
         String fragment = value.substring(hash + 1);
         return fragment.contains(SESSION_KEY) || fragment.contains(ELAPSED_MS_KEY) || fragment.contains(TOTAL_MS_KEY)
                 || fragment.contains(MINECART_ENTITY_KEY) || fragment.contains(MINECART_UUID_KEY)
+                || fragment.contains(REQUEST_KEY)
                         ? value.substring(0, hash)
                         : value;
     }

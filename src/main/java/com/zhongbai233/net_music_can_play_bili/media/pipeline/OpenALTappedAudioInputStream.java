@@ -13,7 +13,6 @@ import java.util.Arrays;
 
 public final class OpenALTappedAudioInputStream extends AudioInputStream {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int DIAGNOSTIC_MIN_FRAMES = 256;
     private static final int SKIP_BUFFER_SIZE = 64 * 1024;
 
     private final AudioInputStream source;
@@ -146,7 +145,7 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
         int aligned = combinedLength - (combinedLength % frameBytes);
         if (aligned > 0) {
             float[][] planar = PcmPlanarConverter.convert(tapBuffer, 0, aligned, getFormat());
-            if (!firstDiagnostics && aligned >= frameBytes * DIAGNOSTIC_MIN_FRAMES) {
+            if (!firstDiagnostics) {
                 firstDiagnostics = true;
                 logFirstPcmDiagnostics(aligned, planar);
             }
@@ -187,6 +186,7 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
         double sumSquares = 0.0;
         float peak = 0.0f;
         int count = 0;
+        int clipped = 0;
         for (float[] channel : planar) {
             if (channel == null) {
                 continue;
@@ -196,14 +196,18 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
                 if (abs > peak) {
                     peak = abs;
                 }
+                if (abs >= 0.999f) {
+                    clipped++;
+                }
                 sumSquares += sample * sample;
                 count++;
             }
         }
         double rms = count > 0 ? Math.sqrt(sumSquares / count) : 0.0;
+        double clippedRatio = count > 0 ? clipped / (double) count : 0.0;
         LOGGER.debug(
-                "FLAC PCM tap first chunk: bytes={} frameBytes={} sampleSize={} endian={} samples={} peak={} rms={}",
-                bytes, frameBytes, format.getSampleSizeInBits(),
-                format.isBigEndian() ? "big" : "little", samples, peak, rms);
+                "PCM tap first chunk: bytes={} frameBytes={} aligned={} sampleSize={} endian={} samples={} peak={} rms={} clippedRatio={}",
+                bytes, frameBytes, bytes % frameBytes == 0, format.getSampleSizeInBits(),
+                format.isBigEndian() ? "big" : "little", samples, peak, rms, clippedRatio);
     }
 }

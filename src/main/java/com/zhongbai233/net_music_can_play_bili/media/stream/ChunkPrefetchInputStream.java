@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.media.stream;
 
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliCdnSelector;
 import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import org.slf4j.Logger;
@@ -203,7 +204,7 @@ public final class ChunkPrefetchInputStream extends InputStream {
                     return downloadChunk(candidate, nextStart, end);
                 } catch (EmptyCdnResponseException e) {
                     lastError = e;
-                    if (attempt < PER_HOST_ATTEMPTS) {
+                    if (attempt < PER_HOST_ATTEMPTS && !CdnHealthTracker.isCoolingDown(candidate)) {
                         LOGGER.warn(
                                 "CDN returned empty media chunk, retrying same host {} attempt={}/{} range={}-{}: {}",
                                 safeHost(candidate), attempt + 1, PER_HOST_ATTEMPTS, nextStart, end, e.getMessage());
@@ -216,7 +217,7 @@ public final class ChunkPrefetchInputStream extends InputStream {
                     }
                 } catch (IOException e) {
                     lastError = e;
-                    if (attempt < PER_HOST_ATTEMPTS) {
+                    if (attempt < PER_HOST_ATTEMPTS && !CdnHealthTracker.isCoolingDown(candidate)) {
                         LOGGER.warn("CDN media chunk failed, retrying same host {} attempt={}/{} range={}-{}: {}",
                                 safeHost(candidate), attempt + 1, PER_HOST_ATTEMPTS, nextStart, end, e.getMessage());
                         backoffBeforeRetry();
@@ -248,8 +249,11 @@ public final class ChunkPrefetchInputStream extends InputStream {
     private long downloadChunk(URL requestUrl, long nextStart, long end) throws IOException {
         long started = System.currentTimeMillis();
         boolean outcomeRecorded = false;
-        try (HttpRangeClient.CdnResponse response = client.getRange(requestUrl, nextStart, end)) {
+        try (HttpRangeClient.CdnResponse response = client.getRangeDirect(requestUrl, nextStart, end)) {
             int status = response.statusCode();
+            if (status == 403 || status == 404 || status == 408 || status == 425 || status == 429 || status >= 500) {
+                outcomeRecorded = true;
+            }
             if (status == 416) {
                 mode = mode == Mode.UNKNOWN ? Mode.RANGE : mode;
                 spool.complete();
@@ -271,6 +275,7 @@ public final class ChunkPrefetchInputStream extends InputStream {
                         nextStart, end, received, spool.cachedLength(), safeHost(requestUrl));
                 long newNextStart = nextStart + received;
                 CdnHealthTracker.recordSuccess(requestUrl, System.currentTimeMillis() - started, received);
+                BiliCdnSelector.recordSuccess(requestUrl.toString());
                 outcomeRecorded = true;
                 if (totalLength > 0 && newNextStart >= totalLength) {
                     spool.complete();
@@ -290,13 +295,10 @@ public final class ChunkPrefetchInputStream extends InputStream {
                     throw new EmptyCdnResponseException("0 bytes for sequential GET host=" + safeHost(requestUrl));
                 }
                 CdnHealthTracker.recordSuccess(requestUrl, System.currentTimeMillis() - started, received);
+                BiliCdnSelector.recordSuccess(requestUrl.toString());
                 outcomeRecorded = true;
                 spool.complete();
                 return received;
-            }
-            if (status == 403 || status == 404 || status == 408 || status == 425 || status == 429 || status >= 500) {
-                CdnHealthTracker.recordFailure(requestUrl, CdnHealthTracker.FailureKind.HTTP_RETRYABLE);
-                outcomeRecorded = true;
             }
             throw new IOException("HTTP " + status + " from CDN range request host=" + safeHost(requestUrl)
                     + " range=" + nextStart + "-" + end + " offset=" + startByteOffset);
@@ -462,6 +464,7 @@ public final class ChunkPrefetchInputStream extends InputStream {
     }
 
     private boolean tryFullDownload() throws IOException {
+        long started = System.currentTimeMillis();
         try (HttpRangeClient.CdnResponse response = client.get(url)) {
             int status = response.statusCode();
             if (status == 200) {
@@ -470,8 +473,10 @@ public final class ChunkPrefetchInputStream extends InputStream {
                 LOGGER.debug("HTTP prefetch mode: full GET, contentLength={}", totalLength);
                 long received = copyResponseToSpool(response.body(), response.contentLength(), Long.MAX_VALUE);
                 if (received == 0L) {
+                    CdnHealthTracker.recordFailure(url, CdnHealthTracker.FailureKind.EMPTY);
                     throw new EmptyCdnResponseException("0 bytes for full GET host=" + safeHost(url));
                 }
+                CdnHealthTracker.recordSuccess(url, System.currentTimeMillis() - started, received);
                 return true;
             }
             return false;

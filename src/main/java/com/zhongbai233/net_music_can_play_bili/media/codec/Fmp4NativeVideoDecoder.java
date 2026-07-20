@@ -292,73 +292,78 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             fallbackFramesToDrop = Math.max(0, Math.round(seekStart.residualSeconds() * fps));
             timelineStartNanos = Math.max(0L, Math.round(seekStart.fragmentSeconds() * 1_000_000_000.0D));
             dropBeforeMediaPtsNanos = Math.max(0L, offsetMillis * 1_000_000L);
-            new Fmp4StreamParser().parse(stream, closed, new Fmp4StreamParser.Callback() {
-                @Override
-                public void onMoov(Fmp4ToMp4Converter.ParseResult parseResult, byte[] moovData)
-                        throws IOException {
-                    DecoderConfig config = extractDecoderConfig(moovData, codecId);
-                    if (config == null || config.annexBConfig().length == 0) {
-                        throw new IOException("无法从 moov/stsd 提取视频 decoder config: codecId=" + codecId);
-                    }
-                    decoderConfig = config.annexBConfig();
-                    nalLengthSize = config.nalLengthSize();
-                    int videoTimescale = Fmp4ToMp4Converter.parseVideoTimescale(moovData);
-                    streamTimescale = videoTimescale > 0 ? videoTimescale : parseResult.timescale;
-                    LOGGER.debug("视频 fMP4 moov 已解析: configBytes={} nalLengthSize={} timescale={} moovBytes={}",
-                            decoderConfig.length, nalLengthSize, streamTimescale, moovData.length);
-                }
-
-                @Override
-                public void onMoof(int[] sampleSizes, byte[] moofData) {
-                    Fmp4ToMp4Converter.SampleTable table = Fmp4ToMp4Converter.extractSampleTableFromMoof(
-                            moofData, streamTimescale > 0 ? streamTimescale : fps, fps);
-                    pendingSampleSizes = table.sampleSizes().length > 0
-                            ? table.sampleSizes()
-                            : sampleSizes != null ? sampleSizes : new int[0];
-                    pendingSamplePtsNanos = table.ptsNanos();
-                    pendingSampleIndex = 0;
-                    parsedMoofCount++;
-                    parsedSampleCount += pendingSampleSizes.length;
-                    if (parsedMoofCount <= 2) {
-                        LOGGER.debug("视频 fMP4 moof 已解析: index={} samples={} firstSampleBytes={} firstPtsNanos={}",
-                                parsedMoofCount, pendingSampleSizes.length,
-                                pendingSampleSizes.length > 0 ? pendingSampleSizes[0] : 0,
-                                pendingSamplePtsNanos.length > 0 ? pendingSamplePtsNanos[0] : -1L);
-                    }
-                }
-
-                @Override
-                public void onMdat(InputStream payload, long size) throws IOException {
-                    if (decoderConfig == null) {
-                        throw new IOException("mdat arrived before video decoder config");
-                    }
-                    if (pendingSampleSizes.length == 0) {
-                        LOGGER.debug("视频 fMP4 mdat 无样本表: bytes={}", size);
-                        byte[] all = Fmp4StreamParser.readFully(payload, size);
-                        decodeSample(all, nextSamplePtsNanos());
-                        return;
-                    }
-                    if (parsedMoofCount <= 2) {
-                        LOGGER.debug("视频 fMP4 mdat 开始: bytes={} samples={} parsedSamples={}", size,
-                                pendingSampleSizes.length, parsedSampleCount);
-                    }
-                    for (int sampleSize : pendingSampleSizes) {
-                        if (closed.get() || totalFrames >= maxFrames) {
-                            return;
+            Fmp4StreamParser.ContainerKind containerKind = new Fmp4StreamParser().parse(stream, closed,
+                    new Fmp4StreamParser.Callback() {
+                        @Override
+                        public void onMoov(Fmp4ToMp4Converter.ParseResult parseResult, byte[] moovData)
+                                throws IOException {
+                            DecoderConfig config = extractDecoderConfig(moovData, codecId);
+                            if (config == null || config.annexBConfig().length == 0) {
+                                throw new IOException("无法从 moov/stsd 提取视频 decoder config: codecId=" + codecId);
+                            }
+                            decoderConfig = config.annexBConfig();
+                            nalLengthSize = config.nalLengthSize();
+                            int videoTimescale = Fmp4ToMp4Converter.parseVideoTimescale(moovData);
+                            streamTimescale = videoTimescale > 0 ? videoTimescale : parseResult.timescale;
+                            LOGGER.debug("视频 fMP4 moov 已解析: configBytes={} nalLengthSize={} timescale={} moovBytes={}",
+                                    decoderConfig.length, nalLengthSize, streamTimescale, moovData.length);
                         }
-                        if (sampleSize <= 0) {
-                            continue;
-                        }
-                        byte[] sample = Fmp4StreamParser.readFully(payload, sampleSize);
-                        decodeSample(sample, nextSamplePtsNanos());
-                    }
-                }
 
-                @Override
-                public void onRawEac3(InputStream payload) throws IOException, UnsupportedAudioFileException {
-                    throw new UnsupportedAudioFileException("video stream is not fMP4 video");
-                }
-            });
+                        @Override
+                        public void onMoof(int[] sampleSizes, byte[] moofData) {
+                            Fmp4ToMp4Converter.SampleTable table = Fmp4ToMp4Converter.extractSampleTableFromMoof(
+                                    moofData, streamTimescale > 0 ? streamTimescale : fps, fps);
+                            pendingSampleSizes = table.sampleSizes().length > 0
+                                    ? table.sampleSizes()
+                                    : sampleSizes != null ? sampleSizes : new int[0];
+                            pendingSamplePtsNanos = table.ptsNanos();
+                            pendingSampleIndex = 0;
+                            parsedMoofCount++;
+                            parsedSampleCount += pendingSampleSizes.length;
+                            if (parsedMoofCount <= 2) {
+                                LOGGER.debug(
+                                        "视频 fMP4 moof 已解析: index={} samples={} firstSampleBytes={} firstPtsNanos={}",
+                                        parsedMoofCount, pendingSampleSizes.length,
+                                        pendingSampleSizes.length > 0 ? pendingSampleSizes[0] : 0,
+                                        pendingSamplePtsNanos.length > 0 ? pendingSamplePtsNanos[0] : -1L);
+                            }
+                        }
+
+                        @Override
+                        public void onMdat(InputStream payload, long size) throws IOException {
+                            if (decoderConfig == null) {
+                                throw new IOException("mdat arrived before video decoder config");
+                            }
+                            if (pendingSampleSizes.length == 0) {
+                                LOGGER.debug("视频 fMP4 mdat 无样本表: bytes={}", size);
+                                byte[] all = Fmp4StreamParser.readFully(payload, size);
+                                decodeSample(all, nextSamplePtsNanos());
+                                return;
+                            }
+                            if (parsedMoofCount <= 2) {
+                                LOGGER.debug("视频 fMP4 mdat 开始: bytes={} samples={} parsedSamples={}", size,
+                                        pendingSampleSizes.length, parsedSampleCount);
+                            }
+                            for (int sampleSize : pendingSampleSizes) {
+                                if (closed.get() || totalFrames >= maxFrames) {
+                                    return;
+                                }
+                                if (sampleSize <= 0) {
+                                    continue;
+                                }
+                                byte[] sample = Fmp4StreamParser.readFully(payload, sampleSize);
+                                decodeSample(sample, nextSamplePtsNanos());
+                            }
+                        }
+
+                        @Override
+                        public void onRawEac3(InputStream payload) throws IOException, UnsupportedAudioFileException {
+                            throw new UnsupportedAudioFileException("video stream is not fMP4 video");
+                        }
+                    });
+            if (containerKind == Fmp4StreamParser.ContainerKind.OTHER_AUDIO) {
+                throw new UnsupportedAudioFileException("video stream is not fMP4 video");
+            }
         } finally {
             activeInput.compareAndSet(stream, null);
         }

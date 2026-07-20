@@ -4,6 +4,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.media.stream.CdnHealthTracker;
+import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import org.slf4j.Logger;
 
@@ -31,11 +32,13 @@ public final class BiliCdnSelector {
     private static final boolean ENABLED = Boolean
             .parseBoolean(System.getProperty("ncpb.bili.cdn_selector.enabled", "true"));
     private static final boolean RACE_ENABLED = Boolean
-            .parseBoolean(System.getProperty("ncpb.bili.cdn_selector.race", "true"));
+            .parseBoolean(System.getProperty("ncpb.bili.cdn_selector.race", "false"));
     private static final int RACE_BYTES = Math.max(1,
-            Integer.getInteger("ncpb.ncpb.bili.cdn_selector.race_bytes", 2048));
+            NcpbSystemProperties.intValue("ncpb.bili.cdn_selector.race_bytes",
+                    "ncpb.ncpb.bili.cdn_selector.race_bytes", 2048));
     private static final long RACE_TIMEOUT_MILLIS = Math.max(250L,
-            Long.getLong("ncpb.ncpb.bili.cdn_selector.race_timeout_ms", 2_500L));
+            NcpbSystemProperties.longValue("ncpb.bili.cdn_selector.race_timeout_ms",
+                    "ncpb.ncpb.bili.cdn_selector.race_timeout_ms", 2_500L));
     private static final int MAX_RACE_CANDIDATES = Math.max(1,
             Integer.getInteger("ncpb.bili.cdn_selector.max_race_candidates", 4));
     private static final long MIN_PERSIST_INTERVAL_MILLIS = Math.max(0L,
@@ -256,8 +259,11 @@ public final class BiliCdnSelector {
                     HttpResponse.BodyHandlers.ofInputStream());
             try (InputStream body = response.body()) {
                 int status = response.statusCode();
+                BiliRequestHeaders.recordBiliCdnResponse(parsed, status);
                 if (status != 200 && status != 206) {
-                    CdnHealthTracker.recordFailure(parsed, CdnHealthTracker.FailureKind.HTTP_RETRYABLE);
+                    CdnHealthTracker.recordFailure(parsed, status == 403
+                            ? CdnHealthTracker.FailureKind.HTTP_FORBIDDEN
+                            : CdnHealthTracker.FailureKind.HTTP_RETRYABLE);
                     return false;
                 }
                 byte[] bytes = body.readNBytes(1);

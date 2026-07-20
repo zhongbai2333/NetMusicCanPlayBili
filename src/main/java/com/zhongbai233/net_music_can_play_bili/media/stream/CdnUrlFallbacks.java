@@ -5,6 +5,7 @@ import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import java.net.URI;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -68,7 +69,21 @@ public final class CdnUrlFallbacks {
                 addUrl(result, url);
             }
         }
-        return result.isEmpty() ? List.of(primary) : result;
+        List<URL> available = result.stream()
+            .filter(candidate -> !CdnHealthTracker.isCoolingDown(candidate))
+            .sorted(Comparator.comparingDouble(CdnHealthTracker::score))
+            .toList();
+        if (!available.isEmpty()) {
+            return available;
+        }
+
+        // 所有 host 都在 403 冷却时仍保留一个最早恢复的兜底，避免播放进入固定时长黑窗；
+        // 同时只尝试一个，防止一次请求再次扫完整个受限 CDN 组。
+        return result.stream()
+            .min(Comparator.comparingLong(CdnHealthTracker::cooldownUntilMillis)
+                .thenComparingDouble(CdnHealthTracker::score))
+            .map(List::of)
+            .orElseGet(() -> List.of(primary));
     }
 
     private static void addUrl(List<URL> result, String value) {

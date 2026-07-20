@@ -168,7 +168,7 @@ public final class ClientMediaTimelineView {
         if (audibleMillis < 0L) {
             return -1L;
         }
-        String audioSessionId = audioTimeline.sessionId();
+        String audioSessionId = audioTimeline.audioSessionId();
         if (audioSessionId != null && !audioSessionId.isBlank() && !audioSessionId.equals(sessionId)) {
             return -1L;
         }
