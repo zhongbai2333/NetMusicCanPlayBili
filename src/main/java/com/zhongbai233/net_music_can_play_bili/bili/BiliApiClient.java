@@ -758,40 +758,15 @@ public final class BiliApiClient {
         List<VideoStream> av1 = selectAv1ProbeCandidates(sortedAv1);
         List<VideoStream> h264 = accepted.stream().filter(stream -> stream.codecId() == CODEC_H264)
                 .sorted(highestQualityFirst).limit(1).toList();
-        List<VideoStream> softwareAv1 = sortedAv1.stream()
-                .filter(BiliApiClient::isSafeSoftwareAv1)
-                .limit(1)
-                .toList();
+        // FFmpeg's built-in AV1 decoder requires a hardware backend. The
+        // bundled native libraries do not include dav1d/libaom, so exposing a
+        // software candidate would only fail with ENOSYS after packet input.
+        List<VideoStream> softwareAv1 = List.of();
         if (av1.isEmpty() && h264.isEmpty()) {
             throw new IllegalStateException("该视频没有画质上限内且编码标识有效的 AV1/H.264 DASH 视频流: "
                     + diagnostics);
         }
         return new VideoStreamPlan(preferredQuality, av1, h264, softwareAv1, diagnostics);
-    }
-
-    private static boolean isSafeSoftwareAv1(VideoStream stream) {
-        double fps = parseFrameRateValue(stream.frameRate());
-        int width = Math.max(0, stream.width());
-        int height = Math.max(0, stream.height());
-        return width <= 1280 && height <= 720 && fps <= 60.5D
-                || width <= 1920 && height <= 1080 && fps <= 30.5D;
-    }
-
-    private static double parseFrameRateValue(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return Double.POSITIVE_INFINITY;
-        }
-        try {
-            String[] parts = raw.trim().split("/", 2);
-            double numerator = Double.parseDouble(parts[0]);
-            if (parts.length == 1) {
-                return numerator;
-            }
-            double denominator = Double.parseDouble(parts[1]);
-            return denominator > 0.0D ? numerator / denominator : Double.POSITIVE_INFINITY;
-        } catch (NumberFormatException ignored) {
-            return Double.POSITIVE_INFINITY;
-        }
     }
 
     private static List<VideoStream> selectAv1ProbeCandidates(List<VideoStream> sortedAv1) {

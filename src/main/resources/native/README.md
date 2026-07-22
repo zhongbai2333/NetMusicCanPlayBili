@@ -1,28 +1,30 @@
 ﻿# Embedded FFmpeg native libraries
 
 > **AV1 migration completed:** all six platform directories were replaced as
-> one bundle from `media-min-v36`. This build contains H.264 + AV1 decoding and
-> explicitly excludes the HEVC decoder, parser, bitstream filter, and hardware
-> acceleration paths in its GitHub Actions configuration checks.
+> one bundle from `media-min-v37`. This build contains complete H.264 software
+> decoding plus platform hardware acceleration, and AV1 hardware acceleration.
+> FFmpeg's built-in `av1` decoder does not provide native software decoding;
+> this bundle does not include dav1d or libaom. HEVC decoder, parser, bitstream
+> filter, and hardware acceleration paths remain explicitly excluded.
 
 The native libraries in this directory are sourced from:
 
-- Release: `media-min-v36`
+- Release: `media-min-v37`
 - Repository: <https://github.com/zhongbai2333/FFmpeg>
-- Release URL: <https://github.com/zhongbai2333/FFmpeg/releases/tag/media-min-v36>
-- Source commit: `0ee789bda4acad75fff8598eb8408a145244b6c7`
+- Release URL: <https://github.com/zhongbai2333/FFmpeg/releases/tag/media-min-v37>
+- Source commit: `8027fb52e6a35f6e8889204d292a1f389d9cfb34`
 - Upstream base: `1b1f6026990bd081ec6e2cef8cd88f60ddbfea66`
 
 Release asset SHA-256 checksums:
 
 | Platform | Asset | SHA-256 |
 | --- | --- | --- |
-| Linux ARM64 | `ffmpeg-media-linux-arm64.tar.gz` | `e6126579eb211ea4eabcde88487581f05b959516dd735ac7945fcd0324e2adfc` |
-| Linux x86_64 | `ffmpeg-media-linux-x86_64.tar.gz` | `a28a718779124e9348726c32298f9b1af449852cbdd5694474b75ef9f5c8a3d7` |
-| macOS ARM64 | `ffmpeg-media-macos-arm64.tar.gz` | `2222c73ae957070a7d5991b69f1741109997a9baff3b1cd1dcbcb8a3d6d7fc87` |
-| macOS x86_64 | `ffmpeg-media-macos-x86_64.tar.gz` | `0d661c09bf36bddec02f2bac91a5796087f5ae0342c31ee94c20f4979bd2eb26` |
-| Windows ARM64 | `ffmpeg-media-windows-arm64.tar.gz` | `8cbac49138372b8f6ddcd9dcebb68afa2cf9ef244f141822097590d3544b3956` |
-| Windows x86_64 | `ffmpeg-media-windows-x86_64.tar.gz` | `73236032ed7c65934d9103707f1c0e9291f1fabe94a727d55767cba27e5bacda` |
+| Linux ARM64 | `ffmpeg-media-linux-arm64.tar.gz` | `39cc79a012142326b78a4e102037537ba340ff88a233e756217a4ac46af4ac65` |
+| Linux x86_64 | `ffmpeg-media-linux-x86_64.tar.gz` | `4a24cc64c484db66f3151c0e4cd5092f7fb2d7b3b3b5fe9d7167bc1d1d55a2e2` |
+| macOS ARM64 | `ffmpeg-media-macos-arm64.tar.gz` | `e2ff4faca2df2673437a3264c2eb836caa6a331f47445f5fe5841660141e50a1` |
+| macOS x86_64 | `ffmpeg-media-macos-x86_64.tar.gz` | `119d636326ee7d7bba86d581510a67ae19bc68cb01612c137802665b690457c8` |
+| Windows ARM64 | `ffmpeg-media-windows-arm64.tar.gz` | `fb4707d69a552a0fa3acf81f8cec150736d733ff2cc587a571f29076dea4cf66` |
+| Windows x86_64 | `ffmpeg-media-windows-x86_64.tar.gz` | `19909bfd7fb93a284bd122ab33ded7cde0f91ccb5549d0ef79dbeb37d6616b25` |
 
 The archives were verified before extraction. Each platform directory is copied as a complete set; FFmpeg and JNI libraries must not be mixed between releases.
 
@@ -36,10 +38,14 @@ the same release/download location as the binary bundle. The source archive
 must exactly match the source commit recorded above and include the build
 workflow/configuration used for all six targets.
 
-The macOS v36 libraries target macOS 11.0, use architecture-specific thin
+The macOS v37 libraries target macOS 11.0, use architecture-specific thin
 Mach-O files, contain only portable system or `@loader_path` dependencies, and
 are ad-hoc signed after install-name rewriting. Their embedded CodeDirectory
 page hashes were independently verified before bundling.
+
+The Linux v37 libraries enable VAAPI for both H.264 and AV1 on x86_64 and
+ARM64. They dynamically depend on the host's `libva.so.2`, `libva-drm.so.2`,
+and `libdrm.so.2`; these system/driver libraries are intentionally not bundled.
 
 `libswresample` is intentionally not bundled. The media JNI wrappers consume
 decoded planar-float audio directly and link only against `libavcodec`,

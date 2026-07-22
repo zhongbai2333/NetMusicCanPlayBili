@@ -128,6 +128,20 @@ class BiliApiClientTest {
                 plan.av1Candidates().stream().map(stream -> stream.quality()).toList());
     }
 
+        @Test
+        void doesNotOfferAv1SoftwareFallbackWithoutDav1dOrLibaom() {
+        BiliApiClient.VideoStream lowResolutionAv1 = new BiliApiClient.VideoStream(
+            64, BiliApiClient.CODEC_AV1, 1280, 720, "30", "av01.0.05M.08",
+            "https://example.test/video-64-13.m4s");
+
+        BiliApiClient.VideoStreamPlan plan = BiliApiClient.buildVideoStreamPlan(
+            List.of(lowResolutionAv1), 64);
+
+        assertTrue(plan.softwareAv1Candidates().isEmpty());
+        assertEquals(List.of(BiliApiClient.CODEC_AV1),
+            plan.fallbackOrder().stream().map(stream -> stream.codecId()).toList());
+        }
+
     private static BiliApiClient.VideoStream stream(int quality, int codecId, String codecs) {
         int width = quality >= 120 ? 3840 : 1920;
         int height = quality >= 120 ? 2160 : 1080;
