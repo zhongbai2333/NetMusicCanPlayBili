@@ -39,8 +39,9 @@ public final class BiliVideoStreamResolver {
             throw new IllegalArgumentException("不是 B 站视频选择: " + rawUrl);
         }
         BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(selection.videoId(), selection.page());
-        BiliApiClient.VideoStream stream = BiliApiClient.getBestVideoStream(selection.videoId(), info.cid(),
+        BiliApiClient.VideoStreamPlan plan = BiliApiClient.getVideoStreamPlan(selection.videoId(), info.cid(),
                 qualityCeiling);
+        BiliApiClient.VideoStream stream = plan.preferred();
         String title = info.displayTitle() != null && !info.displayTitle().isBlank() ? info.displayTitle()
                 : fallbackTitle;
         LyricRecord subtitle = includeSubtitle
@@ -54,7 +55,25 @@ public final class BiliVideoStreamResolver {
                 parseFrameRate(stream.frameRate(), fallbackFps),
                 stream.quality(),
                 title,
-                subtitle);
+                subtitle,
+                stream.codecId() == BiliApiClient.CODEC_AV1 ? DecodeMode.HARDWARE_REQUIRED : DecodeMode.AUTO,
+                buildCandidates(plan, fallbackFps));
+    }
+
+    private static java.util.List<VideoCandidate> buildCandidates(BiliApiClient.VideoStreamPlan plan,
+            int fallbackFps) {
+        java.util.List<VideoCandidate> candidates = new java.util.ArrayList<>();
+        plan.av1Candidates().forEach(stream -> candidates.add(toCandidate(stream, fallbackFps,
+                DecodeMode.HARDWARE_REQUIRED)));
+        plan.h264Candidates().forEach(stream -> candidates.add(toCandidate(stream, fallbackFps, DecodeMode.AUTO)));
+        plan.softwareAv1Candidates().forEach(stream -> candidates.add(toCandidate(stream, fallbackFps,
+                DecodeMode.SOFTWARE_ONLY)));
+        return java.util.List.copyOf(candidates);
+    }
+
+    private static VideoCandidate toCandidate(BiliApiClient.VideoStream stream, int fallbackFps, DecodeMode mode) {
+        return new VideoCandidate(stream.baseUrl(), stream.codecId(), Math.max(1, stream.width()),
+                Math.max(1, stream.height()), parseFrameRate(stream.frameRate(), fallbackFps), stream.quality(), mode);
     }
 
     public static int parseFrameRate(String raw, int fallbackFps) {
@@ -76,7 +95,32 @@ public final class BiliVideoStreamResolver {
         }
     }
 
+    public enum DecodeMode {
+        HARDWARE_REQUIRED,
+        AUTO,
+        SOFTWARE_ONLY
+    }
+
+    public record VideoCandidate(String url, int codecId, int sourceWidth, int sourceHeight, int fps, int quality,
+            DecodeMode decodeMode) {
+        public VideoCandidate(String url, int codecId, int sourceWidth, int sourceHeight, int fps, int quality) {
+            this(url, codecId, sourceWidth, sourceHeight, fps, quality, DecodeMode.AUTO);
+        }
+    }
+
     public record ResolvedVideoStream(String url, int codecId, int sourceWidth, int sourceHeight, int fps,
-            int quality, String title, LyricRecord subtitleRecord) {
+            int quality, String title, LyricRecord subtitleRecord, DecodeMode decodeMode,
+            java.util.List<VideoCandidate> candidates) {
+        public ResolvedVideoStream {
+            candidates = candidates == null || candidates.isEmpty()
+                    ? java.util.List.of(new VideoCandidate(url, codecId, sourceWidth, sourceHeight, fps, quality))
+                    : java.util.List.copyOf(candidates);
+        }
+
+        public ResolvedVideoStream withCandidate(VideoCandidate candidate) {
+            return new ResolvedVideoStream(candidate.url(), candidate.codecId(), candidate.sourceWidth(),
+                    candidate.sourceHeight(), candidate.fps(), candidate.quality(), title, subtitleRecord,
+                    candidate.decodeMode(), candidates);
+        }
     }
 }

@@ -6,7 +6,7 @@ import org.slf4j.Logger;
 import java.nio.ByteBuffer;
 
 /**
- * H.264/HEVC 视频原生解码器。
+ * H.264/AV1 视频原生解码器。
  *
  * 用法:
  * 
@@ -43,9 +43,12 @@ public class VideoNativeDecoder implements AutoCloseable {
     }
 
     /**
-     * @param codecId B站 DASH codecid: 7=H.264, 12=HEVC
+     * @param codecId B站 DASH codecid: 7=H.264, 13=AV1
      */
     public VideoNativeDecoder(int codecId, int targetWidth, int targetHeight) {
+        if (codecId != 7 && codecId != 13) {
+            throw new IllegalArgumentException("不支持的视频 codecId=" + codecId + "（仅支持 7=H.264, 13=AV1）");
+        }
         this.codecId = codecId;
         this.targetWidth = targetWidth;
         this.targetHeight = targetHeight;
@@ -128,6 +131,21 @@ public class VideoNativeDecoder implements AutoCloseable {
         return true;
     }
 
+    /** 立即打开 native decoder，使调用方能在发送首包前探测后端是否可用。 */
+    public synchronized boolean open() {
+        return ensureOpen();
+    }
+
+    public synchronized String actualHwaccel() {
+        return actualHwaccel;
+    }
+
+    public synchronized boolean isHardwareAccelerated() {
+        return open && !actualHwaccel.startsWith("cpu")
+                && !actualHwaccel.startsWith("unknown")
+                && !"none".equalsIgnoreCase(actualHwaccel);
+    }
+
     private boolean isHwaccelRequested() {
         return !requestedHwaccel.isBlank()
                 && !"none".equalsIgnoreCase(requestedHwaccel)
@@ -147,7 +165,7 @@ public class VideoNativeDecoder implements AutoCloseable {
     }
 
     /**
-     * 喂入一包 H.264 数据。
+     * 喂入一包 H.264 Annex-B 或 AV1 OBU 数据。
      */
     public synchronized boolean sendPacket(byte[] data, int offset, int length) {
         if (!ensureOpen())

@@ -20,7 +20,7 @@ final class VideoJni {
     /**
      * 创建指定编码的视频解码器。
      *
-     * @param codecId B站 DASH codecid: 7=H.264, 12=HEVC
+     * @param codecId B站 DASH codecid: 7=H.264, 13=AV1
      */
     static native long decoderOpenForCodec(int codecId, int targetWidth, int targetHeight);
 
@@ -33,7 +33,7 @@ final class VideoJni {
     static native long decoderOpenForCodecWithHwaccel(int codecId, int targetWidth, int targetHeight, String hwaccel);
 
     /**
-     * 喂入一包 H.264 数据（NAL 单元或 annex-b 流）。
+     * 喂入一包视频数据（H.264 Annex-B 或 AV1 OBU）。
      *
      * @return 0=成功, -1=失败
      */

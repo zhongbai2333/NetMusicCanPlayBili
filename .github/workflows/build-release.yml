@@ -68,6 +68,28 @@ jobs:
         shell: bash
         run: chmod +x ./gradlew
 
+      - name: Verify AV1 native release bundle
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          platforms=(
+            linux-arm64 linux-x86_64
+            macos-arm64 macos-x86_64
+            windows-arm64 windows-x86_64
+          )
+          for platform in "${platforms[@]}"; do
+            license="src/main/resources/native/${platform}/FFmpeg-LGPL-2.1.txt"
+            if [[ ! -s "${license}" ]]; then
+              echo "Missing FFmpeg license from rebuilt AV1 bundle: ${license}" >&2
+              exit 1
+            fi
+          done
+          if grep -q 'Release: `media-min-v35`' src/main/resources/native/README.md; then
+            echo 'native/README.md still identifies the pre-AV1 media-min-v35 bundle' >&2
+            exit 1
+          fi
+
       - name: Build with Gradle
         shell: bash
         run: |

@@ -28,6 +28,13 @@ import java.util.regex.Pattern;
  * B站 API 客户端：BV/AV 解析、视频信息、DASH 音频流地址
  */
 public final class BiliApiClient {
+    public static final int CODEC_H264 = 7;
+    public static final int CODEC_HEVC = 12;
+    public static final int CODEC_AV1 = 13;
+    static final int FNVAL_DASH = 16;
+    static final int FNVAL_4K = 128;
+    static final int FNVAL_8K = 1024;
+    static final int FNVAL_AV1 = 2048;
     private static final Pattern BV_FULL_RE = Pattern.compile("^[Bb][Vv][0-9A-Za-z]{10}$");
     private static final Pattern AV_FULL_RE = Pattern.compile("^av(\\d+)$", Pattern.CASE_INSENSITIVE);
     private static final Pattern BV_ANYWHERE_RE = Pattern.compile("[Bb][Vv][0-9A-Za-z]{10}");
@@ -261,9 +268,9 @@ public final class BiliApiClient {
 
         public String codecName() {
             return switch (codecId) {
-                case 7 -> "H.264";
-                case 12 -> "HEVC";
-                case 13 -> "AV1";
+                case CODEC_H264 -> "H.264";
+                case CODEC_HEVC -> "HEVC";
+                case CODEC_AV1 -> "AV1";
                 default -> "codecId=" + codecId;
             };
         }
@@ -274,6 +281,36 @@ public final class BiliApiClient {
 
         public String qualityLabel() {
             return BiliApiClient.qualityLabel(quality);
+        }
+    }
+
+    /** 同一次 playurl 响应内可用于探测和回退的视频候选。 */
+    public record VideoStreamPlan(int requestedQualityCeiling, List<VideoStream> av1Candidates,
+            List<VideoStream> h264Candidates, List<VideoStream> softwareAv1Candidates, List<String> diagnostics) {
+        public VideoStreamPlan {
+            av1Candidates = List.copyOf(av1Candidates);
+            h264Candidates = List.copyOf(h264Candidates);
+            softwareAv1Candidates = List.copyOf(softwareAv1Candidates);
+            diagnostics = List.copyOf(diagnostics);
+        }
+
+        public VideoStream preferred() {
+            if (!av1Candidates.isEmpty()) {
+                return av1Candidates.get(0);
+            }
+            if (!h264Candidates.isEmpty()) {
+                return h264Candidates.get(0);
+            }
+            throw new IllegalStateException("该视频没有可用的 AV1/H.264 DASH 视频流");
+        }
+
+        public List<VideoStream> fallbackOrder() {
+            List<VideoStream> result = new ArrayList<>(
+                    av1Candidates.size() + h264Candidates.size() + softwareAv1Candidates.size());
+            result.addAll(av1Candidates);
+            result.addAll(h264Candidates);
+            result.addAll(softwareAv1Candidates);
+            return List.copyOf(result);
         }
     }
 
@@ -605,11 +642,15 @@ public final class BiliApiClient {
     }
 
     public static VideoStream getBestVideoStream(VideoId id, long cid, int preferredQuality) throws Exception {
+        return getVideoStreamPlan(id, cid, preferredQuality).preferred();
+    }
+
+    public static VideoStreamPlan getVideoStreamPlan(VideoId id, long cid, int preferredQuality) throws Exception {
         Map<String, String> params = new HashMap<>();
         id.putPlayUrlParam(params);
         params.put("cid", String.valueOf(cid));
         params.put("qn", String.valueOf(preferredQuality));
-        params.put("fnval", "4048");
+        params.put("fnval", String.valueOf(videoFnval(preferredQuality)));
         params.put("fnver", "0");
         params.put("fourk", "1");
         params.put("high_quality", "1");
@@ -646,7 +687,9 @@ public final class BiliApiClient {
             JsonObject v = e.getAsJsonObject();
             int qid = v.get("id").getAsInt();
             int codecId = v.has("codecid") ? v.get("codecid").getAsInt() : 0;
-            String baseUrl = v.get("baseUrl").getAsString();
+            String baseUrl = v.has("baseUrl") && !v.get("baseUrl").isJsonNull()
+                    ? v.get("baseUrl").getAsString()
+                    : v.has("base_url") && !v.get("base_url").isJsonNull() ? v.get("base_url").getAsString() : "";
             List<String> cdnCandidates = extractStreamUrls(v);
             if (cdnCandidates.isEmpty() && baseUrl != null && !baseUrl.isBlank()) {
                 cdnCandidates = List.of(baseUrl);
@@ -665,61 +708,155 @@ public final class BiliApiClient {
                     initRange[0], initRange[1], indexRange[0], indexRange[1], cdnCandidates));
         }
 
-        boolean requestedSpecial = isSpecialVideoQuality(preferredQuality);
-        List<VideoStream> selectableStreams = requestedSpecial ? streams
-                : streams.stream().filter(stream -> !isSpecialVideoQuality(stream.quality())).toList();
-        if (selectableStreams.isEmpty()) {
-            selectableStreams = streams;
-        }
-
-        VideoStream selected = bestBy(selectableStreams, preferredQuality, 7, false);
-        String reason = "exact-h264";
-        if (selected == null) {
-            selected = bestBy(selectableStreams, preferredQuality, 0, false);
-            reason = "exact-any-codec";
-        }
-        if (selected == null) {
-            selected = bestBy(selectableStreams, preferredQuality, 7, true);
-            reason = "fallback-h264-at-or-below-ceiling";
-        }
-        if (selected == null) {
-            selected = bestBy(selectableStreams, preferredQuality, 0, true);
-            reason = "fallback-any-at-or-below-ceiling";
-        }
-        if (selected == null) {
-            // preferredQuality 是投影仪期望的最高画质上限，不是必须达到的画质。
-            // 如果 B 站返回的流全都高于这个上限，宁可选最低可用流，也不要突破用户配置的上限。
-            selected = selectableStreams.stream()
-                    .min((a, b) -> Integer.compare(videoQualityRank(a.quality()), videoQualityRank(b.quality())))
-                    .orElseThrow(() -> new RuntimeException("该视频没有可用 DASH 视频流"));
-            reason = "fallback-lowest-available-above-ceiling";
-        }
+        VideoStreamPlan plan = buildVideoStreamPlan(streams, preferredQuality);
+        VideoStream selected = plan.preferred();
         logger().debug(
-                "B站视频流选择摘要: id={} cid={} qualityCeiling={} available={} selected={} codec={} size={}x{} fps={} reason={} host={}",
+                "B站视频流选择摘要: id={} cid={} qualityCeiling={} available={} selected={} codec={} size={}x{} fps={} av1Candidates={} h264Candidates={} rejected={} host={}",
                 id.asInputText(), cid, qualityLabel(preferredQuality),
                 streams.stream().map(stream -> qualityLabel(stream.quality())).distinct().toList(),
                 qualityLabel(selected.quality()),
-                selected.codecId(), selected.width(), selected.height(), selected.frameRate(), reason,
+                selected.codecId(), selected.width(), selected.height(), selected.frameRate(),
+                plan.av1Candidates().size(), plan.h264Candidates().size(), plan.diagnostics(),
                 hostOf(selected.baseUrl()));
-        List<String> orderedCdnCandidates = BiliCdnSelector.orderCandidates(selected.cdnCandidates());
-        String preferredBaseUrl = BiliCdnSelector.selectPreferred(orderedCdnCandidates);
-        VideoStream preferred = selected;
-        if (!preferredBaseUrl.isBlank() && !preferredBaseUrl.equals(selected.baseUrl())) {
-            preferred = new VideoStream(selected.quality(), selected.codecId(), selected.width(), selected.height(),
-                    selected.frameRate(), selected.codecs(), preferredBaseUrl, selected.initStart(), selected.initEnd(),
-                    selected.indexStart(), selected.indexEnd(), orderedCdnCandidates);
-        } else if (!orderedCdnCandidates.equals(selected.cdnCandidates())) {
-            preferred = new VideoStream(selected.quality(), selected.codecId(), selected.width(), selected.height(),
-                    selected.frameRate(), selected.codecs(), selected.baseUrl(), selected.initStart(),
-                    selected.initEnd(),
-                    selected.indexStart(), selected.indexEnd(), orderedCdnCandidates);
+        return registerVideoPlan(plan);
+    }
+
+    static int videoFnval(int preferredQuality) {
+        int fnval = FNVAL_DASH | FNVAL_AV1;
+        if (videoQualityRank(preferredQuality) >= videoQualityRank(120)) {
+            fnval |= FNVAL_4K;
         }
-        if (preferred.hasSegmentBase()) {
-            Fmp4NativeVideoDecoder.registerSegmentBase(preferred.baseUrl(), preferred.initStart(), preferred.initEnd(),
-                    preferred.indexStart(), preferred.indexEnd());
+        if (videoQualityRank(preferredQuality) >= videoQualityRank(127)) {
+            fnval |= FNVAL_8K;
         }
-        CdnUrlFallbacks.registerAlternates(preferred.cdnCandidates());
-        return preferred;
+        return fnval;
+    }
+
+    static VideoStreamPlan buildVideoStreamPlan(List<VideoStream> streams, int preferredQuality) {
+        int ceilingRank = videoQualityRank(preferredQuality);
+        boolean requestedSpecial = isSpecialVideoQuality(preferredQuality);
+        List<String> diagnostics = new ArrayList<>();
+        List<VideoStream> accepted = new ArrayList<>();
+        for (VideoStream stream : streams) {
+            String rejection = rejectionReason(stream, ceilingRank, requestedSpecial);
+            if (rejection == null) {
+                accepted.add(preferCdn(stream));
+            } else {
+                diagnostics.add("q" + stream.quality() + "/" + stream.codecId() + ":" + rejection);
+            }
+        }
+        java.util.Comparator<VideoStream> highestQualityFirst = (left, right) -> {
+            int quality = Integer.compare(videoQualityRank(right.quality()), videoQualityRank(left.quality()));
+            if (quality != 0) {
+                return quality;
+            }
+            int width = Integer.compare(right.width(), left.width());
+            return width != 0 ? width : left.baseUrl().compareTo(right.baseUrl());
+        };
+        List<VideoStream> sortedAv1 = accepted.stream().filter(stream -> stream.codecId() == CODEC_AV1)
+                .sorted(highestQualityFirst).toList();
+        List<VideoStream> av1 = selectAv1ProbeCandidates(sortedAv1);
+        List<VideoStream> h264 = accepted.stream().filter(stream -> stream.codecId() == CODEC_H264)
+                .sorted(highestQualityFirst).limit(1).toList();
+        List<VideoStream> softwareAv1 = sortedAv1.stream()
+                .filter(BiliApiClient::isSafeSoftwareAv1)
+                .limit(1)
+                .toList();
+        if (av1.isEmpty() && h264.isEmpty()) {
+            throw new IllegalStateException("该视频没有画质上限内且编码标识有效的 AV1/H.264 DASH 视频流: "
+                    + diagnostics);
+        }
+        return new VideoStreamPlan(preferredQuality, av1, h264, softwareAv1, diagnostics);
+    }
+
+    private static boolean isSafeSoftwareAv1(VideoStream stream) {
+        double fps = parseFrameRateValue(stream.frameRate());
+        int width = Math.max(0, stream.width());
+        int height = Math.max(0, stream.height());
+        return width <= 1280 && height <= 720 && fps <= 60.5D
+                || width <= 1920 && height <= 1080 && fps <= 30.5D;
+    }
+
+    private static double parseFrameRateValue(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return Double.POSITIVE_INFINITY;
+        }
+        try {
+            String[] parts = raw.trim().split("/", 2);
+            double numerator = Double.parseDouble(parts[0]);
+            if (parts.length == 1) {
+                return numerator;
+            }
+            double denominator = Double.parseDouble(parts[1]);
+            return denominator > 0.0D ? numerator / denominator : Double.POSITIVE_INFINITY;
+        } catch (NumberFormatException ignored) {
+            return Double.POSITIVE_INFINITY;
+        }
+    }
+
+    private static List<VideoStream> selectAv1ProbeCandidates(List<VideoStream> sortedAv1) {
+        if (sortedAv1.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<VideoStream> probes = new LinkedHashSet<>();
+        probes.add(sortedAv1.get(0));
+        addHighestAtOrBelow(probes, sortedAv1, 120);
+        addHighestAtOrBelow(probes, sortedAv1, 116);
+        return List.copyOf(probes);
+    }
+
+    private static void addHighestAtOrBelow(Set<VideoStream> result, List<VideoStream> sortedStreams,
+            int qualityCeiling) {
+        int ceilingRank = videoQualityRank(qualityCeiling);
+        sortedStreams.stream()
+                .filter(stream -> videoQualityRank(stream.quality()) <= ceilingRank)
+                .findFirst()
+                .ifPresent(result::add);
+    }
+
+    private static String rejectionReason(VideoStream stream, int ceilingRank, boolean requestedSpecial) {
+        if (stream.codecId() != CODEC_AV1 && stream.codecId() != CODEC_H264) {
+            return stream.codecId() == CODEC_HEVC ? "hevc-disabled" : "unsupported-codec";
+        }
+        String codecs = stream.codecs() == null ? "" : stream.codecs().trim().toLowerCase(java.util.Locale.ROOT);
+        if (codecs.isEmpty()) {
+            return "missing-codecs";
+        }
+        if (stream.codecId() == CODEC_AV1 && !codecs.startsWith("av01.")) {
+            return "codec-string-mismatch";
+        }
+        if (stream.codecId() == CODEC_H264 && !codecs.startsWith("avc1.")) {
+            return "codec-string-mismatch";
+        }
+        if (!requestedSpecial && isSpecialVideoQuality(stream.quality())) {
+            return "special-quality-not-requested";
+        }
+        if (videoQualityRank(stream.quality()) > ceilingRank) {
+            return "above-quality-ceiling";
+        }
+        if (stream.baseUrl() == null || stream.baseUrl().isBlank()) {
+            return "missing-url";
+        }
+        return null;
+    }
+
+    private static VideoStream preferCdn(VideoStream stream) {
+        List<String> ordered = BiliCdnSelector.orderCandidates(stream.cdnCandidates());
+        String preferredUrl = BiliCdnSelector.selectPreferred(ordered);
+        return new VideoStream(stream.quality(), stream.codecId(), stream.width(), stream.height(),
+                stream.frameRate(), stream.codecs(), preferredUrl.isBlank() ? stream.baseUrl() : preferredUrl,
+                stream.initStart(), stream.initEnd(), stream.indexStart(), stream.indexEnd(), ordered);
+    }
+
+    private static VideoStreamPlan registerVideoPlan(VideoStreamPlan plan) {
+        for (VideoStream stream : plan.fallbackOrder()) {
+            if (stream.hasSegmentBase()) {
+                Fmp4NativeVideoDecoder.registerSegmentBase(stream.baseUrl(), stream.initStart(), stream.initEnd(),
+                        stream.indexStart(), stream.indexEnd());
+            }
+            CdnUrlFallbacks.registerAlternates(stream.cdnCandidates());
+        }
+        return plan;
     }
 
     private static long[] parseSegmentBaseRange(JsonObject stream, String key) {
@@ -742,16 +879,6 @@ public final class BiliApiClient {
         } catch (NumberFormatException ignored) {
             return new long[] { -1L, -1L };
         }
-    }
-
-    private static VideoStream bestBy(List<VideoStream> streams, int preferredQuality, int codecId, boolean atOrBelow) {
-        int preferredRank = videoQualityRank(preferredQuality);
-        return streams.stream()
-                .filter(s -> codecId == 0 || s.codecId() == codecId)
-                .filter(s -> atOrBelow ? videoQualityRank(s.quality()) <= preferredRank
-                        : s.quality() == preferredQuality)
-                .max((a, b) -> Integer.compare(videoQualityRank(a.quality()), videoQualityRank(b.quality())))
-                .orElse(null);
     }
 
     public static boolean isSpecialVideoQuality(int quality) {

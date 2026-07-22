@@ -2,9 +2,12 @@ package com.zhongbai233.net_music_can_play_bili.bili;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BiliApiClientTest {
@@ -57,5 +60,78 @@ class BiliApiClientTest {
         assertNull(BiliApiClient.parseStoredVideoSelection(BVID + "|p=-1"));
         assertNull(BiliApiClient.parseStoredVideoSelection(BVID + "|p=abc"));
         assertNull(BiliApiClient.extractVideoSelectionLenient("not a bilibili video"));
+    }
+
+    @Test
+    void buildsMinimalVideoFnvalForQualityCeiling() {
+        assertEquals(2064, BiliApiClient.videoFnval(116));
+        assertEquals(2192, BiliApiClient.videoFnval(120));
+        assertEquals(3216, BiliApiClient.videoFnval(127));
+    }
+
+    @Test
+    void plansAv1BeforeH264AndKeepsDescendingFallbacks() {
+        BiliApiClient.VideoStreamPlan plan = BiliApiClient.buildVideoStreamPlan(List.of(
+                stream(80, BiliApiClient.CODEC_H264, "avc1.640028"),
+                stream(120, BiliApiClient.CODEC_AV1, "av01.0.13M.08"),
+                stream(80, BiliApiClient.CODEC_AV1, "av01.0.08M.08")), 120);
+
+        assertEquals(List.of(120, 80), plan.av1Candidates().stream().map(stream -> stream.quality()).toList());
+        assertEquals(List.of(80), plan.h264Candidates().stream().map(stream -> stream.quality()).toList());
+        assertEquals(BiliApiClient.CODEC_AV1, plan.preferred().codecId());
+        assertEquals(List.of(BiliApiClient.CODEC_AV1, BiliApiClient.CODEC_AV1, BiliApiClient.CODEC_H264),
+            plan.fallbackOrder().stream().limit(3).map(stream -> stream.codecId()).toList());
+    }
+
+    @Test
+    void rejectsHevcUnknownAndCodecStringMismatch() {
+        BiliApiClient.VideoStreamPlan plan = BiliApiClient.buildVideoStreamPlan(List.of(
+                stream(120, BiliApiClient.CODEC_HEVC, "hev1.1.6.L120"),
+                stream(120, BiliApiClient.CODEC_AV1, "hev1.1.6.L120"),
+                stream(120, 0, "av01.0.13M.08"),
+                stream(80, BiliApiClient.CODEC_H264, "avc1.640028")), 120);
+
+        assertTrue(plan.av1Candidates().isEmpty());
+        assertEquals(1, plan.h264Candidates().size());
+        assertTrue(plan.diagnostics().stream().anyMatch(value -> value.contains("hevc-disabled")));
+        assertTrue(plan.diagnostics().stream().anyMatch(value -> value.contains("codec-string-mismatch")));
+        assertTrue(plan.diagnostics().stream().anyMatch(value -> value.contains("unsupported-codec")));
+    }
+
+    @Test
+    void neverSelectsOnlyHevcOrStreamsAboveCeiling() {
+        assertThrows(IllegalStateException.class, () -> BiliApiClient.buildVideoStreamPlan(List.of(
+                stream(127, BiliApiClient.CODEC_HEVC, "hev1.1.6.L180"),
+                stream(120, BiliApiClient.CODEC_AV1, "av01.0.13M.08")), 80));
+    }
+
+    @Test
+    void keepsOnlyHighestH264Fallback() {
+        BiliApiClient.VideoStreamPlan plan = BiliApiClient.buildVideoStreamPlan(List.of(
+                stream(80, BiliApiClient.CODEC_H264, "avc1.640028"),
+                stream(64, BiliApiClient.CODEC_H264, "avc1.64001f"),
+                stream(32, BiliApiClient.CODEC_H264, "avc1.4d401e")), 80);
+
+        assertEquals(List.of(80),
+                plan.h264Candidates().stream().map(stream -> stream.quality()).toList());
+    }
+
+    @Test
+    void limitsAv1HardwareProbesToRepresentativeQualitySteps() {
+        BiliApiClient.VideoStreamPlan plan = BiliApiClient.buildVideoStreamPlan(List.of(
+                stream(127, BiliApiClient.CODEC_AV1, "av01.0.17M.08"),
+                stream(120, BiliApiClient.CODEC_AV1, "av01.0.13M.08"),
+                stream(116, BiliApiClient.CODEC_AV1, "av01.0.09M.08"),
+                stream(80, BiliApiClient.CODEC_AV1, "av01.0.08M.08")), 127);
+
+        assertEquals(List.of(127, 120, 116),
+                plan.av1Candidates().stream().map(stream -> stream.quality()).toList());
+    }
+
+    private static BiliApiClient.VideoStream stream(int quality, int codecId, String codecs) {
+        int width = quality >= 120 ? 3840 : 1920;
+        int height = quality >= 120 ? 2160 : 1080;
+        return new BiliApiClient.VideoStream(quality, codecId, width, height, "60", codecs,
+                "https://example.test/video-" + quality + "-" + codecId + ".m4s");
     }
 }

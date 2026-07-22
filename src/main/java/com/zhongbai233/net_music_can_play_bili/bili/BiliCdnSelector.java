@@ -28,7 +28,6 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** B站 CDN 优选缓存与轻量首包竞速。 */
 public final class BiliCdnSelector {
-    private static final Logger LOGGER = LogUtils.getLogger();
     private static final boolean ENABLED = Boolean
             .parseBoolean(System.getProperty("ncpb.bili.cdn_selector.enabled", "true"));
     private static final boolean RACE_ENABLED = Boolean
@@ -72,10 +71,10 @@ public final class BiliCdnSelector {
                 preferredUpdatedAtMillis = Math.max(0L, updated.getAsLong());
             }
             if (!preferredHost.isBlank()) {
-                LOGGER.info("已加载 B站 CDN 优选域名: {}", preferredHost);
+                logger().info("已加载 B站 CDN 优选域名: {}", preferredHost);
             }
         } catch (Exception e) {
-            LOGGER.warn("加载 B站 CDN 优选配置失败", e);
+            logger().warn("加载 B站 CDN 优选配置失败", e);
         }
     }
 
@@ -181,13 +180,13 @@ public final class BiliCdnSelector {
             }
             long now = System.currentTimeMillis();
             if (!preferredHost.isBlank() && now - preferredUpdatedAtMillis < MIN_PERSIST_INTERVAL_MILLIS) {
-                LOGGER.debug("B站 CDN 优选更新已防抖: current={} candidate={}", preferredHost, host);
+                logger().debug("B站 CDN 优选更新已防抖: current={} candidate={}", preferredHost, host);
                 return;
             }
             preferredHost = host;
             preferredUpdatedAtMillis = now;
             BiliConfig.save();
-            LOGGER.info("B站 CDN 优选更新: host={}", host);
+            logger().info("B站 CDN 优选更新: host={}", host);
         }
     }
 
@@ -215,7 +214,7 @@ public final class BiliCdnSelector {
         Thread thread = NetMusicThreadFactory.daemonThread("bili-cdn-background-race", () -> {
             String winner = raceFirstReadable(snapshot, false);
             if (winner != null && !winner.isBlank()) {
-                LOGGER.debug("B站 CDN 后台优选完成: host={}", hostOf(winner));
+                logger().debug("B站 CDN 后台优选完成: host={}", hostOf(winner));
             }
         });
         thread.start();
@@ -294,5 +293,16 @@ public final class BiliCdnSelector {
 
     private static String normalizeHost(String host) {
         return host == null ? "" : host.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static Logger logger() {
+        return LoggerHolder.INSTANCE;
+    }
+
+    private static final class LoggerHolder {
+        private static final Logger INSTANCE = LogUtils.getLogger();
+
+        private LoggerHolder() {
+        }
     }
 }

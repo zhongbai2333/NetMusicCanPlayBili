@@ -591,7 +591,7 @@ public final class BiliRealVideoPlaybackBench {
         if (stream.codecId() == 7 && (lower.contains("264") || lower.contains("avc"))) {
             return configured;
         }
-        if (stream.codecId() == 12 && (lower.contains("265") || lower.contains("hevc"))) {
+        if (stream.codecId() == BiliApiClient.CODEC_AV1 && lower.contains("av1")) {
             return configured;
         }
         return null;

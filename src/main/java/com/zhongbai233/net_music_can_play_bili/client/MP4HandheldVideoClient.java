@@ -522,6 +522,28 @@ public final class MP4HandheldVideoClient {
             ResolvedVideoStream stream,
             long elapsedMillis, long totalMillis)
             throws IOException {
+        IOException lastStartupFailure = null;
+        for (BiliVideoStreamResolver.VideoCandidate candidate : stream.candidates()) {
+            if (session.closed.get() || !session.key.equals(state.activeKey)) {
+                return;
+            }
+            ResolvedVideoStream selected = stream.withCandidate(candidate);
+            try {
+                decodeCandidate(deviceId, state, session, selected, elapsedMillis, totalMillis);
+                return;
+            } catch (StartupDecodeException failure) {
+                lastStartupFailure = failure;
+                LOGGER.warn(
+                        "MP4 横屏视频候选首帧失败，尝试下一候选: session={} quality={} codec={} source={}x{} reason={}",
+                        session.key.sessionId(), selected.quality(), selected.codecId(), selected.sourceWidth(),
+                        selected.sourceHeight(), failure.getMessage());
+            }
+        }
+        throw lastStartupFailure != null ? lastStartupFailure : new IOException("没有可用的视频解码候选");
+    }
+
+    private static void decodeCandidate(UUID deviceId, DeviceVideoState state, VideoSession session,
+            ResolvedVideoStream stream, long elapsedMillis, long totalMillis) throws IOException {
         LOGGER.debug("MP4 横屏视频启动: session={} quality={} source={}x{} fps={} offset={}ms title='{}'",
                 session.key.sessionId(), stream.quality(), stream.sourceWidth(), stream.sourceHeight(), stream.fps(),
                 elapsedMillis, stream.title());
@@ -534,19 +556,22 @@ public final class MP4HandheldVideoClient {
                 : Fmp4NativeVideoDecoder.OutputFormat.NV12;
         LOGGER.debug("MP4 横屏视频输出格式: session={} format={} irisShaderpackFallback={}",
                 session.key.sessionId(), outputFormat, session.key.rgbaFallback());
+        boolean firstFrameAccepted = false;
         try (Fmp4NativeVideoDecoder decoder = openNativeDecoder(session.key.sessionId(), stream, decodeSize,
                 outputFormat, elapsedMillis, totalMillis)) {
             if (!session.attachDecoder(decoder)) {
                 return;
             }
             long displayedFrames = 0L;
-            boolean firstFrameAccepted = false;
             while (!session.closed.get() && session.key.equals(state.activeKey)) {
                 if (!waitWhileOffscreen(deviceId, state, session)) {
                     return;
                 }
                 Fmp4NativeVideoDecoder.DecodedFrame decoded = decoder.getNextDecodedFrame();
                 if (decoded == null) {
+                    if (!firstFrameAccepted) {
+                        throw new StartupDecodeException("候选在输出首帧前结束");
+                    }
                     synchronized (state.lifecycleLock) {
                         if (state.activeSession == session && session.key.equals(state.activeKey)) {
                             state.endedKey = session.key;
@@ -586,8 +611,30 @@ public final class MP4HandheldVideoClient {
                 displayedFrames++;
                 state.statusText = "视频播放中";
             }
+        } catch (IOException failure) {
+            if (!firstFrameAccepted) {
+                throw failure instanceof StartupDecodeException startup
+                        ? startup
+                        : new StartupDecodeException(failure.getMessage(), failure);
+            }
+            throw failure;
+        } catch (RuntimeException failure) {
+            if (!firstFrameAccepted && !session.closed.get()) {
+                throw new StartupDecodeException(failure.getMessage(), failure);
+            }
+            throw failure;
         } finally {
             session.detachDecoder();
+        }
+    }
+
+    private static final class StartupDecodeException extends IOException {
+        private StartupDecodeException(String message) {
+            super(message);
+        }
+
+        private StartupDecodeException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 
@@ -595,7 +642,7 @@ public final class MP4HandheldVideoClient {
             DecodeSize decodeSize, Fmp4NativeVideoDecoder.OutputFormat outputFormat, long elapsedMillis,
             long totalMillis) throws IOException {
         IOException last = null;
-        for (String hwaccel : handheldHwaccelCandidates(sessionId)) {
+        for (String hwaccel : handheldHwaccelCandidates(sessionId, stream.decodeMode())) {
             try {
                 if (PAD_VIDEO_DEBUG_LOG && PadClientMediaSessionIds.isPadSession(sessionId)) {
                     LOGGER.info(
@@ -614,7 +661,11 @@ public final class MP4HandheldVideoClient {
         throw last != null ? last : new IOException("Native handheld video decoder unavailable");
     }
 
-    private static String[] handheldHwaccelCandidates(String sessionId) {
+    private static String[] handheldHwaccelCandidates(String sessionId,
+            BiliVideoStreamResolver.DecodeMode decodeMode) {
+        if (decodeMode == BiliVideoStreamResolver.DecodeMode.SOFTWARE_ONLY) {
+            return new String[] { "none" };
+        }
         String requested = PadClientMediaSessionIds.isPadSession(sessionId)
                 ? PAD_NATIVE_HWACCEL
                 : HANDHELD_NATIVE_HWACCEL;
@@ -624,9 +675,15 @@ public final class MP4HandheldVideoClient {
             return new String[] { "none" };
         }
         if ("auto".equalsIgnoreCase(requested)) {
-            return VideoFeatureFlags.requestedHwaccelCandidates();
+            String[] candidates = VideoFeatureFlags.requestedHwaccelCandidates();
+            return decodeMode == BiliVideoStreamResolver.DecodeMode.HARDWARE_REQUIRED
+                    ? java.util.Arrays.stream(candidates).filter(value -> !"none".equalsIgnoreCase(value))
+                            .toArray(String[]::new)
+                    : candidates;
         }
-        return new String[] { requested, "none" };
+        return decodeMode == BiliVideoStreamResolver.DecodeMode.HARDWARE_REQUIRED
+                ? new String[] { requested }
+                : new String[] { requested, "none" };
     }
 
     private static boolean waitWhileOffscreen(UUID deviceId, DeviceVideoState state, VideoSession session) {

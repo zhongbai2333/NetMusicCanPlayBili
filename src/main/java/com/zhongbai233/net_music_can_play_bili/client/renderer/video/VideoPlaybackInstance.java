@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.VideoCandidate;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.item.HolographicGlassesItem;
@@ -24,6 +25,7 @@ import org.slf4j.Logger;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Collection;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArraySet;
@@ -76,11 +78,10 @@ final class VideoPlaybackInstance {
     private static final int LOADING_PLACEHOLDER_WIDTH = 320;
     private static final int LOADING_PLACEHOLDER_HEIGHT = 180;
 
-    private final String videoUrl;
     private int targetWidth;
     private int targetHeight;
     private final int fps;
-    private final int codecId;
+    private final List<VideoCandidate> candidates;
     private final String sessionId;
     private final long startOffsetMillis;
     private final long totalMillis;
@@ -129,17 +130,27 @@ final class VideoPlaybackInstance {
             BlockPos turntablePos, boolean preferNative, String decoderOverride) {
         this(videoUrl, targetWidth, targetHeight, fps, codecId, sessionId, startOffsetMillis, totalMillis,
                 projectorPositions, VideoPlaybackAnchor.turntable(turntablePos, sessionId, Math.max(0L, totalMillis)),
-                preferNative, decoderOverride);
+                preferNative, decoderOverride, List.of(new VideoCandidate(videoUrl, codecId, targetWidth,
+                        targetHeight, fps, 0)));
     }
 
     VideoPlaybackInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             String sessionId, long startOffsetMillis, long totalMillis, Collection<BlockPos> projectorPositions,
             VideoPlaybackAnchor anchor, boolean preferNative, String decoderOverride) {
-        this.videoUrl = videoUrl;
+        this(videoUrl, targetWidth, targetHeight, fps, codecId, sessionId, startOffsetMillis, totalMillis,
+                projectorPositions, anchor, preferNative, decoderOverride,
+                List.of(new VideoCandidate(videoUrl, codecId, targetWidth, targetHeight, fps, 0)));
+    }
+
+    VideoPlaybackInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
+            String sessionId, long startOffsetMillis, long totalMillis, Collection<BlockPos> projectorPositions,
+            VideoPlaybackAnchor anchor, boolean preferNative, String decoderOverride, List<VideoCandidate> candidates) {
         this.targetWidth = Math.max(1, targetWidth);
         this.targetHeight = Math.max(1, targetHeight);
         this.fps = Math.max(1, fps);
-        this.codecId = codecId;
+        this.candidates = candidates == null || candidates.isEmpty()
+                ? List.of(new VideoCandidate(videoUrl, codecId, targetWidth, targetHeight, fps, 0))
+                : List.copyOf(candidates);
         this.sessionId = sessionId;
         this.startOffsetMillis = Math.max(0L, startOffsetMillis);
         this.totalMillis = Math.max(0L, totalMillis);
@@ -209,13 +220,47 @@ final class VideoPlaybackInstance {
     }
 
     private void decode(long gen) {
-        long frameIntervalNs = Math.max(1L, 1_000_000_000L / fps);
+        Exception lastStartupFailure = null;
+        for (VideoCandidate candidate : candidates) {
+            if (!running || gen != generation.get()) {
+                return;
+            }
+            try {
+                if (decodeCandidate(gen, candidate)) {
+                    return;
+                }
+            } catch (Exception error) {
+                if (firstFrameLogged) {
+                    handleDecodeFailure(gen, error);
+                    return;
+                }
+                lastStartupFailure = error;
+                LOGGER.warn("视频实例候选首帧失败，尝试下一候选: session={} quality={} codec={} source={}x{} reason={}",
+                        sessionId, candidate.quality(), candidate.codecId(), candidate.sourceWidth(),
+                        candidate.sourceHeight(), error.toString());
+            }
+        }
+        if (lastStartupFailure != null) {
+            handleDecodeFailure(gen, lastStartupFailure);
+        }
+        if (gen == generation.get()) {
+            running = false;
+            decoder = null;
+        }
+    }
+
+    private boolean decodeCandidate(long gen, VideoCandidate candidate) throws Exception {
+        int candidateFps = Math.max(1, candidate.fps());
+        long frameIntervalNs = Math.max(1L, 1_000_000_000L / candidateFps);
         long frameIndex = 0L;
         long effectiveStartOffsetMillis = effectiveDecoderStartOffsetMillis();
         decoderStartOffsetMillis = effectiveStartOffsetMillis;
         adaptiveRestartOffsetMillis = -1L;
-        try (AutoCloseable dec = VideoBillboardPreview.openDecoder(videoUrl, targetWidth, targetHeight, fps, codecId,
-                preferNative, decoderOverride, effectiveStartOffsetMillis, totalMillis, guiConsumer)) {
+        try (AutoCloseable dec = VideoBillboardPreview.openDecoder(candidate.url(), targetWidth, targetHeight,
+                candidateFps,
+                candidate.codecId(),
+                preferNative, decoderOverride, effectiveStartOffsetMillis, totalMillis, guiConsumer,
+                candidate.decodeMode())) {
             decoder = dec;
             while (running && gen == generation.get()) {
                 if (!waitWhilePaused(gen)) {
@@ -238,7 +283,10 @@ final class VideoPlaybackInstance {
                             sessionId, waitNs / 1_000_000L, effectiveStartOffsetMillis, frameQueue.size());
                 }
                 if (frame == null) {
-                    break;
+                    if (!firstFrameLogged) {
+                        throw new java.io.IOException("候选在输出首帧前结束");
+                    }
+                    return true;
                 }
                 frameIndex++;
                 long ptsNanos = frame.ptsNanos() >= 0L ? frame.ptsNanos() : frameIndex * frameIntervalNs;
@@ -259,24 +307,26 @@ final class VideoPlaybackInstance {
                 }
                 warnIfUploadPumpStalled();
             }
-        } catch (OutOfMemoryError error) {
+            return firstFrameLogged;
+        } finally {
+            decoder = null;
+        }
+    }
+
+    private void handleDecodeFailure(long gen, Throwable error) {
+        if (error instanceof OutOfMemoryError) {
             com.zhongbai233.net_music_can_play_bili.client.ClientMediaLifecycleHandler
                     .tripMemoryProtection("video decoder allocation failed: " + error.getMessage());
             LOGGER.error("视频会话内存分配失败并触发熔断: session={}", sessionId, error);
-        } catch (Exception e) {
-            if (gen != generation.get() || (!running && isInterruptedWait(e))) {
+        } else {
+            if (gen != generation.get() || (!running && isInterruptedWait(error))) {
                 return;
             }
-            networkFailure = MediaNetworkFailureClassifier.isNetworkFailure(e);
+            networkFailure = MediaNetworkFailureClassifier.isNetworkFailure(error);
             if (networkFailure) {
                 notifyNetworkFailure();
             }
-            LOGGER.error("视频会话解码失败: session={}", sessionId, e);
-        } finally {
-            if (gen == generation.get()) {
-                running = false;
-                decoder = null;
-            }
+            LOGGER.error("视频会话解码失败: session={}", sessionId, error);
         }
     }
 

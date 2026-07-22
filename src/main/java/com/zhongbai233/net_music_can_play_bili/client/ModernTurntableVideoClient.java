@@ -432,8 +432,8 @@ public final class ModernTurntableVideoClient {
                         "qualityCeiling=" + qualityCeiling + " actualQuality=" + stream.quality() + " title='"
                                 + stream.title() + "' size=" + sourceWidth + "x" + sourceHeight + " fps=" + fps
                                 + " launchTimelineRefreshed=" + (launchSync != sync));
-                VideoBillboardPreview.startSynced(stream.url(), sourceWidth,
-                        sourceHeight, fps, stream.codecId(), launchSync.sessionId(), elapsedMillis,
+                VideoBillboardPreview.startSyncedCandidates(stream.candidates(), sourceWidth,
+                        sourceHeight, fps, launchSync.sessionId(), elapsedMillis,
                         launchSync.totalMillis(),
                         projectorPositions,
                         turntablePos,

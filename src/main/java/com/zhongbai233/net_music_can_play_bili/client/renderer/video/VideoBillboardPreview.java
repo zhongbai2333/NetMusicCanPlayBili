@@ -12,6 +12,8 @@ import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
 import com.zhongbai233.net_music_can_play_bili.media.stream.MediaNetworkFailureClassifier;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.VideoCandidate;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.DecodeMode;
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.client.VideoFeatureFlags;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
@@ -434,6 +436,20 @@ public final class VideoBillboardPreview {
                 anchorPositions, anchor, preferNative, decoderOverride);
     }
 
+    public static void startSyncedCandidates(List<VideoCandidate> candidates, int targetWidth, int targetHeight,
+            int fps, String sessionId, long startOffsetMillis, long totalMillis,
+            Collection<BlockPos> anchorPositions, BlockPos turntablePos, boolean preferNative,
+            String decoderOverride) {
+        if (candidates == null || candidates.isEmpty()) {
+            return;
+        }
+        VideoCandidate preferred = candidates.get(0);
+        VideoPlaybackAnchor anchor = VideoPlaybackAnchor.turntable(turntablePos, sessionId, Math.max(0L, totalMillis));
+        startOrUpdateInstance(preferred.url(), targetWidth, targetHeight, fps, preferred.codecId(), sessionId,
+                startOffsetMillis, totalMillis, anchorPositions, anchor, preferNative, decoderOverride,
+                candidates);
+    }
+
     static void startSynced(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             String sessionId, long startOffsetMillis, long totalMillis, Collection<BlockPos> anchorPositions,
             VideoPlaybackAnchor anchor, boolean preferNative, String decoderOverride) {
@@ -449,6 +465,14 @@ public final class VideoBillboardPreview {
     private static void startOrUpdateInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             String sessionId, long startOffsetMillis, long totalMillis, Collection<BlockPos> anchorPositions,
             VideoPlaybackAnchor anchor, boolean preferNative, String decoderOverride) {
+        startOrUpdateInstance(videoUrl, targetWidth, targetHeight, fps, codecId, sessionId, startOffsetMillis,
+                totalMillis, anchorPositions, anchor, preferNative, decoderOverride,
+                List.of(new VideoCandidate(videoUrl, codecId, targetWidth, targetHeight, fps, 0)));
+    }
+
+    private static void startOrUpdateInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
+            String sessionId, long startOffsetMillis, long totalMillis, Collection<BlockPos> anchorPositions,
+            VideoPlaybackAnchor anchor, boolean preferNative, String decoderOverride, List<VideoCandidate> candidates) {
         if (!com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection.allowMediaStart()) {
             stopIfSession(sessionId);
             return;
@@ -470,7 +494,8 @@ public final class VideoBillboardPreview {
         }
         VideoPlaybackInstance instance = new VideoPlaybackInstance(videoUrl, targetWidth, targetHeight, fps, codecId,
                 sessionId,
-                normalizedOffset, Math.max(0L, totalMillis), projectors, anchor, preferNative, decoderOverride);
+                normalizedOffset, Math.max(0L, totalMillis), projectors, anchor, preferNative, decoderOverride,
+                candidates);
         INSTANCES.put(sessionId, instance);
         PENDING_LOADING.remove(sessionId);
         instance.start();
@@ -1081,9 +1106,22 @@ public final class VideoBillboardPreview {
     static AutoCloseable openDecoder(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             boolean preferNative, String decoderOverride, long startOffsetMillis, long totalMillis,
             boolean forceRgbaOutput) throws IOException {
+        return openDecoder(videoUrl, targetWidth, targetHeight, fps, codecId, preferNative, decoderOverride,
+                startOffsetMillis, totalMillis, forceRgbaOutput, DecodeMode.AUTO);
+    }
+
+    static AutoCloseable openDecoder(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
+            boolean preferNative, String decoderOverride, long startOffsetMillis, long totalMillis,
+            boolean forceRgbaOutput, DecodeMode decodeMode) throws IOException {
         if (preferNative) {
             IOException last = null;
-            for (String hwaccel : VideoFeatureFlags.requestedHwaccelCandidates()) {
+            String[] requested = decodeMode == DecodeMode.SOFTWARE_ONLY
+                    ? new String[] { "none" }
+                    : VideoFeatureFlags.requestedHwaccelCandidates();
+            for (String hwaccel : requested) {
+                if (decodeMode == DecodeMode.HARDWARE_REQUIRED && "none".equalsIgnoreCase(hwaccel)) {
+                    continue;
+                }
                 try {
                     return new Fmp4NativeVideoDecoder(videoUrl, codecId, targetWidth, targetHeight,
                             Integer.MAX_VALUE, true,
