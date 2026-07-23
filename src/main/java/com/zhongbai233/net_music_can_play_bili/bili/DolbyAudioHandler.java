@@ -619,15 +619,14 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         int mixTargetCount = mixTargets.size();
 
         for (SpeakerAudioRelay relay : relays) {
-            int ch = relay.getChannelIndex();
-            if (ch < 0 || ch >= pf.pcmCh.length) {
+            float[] mixed = SpeakerChannelMixer.baseMix(pf.pcmCh, relay.getChannelIndex());
+            if (mixed == null) {
                 continue;
             }
             if (!relay.isAutoMixJoc() || mixTargetCount == 0) {
-                relay.feedChannel(pf.pcmCh[ch]);
+                relay.feedChannel(mixed);
                 continue;
             }
-            float[] mixed = pf.pcmCh[ch].clone();
             mixUnassignedBedChannels(mixed, pf.pcmCh, relay, mixTargets, mixTargetCount);
             mixJocObjects(mixed, pf.objPcmCh, relay, mixTargets, mixTargetCount);
             relay.feedMono(mixed);
@@ -638,7 +637,8 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         List<SpeakerAudioRelay> targets = new ArrayList<>();
         for (SpeakerAudioRelay relay : relays) {
             int ch = relay.getChannelIndex();
-            if (relay.isAutoMixJoc() && ch >= 0 && ch < channelCount) {
+            if (relay.isAutoMixJoc()
+                    && SpeakerChannelMixer.primarySourceChannel(ch, channelCount) >= 0) {
                 targets.add(relay);
             }
         }
@@ -649,24 +649,15 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
             SpeakerAudioRelay relay, List<SpeakerAudioRelay> targets, int targetCount) {
         int relayChannel = relay.getChannelIndex();
         for (int ch = 0; ch < pcmCh.length; ch++) {
-            if (ch == relayChannel || isBedChannelClaimedByAnyRelay(ch)) {
+            if (SpeakerChannelMixer.isSourceClaimed(ch, pcmCh.length, relays)) {
                 continue;
             }
             int targetIndex = nearestRelayIndexForBedChannel(ch, targets);
             if (targetIndex < 0 || targets.get(targetIndex) != relay) {
                 continue;
             }
-            mixInto(mixed, pcmCh[ch], bedMixGain(ch, relayChannel, targetCount));
+            SpeakerChannelMixer.mixInto(mixed, pcmCh[ch], bedMixGain(ch, relayChannel, targetCount));
         }
-    }
-
-    private boolean isBedChannelClaimedByAnyRelay(int channelIndex) {
-        for (SpeakerAudioRelay relay : relays) {
-            if (relay.getChannelIndex() == channelIndex) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private void mixJocObjects(float[] mixed, float[][] objPcmCh, SpeakerAudioRelay relay,
@@ -679,7 +670,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
             if (targetIndex < 0 || targets.get(targetIndex) != relay) {
                 continue;
             }
-            mixInto(mixed, objPcmCh[obj], objectMixGain(targetCount));
+            SpeakerChannelMixer.mixInto(mixed, objPcmCh[obj], objectMixGain(targetCount));
         }
     }
 
@@ -688,8 +679,8 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         int best = -1;
         float bestScore = Float.MAX_VALUE;
         for (int i = 0; i < targets.size(); i++) {
-            int relayChannel = targets.get(i).getChannelIndex();
-            float score = positionDistanceSquared(source, channelPosition(relayChannel));
+            int logicalChannel = targets.get(i).getChannelIndex();
+            float score = positionDistanceSquared(source, channelPosition(logicalChannel));
             if (score < bestScore) {
                 bestScore = score;
                 best = i;
@@ -708,8 +699,8 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         int best = -1;
         float bestScore = Float.MAX_VALUE;
         for (int i = 0; i < targets.size(); i++) {
-            int relayChannel = targets.get(i).getChannelIndex();
-            float score = positionDistanceSquared(source, channelPosition(relayChannel));
+            int logicalChannel = targets.get(i).getChannelIndex();
+            float score = positionDistanceSquared(source, channelPosition(logicalChannel));
             if (score < bestScore) {
                 bestScore = score;
                 best = i;
@@ -737,16 +728,6 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
 
     private float objectMixGain(int targetCount) {
         return 0.85f;
-    }
-
-    private static void mixInto(float[] target, float[] source, float gain) {
-        if (target == null || source == null || gain <= 0.0f) {
-            return;
-        }
-        int n = Math.min(target.length, source.length);
-        for (int i = 0; i < n; i++) {
-            target[i] = softClip(target[i] + source[i] * gain);
-        }
     }
 
     private static float positionDistanceSquared(float[] a, float[] b) {

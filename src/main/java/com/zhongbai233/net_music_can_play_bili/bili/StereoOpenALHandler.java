@@ -343,46 +343,26 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
             return;
         }
         for (SpeakerAudioRelay relay : relays) {
-            int ch = relay.getChannelIndex();
-            if (ch < 0 || ch >= block.length) {
+            float[] mixed = SpeakerChannelMixer.baseMix(block, relay.getChannelIndex());
+            if (mixed == null) {
                 continue;
             }
             if (!relay.isAutoMixJoc()) {
-                relay.feedChannel(block[ch]);
+                relay.feedChannel(mixed);
                 continue;
             }
-            float[] mixed = block[ch].clone();
             for (int sourceChannel = 0; sourceChannel < block.length; sourceChannel++) {
-                if (sourceChannel == ch || isChannelClaimedByAnyRelay(sourceChannel)) {
+                if (SpeakerChannelMixer.isSourceClaimed(sourceChannel, block.length, relays)) {
                     continue;
                 }
-                mixInto(mixed, block[sourceChannel], stereoMixGain(block.length));
+                SpeakerChannelMixer.mixInto(mixed, block[sourceChannel], stereoMixGain(block.length));
             }
             relay.feedMono(mixed);
         }
     }
 
-    private boolean isChannelClaimedByAnyRelay(int channelIndex) {
-        for (SpeakerAudioRelay relay : relays) {
-            if (relay.getChannelIndex() == channelIndex) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private static float stereoMixGain(int channelCount) {
         return channelCount <= 2 ? 0.65f : 0.55f;
-    }
-
-    private static void mixInto(float[] target, float[] source, float gain) {
-        if (target == null || source == null || gain <= 0.0f) {
-            return;
-        }
-        int n = Math.min(target.length, source.length);
-        for (int i = 0; i < n; i++) {
-            target[i] = softClip(target[i] + source[i] * gain);
-        }
     }
 
     private int allowedBlocksForTarget(long targetRelativeTicks) {
