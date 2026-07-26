@@ -356,11 +356,6 @@ public class ModernTurntableSound extends SyncedMediaSound {
         return fallbackLyricTick();
     }
 
-    void stopFromTracker() {
-        finishSession();
-        stop();
-    }
-
     @Override
     protected void finishSession() {
         if (!sessionFinished) {

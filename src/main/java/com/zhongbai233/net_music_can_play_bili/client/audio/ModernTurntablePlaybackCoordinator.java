@@ -90,6 +90,14 @@ public final class ModernTurntablePlaybackCoordinator {
             return;
         }
 
+        String liveRoomId = com.zhongbai233.net_music_can_play_bili.bili.BiliLiveRoomInput
+                .roomIdFromPlaceholder(com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync
+                        .strip(command.playUrl()));
+        if (!liveRoomId.isEmpty()) {
+            playLive(command, sourcePos, liveRoomId);
+            return;
+        }
+
         if (command.minecartAnchor() != null && command.hasSession()) {
             ClientMinecartAudioAnchors.register(command.sessionId(), command.minecartAnchor().entityId(),
                     command.minecartAnchor().entityUuid());
@@ -132,7 +140,7 @@ public final class ModernTurntablePlaybackCoordinator {
         }
         long prepareMillis = TimeUnit.NANOSECONDS.toMillis(Math.max(0L, System.nanoTime() - prepareStartedNanos));
         final long launchElapsedMillis = AudioStartupSync.compensatedOffsetMillis(
-            command.elapsedMillis(), command.totalMillis(), prepareMillis);
+                command.elapsedMillis(), command.totalMillis(), prepareMillis);
         SyncedMediaPlaybackLauncher.LaunchResult launch;
         try {
             launch = SyncedMediaPlaybackLauncher.fromPrepared(
@@ -166,7 +174,59 @@ public final class ModernTurntablePlaybackCoordinator {
         boolean submitted = SyncedMediaPlaybackLauncher.play(launch, command.songName(),
                 (url, lyricRecord) -> new ModernTurntableSound(sourcePos, url,
                         command.remainingSeconds(), lyricRecord, command.sessionId(), launchElapsedMillis,
-                command.rawUrl(), command.songName(), command.durationMillis()), false);
+                        command.rawUrl(), command.songName(), command.durationMillis()),
+                false);
+        if (!submitted) {
+            ModernTurntablePlaybackTracker.finish(sourcePos, command.sessionId());
+        }
+    }
+
+    /**
+     * B站直播播放：跳过直链解析与歌词，占位地址原样注册请求 token，
+     * 由 BiliLiveAudioStreamHandler 在声音线程解析真实直播流并输出到 OpenAL。
+     */
+    private static void playLive(ClientPlaybackCommand command, BlockPos sourcePos, String roomId) {
+        if (com.zhongbai233.net_music_can_play_bili.bili.LiveOfflineBackoff.isBlocked(roomId)) {
+            // 房间未开播且在退避期内：不创建声音实例（保护声音引擎的流式句柄），等下轮探测。
+            LOGGER.debug("直播间未开播退避中，跳过本轮播放: room={} pos={}", roomId, sourcePos);
+            return;
+        }
+        if (command.hasSession()
+                && !ModernTurntablePlaybackTracker.tryStart(sourcePos, command.sessionId(),
+                        command.remainingSeconds())) {
+            return;
+        }
+        SyncedMediaPlaybackLauncher.LaunchResult launch;
+        try {
+            launch = SyncedMediaPlaybackLauncher.fromPrepared(command.rawUrl(), command.songName(),
+                    new ClientMediaPreparer.PreparedMedia(command.playUrl(), null), command.playUrl(),
+                    command.sessionId(), 0L, 0L, sourcePos, null, null);
+        } catch (RuntimeException launchError) {
+            LOGGER.error("直播机客户端提交播放失败: pos={} session={} room={}", sourcePos,
+                    command.sessionId(), roomId, launchError);
+            ModernTurntablePlaybackTracker.fail(sourcePos, command.sessionId());
+            return;
+        }
+        if (launch == null) {
+            ModernTurntablePlaybackTracker.finish(sourcePos, command.sessionId());
+            return;
+        }
+        if (command.hasSession() && !launch.requestToken().isBlank()
+                && !ModernTurntablePlaybackTracker.onCancel(sourcePos, command.sessionId(),
+                        () -> HttpAudioStreamHandler.cancelRequest(launch.requestToken()))) {
+            HttpAudioStreamHandler.cancelRequest(launch.requestToken());
+            return;
+        }
+        if (command.hasSession()) {
+            ModernTurntablePlaybackTracker.onCancel(sourcePos, command.sessionId(),
+                    () -> com.zhongbai233.net_music_can_play_bili.client.LiveStreamerVideoClient
+                            .forget(command.sessionId()));
+        }
+        LOGGER.debug("直播机客户端接管播放: room={} session={} pos={}", roomId, command.sessionId(), sourcePos);
+        boolean submitted = SyncedMediaPlaybackLauncher.play(launch, command.songName(),
+                (url, ignoredLyric) -> new LiveStreamerSound(sourcePos, url, command.remainingSeconds(),
+                        command.sessionId()),
+                false);
         if (!submitted) {
             ModernTurntablePlaybackTracker.finish(sourcePos, command.sessionId());
         }

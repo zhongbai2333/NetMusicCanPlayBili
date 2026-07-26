@@ -155,6 +155,10 @@ public class VideoProjectorScreen extends BlackGoldScreen {
                 && !t.getSongName().isBlank()) {
             String s = t.getSongName();
             info = s.length() > 26 ? s.substring(0, 24) + ".." : s;
+        } else if (level.getBlockEntity(
+                linked) instanceof com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEntity live
+                && !live.getRoomId().isEmpty()) {
+            info = "B站直播 " + live.getRoomId();
         }
         g.centeredText(font, Component.literal(info), cx, iy, GOLD);
 

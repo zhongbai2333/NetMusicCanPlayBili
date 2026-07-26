@@ -1,0 +1,9 @@
+{
+  "parent": "minecraft:block/orientable_with_bottom",
+  "textures": {
+    "front": "net_music_can_play_bili:block/live_streamer_front",
+    "side": "net_music_can_play_bili:block/live_streamer_side",
+    "top": "net_music_can_play_bili:block/live_streamer_top",
+    "bottom": "net_music_can_play_bili:block/live_streamer_bottom"
+  }
+}

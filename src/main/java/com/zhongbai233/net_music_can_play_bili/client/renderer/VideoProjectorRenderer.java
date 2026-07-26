@@ -34,7 +34,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
  */
 public class VideoProjectorRenderer
         implements BlockEntityRenderer<VideoProjectorBlockEntity, VideoProjectorRenderer.State> {
-        private static final double PROJECTOR_RENDER_MARGIN = Double.parseDouble(
+    private static final double PROJECTOR_RENDER_MARGIN = Double.parseDouble(
             System.getProperty("ncpb.video.projector.render_margin", "0.5"));
     private static final double PROJECTOR_RENDER_MAX_ASPECT = Double.parseDouble(
             System.getProperty("ncpb.video.projector.render_max_aspect", "8.0"));
@@ -72,7 +72,27 @@ public class VideoProjectorRenderer
         }
         state.linkedPos = linkedPos.immutable();
         var level = projector.getLevel();
-        if (!(level.getBlockEntity(linkedPos) instanceof ModernTurntableBlockEntity turntable)) {
+        var linkedBlockEntity = level.getBlockEntity(linkedPos);
+        // 直播机与唱片机都是合法的视频源；直播会话由 LiveStreamerVideoClient 驱动，
+        // 渲染器只负责取帧和可见性。
+        if (linkedBlockEntity instanceof com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEntity live) {
+            ClientLinkRegistry.link(projector.getBlockPos(), linkedPos);
+            state.visible = live.isPlaying();
+            if (state.visible) {
+                // 与唱片机一致：登记为 BER 渲染，避免 VideoPlaybackInstance 的
+                // 备用几何路径同帧再画一张屏（姿态计算不同会呈交叉双片）。
+                VideoBillboardPreview.attachProjectorToTurntable(linkedPos, projector.getBlockPos());
+                String liveSessionId = com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker
+                        .currentSessionId(linkedPos);
+                state.sessionId = liveSessionId.isBlank() ? null : liveSessionId;
+                state.frame = VideoBillboardPreview.currentProjectorDisplayFrame(projector.getBlockPos());
+            } else {
+                VideoBillboardPreview.stopIfProjector(projector.getBlockPos());
+            }
+            syncActivatedState(projector, state.visible);
+            return;
+        }
+        if (!(linkedBlockEntity instanceof ModernTurntableBlockEntity turntable)) {
             ClientLinkRegistry.unlink(projector.getBlockPos());
             VideoBillboardPreview.stopIfProjector(projector.getBlockPos());
             projector.unlink();
@@ -121,7 +141,7 @@ public class VideoProjectorRenderer
 
         if (state.sessionId != null && !state.hideVideoForPrivacy) {
             VideoBillboardPreview.captureProjectorImmediatePose(state.sessionId, state.projectorPos,
-                screenPose, halfHeight);
+                    screenPose, halfHeight);
         }
 
         if (state.hideVideoForPrivacy) {
@@ -157,17 +177,17 @@ public class VideoProjectorRenderer
     @Override
     public AABB getRenderBoundingBox(VideoProjectorBlockEntity blockEntity) {
         return ProjectorScreenBounds.aroundBlock(blockEntity.getBlockPos(),
-            blockEntity.getProjectionDistanceX(), blockEntity.getProjectionHeight(),
-            blockEntity.getProjectionDistanceZ(), blockEntity.getProjectionYaw(),
-            blockEntity.getProjectionPitch(), blockEntity.getProjectionScale(),
-            PROJECTOR_RENDER_MAX_ASPECT, PROJECTOR_RENDER_MARGIN);
-        }
+                blockEntity.getProjectionDistanceX(), blockEntity.getProjectionHeight(),
+                blockEntity.getProjectionDistanceZ(), blockEntity.getProjectionYaw(),
+                blockEntity.getProjectionPitch(), blockEntity.getProjectionScale(),
+                PROJECTOR_RENDER_MAX_ASPECT, PROJECTOR_RENDER_MARGIN);
+    }
 
-        @Override
-        public boolean shouldRender(VideoProjectorBlockEntity blockEntity, Vec3 cameraPos) {
+    @Override
+    public boolean shouldRender(VideoProjectorBlockEntity blockEntity, Vec3 cameraPos) {
         double viewDistance = getViewDistance();
-        return ProjectorScreenBounds.distanceToSqr(getRenderBoundingBox(blockEntity), cameraPos)
-            < viewDistance * viewDistance;
+        return ProjectorScreenBounds.distanceToSqr(getRenderBoundingBox(blockEntity), cameraPos) < viewDistance
+                * viewDistance;
     }
 
     private static void syncActivatedState(VideoProjectorBlockEntity projector, boolean visible) {

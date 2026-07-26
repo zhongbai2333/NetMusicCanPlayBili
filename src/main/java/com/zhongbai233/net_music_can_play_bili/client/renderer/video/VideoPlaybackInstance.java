@@ -82,6 +82,8 @@ final class VideoPlaybackInstance {
     private int targetHeight;
     private final int fps;
     private final List<VideoCandidate> candidates;
+    /** 直播总线源：pts 已在音频输出时间域，播放时钟不得按"当前媒体位置"重基准。 */
+    private final boolean liveSource;
     private final String sessionId;
     private final long startOffsetMillis;
     private final long totalMillis;
@@ -151,6 +153,8 @@ final class VideoPlaybackInstance {
         this.candidates = candidates == null || candidates.isEmpty()
                 ? List.of(new VideoCandidate(videoUrl, codecId, targetWidth, targetHeight, fps, 0))
                 : List.copyOf(candidates);
+        this.liveSource = com.zhongbai233.net_music_can_play_bili.media.stream.LiveVideoSampleBus
+                .isBusUrl(this.candidates.get(0).url());
         this.sessionId = sessionId;
         this.startOffsetMillis = Math.max(0L, startOffsetMillis);
         this.totalMillis = Math.max(0L, totalMillis);
@@ -449,6 +453,10 @@ final class VideoPlaybackInstance {
     }
 
     private long effectiveDecoderStartOffsetMillis() {
+        if (liveSource) {
+            // 直播样本 pts 与播放时钟同域（音频输出时间），重基准会把帧推到"未来"。
+            return 0L;
+        }
         long restartOffset = adaptiveRestartOffsetMillis;
         long requestedOffsetMillis = restartOffset >= 0L ? restartOffset : startOffsetMillis;
         long synced = anchor.timeline().mediaMillis();
@@ -534,6 +542,10 @@ final class VideoPlaybackInstance {
     }
 
     private long currentRestartOffsetMillis() {
+        if (liveSource) {
+            // 直播重启后从总线关键帧续播，不存在 seek 偏移。
+            return 0L;
+        }
         long displayed = mediaMillis();
         if (displayed >= 0L) {
             return totalMillis > 0L ? Math.min(totalMillis, displayed) : displayed;

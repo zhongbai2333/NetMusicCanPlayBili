@@ -207,6 +207,8 @@ public class VideoProjectorBlockEntity extends SyncedBlockEntity {
             com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry.unlink(worldPosition);
             if (linkedTurntablePos != null) {
                 com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry.link(worldPosition, linkedTurntablePos);
+                com.mojang.logging.LogUtils.getLogger().debug("视频投影仪客户端链接注册: projector={} target={}",
+                        worldPosition, linkedTurntablePos);
             }
         }
     }

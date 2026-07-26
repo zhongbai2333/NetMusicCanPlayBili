@@ -1,6 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.client.audio;
 
-import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.blockentity.PlaybackAudioSource;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 
@@ -21,24 +21,29 @@ final class ClientAudioOutputPolicy {
     }
 
     static float volume(BlockPos sourcePos) {
-        ModernTurntableBlockEntity turntable = turntable(sourcePos);
-        return turntable != null ? turntable.getVolume() : 1.0F;
+        PlaybackAudioSource source = source(sourcePos);
+        return source != null ? source.getVolume() : 1.0F;
     }
 
     static long targetRelativeTicks(BlockPos sourcePos, String sessionId, long startOffsetTicks) {
         if (ClientMinecartAudioAnchors.isMoving(sessionId)) {
             return Long.MAX_VALUE;
         }
-        ModernTurntableBlockEntity turntable = turntable(sourcePos);
+        PlaybackAudioSource source = source(sourcePos);
         Minecraft minecraft = Minecraft.getInstance();
-        if (turntable == null || minecraft == null || minecraft.level == null || !turntable.isPlaying()) {
+        if (source == null || minecraft == null || minecraft.level == null || !source.isPlaying()) {
             return Long.MAX_VALUE;
         }
-        long targetTicks = turntable.getPlaybackElapsedMillis(minecraft.level.getGameTime()) / 50L;
+        long elapsedMillis = source.getPlaybackElapsedMillis(minecraft.level.getGameTime());
+        if (elapsedMillis < 0L) {
+            // 无界媒体（直播）没有服务端进度，不做 pacing
+            return Long.MAX_VALUE;
+        }
+        long targetTicks = elapsedMillis / 50L;
         return Math.max(0L, targetTicks - startOffsetTicks + AUDIO_SYNC_AHEAD_TOLERANCE_TICKS);
     }
 
-    private static ModernTurntableBlockEntity turntable(BlockPos sourcePos) {
+    private static PlaybackAudioSource source(BlockPos sourcePos) {
         if (!isWorldPosition(sourcePos)) {
             return null;
         }
@@ -46,8 +51,8 @@ final class ClientAudioOutputPolicy {
         if (minecraft == null || minecraft.level == null) {
             return null;
         }
-        return minecraft.level.getBlockEntity(sourcePos) instanceof ModernTurntableBlockEntity turntable
-                ? turntable
+        return minecraft.level.getBlockEntity(sourcePos) instanceof PlaybackAudioSource source
+                ? source
                 : null;
     }
 

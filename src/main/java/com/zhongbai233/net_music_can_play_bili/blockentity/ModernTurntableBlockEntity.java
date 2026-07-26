@@ -42,7 +42,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
 
-public class ModernTurntableBlockEntity extends BlockEntity {
+public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackAudioSource {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final String DISC_TAG = "Disc";
     private static final String PLAYING_TAG = "Playing";

@@ -12,6 +12,7 @@ public final class BiliClientAudioHandlers {
 
     public static void register() {
         AudioStreamHandlerManager.registerHandler(new HttpAudioStreamHandler());
-        LOGGER.info("HttpAudioStreamHandler registered with NetMusic");
+        AudioStreamHandlerManager.registerHandler(new BiliLiveAudioStreamHandler());
+        LOGGER.info("HttpAudioStreamHandler and BiliLiveAudioStreamHandler registered with NetMusic");
     }
 }

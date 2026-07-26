@@ -109,5 +109,20 @@
   "message.net_music_can_play_bili.media_tool.no_active_source": "No active reportable source was found",
   "message.net_music_can_play_bili.media_tool.report_sent": "Reported the source to online OP2+ players (%d total / %d reporter(s))",
   "message.net_music_can_play_bili.media_tool.report_logged": "Recorded the source report; no OP2+ players are currently online (%d total / %d reporter(s))",
-  "message.net_music_can_play_bili.media_tool.report_merged": "Merged into the existing source report to prevent spam (%d total / %d reporter(s))"
+  "message.net_music_can_play_bili.media_tool.report_merged": "Merged into the existing source report to prevent spam (%d total / %d reporter(s))",
+  "block.net_music_can_play_bili.live_streamer": "Live Streamer",
+  "item.net_music_can_play_bili.live_streamer": "Live Streamer",
+  "gui.net_music_can_play_bili.live_streamer": "Live Streamer",
+  "gui.net_music_can_play_bili.live_streamer.room_label": "Bilibili Live Room",
+  "gui.net_music_can_play_bili.live_streamer.room_hint": "Room id or live room link",
+  "gui.net_music_can_play_bili.live_streamer.start": "Start",
+  "gui.net_music_can_play_bili.live_streamer.stop": "Stop",
+  "gui.net_music_can_play_bili.live_streamer.status_playing": "Live: %s",
+  "gui.net_music_can_play_bili.live_streamer.status_ready": "Ready: %s",
+  "gui.net_music_can_play_bili.live_streamer.status_empty": "No live room set",
+  "message.net_music_can_play_bili.live_streamer.invalid_room": "Invalid live room. Enter a numeric room id or a live room link",
+  "message.net_music_can_play_bili.live_streamer.need_room": "Set a live room id first",
+  "message.net_music_can_play_bili.live_streamer.room_offline": "Live room %s is not streaming",
+  "message.net_music_can_play_bili.live_streamer.room_missing": "Live room %s does not exist or is unreachable",
+  "message.net_music_can_play_bili.live_streamer.room_offline_waiting": "Live room %s is offline, retrying every %s s"
 }

@@ -1,0 +1,34 @@
+{
+  "variants": {
+    "playing=false,facing=north": {
+      "model": "net_music_can_play_bili:block/live_streamer"
+    },
+    "playing=false,facing=east": {
+      "model": "net_music_can_play_bili:block/live_streamer",
+      "y": 90
+    },
+    "playing=false,facing=south": {
+      "model": "net_music_can_play_bili:block/live_streamer",
+      "y": 180
+    },
+    "playing=false,facing=west": {
+      "model": "net_music_can_play_bili:block/live_streamer",
+      "y": 270
+    },
+    "playing=true,facing=north": {
+      "model": "net_music_can_play_bili:block/live_streamer"
+    },
+    "playing=true,facing=east": {
+      "model": "net_music_can_play_bili:block/live_streamer",
+      "y": 90
+    },
+    "playing=true,facing=south": {
+      "model": "net_music_can_play_bili:block/live_streamer",
+      "y": 180
+    },
+    "playing=true,facing=west": {
+      "model": "net_music_can_play_bili:block/live_streamer",
+      "y": 270
+    }
+  }
+}

@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.mixin;
 
 import com.github.tartaricacid.netmusic.client.gui.BigMegaphoneScreen;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliLiveRoomInput;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.events.GuiEventListener;
@@ -34,11 +35,13 @@ public abstract class BigMegaphoneScreenMixin {
                 Button.OnPress original = bridge.net_music_can_play_bili$getOnPress();
                 Button.OnPress wrapped = btn2 -> {
                     String text = this.urlTextField.getValue().trim();
-                    if (text.startsWith("live:")) {
-                        String saved = text;
-                        this.urlTextField.setValue("http://live/" + text.substring(5) + ".m3u8");
+                    String roomId = BiliLiveRoomInput.parseRoomId(text);
+                    if (!roomId.isEmpty()) {
+                        // NetMusic 服务端只接受 m3u8 广播地址，因此发送占位地址，
+                        // 由客户端的 BiliLiveAudioStreamHandler 解析成真实直播流。
+                        this.urlTextField.setValue(BiliLiveRoomInput.placeholderUrl(roomId));
                         original.onPress(btn2);
-                        this.urlTextField.setValue(saved);
+                        this.urlTextField.setValue(text);
                     } else {
                         original.onPress(btn2);
                     }

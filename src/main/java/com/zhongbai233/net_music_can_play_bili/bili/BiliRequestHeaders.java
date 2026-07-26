@@ -26,6 +26,9 @@ public final class BiliRequestHeaders {
     };
     public static final String WEB_REFERER = "https://www.bilibili.com/";
     public static final String WEB_ORIGIN = "https://www.bilibili.com";
+    /** 直播 API 与直播 CDN 校验的是直播站点来源，与点播站点不同。 */
+    public static final String LIVE_REFERER = "https://live.bilibili.com/";
+    public static final String LIVE_ORIGIN = "https://live.bilibili.com";
     public static final String ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9,en;q=0.8";
     private static final AtomicInteger UA_INDEX = new AtomicInteger(
             ThreadLocalRandom.current().nextInt(DESKTOP_USER_AGENT_PRESETS.length));
@@ -81,6 +84,19 @@ public final class BiliRequestHeaders {
                 .header("Accept", "*/*")
                 .header("Accept-Language", ACCEPT_LANGUAGE);
         if (isBiliHost(url)) {
+            addCookie(builder);
+        }
+        return builder;
+    }
+
+    /** 直播 API 与直播流 CDN 共用的请求头；Referer/Origin 必须指向直播站点。 */
+    public static HttpRequest.Builder applyLiveHeaders(HttpRequest.Builder builder, URL url) {
+        builder.header("User-Agent", userAgent())
+                .header("Referer", LIVE_REFERER)
+                .header("Origin", LIVE_ORIGIN)
+                .header("Accept", "*/*")
+                .header("Accept-Language", ACCEPT_LANGUAGE);
+        if (url == null || isBiliHost(url)) {
             addCookie(builder);
         }
         return builder;

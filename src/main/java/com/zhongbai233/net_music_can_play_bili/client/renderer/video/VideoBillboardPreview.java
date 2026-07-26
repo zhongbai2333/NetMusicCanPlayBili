@@ -436,6 +436,20 @@ public final class VideoBillboardPreview {
                 anchorPositions, anchor, preferNative, decoderOverride);
     }
 
+    /**
+     * 直播机视频入口：解码源是 {@code LiveVideoSampleBus}，播放时钟锚定直播机处的
+     * OpenAL 可听位置，无总时长与 seek。
+     */
+    public static void startLiveSession(String busUrl, int targetWidth, int targetHeight, int fps,
+            String sessionId, Collection<BlockPos> projectorPositions, BlockPos livePos) {
+        if (sessionId == null || sessionId.isBlank() || busUrl == null || busUrl.isBlank()) {
+            return;
+        }
+        VideoPlaybackAnchor anchor = new LiveVideoPlaybackAnchor(livePos, sessionId);
+        startOrUpdateInstance(busUrl, targetWidth, targetHeight, fps, 7, sessionId, 0L, 0L,
+                projectorPositions, anchor, true, null);
+    }
+
     public static void startSyncedCandidates(List<VideoCandidate> candidates, int targetWidth, int targetHeight,
             int fps, String sessionId, long startOffsetMillis, long totalMillis,
             Collection<BlockPos> anchorPositions, BlockPos turntablePos, boolean preferNative,
@@ -685,6 +699,8 @@ public final class VideoBillboardPreview {
         String normalized = sessionId != null ? sessionId : "";
         clearPendingLoading(normalized);
         ModernTurntableVideoClient.forgetSession(normalized);
+        // YUV 立即渲染路径未激活时捕获的姿态不会被消费，会话结束必须显式清理。
+        PROJECTOR_IMMEDIATE_POSES.keySet().removeIf(key -> key.sessionId().equals(normalized));
         VideoPlaybackInstance instance = INSTANCES.remove(normalized);
         if (instance != null) {
             instance.stop();
@@ -700,6 +716,7 @@ public final class VideoBillboardPreview {
         }
         berRenderedProjectorPositions.remove(projectorPos);
         PROJECTOR_VISIBILITY_CACHE.remove(projectorPos);
+        PROJECTOR_IMMEDIATE_POSES.keySet().removeIf(key -> key.projectorPos().equals(projectorPos));
         PENDING_LOADING.replaceAll((sessionId, pending) -> pending.withoutProjector(projectorPos));
         PENDING_LOADING.entrySet().removeIf(entry -> entry.getValue().projectorPositions().isEmpty());
         INSTANCES.values().forEach(instance -> instance.removeProjector(projectorPos));
@@ -1113,6 +1130,28 @@ public final class VideoBillboardPreview {
     static AutoCloseable openDecoder(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             boolean preferNative, String decoderOverride, long startOffsetMillis, long totalMillis,
             boolean forceRgbaOutput, DecodeMode decodeMode) throws IOException {
+        if (com.zhongbai233.net_music_can_play_bili.media.stream.LiveVideoSampleBus.isBusUrl(videoUrl)) {
+            String busKey = com.zhongbai233.net_music_can_play_bili.media.stream.LiveVideoSampleBus
+                    .keyFromBusUrl(videoUrl);
+            IOException last = null;
+            String[] requested = decodeMode == DecodeMode.SOFTWARE_ONLY
+                    ? new String[] { "none" }
+                    : VideoFeatureFlags.requestedHwaccelCandidates();
+            for (String hwaccel : requested) {
+                if (decodeMode == DecodeMode.HARDWARE_REQUIRED && "none".equalsIgnoreCase(hwaccel)) {
+                    continue;
+                }
+                try {
+                    return Fmp4NativeVideoDecoder.forLiveBus(busKey, targetWidth, targetHeight,
+                            forceRgbaOutput ? Fmp4NativeVideoDecoder.OutputFormat.RGBA : yuvDecodeFormat(), hwaccel,
+                            fps);
+                } catch (IOException e) {
+                    last = e;
+                    LOGGER.warn("直播视频解码器启动失败 hwaccel={}，尝试下一个候选: {}", hwaccel, e.toString());
+                }
+            }
+            throw last != null ? last : new IOException("直播视频解码器不可用");
+        }
         if (preferNative) {
             IOException last = null;
             String[] requested = decodeMode == DecodeMode.SOFTWARE_ONLY

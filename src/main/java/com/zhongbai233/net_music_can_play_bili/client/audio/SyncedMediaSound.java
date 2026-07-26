@@ -71,9 +71,25 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
                 BiliPlaybackDiagnostics.markFailed(songUrl, e);
                 onStreamFailure(e);
                 NetMusic.LOGGER.error("Failed to create {} audio stream for URL: {}", streamDebugName(), songUrl, e);
-                throw new CompletionException(e);
+                // 不向声音引擎抛异常：future 异常完成会让已分配的流式声道悬空，
+                // 反复失败（如直播间未开播）会耗尽 8 个流式句柄。改为返回提示音，
+                // 声道正常挂载、播完即释放。
+                return errorCueStream(e);
             }
         }, Util.backgroundExecutor());
+    }
+
+    private AudioStream errorCueStream(Exception cause) {
+        try {
+            java.io.InputStream errorSound = net.minecraft.client.Minecraft.getInstance()
+                    .getResourceManager()
+                    .open(com.github.tartaricacid.netmusic.client.audio.NetMusicSound.ERROR_SOUND);
+            return new net.minecraft.client.sounds.JOrbisAudioStream(errorSound);
+        } catch (Exception fallbackError) {
+            CompletionException failure = new CompletionException(cause);
+            failure.addSuppressed(fallbackError);
+            throw failure;
+        }
     }
 
     protected int fallbackLyricTick() {
@@ -84,6 +100,11 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
     protected void stopAndFinish() {
         finishSession();
         stop();
+    }
+
+    /** 供播放 tracker 在会话被取消/替换时停止本声音实例。 */
+    void stopFromTracker() {
+        stopAndFinish();
     }
 
     protected void onStreamStarting() {

@@ -148,9 +148,13 @@ public abstract class BlackGoldScreen extends Screen {
     /** 便捷创建滑块 + 文本框 */
     protected ConfigSlider addConfigSlider(int x, int y, float min, float max, float cur,
             Consumer<Float> onApply) {
-        ConfigSlider s = new ConfigSlider(x, y, SLIDER_W, SLIDER_H, min, max, cur, onApply);
+        return addConfigSlider(new ConfigSlider(x, y, SLIDER_W, SLIDER_H, min, max, cur, onApply), cur, onApply);
+    }
+
+    /** 注册子类自定义的滑块实例（如需要 onRelease 即时提交），并挂接联动文本框。 */
+    protected ConfigSlider addConfigSlider(ConfigSlider s, float cur, Consumer<Float> onApply) {
         addRenderableWidget(s);
-        EditBox box = new EditBox(font, x + SLIDER_W + 4, y, VAL_W, SLIDER_H, Component.empty());
+        EditBox box = new EditBox(font, s.getX() + SLIDER_W + 4, s.getY(), VAL_W, SLIDER_H, Component.empty());
         box.setValue(ConfigSlider.fmt(cur));
         box.setResponder(txt -> {
             try {

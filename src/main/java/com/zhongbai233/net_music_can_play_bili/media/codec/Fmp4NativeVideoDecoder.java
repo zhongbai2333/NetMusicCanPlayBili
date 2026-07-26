@@ -75,7 +75,10 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             "bili.video.segment_base_cache.max_entries", 512);
     private static final ConcurrentHashMap<String, SegmentBaseInfo> SEGMENT_BASE_BY_URL = new ConcurrentHashMap<>();
 
+    /** fMP4 模式下的媒体地址；直播总线模式为 null。 */
     private final URL videoUrl;
+    /** 直播视频样本总线 key；非 null 时输入来自 {@code LiveVideoSampleBus} 而不是 HTTP。 */
+    private final String liveBusKey;
     private final int codecId;
     private final int targetWidth;
     private final int targetHeight;
@@ -166,7 +169,28 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     public Fmp4NativeVideoDecoder(String videoUrl, int codecId, int targetWidth, int targetHeight, int maxFrames,
             boolean outputFrames, OutputFormat outputFormat, String requestedHwaccel, long startOffsetMillis,
             long totalMillis, int fps) throws IOException {
-        this.videoUrl = URI.create(videoUrl).toURL();
+        this(URI.create(videoUrl).toURL(), null, codecId, targetWidth, targetHeight, maxFrames, outputFrames,
+                outputFormat, requestedHwaccel, startOffsetMillis, totalMillis, fps);
+    }
+
+    /**
+     * 直播总线模式：输入是 {@code LiveVideoSampleBus} 里由音频会话解出的 H.264 样本，
+     * pts 已在音频输出时间域。无 seek、无 HTTP，流结束由总线关闭驱动。
+     */
+    public static Fmp4NativeVideoDecoder forLiveBus(String busKey, int targetWidth, int targetHeight,
+            OutputFormat outputFormat, String requestedHwaccel, int fps) throws IOException {
+        if (busKey == null || busKey.isBlank()) {
+            throw new IOException("直播视频总线 key 为空");
+        }
+        return new Fmp4NativeVideoDecoder(null, busKey, CODEC_H264, targetWidth, targetHeight, Integer.MAX_VALUE,
+                true, outputFormat, requestedHwaccel, 0L, 0L, fps);
+    }
+
+    private Fmp4NativeVideoDecoder(URL videoUrl, String liveBusKey, int codecId, int targetWidth, int targetHeight,
+            int maxFrames, boolean outputFrames, OutputFormat outputFormat, String requestedHwaccel,
+            long startOffsetMillis, long totalMillis, int fps) throws IOException {
+        this.videoUrl = videoUrl;
+        this.liveBusKey = liveBusKey;
         if (codecId != CODEC_H264 && codecId != CODEC_AV1) {
             throw new IOException("不支持的视频 codecId=" + codecId + "（仅支持 7=H.264, 13=AV1）");
         }
@@ -280,6 +304,10 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     }
 
     private void parseAndDecode() throws IOException {
+        if (liveBusKey != null) {
+            decodeLiveBusStream();
+            return;
+        }
         long streamStartOffsetMillis = startOffsetMillis;
         int recoveries = 0;
         while (!closed.get() && totalFrames < maxFrames) {
@@ -299,6 +327,48 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                         e.getMessage(), recoveries, FMP4_STREAM_RECOVERY_ATTEMPTS, streamStartOffsetMillis);
                 resetParserStateForRecovery();
             }
+        }
+    }
+
+    /** 直播模式主循环：从样本总线取 AVCC 样本喂解码器，直到总线关闭或解码器被关闭。 */
+    private void decodeLiveBusStream() throws IOException {
+        com.zhongbai233.net_music_can_play_bili.media.stream.LiveVideoSampleBus bus = com.zhongbai233.net_music_can_play_bili.media.stream.LiveVideoSampleBus
+                .find(liveBusKey);
+        if (bus == null) {
+            throw new IOException("直播视频总线不存在: " + liveBusKey);
+        }
+        logger().debug("直播视频总线解码开始: key={} output={} target={}x{}", liveBusKey, outputFormat,
+                targetWidth, targetHeight);
+        byte[] activeConfig = null;
+        while (!closed.get()) {
+            com.zhongbai233.net_music_can_play_bili.media.stream.LiveVideoSampleBus.VideoSample sample;
+            try {
+                sample = bus.poll(250L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            if (sample == null) {
+                if (bus.isClosed()) {
+                    logger().debug("直播视频总线已关闭，解码结束: key={} frames={}", liveBusKey, totalFrames);
+                    return;
+                }
+                continue;
+            }
+            if (sample.avcConfig() != activeConfig) {
+                DecoderConfig config = parseAvcC(sample.avcConfig());
+                if (config == null || config.packetPrefix().length == 0) {
+                    throw new IOException("直播视频 avcC 无效: bytes="
+                            + (sample.avcConfig() != null ? sample.avcConfig().length : 0));
+                }
+                decoderConfig = config.packetPrefix();
+                nalLengthSize = config.nalLengthSize();
+                sentConfig = false;
+                activeConfig = sample.avcConfig();
+                logger().debug("直播视频 avcC 已应用: key={} configBytes={} nalLengthSize={}", liveBusKey,
+                        decoderConfig.length, nalLengthSize);
+            }
+            decodeSample(sample.data(), sample.ptsNanos());
         }
     }
 

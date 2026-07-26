@@ -1,7 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer;
 
 import com.zhongbai233.net_music_can_play_bili.block.SpeakerBlock;
-import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.SpeakerBlockEntity;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.SubmitNodeCollector;
@@ -37,9 +36,11 @@ public class SpeakerRenderer implements BlockEntityRenderer<SpeakerBlockEntity, 
         BlockPos linked = speaker.getLinkedTurntablePos();
         if (linked != null) {
             var level = speaker.getLevel();
+            // 唱片机与直播机都通过 PlaybackAudioSource 提供播放状态
             if (level != null
-                    && level.getBlockEntity(linked) instanceof ModernTurntableBlockEntity turntable
-                    && turntable.isPlaying()) {
+                    && level.getBlockEntity(
+                            linked) instanceof com.zhongbai233.net_music_can_play_bili.blockentity.PlaybackAudioSource source
+                    && source.isPlaying()) {
                 active = true;
             }
         }

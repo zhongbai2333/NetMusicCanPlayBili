@@ -14,6 +14,10 @@ public final class ModernTurntableNetwork {
                 ModernTurntableControlPacket.STREAM_CODEC,
                 ModernTurntableControlPacket::handle);
         registrar.playToServer(
+                LiveStreamerControlPacket.TYPE,
+                LiveStreamerControlPacket.STREAM_CODEC,
+                LiveStreamerControlPacket::handle);
+        registrar.playToServer(
                 LyricProjectorConfigPacket.TYPE,
                 LyricProjectorConfigPacket.STREAM_CODEC,
                 LyricProjectorConfigPacket::handle);

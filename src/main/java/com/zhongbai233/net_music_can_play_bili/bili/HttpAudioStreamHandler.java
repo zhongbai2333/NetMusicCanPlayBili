@@ -123,6 +123,12 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         }
     }
 
+    /** 供其他 handler（如直播）消费自己 URL 上携带的一次性播放请求。 */
+    public static PlaybackRequest consumeRegisteredRequest(String url) {
+        String requestToken = PlaybackSync.parseRequestToken(url);
+        return requestToken.isBlank() ? null : REQUESTS.consume(requestToken);
+    }
+
     public static void closeModernStreams() {
         for (ActiveStreamControl control : ACTIVE_MODERN_STREAMS) {
             control.close();

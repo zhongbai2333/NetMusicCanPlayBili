@@ -1,0 +1,19 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {
+    "E": "minecraft:ender_pearl",
+    "I": "minecraft:iron_ingot",
+    "J": "minecraft:jukebox",
+    "O": "minecraft:observer",
+    "R": "minecraft:redstone"
+  },
+  "pattern": [
+    "III",
+    "OJE",
+    "IRI"
+  ],
+  "result": {
+    "id": "net_music_can_play_bili:live_streamer"
+  }
+}

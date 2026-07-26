@@ -12,7 +12,7 @@ public final class ModernTurntablePlaybackTracker {
     private static final long STOP_GRACE_MILLIS = 5_000L;
     private static final long DUPLICATE_SUPPRESS_MILLIS = 1_500L;
     private static final ConcurrentHashMap<Object, ClientPlaybackSession> ACTIVE = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<ModernTurntableSound, Boolean> ACTIVE_SOUNDS = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<SyncedMediaSound, Boolean> ACTIVE_SOUNDS = new ConcurrentHashMap<>();
 
     private ModernTurntablePlaybackTracker() {
     }
@@ -66,7 +66,7 @@ public final class ModernTurntablePlaybackTracker {
         }
     }
 
-    public static void registerSound(ModernTurntableSound sound, BlockPos pos, String sessionId) {
+    public static void registerSound(SyncedMediaSound sound, BlockPos pos, String sessionId) {
         if (sound != null) {
             ACTIVE_SOUNDS.put(sound, Boolean.TRUE);
             ClientPlaybackSession active = ACTIVE.get(keyFor(pos, sessionId));
@@ -79,7 +79,7 @@ public final class ModernTurntablePlaybackTracker {
         }
     }
 
-    public static void unregisterSound(ModernTurntableSound sound) {
+    public static void unregisterSound(SyncedMediaSound sound) {
         if (sound != null) {
             ACTIVE_SOUNDS.remove(sound);
         }
@@ -87,7 +87,7 @@ public final class ModernTurntablePlaybackTracker {
 
     public static void stopAllSounds() {
         Minecraft minecraft = Minecraft.getInstance();
-        for (ModernTurntableSound sound : ACTIVE_SOUNDS.keySet()) {
+        for (SyncedMediaSound sound : ACTIVE_SOUNDS.keySet()) {
             sound.stopFromTracker();
             if (minecraft != null) {
                 minecraft.getSoundManager().stop(sound);
@@ -207,7 +207,7 @@ public final class ModernTurntablePlaybackTracker {
         });
     }
 
-    private static void stopSound(ModernTurntableSound sound) {
+    private static void stopSound(SyncedMediaSound sound) {
         ACTIVE_SOUNDS.remove(sound);
         Minecraft minecraft = Minecraft.getInstance();
         Runnable stop = () -> {

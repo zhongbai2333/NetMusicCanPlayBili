@@ -63,6 +63,12 @@ public final class BiliWhitelistManager {
         if (canonicalId.isPresent()) {
             return canonicalId;
         }
+        // live: 前缀和 live.bilibili.com 链接归一化成同一条 live 记录。
+        String liveRoomId = com.zhongbai233.net_music_can_play_bili.bili.BiliLiveRoomInput
+                .parseExplicitRoomId(trimmed);
+        if (!liveRoomId.isEmpty()) {
+            return Optional.of(new CanonicalResource("live", liveRoomId));
+        }
         BiliApiClient.VideoSelection selection = BiliApiClient.extractVideoSelectionLenientWithShortLink(raw);
         if (selection != null) {
             return Optional.of(new CanonicalResource("bili", normalizeVideoSelection(selection)));

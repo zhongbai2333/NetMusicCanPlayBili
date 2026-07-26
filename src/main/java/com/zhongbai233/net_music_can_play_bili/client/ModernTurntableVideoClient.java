@@ -148,6 +148,11 @@ public final class ModernTurntableVideoClient {
             return;
         }
         BlockEntity turntableBe = minecraft.level.getBlockEntity(turntablePos);
+        if (turntableBe instanceof com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEntity) {
+            // 直播机：停掉当前会话，让 LiveStreamerVideoClient 在下个周期按新参数重建。
+            VideoBillboardPreview.stopIfProjector(projectorPos);
+            return;
+        }
         if (!(turntableBe instanceof ModernTurntableBlockEntity turntable) || !turntable.isPlaying()) {
             VideoBillboardPreview.stopIfProjector(projectorPos);
             return;
