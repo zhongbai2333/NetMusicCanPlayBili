@@ -135,6 +135,14 @@ public class SpeakerAudioRelay {
         return started;
     }
 
+    /** 是否配置了有效声道，且指定监听位置处于播放提示预警范围。 */
+    public boolean isWithinNoticeRangeAt(float[] listenerPos) {
+        float[] currentSpeakerPos = speakerPos;
+        return channelIndex >= 0 && listenerPos != null && currentSpeakerPos != null
+                && com.zhongbai233.net_music_can_play_bili.client.audio.PlaybackNoticePolicy
+                        .isWithinNoticeRange(distance(listenerPos, currentSpeakerPos), userVolume);
+    }
+
     public long getPositionTicks() {
         long millis = getPositionMillis();
         return millis >= 0L ? millis * 20L / 1000L : -1L;

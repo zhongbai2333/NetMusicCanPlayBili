@@ -9,6 +9,9 @@ import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackRequest;
 import net.minecraft.core.BlockPos;
 import net.minecraft.client.resources.sounds.SoundInstance;
 
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.UUID;
 import java.util.function.BiFunction;
@@ -61,12 +64,32 @@ public final class SyncedMediaPlaybackLauncher {
 
     public static boolean play(LaunchResult launch, String songName,
             BiFunction<URL, LyricRecord, SoundInstance> soundFactory) {
+        return play(launch, songName, soundFactory, true);
+    }
+
+    public static boolean play(LaunchResult launch, String songName,
+            BiFunction<URL, LyricRecord, SoundInstance> soundFactory, boolean announceImmediately) {
         if (!com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection.allowMediaStart()
                 || launch == null || launch.playUrl() == null || launch.playUrl().isBlank()) {
             return false;
         }
         LyricRecord lyricRecord = launch.lyricRecord();
-        MusicPlayManager.play(launch.playUrl(), songName, url -> soundFactory.apply(url, lyricRecord));
+        if (announceImmediately) {
+            MusicPlayManager.play(launch.playUrl(), songName, url -> soundFactory.apply(url, lyricRecord));
+            return true;
+        }
+        var finalUrl = MusicPlayManager.getFinalUrl(launch.playUrl());
+        if (finalUrl.isEmpty()) {
+            return false;
+        }
+        try {
+            URL url = new URI(finalUrl.get()).toURL();
+            net.minecraft.client.Minecraft.getInstance().submitAsync(() ->
+                    net.minecraft.client.Minecraft.getInstance().getSoundManager()
+                            .play(soundFactory.apply(url, lyricRecord)));
+        } catch (MalformedURLException | URISyntaxException error) {
+            return false;
+        }
         return true;
     }
 

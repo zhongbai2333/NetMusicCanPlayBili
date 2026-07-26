@@ -10,6 +10,7 @@ import com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackClock;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 
@@ -42,6 +43,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
     private volatile int lastAudioProgressTick = -1;
     private volatile long lastObservedAudioMillis = -1L;
     private volatile boolean watchdogRecoveryRequested;
+    private boolean nowPlayingShown;
 
     public ModernTurntableSound(BlockPos pos, URL songUrl, int timeSecond, LyricRecord lyricRecord) {
         this(pos, songUrl, timeSecond, lyricRecord, "", 0L);
@@ -135,6 +137,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
         if (turntable != null && turntable.isPlaying()) {
             ModernTurntablePlaybackDiagnostics.logEveryThreeSeconds(pos, sessionId);
         }
+        showNowPlayingWhenAudible();
         checkAudioProgressWatchdog(turntable, movingSource);
 
         if (level.getGameTime() % 8L == 0L) {
@@ -157,6 +160,18 @@ public class ModernTurntableSound extends SyncedMediaSound {
         ModernTurntablePlaybackTracker.markStreamStarted(pos, sessionId);
         streamReadyTick = tick;
         lastAudioProgressTick = tick;
+    }
+
+    private void showNowPlayingWhenAudible() {
+        if (nowPlayingShown || streamReadyTick < 0 || songName.isBlank()
+                || !ClientAudioOutputRegistry.hasAudibleOutput(pos)) {
+            return;
+        }
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.gui != null) {
+            minecraft.gui.setNowPlaying(Component.literal(songName));
+            nowPlayingShown = true;
+        }
     }
 
     @Override
@@ -271,7 +286,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
         SyncedMediaPlaybackLauncher.play(new SyncedMediaPlaybackLauncher.LaunchResult(launch.playUrl(), retryLyric,
                 launch.requestToken()),
                 songName, (url, ignoredLyric) -> new ModernTurntableSound(pos, url, Math.max(1, tickTimes / 20),
-                        retryLyric, sessionId, retryOffset, rawUrl, songName, durationMillis));
+                retryLyric, sessionId, retryOffset, rawUrl, songName, durationMillis), false);
         retireForRecovery();
         stop();
     }

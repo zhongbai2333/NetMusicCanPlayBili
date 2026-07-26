@@ -313,6 +313,34 @@ public class ClientAudioOutputRegistry {
         return AudioUtils.copyPos3(listenerPos);
     }
 
+    /** 玩家位于唱片机本体或任一已连接音响的实际可听范围内时才显示播放提示。 */
+    public static boolean hasAudibleOutput(BlockPos turntablePos) {
+        var minecraft = net.minecraft.client.Minecraft.getInstance();
+        if (minecraft == null || minecraft.player == null || minecraft.options == null
+                || minecraft.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.MASTER) <= 0.0F
+                || minecraft.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.RECORDS) <= 0.0F) {
+            return false;
+        }
+        float[] listener = { (float) minecraft.player.getX(), (float) minecraft.player.getEyeY(),
+                (float) minecraft.player.getZ() };
+        AudioEntry mainOutput = turntablePos != null ? OUTPUTS.get(keyFor(turntablePos)) : null;
+        if (mainOutput != null && mainOutput.output().getPositionMillis() >= 0L
+            && PlaybackNoticePolicy.isWithinNoticeRange(
+                AudioUtils.distance(listener, AudioUtils.centerFor(turntablePos)),
+                ClientAudioOutputPolicy.volume(turntablePos))) {
+            return true;
+        }
+        for (var entry : RELAY_TURNTABLE.entrySet()) {
+            if (turntablePos != null && turntablePos.equals(entry.getValue())) {
+                SpeakerAudioRelay relay = RELAYS.get(entry.getKey());
+                if (relay != null && relay.isStarted() && relay.isWithinNoticeRangeAt(listener)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     public static boolean isActive() {
         return !OUTPUTS.isEmpty();
     }

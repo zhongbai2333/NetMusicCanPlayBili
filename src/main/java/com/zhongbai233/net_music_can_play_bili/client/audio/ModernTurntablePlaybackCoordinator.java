@@ -166,7 +166,7 @@ public final class ModernTurntablePlaybackCoordinator {
         boolean submitted = SyncedMediaPlaybackLauncher.play(launch, command.songName(),
                 (url, lyricRecord) -> new ModernTurntableSound(sourcePos, url,
                         command.remainingSeconds(), lyricRecord, command.sessionId(), launchElapsedMillis,
-                        command.rawUrl(), command.songName(), command.durationMillis()));
+                command.rawUrl(), command.songName(), command.durationMillis()), false);
         if (!submitted) {
             ModernTurntablePlaybackTracker.finish(sourcePos, command.sessionId());
         }
