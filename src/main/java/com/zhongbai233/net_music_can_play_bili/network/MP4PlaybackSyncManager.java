@@ -773,7 +773,6 @@ public final class MP4PlaybackSyncManager {
                 packet.rawUrl(), packet.songName(), packet.durationSeconds(), packet.volumePerMille(),
                 packet.sessionId(), packet.elapsedMillis(), true);
         owner = level.getServer().getPlayerList().getPlayer(session.ownerId());
-        boolean headphoneLinked = AudioLinkIndex.hasHeadphoneLinkedToMp4(session.sourceId());
         boolean routedToHeadphones = sendToHeadphoneListeners(level, session, pos, headphonePacket, gameTime);
         if (session.sourceType() == ClientMediaSyncPayload.SOURCE_PLAYER) {
             if (owner != null && owner.level() == level) {
@@ -781,14 +780,14 @@ public final class MP4PlaybackSyncManager {
             }
             return;
         }
-        if (!headphoneLinked) {
+        if (!routedToHeadphones) {
             PacketDistributor.sendToPlayersNear(level, null, pos.x(), pos.y(), pos.z(), SYNC_RANGE, packet);
         }
         LOGGER.trace(
-                "MP4 播放同步下发: owner={} source={} type={} song='{}' session={} elapsed={}ms host={} ownerOnline={} headphoneLinked={} routedToHeadphones={}",
+                "MP4 播放同步下发: owner={} source={} type={} song='{}' session={} elapsed={}ms host={} ownerOnline={} routedToHeadphones={}",
                 session.ownerId(), session.sourceId(), session.sourceType(), session.songName(), session.sessionId(),
                 session.elapsedMillis(gameTime), safeHost(session.playUrl()), owner != null && owner.level() == level,
-                headphoneLinked, routedToHeadphones);
+                routedToHeadphones);
     }
 
     private static void sendTimeline(ServerLevel level, Session session, long gameTime) {
@@ -797,8 +796,7 @@ public final class MP4PlaybackSyncManager {
                 session.elapsedMillis(gameTime), session.volumePerMille(), false);
         MP4PlaybackTimelinePacket headphonePacket = new MP4PlaybackTimelinePacket(session.sourceId(),
                 session.sessionId(), session.elapsedMillis(gameTime), session.volumePerMille(), true);
-        boolean headphoneLinked = AudioLinkIndex.hasHeadphoneLinkedToMp4(session.sourceId());
-        sendTimelineToHeadphoneListeners(level, session, pos, headphonePacket);
+        boolean routedToHeadphones = sendTimelineToHeadphoneListeners(level, session, pos, headphonePacket);
         if (session.sourceType() == ClientMediaSyncPayload.SOURCE_PLAYER) {
             ServerPlayer owner = level.getServer().getPlayerList().getPlayer(session.ownerId());
             if (owner != null && owner.level() == level) {
@@ -808,7 +806,7 @@ public final class MP4PlaybackSyncManager {
             }
             return;
         }
-        if (!headphoneLinked) {
+        if (!routedToHeadphones) {
             PacketDistributor.sendToPlayersNear(level, null, pos.x(), pos.y(), pos.z(), SYNC_RANGE, packet);
         }
     }
@@ -887,8 +885,9 @@ public final class MP4PlaybackSyncManager {
         return routed;
     }
 
-    private static void sendTimelineToHeadphoneListeners(ServerLevel level, Session session, SourcePosition pos,
+    private static boolean sendTimelineToHeadphoneListeners(ServerLevel level, Session session, SourcePosition pos,
             MP4PlaybackTimelinePacket packet) {
+        boolean routed = false;
         MP4PlaybackSyncPacket stop = MP4PlaybackSyncPacket.stop(session.ownerId(), session.sourceId(),
                 session.queueIndex());
         for (UUID playerId : AudioLinkIndex.headphonePlayersForMp4(session.sourceId())) {
@@ -902,6 +901,7 @@ public final class MP4PlaybackSyncManager {
             if (linked && distanceSquared <= AudioLinkData.MP4_HEADPHONE_RANGE_SQUARED) {
                 AudioLinkIndex.updatePlayerHeadphones(player);
                 PacketDistributor.sendToPlayer(player, packet);
+                routed = true;
             } else {
                 if (linked && distanceSquared > AudioLinkData.MP4_HEADPHONE_RANGE_SQUARED) {
                     clearLinkedMp4(player);
@@ -911,6 +911,7 @@ public final class MP4PlaybackSyncManager {
                 PacketDistributor.sendToPlayer(player, stop);
             }
         }
+        return routed;
     }
 
     private static boolean isPlaybackAllowed(ServerLevel level, String sourceUrl, ServerPlayer actor) {

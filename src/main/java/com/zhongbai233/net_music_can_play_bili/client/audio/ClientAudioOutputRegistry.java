@@ -164,7 +164,13 @@ public class ClientAudioOutputRegistry {
             if (isRealWorldKey(entry.pos())
                     && com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
                             .suppressesTurntable(entry.pos())) {
-                entry.output().tick(entry.machinePos(), currentListenerPos, Long.MIN_VALUE, false);
+                // Long.MIN_VALUE previously only stopped the Dolby tick; audio already queued
+                // in
+                // OpenAL could still be heard. Mute the main output explicitly while continuing
+                // to consume the queue so playback does not burst when the headphone route
+                // ends.
+                entry.output().setUserVolume(0.0F);
+                entry.output().tick(entry.machinePos(), currentListenerPos, Long.MAX_VALUE, false);
                 continue;
             }
             float[] pos = resolveMachinePos(entry);
@@ -325,9 +331,9 @@ public class ClientAudioOutputRegistry {
                 (float) minecraft.player.getZ() };
         AudioEntry mainOutput = turntablePos != null ? OUTPUTS.get(keyFor(turntablePos)) : null;
         if (mainOutput != null && mainOutput.output().getPositionMillis() >= 0L
-            && PlaybackNoticePolicy.isWithinNoticeRange(
-                AudioUtils.distance(listener, AudioUtils.centerFor(turntablePos)),
-                ClientAudioOutputPolicy.volume(turntablePos))) {
+                && PlaybackNoticePolicy.isWithinNoticeRange(
+                        AudioUtils.distance(listener, AudioUtils.centerFor(turntablePos)),
+                        ClientAudioOutputPolicy.volume(turntablePos))) {
             return true;
         }
         for (var entry : RELAY_TURNTABLE.entrySet()) {
