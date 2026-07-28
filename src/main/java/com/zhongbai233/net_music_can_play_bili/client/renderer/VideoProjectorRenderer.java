@@ -122,6 +122,9 @@ public class VideoProjectorRenderer
         if (!state.visible || state.linkedPos == null || state.projectorPos == null) {
             return;
         }
+        // submit 只会在 BER 通过引擎视锥/距离调度后执行；将这个逐帧事实与
+        // extractRenderState 中登记的持久 BER 管理状态分开，供离屏暂停使用。
+        VideoBillboardPreview.markProjectorSubmittedByBer(state.sessionId, state.projectorPos);
         VideoBillboardPreview.ProjectorFrameSnapshot frame = state.frame;
         if (frame == null || !frame.hasFrame() || frame.width() <= 0 || frame.height() <= 0) {
             return;

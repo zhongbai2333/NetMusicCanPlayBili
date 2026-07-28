@@ -55,6 +55,10 @@ final class VideoPlaybackInstance {
             "bili.video.offscreen.resume_restart_lag_ms", 1_500L) * 1_000_000L;
     private static final double OFFSCREEN_PREWARM_DOT_THRESHOLD = Double.parseDouble(
             System.getProperty("ncpb.video.offscreen.prewarm_dot_threshold", "-0.20"));
+    private static final int MAX_OPERATIONAL_SOURCE_WIDTH = Integer.getInteger(
+            "ncpb.video.pipeline.max_source_width", 4096);
+    private static final int MAX_OPERATIONAL_SOURCE_HEIGHT = Integer.getInteger(
+            "ncpb.video.pipeline.max_source_height", 2304);
     private static final double IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET = Double.parseDouble(
             System.getProperty("ncpb.video.pipeline.iris_warning_placeholder_view_depth_offset", "0.03"));
     private static final float IRIS_WARNING_PLACEHOLDER_LOCAL_DEPTH_OFFSET = Float.parseFloat(
@@ -78,8 +82,8 @@ final class VideoPlaybackInstance {
     private static final int LOADING_PLACEHOLDER_WIDTH = 320;
     private static final int LOADING_PLACEHOLDER_HEIGHT = 180;
 
-    private int targetWidth;
-    private int targetHeight;
+    private volatile int targetWidth;
+    private volatile int targetHeight;
     private final int fps;
     private final List<VideoCandidate> candidates;
     /** 直播总线源：pts 已在音频输出时间域，播放时钟不得按"当前媒体位置"重基准。 */
@@ -225,7 +229,9 @@ final class VideoPlaybackInstance {
 
     private void decode(long gen) {
         Exception lastStartupFailure = null;
-        for (VideoCandidate candidate : candidates) {
+        List<VideoCandidate> operationalCandidates = VideoStartupFallbackPolicy.operationalCandidates(candidates,
+                MAX_OPERATIONAL_SOURCE_WIDTH, MAX_OPERATIONAL_SOURCE_HEIGHT);
+        for (VideoCandidate candidate : operationalCandidates) {
             if (!running || gen != generation.get()) {
                 return;
             }
@@ -260,7 +266,10 @@ final class VideoPlaybackInstance {
         long effectiveStartOffsetMillis = effectiveDecoderStartOffsetMillis();
         decoderStartOffsetMillis = effectiveStartOffsetMillis;
         adaptiveRestartOffsetMillis = -1L;
-        try (AutoCloseable dec = VideoBillboardPreview.openDecoder(candidate.url(), targetWidth, targetHeight,
+        VideoStartupFallbackPolicy.DecodeSize decodeSize = VideoStartupFallbackPolicy.candidateDecodeSize(
+                targetWidth, targetHeight, candidate.sourceWidth(), candidate.sourceHeight());
+        try (AutoCloseable dec = VideoBillboardPreview.openDecoder(candidate.url(), decodeSize.width(),
+                decodeSize.height(),
                 candidateFps,
                 candidate.codecId(),
                 preferNative, decoderOverride, effectiveStartOffsetMillis, totalMillis, guiConsumer,
@@ -299,6 +308,8 @@ final class VideoPlaybackInstance {
                     continue;
                 }
                 if (!firstFrameLogged) {
+                    targetWidth = decodeSize.width();
+                    targetHeight = decodeSize.height();
                     firstFrameLogged = true;
                     firstDecodedNanoTime = System.nanoTime();
                     LOGGER.debug("视频实例首个解码帧已获得: session={}, pts={}ms, wait={}ms, startOffset={}ms",
@@ -890,8 +901,11 @@ final class VideoPlaybackInstance {
         boolean prewarm = false;
         for (BlockPos pos : projectorPositions) {
             if (VideoBillboardPreview.isProjectorRenderedByBer(pos)) {
-                renderable = true;
-                prewarm = true;
+                // BER 管理归属是持久状态，不能等同于本帧通过视锥。否则投影仪
+                // 第一次出现后会永久保持 prewarm，离屏上传和解码永远不会暂停。
+                boolean submittedByBer = VideoBillboardPreview.wasProjectorRecentlySubmittedByBer(sessionId, pos);
+                renderable |= submittedByBer;
+                prewarm |= submittedByBer;
                 continue;
             }
             if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {

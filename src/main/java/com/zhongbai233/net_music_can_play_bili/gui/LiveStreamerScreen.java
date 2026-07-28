@@ -140,6 +140,10 @@ public class LiveStreamerScreen extends BlackGoldScreen {
             status = Component.translatable("gui.net_music_can_play_bili.live_streamer.status_playing",
                     be.getRoomId());
             color = GOLD;
+        } else if (be != null && be.isWaitingForLive()) {
+            status = Component.translatable("gui.net_music_can_play_bili.live_streamer.status_waiting",
+                    be.getRoomId());
+            color = 0xFFF2C94C;
         } else if (be != null && !be.getRoomId().isEmpty()) {
             status = Component.translatable("gui.net_music_can_play_bili.live_streamer.status_ready",
                     be.getRoomId());

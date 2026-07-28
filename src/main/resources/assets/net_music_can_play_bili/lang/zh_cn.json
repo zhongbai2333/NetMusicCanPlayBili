@@ -128,11 +128,13 @@
   "gui.net_music_can_play_bili.live_streamer.start": "开始播放",
   "gui.net_music_can_play_bili.live_streamer.stop": "停止",
   "gui.net_music_can_play_bili.live_streamer.status_playing": "直播中: %s",
+  "gui.net_music_can_play_bili.live_streamer.status_waiting": "后台等待开播（每 10 秒检测）: %s",
   "gui.net_music_can_play_bili.live_streamer.status_ready": "就绪: %s",
   "gui.net_music_can_play_bili.live_streamer.status_empty": "未设置直播间",
   "message.net_music_can_play_bili.live_streamer.invalid_room": "无效的直播间号，请输入数字房间号或直播间链接",
   "message.net_music_can_play_bili.live_streamer.need_room": "请先输入直播间号",
   "message.net_music_can_play_bili.live_streamer.room_offline": "直播间 %s 未开播",
   "message.net_music_can_play_bili.live_streamer.room_missing": "直播间 %s 不存在或无法访问",
+  "message.net_music_can_play_bili.live_streamer.status_unavailable": "暂时无法查询直播间 %s，已转入后台重试",
   "message.net_music_can_play_bili.live_streamer.room_offline_waiting": "直播间 %s 未开播，每 %s 秒自动重试"
 }

@@ -186,11 +186,6 @@ public final class ModernTurntablePlaybackCoordinator {
      * 由 BiliLiveAudioStreamHandler 在声音线程解析真实直播流并输出到 OpenAL。
      */
     private static void playLive(ClientPlaybackCommand command, BlockPos sourcePos, String roomId) {
-        if (com.zhongbai233.net_music_can_play_bili.bili.LiveOfflineBackoff.isBlocked(roomId)) {
-            // 房间未开播且在退避期内：不创建声音实例（保护声音引擎的流式句柄），等下轮探测。
-            LOGGER.debug("直播间未开播退避中，跳过本轮播放: room={} pos={}", roomId, sourcePos);
-            return;
-        }
         if (command.hasSession()
                 && !ModernTurntablePlaybackTracker.tryStart(sourcePos, command.sessionId(),
                         command.remainingSeconds())) {

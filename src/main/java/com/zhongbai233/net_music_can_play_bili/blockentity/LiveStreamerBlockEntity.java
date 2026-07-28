@@ -43,6 +43,7 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final String ROOM_ID_TAG = "RoomId";
     private static final String PLAYING_TAG = "Playing";
+    private static final String AUTO_RESUME_TAG = "AutoResumeRequested";
     private static final String STARTED_TIME_TAG = "StartedGameTime";
     private static final String OWNER_TAG = "PlaybackOwner";
     private static final String VOLUME_PER_MILLE_TAG = "VolumePerMille";
@@ -59,7 +60,12 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
 
     private String roomId = "";
     private boolean playing;
+    private boolean autoResumeRequested;
     private boolean checkingLiveStatus;
+    private boolean needsLiveStatusConfirmation;
+    private long nextLiveStatusCheckGameTime;
+    private long liveStatusRequestGeneration;
+    private long liveStatusProbeId;
     private long startedGameTime;
     private long lastFullSyncGameTime;
     private UUID playbackOwnerId;
@@ -70,15 +76,39 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
     }
 
     public static void tick(Level level, BlockPos pos, BlockState state, LiveStreamerBlockEntity streamer) {
-        if (!(level instanceof ServerLevel serverLevel) || !streamer.playing) {
+        if (!(level instanceof ServerLevel serverLevel) || !streamer.autoResumeRequested) {
             return;
         }
-        if (serverLevel.getGameTime() - streamer.lastFullSyncGameTime > FULL_RESYNC_INTERVAL_TICKS) {
-            streamer.syncedPlayers.clear();
-            streamer.lastFullSyncGameTime = serverLevel.getGameTime();
+        if (!streamer.isLiveAllowed(serverLevel, null)) {
+            LOGGER.info("直播间已被移出白名单，停止后台检测: pos={} room={}", pos, streamer.roomId);
+            streamer.stopLive();
+            return;
         }
-        if (serverLevel.getGameTime() % SYNC_INTERVAL_TICKS == 0) {
-            streamer.syncNearbyPlayers(serverLevel);
+        long gameTime = serverLevel.getGameTime();
+        if (streamer.needsLiveStatusConfirmation) {
+            streamer.needsLiveStatusConfirmation = false;
+            if (streamer.stopForegroundPlayback()) {
+                streamer.markDirty();
+            }
+        }
+        if (streamer.checkingLiveStatus && gameTime >= streamer.nextLiveStatusCheckGameTime) {
+            streamer.checkingLiveStatus = false;
+            streamer.liveStatusProbeId++;
+            LOGGER.warn("直播间状态检测超过 10 秒，作废旧结果并继续低频检测: pos={} room={}",
+                    pos, streamer.roomId);
+        }
+        if (streamer.playing) {
+            if (gameTime - streamer.lastFullSyncGameTime > FULL_RESYNC_INTERVAL_TICKS) {
+                streamer.syncedPlayers.clear();
+                streamer.lastFullSyncGameTime = gameTime;
+            }
+            if (gameTime % SYNC_INTERVAL_TICKS == 0) {
+                streamer.syncNearbyPlayers(serverLevel);
+            }
+        }
+        if (LiveStatusProbePolicy.shouldProbe(streamer.autoResumeRequested,
+                streamer.checkingLiveStatus, gameTime, streamer.nextLiveStatusCheckGameTime)) {
+            streamer.probeLiveStatus(serverLevel, null, false);
         }
     }
 
@@ -89,6 +119,10 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
     @Override
     public boolean isPlaying() {
         return playing;
+    }
+
+    public boolean isWaitingForLive() {
+        return autoResumeRequested && !playing;
     }
 
     @Override
@@ -150,14 +184,29 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
         if (!isLiveAllowed(serverLevel, actor)) {
             return;
         }
-        if (checkingLiveStatus) {
+        if (autoResumeRequested) {
             return;
         }
 
-        // 先确认开播再进入播放状态：避免向全体客户端广播一个必然失败的会话。
+        autoResumeRequested = true;
+        playbackOwnerId = actor != null ? actor.getUUID() : playbackOwnerId;
+        liveStatusRequestGeneration++;
+        checkingLiveStatus = false;
+        nextLiveStatusCheckGameTime = serverLevel.getGameTime();
+        markDirty();
+        probeLiveStatus(serverLevel, actor != null ? actor.getUUID() : null, true);
+    }
+
+    private void probeLiveStatus(ServerLevel serverLevel, UUID feedbackTargetId, boolean userInitiated) {
+        if (!LiveStatusProbePolicy.shouldProbe(autoResumeRequested, checkingLiveStatus,
+                serverLevel.getGameTime(), nextLiveStatusCheckGameTime)) {
+            return;
+        }
         checkingLiveStatus = true;
+        nextLiveStatusCheckGameTime = LiveStatusProbePolicy.nextProbeGameTime(serverLevel.getGameTime());
         String requestedRoomId = roomId;
-        java.util.UUID actorId = actor != null ? actor.getUUID() : null;
+        long requestGeneration = liveStatusRequestGeneration;
+        long probeId = ++liveStatusProbeId;
         CompletableFuture
                 .supplyAsync(() -> {
                     try {
@@ -167,13 +216,15 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
                     }
                 }, Util.backgroundExecutor())
                 .whenCompleteAsync((liveStatus, error) -> {
-                    checkingLiveStatus = false;
                     if (isRemoved() || !(level instanceof ServerLevel currentLevel)
-                            || !requestedRoomId.equals(roomId)) {
+                            || !LiveStatusProbePolicy.acceptsResult(autoResumeRequested,
+                                    liveStatusRequestGeneration, requestGeneration,
+                                    liveStatusProbeId, probeId, roomId, requestedRoomId)) {
                         return;
                     }
-                    ServerPlayer feedbackTarget = actorId != null
-                            ? currentLevel.getServer().getPlayerList().getPlayer(actorId)
+                    checkingLiveStatus = false;
+                    ServerPlayer feedbackTarget = feedbackTargetId != null
+                            ? currentLevel.getServer().getPlayerList().getPlayer(feedbackTargetId)
                             : null;
                     if (error != null) {
                         Throwable cause = error instanceof java.util.concurrent.CompletionException
@@ -181,24 +232,37 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
                                 : error;
                         if (feedbackTarget != null) {
                             feedbackTarget.sendSystemMessage(Component.translatable(
-                                    "message.net_music_can_play_bili.live_streamer.room_missing", requestedRoomId)
-                                    .withStyle(ChatFormatting.RED));
+                                    "message.net_music_can_play_bili.live_streamer.status_unavailable",
+                                    requestedRoomId).withStyle(ChatFormatting.YELLOW));
                         }
-                        LOGGER.warn("直播间校验失败，不开始播放: pos={} room={} reason={}", worldPosition,
+                        LOGGER.warn("直播间状态检测失败，保持后台重试: pos={} room={} reason={}", worldPosition,
                                 requestedRoomId, cause != null ? cause.toString() : "unknown");
                         return;
                     }
-                    // liveStatus < 0 表示接口不可用：放行，由客户端播放路径自行处理。
                     if (liveStatus == BiliLiveStreamResolver.LIVE_STATUS_OFFLINE) {
+                        if (stopForegroundPlayback()) {
+                            markDirty();
+                        }
                         if (feedbackTarget != null) {
                             feedbackTarget.sendSystemMessage(Component.translatable(
-                                    "message.net_music_can_play_bili.live_streamer.room_offline", requestedRoomId)
-                                    .withStyle(ChatFormatting.RED));
+                                    "message.net_music_can_play_bili.live_streamer.room_offline_waiting",
+                                    requestedRoomId, LiveStatusProbePolicy.PROBE_INTERVAL_TICKS / 20L)
+                                    .withStyle(ChatFormatting.YELLOW));
                         }
-                        LOGGER.info("直播间未开播，不开始播放: pos={} room={}", worldPosition, requestedRoomId);
+                        LOGGER.info("直播间未开播，已关闭前台播放并转入后台检测: pos={} room={} interval={}s",
+                                worldPosition, requestedRoomId, LiveStatusProbePolicy.PROBE_INTERVAL_TICKS / 20L);
                         return;
                     }
-                    beginPlaying(currentLevel, actorId);
+                    if (liveStatus < 0) {
+                        if (userInitiated) {
+                            LOGGER.info("直播状态接口暂不可用，保持后台检测: pos={} room={}",
+                                    worldPosition, requestedRoomId);
+                        }
+                        return;
+                    }
+                    if (!playing) {
+                        beginPlaying(currentLevel, playbackOwnerId);
+                    }
                 }, serverLevel.getServer());
     }
 
@@ -214,16 +278,28 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
     }
 
     public void stopLive() {
+        autoResumeRequested = false;
+        liveStatusRequestGeneration++;
+        checkingLiveStatus = false;
+        nextLiveStatusCheckGameTime = 0L;
+        stopForegroundPlayback();
+        markDirty();
+    }
+
+    private boolean stopForegroundPlayback() {
         if (!playing) {
-            return;
+            return false;
         }
         playing = false;
         startedGameTime = 0L;
         syncedPlayers.clear();
-        markDirty();
+        return true;
     }
 
     public void stopForBlockRemoval() {
+        autoResumeRequested = false;
+        liveStatusRequestGeneration++;
+        checkingLiveStatus = false;
         playing = false;
         syncedPlayers.clear();
         setChanged();
@@ -301,6 +377,7 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
         super.saveAdditional(output);
         output.putString(ROOM_ID_TAG, roomId);
         output.putBoolean(PLAYING_TAG, playing);
+        output.putBoolean(AUTO_RESUME_TAG, autoResumeRequested);
         output.putLong(STARTED_TIME_TAG, startedGameTime);
         output.putInt(VOLUME_PER_MILLE_TAG, volumePerMille);
         if (playbackOwnerId != null) {
@@ -313,6 +390,12 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
         super.loadAdditional(input);
         roomId = sanitizeRoomId(input.getStringOr(ROOM_ID_TAG, ""));
         playing = input.getBooleanOr(PLAYING_TAG, false) && !roomId.isEmpty();
+        autoResumeRequested = input.getBooleanOr(AUTO_RESUME_TAG, playing) && !roomId.isEmpty();
+        checkingLiveStatus = false;
+        needsLiveStatusConfirmation = playing && autoResumeRequested;
+        nextLiveStatusCheckGameTime = 0L;
+        liveStatusRequestGeneration++;
+        liveStatusProbeId++;
         startedGameTime = input.getLongOr(STARTED_TIME_TAG, 0L);
         volumePerMille = Math.max(0, Math.min(1000, input.getIntOr(VOLUME_PER_MILLE_TAG, 1000)));
         playbackOwnerId = parseUuid(input.getStringOr(OWNER_TAG, ""));

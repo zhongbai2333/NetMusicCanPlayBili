@@ -83,7 +83,7 @@ public final class BiliLiveAudioStreamHandler implements IAudioStreamHandler {
         // 直播机走现代播放链路时会携带一次性播放请求；广播喇叭没有。
         PlaybackRequest request = HttpAudioStreamHandler.consumeRegisteredRequest(url.toString());
 
-        if (LiveOfflineBackoff.isBlocked(roomId)) {
+        if (request == null && LiveOfflineBackoff.isBlocked(roomId)) {
             // 退避期内不访问 B站 API，快速失败等下一轮探测。
             throw new IOException("直播间 " + roomId + " 未开播（退避重试中）");
         }

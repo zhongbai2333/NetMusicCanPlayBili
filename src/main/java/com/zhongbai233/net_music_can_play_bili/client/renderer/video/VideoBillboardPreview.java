@@ -258,7 +258,11 @@ public final class VideoBillboardPreview {
     private static volatile String activeSessionId = "";
     private static volatile BlockPos activeProjectorPos;
     private static final Set<BlockPos> activeProjectorPositions = new CopyOnWriteArraySet<>();
-    private static final Set<BlockPos> berRenderedProjectorPositions = new CopyOnWriteArraySet<>();
+    /** 由 BER 路径管理的投影仪；这是生命周期状态，不代表当前帧可见。 */
+    private static final Set<BlockPos> berManagedProjectorPositions = new CopyOnWriteArraySet<>();
+    /** BER 最近实际提交投影面的渲染帧，用于向解码/上传管线传播视锥可见性。 */
+    private static final RecentFrameVisibility<BerProjectorSubmission> BER_SUBMITTED_PROJECTORS = new RecentFrameVisibility<>(
+            1L);
     private static final Map<ProjectorImmediateKey, ProjectorImmediatePose> PROJECTOR_IMMEDIATE_POSES = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<BlockPos, VisibilitySample> PROJECTOR_VISIBILITY_CACHE = new ConcurrentHashMap<>();
     private static volatile boolean activeRequiresProjector;
@@ -652,7 +656,8 @@ public final class VideoBillboardPreview {
         activeSessionId = "";
         activeProjectorPos = null;
         activeProjectorPositions.clear();
-        berRenderedProjectorPositions.clear();
+        berManagedProjectorPositions.clear();
+        BER_SUBMITTED_PROJECTORS.clear();
         PROJECTOR_VISIBILITY_CACHE.clear();
         activeRequest = null;
         activeRequiresProjector = false;
@@ -714,7 +719,8 @@ public final class VideoBillboardPreview {
         if (projectorPos == null) {
             return;
         }
-        berRenderedProjectorPositions.remove(projectorPos);
+        berManagedProjectorPositions.remove(projectorPos);
+        BER_SUBMITTED_PROJECTORS.removeIf(key -> key.projectorPos().equals(projectorPos));
         PROJECTOR_VISIBILITY_CACHE.remove(projectorPos);
         PROJECTOR_IMMEDIATE_POSES.keySet().removeIf(key -> key.projectorPos().equals(projectorPos));
         PENDING_LOADING.replaceAll((sessionId, pending) -> pending.withoutProjector(projectorPos));
@@ -743,7 +749,7 @@ public final class VideoBillboardPreview {
         if (turntablePos == null || projectorPos == null) {
             return;
         }
-        berRenderedProjectorPositions.add(projectorPos.immutable());
+        berManagedProjectorPositions.add(projectorPos.immutable());
         for (VideoPlaybackInstance instance : INSTANCES.values()) {
             if (instance.isForTurntable(turntablePos)) {
                 instance.addProjector(projectorPos);
@@ -752,7 +758,33 @@ public final class VideoBillboardPreview {
     }
 
     static boolean isProjectorRenderedByBer(BlockPos projectorPos) {
-        return projectorPos != null && berRenderedProjectorPositions.contains(projectorPos);
+        return projectorPos != null && berManagedProjectorPositions.contains(projectorPos);
+    }
+
+    /** 由 BER 在真正通过引擎裁剪并进入提交阶段时调用。 */
+    public static void markProjectorSubmittedByBer(String sessionId, BlockPos projectorPos) {
+        if (sessionId != null && !sessionId.isBlank() && projectorPos != null) {
+            BER_SUBMITTED_PROJECTORS.markSubmitted(
+                    new BerProjectorSubmission(sessionId, projectorPos.immutable()));
+        }
+    }
+
+    /**
+     * 接受当前帧或上一帧的标记，以兼容 BER submit 与全局几何事件在不同渲染后端下的先后顺序。
+     */
+    static boolean wasProjectorRecentlySubmittedByBer(String sessionId, BlockPos projectorPos) {
+        if (sessionId == null || sessionId.isBlank() || projectorPos == null) {
+            return false;
+        }
+        return BER_SUBMITTED_PROJECTORS.wasRecentlySubmitted(
+                new BerProjectorSubmission(sessionId, projectorPos));
+    }
+
+    static void beginBerVisibilityFrame() {
+        BER_SUBMITTED_PROJECTORS.beginFrame();
+    }
+
+    private record BerProjectorSubmission(String sessionId, BlockPos projectorPos) {
     }
 
     public static boolean hasSessionForTurntable(BlockPos turntablePos) {
@@ -1970,6 +2002,7 @@ public final class VideoBillboardPreview {
 
     @SubscribeEvent
     public static void onRenderFrame(RenderFrameEvent.Pre event) {
+        beginBerVisibilityFrame();
         PROJECTOR_IMMEDIATE_POSES.clear();
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level == null || minecraft.player == null || INSTANCES.isEmpty()) {
