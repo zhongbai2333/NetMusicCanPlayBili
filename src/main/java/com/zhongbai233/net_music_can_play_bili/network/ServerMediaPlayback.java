@@ -4,7 +4,6 @@ import java.util.UUID;
 
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import net.minecraft.server.level.ServerPlayer;
-import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * Protocol-neutral server-side media playback facade.
@@ -42,10 +41,6 @@ public final class ServerMediaPlayback {
 
     public static void stopAndBroadcast(ServerPlayer owner, UUID deviceId) {
         stop(owner, deviceId);
-        if (owner != null && deviceId != null) {
-            PacketDistributor.sendToPlayersTrackingEntityAndSelf(owner,
-                    MP4PlaybackSyncPacket.stop(owner.getUUID(), deviceId, 0));
-        }
     }
 
     public static void stopExternalPlaybackForLinkedHeadphones(ServerPlayer actor, UUID deviceId) {

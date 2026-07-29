@@ -5,7 +5,7 @@ final class SpeakerRelayMutePolicy {
     private SpeakerRelayMutePolicy() {
     }
 
-    static boolean shouldMuteMain(boolean enabled, int registeredRelayCount) {
-        return enabled && registeredRelayCount > 0;
+    static boolean shouldMuteMain(boolean enabled, int registeredRelayCount, boolean privateHeadphoneRoute) {
+        return enabled && registeredRelayCount > 0 && !privateHeadphoneRoute;
     }
 }

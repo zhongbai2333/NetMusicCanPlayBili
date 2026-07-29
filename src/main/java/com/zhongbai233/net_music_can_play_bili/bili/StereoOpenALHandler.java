@@ -248,16 +248,17 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
                 float gain = spatialGainForDistance(distance, userVolume);
                 lastDistance = distance;
                 lastGain = gain;
-                float gv = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays.size())
-                        ? 0f
-                        : gain * gameVolume();
+                float gv = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays.size(),
+                        followLocalPlayerFront)
+                                ? 0f
+                                : gain * gameVolume();
                 spatialAudio.setBedGain(0, gv);
                 spatialAudio.setBedGain(1, gv);
             }
         }
         // 驱动所有音响 relay（relay 使用自身存储的音响位置，不传 machinePos）
         for (SpeakerAudioRelay relay : relays) {
-            relay.tick(listenerPos);
+            relay.tick(listenerPos, followLocalPlayerFront);
         }
     }
 

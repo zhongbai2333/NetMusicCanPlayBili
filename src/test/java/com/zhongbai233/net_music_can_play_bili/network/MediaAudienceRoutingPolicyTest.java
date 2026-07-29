@@ -1,0 +1,33 @@
+package com.zhongbai233.net_music_can_play_bili.network;
+
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class MediaAudienceRoutingPolicyTest {
+    @Test
+    void ownerGetsPublicRouteOnlyWithoutHeadphoneDelivery() {
+        assertTrue(MediaAudienceRoutingPolicy.shouldSendPublicToOwner(false));
+        assertFalse(MediaAudienceRoutingPolicy.shouldSendPublicToOwner(true));
+    }
+
+    @Test
+    void publicAudienceIsSuppressedAfterAnyHeadphoneDelivery() {
+        assertTrue(MediaAudienceRoutingPolicy.shouldBroadcastPublic(false));
+        assertFalse(MediaAudienceRoutingPolicy.shouldBroadcastPublic(true));
+    }
+
+    @Test
+    void mp4PlayerSourceBroadcastsOnlyWithoutHeadphoneDelivery() {
+        assertTrue(MediaAudienceRoutingPolicy.shouldBroadcastPlayerSource("device-mp4-123", false));
+        assertFalse(MediaAudienceRoutingPolicy.shouldBroadcastPlayerSource("device-mp4-123", true));
+    }
+
+    @Test
+    void padPlayerSourceNeverBroadcasts() {
+        assertTrue(MediaAudienceRoutingPolicy.isPadSession("device-pad-point-session"));
+        assertFalse(MediaAudienceRoutingPolicy.shouldBroadcastPlayerSource("device-pad-point-session", false));
+        assertFalse(MediaAudienceRoutingPolicy.shouldBroadcastPlayerSource("device-pad-point-session", true));
+    }
+}

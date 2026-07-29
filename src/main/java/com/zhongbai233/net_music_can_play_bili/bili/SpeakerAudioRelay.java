@@ -104,6 +104,10 @@ public class SpeakerAudioRelay {
     }
 
     public void tick(float[] listenerPos) {
+        tick(listenerPos, false);
+    }
+
+    public void tick(float[] listenerPos, boolean muted) {
         if (closed || speakerPos == null)
             return;
         if (!initialized)
@@ -117,7 +121,7 @@ public class SpeakerAudioRelay {
         }
         sa.updatePositions(new float[][] { MONO_POS }, new float[0][0], listenerPos,
                 forward(speakerPos, listenerPos));
-        float g = gainForDistance(distance(listenerPos, speakerPos), userVolume) * gameVol();
+        float g = muted ? 0.0F : gainForDistance(distance(listenerPos, speakerPos), userVolume) * gameVol();
         sa.setBedGain(0, g);
         if (sa.isDeviceLost()) {
             sa.cleanup();

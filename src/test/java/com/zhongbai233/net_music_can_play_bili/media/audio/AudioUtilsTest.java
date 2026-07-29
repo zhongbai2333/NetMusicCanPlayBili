@@ -28,4 +28,16 @@ class AudioUtilsTest {
         assertEquals(0.0f, AudioUtils.spatialGainForDistance(19.2f, 0.25f));
         assertEquals(0.0f, AudioUtils.spatialGainForDistance(1.5f, 0.0f));
     }
+
+    @Test
+    void separatesLinearRangeScaleFromNonlinearOutputGain() {
+        float halfSliderGain = 0.25f;
+        float atEdge = AudioUtils.spatialGainForDistance(32.0f, 0.5f, halfSliderGain);
+        assertEquals(AudioUtils.gainForDistance(32.0f) * halfSliderGain, atEdge, 1.0e-6f);
+        assertTrue(AudioUtils.spatialGainForDistance(35.0f, 0.5f, halfSliderGain) > 0.0f);
+        assertEquals(0.0f, AudioUtils.spatialGainForDistance(38.4f, 0.5f, halfSliderGain));
+
+        assertEquals(0.0f, AudioUtils.spatialGainForDistance(1.5f, 0.0f, 1.0f));
+        assertEquals(0.0f, AudioUtils.spatialGainForDistance(1.5f, 1.0f, 0.0f));
+    }
 }

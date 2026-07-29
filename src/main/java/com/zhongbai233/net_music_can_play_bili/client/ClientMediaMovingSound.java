@@ -10,6 +10,7 @@ import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRe
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundHandle;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundLifecyclePolicy;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaRetryHandler;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
@@ -149,10 +150,16 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
         x = pos.x;
         y = pos.y;
         z = pos.z;
-        attenuation = (headphoneRouted || ClientMediaPlayback.isLocalPlayerSource(sourceId))
-                ? Attenuation.NONE
-                : Attenuation.LINEAR;
-        volume = ClientMediaPlayback.perceivedGain(mediaVolume);
+        boolean privateOrLocal = headphoneRouted || ClientMediaPlayback.isLocalPlayerSource(sourceId);
+        attenuation = Attenuation.NONE;
+        float perceivedGain = ClientMediaPlayback.perceivedGain(mediaVolume);
+        if (privateOrLocal) {
+            volume = perceivedGain;
+            return;
+        }
+        Minecraft minecraft = Minecraft.getInstance();
+        double distance = minecraft.player != null ? minecraft.player.position().distanceTo(pos) : Double.MAX_VALUE;
+        volume = AudioUtils.spatialGainForDistance((float) distance, mediaVolume, perceivedGain);
     }
 
     @Override

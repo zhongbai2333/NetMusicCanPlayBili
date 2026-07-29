@@ -63,12 +63,21 @@ public final class AudioUtils {
      * 音量只负责缩放设计听距与响度，不要求服务端按该距离停止媒体流。
      */
     public static float spatialGainForDistance(float d, float volume) {
-        float clampedVolume = clampGain(volume);
-        if (clampedVolume <= 0.0f) {
+        return spatialGainForDistance(d, volume, volume);
+    }
+
+    /**
+     * 空间音源衰减，可分别控制听距比例与实际输出响度。
+     * 适用于 UI 使用非线性响度曲线、但仍希望听距按滑块线性缩放的移动媒体。
+     */
+    public static float spatialGainForDistance(float d, float audibleRangeScale, float outputGain) {
+        float clampedRangeScale = clampGain(audibleRangeScale);
+        float clampedOutputGain = clampGain(outputGain);
+        if (clampedRangeScale <= 0.0f || clampedOutputGain <= 0.0f) {
             return 0.0f;
         }
-        float maxAudibleDistance = MAX_AUDIBLE_DISTANCE * clampedVolume;
-        float baseGain = gainForDistance(d) * clampedVolume;
+        float maxAudibleDistance = MAX_AUDIBLE_DISTANCE * clampedRangeScale;
+        float baseGain = gainForDistance(d) * clampedOutputGain;
         if (d <= maxAudibleDistance) {
             return baseGain;
         }

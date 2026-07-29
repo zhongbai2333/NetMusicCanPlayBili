@@ -175,7 +175,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         }
         // 驱动所有音响 relay（relay 使用自身存储的音响位置，不传 machinePos）
         for (SpeakerAudioRelay relay : relays) {
-            relay.tick(listenerPos);
+            relay.tick(listenerPos, followLocalPlayerFront);
         }
     }
 
@@ -821,9 +821,10 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         }
         sa.updatePositions(bedPositions, objectPositions, lp, forward);
         float d = distance(lp, mp), g = spatialGainForDistance(d, userVolume);
-        float gv = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays.size())
-                ? 0f
-                : g * gameVolume();
+        float gv = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays.size(),
+                followLocalPlayerFront)
+                        ? 0f
+                        : g * gameVolume();
         for (int ch = 0; ch < numBedChannels; ch++)
             sa.setBedGain(ch, channelGain(ch, gv));
         for (int o = 0; o < numObjects; o++)

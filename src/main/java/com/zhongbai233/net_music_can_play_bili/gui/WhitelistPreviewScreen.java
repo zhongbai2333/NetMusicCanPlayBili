@@ -4,6 +4,7 @@ import com.zhongbai233.net_music_can_play_bili.client.MP4ClientMediaSync;
 import com.zhongbai233.net_music_can_play_bili.client.audio.AudioDurationProbe;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaAudioRouting;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTimelineView;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.media.stream.MediaNetworkFailureClassifier;
@@ -275,6 +276,7 @@ public class WhitelistPreviewScreen extends Screen {
         if (locallyPaused || !packet.playing()) {
             return;
         }
+        ClientMediaAudioRouting.registerLocalPrivateSource(packet.previewId());
         MP4ClientMediaSync.handleSync(toLocalAudioSync(packet));
         if (!hasVideo(packet)) {
             return;
@@ -368,6 +370,7 @@ public class WhitelistPreviewScreen extends Screen {
             String sessionId = WhitelistPreviewPacket.sessionId(previewId, payload.elapsedMillis());
             pendingVideoSessionId = "";
             MP4ClientMediaSync.handleSync(WhitelistPreviewPacket.stopAudio(previewId));
+            ClientMediaAudioRouting.unregisterLocalPrivateSource(previewId);
             VideoBillboardPreview.stopIfSession(sessionId);
         }
     }

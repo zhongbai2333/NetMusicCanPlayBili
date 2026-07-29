@@ -48,7 +48,7 @@ public final class ClientMediaLifecycleHandler {
     public static void onClientTick(ClientTickEvent.Post event) {
         com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryDiagnostics.tick();
         com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection
-            .tick(ClientMediaLifecycleHandler::emergencyCleanupClientPlayback);
+                .tick(ClientMediaLifecycleHandler::emergencyCleanupClientPlayback);
         // 切世界/单人存档重进时清掉旧 tracker 记录
         Minecraft mc = Minecraft.getInstance();
         if (mc.level != lastTrackedLevel) {
@@ -131,7 +131,8 @@ public final class ClientMediaLifecycleHandler {
         com.zhongbai233.net_music_can_play_bili.client.MP4Client.clearCachedStates();
         com.zhongbai233.net_music_can_play_bili.client.PadClient.clearCachedDocuments();
         com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackSessions.clearAll(
-            com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient::clearAll);
+                com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient::clearAll);
+        com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaAudioRouting.clearLocalPrivateSources();
         com.zhongbai233.net_music_can_play_bili.client.MP4FocusState.resetAll();
         com.zhongbai233.net_music_can_play_bili.client.PadFocusState.resetAll();
         com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer.releaseAll();
@@ -148,6 +149,6 @@ public final class ClientMediaLifecycleHandler {
 
     public static void tripMemoryProtection(String reason) {
         com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection
-            .tripOnAllocationFailure(reason, ClientMediaLifecycleHandler::emergencyCleanupClientPlayback);
+                .tripOnAllocationFailure(reason, ClientMediaLifecycleHandler::emergencyCleanupClientPlayback);
     }
 }

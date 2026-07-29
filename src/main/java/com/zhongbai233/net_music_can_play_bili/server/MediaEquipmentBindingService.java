@@ -9,7 +9,6 @@ import com.zhongbai233.net_music_can_play_bili.link.MediaBindingData.MediaSource
 import com.zhongbai233.net_music_can_play_bili.network.ServerMediaPlayback;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 
@@ -61,25 +60,19 @@ public final class MediaEquipmentBindingService {
     }
 
     private static BindResult bindTurntable(ServerPlayer player, ItemStack equipment, MediaSource source) {
-        if (!(player.level() instanceof ServerLevel level) || source.pos() == null) {
+        if (source.pos() == null) {
             return BindResult.unhandled();
         }
         boolean bound = false;
         boolean handled = false;
         if (HeadphoneAbility.has(equipment)) {
             handled = true;
-            if (AudioLinkIndex.hasSpeakerLinkedTo(level, source.pos())) {
-                player.sendSystemMessage(Component.translatable(
-                        "message.net_music_can_play_bili.headphones.turntable_has_speaker")
-                        .withStyle(ChatFormatting.RED));
-            } else {
-                AudioLinkData.writeHeadphoneTurntable(equipment, source.pos());
-                AudioLinkIndex.updatePlayerHeadphones(player);
-                player.sendSystemMessage(Component.translatable(
-                        "message.net_music_can_play_bili.headphones.turntable_linked",
-                        source.pos().getX(), source.pos().getY(), source.pos().getZ()).withStyle(ChatFormatting.GOLD));
-                bound = true;
-            }
+            AudioLinkData.writeHeadphoneTurntable(equipment, source.pos());
+            AudioLinkIndex.updatePlayerHeadphones(player);
+            player.sendSystemMessage(Component.translatable(
+                    "message.net_music_can_play_bili.headphones.turntable_linked",
+                    source.pos().getX(), source.pos().getY(), source.pos().getZ()).withStyle(ChatFormatting.GOLD));
+            bound = true;
         }
         if (HolographicGlassesAbility.has(equipment)) {
             handled = true;
