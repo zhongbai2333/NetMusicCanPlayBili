@@ -4,6 +4,7 @@ import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 
 import com.zhongbai233.net_music_can_play_bili.client.PlaybackLatencyBench;
 import com.zhongbai233.net_music_can_play_bili.media.audio.OpenALSpatialAudio;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 音响独立音频输出 — 单声道，只接收已拆分好的目标声道 PCM
@@ -20,7 +21,10 @@ public class SpeakerAudioRelay {
     private volatile boolean started;
     private volatile int channelIndex = -1;
     private volatile boolean autoMixJoc;
+    private volatile boolean takeOverMainOutput = true;
     private volatile float userVolume = 1.0f;
+    private volatile float rangeGain = 1.0f;
+    private volatile float maxDistance = AudioUtils.MAX_AUDIBLE_DISTANCE;
     private volatile float[] speakerPos;
     private volatile boolean handlerStarted;
     private int pendingFed = 0;
@@ -43,8 +47,35 @@ public class SpeakerAudioRelay {
         return autoMixJoc;
     }
 
+    /** 是否会实际领取至少一个输入声道并尝试输出。 */
+    public boolean hasOutputIntent() {
+        return channelIndex >= 0 && channelIndex <= 11 && userVolume > 0.0F;
+    }
+
+    public void setTakeOverMainOutput(boolean takeOverMainOutput) {
+        this.takeOverMainOutput = takeOverMainOutput;
+    }
+
+    public boolean takesOverMainOutput() {
+        return takeOverMainOutput;
+    }
+
     public void setUserVolume(float v) {
         this.userVolume = AudioUtils.clampGain(v);
+    }
+
+    public void setRangeGain(float gain) {
+        this.rangeGain = AudioUtils.clampGain(gain);
+    }
+
+    public void setMaxDistance(float distance) {
+        if (Float.isFinite(distance) && distance > 0.0F) {
+            this.maxDistance = Math.min(distance, 4096.0F);
+        }
+    }
+
+    public float getMaxDistance() {
+        return maxDistance;
     }
 
     public void setSpeakerPos(float[] pos) {
@@ -121,7 +152,9 @@ public class SpeakerAudioRelay {
         }
         sa.updatePositions(new float[][] { MONO_POS }, new float[0][0], listenerPos,
                 forward(speakerPos, listenerPos));
-        float g = muted ? 0.0F : gainForDistance(distance(listenerPos, speakerPos), userVolume) * gameVol();
+        float g = muted ? 0.0F
+            : gainForDistance(distance(listenerPos, speakerPos), maxDistance, userVolume)
+                * rangeGain * gameVol();
         sa.setBedGain(0, g);
         if (sa.isDeviceLost()) {
             sa.cleanup();
@@ -213,8 +246,8 @@ public class SpeakerAudioRelay {
     }
 
     /** 音响音量会同步收缩最大传播距离，避免低音量仍能被远处听到。 */
-    private static float gainForDistance(float d, float volume) {
-        return AudioUtils.spatialGainForDistance(d, volume);
+    private static float gainForDistance(float d, float maxDistance, float volume) {
+        return AudioUtils.spatialGainForDistance(d, maxDistance, volume, true);
     }
 
     private static float gameVol() {
@@ -226,18 +259,18 @@ public class SpeakerAudioRelay {
     }
 
     private volatile boolean closed;
+    private final AtomicBoolean cleanupStarted = new AtomicBoolean();
 
     public void cleanup() {
-        hardStopOutput();
+        if (!cleanupStarted.compareAndSet(false, true)) {
+            return;
+        }
         closed = true;
+        hardStopOutput();
         started = false;
         handlerStarted = false;
         pendingFed = 0;
         totalSamplesFed = 0L;
-        if (spatialAudio != null) {
-            spatialAudio.cleanup();
-            spatialAudio = null;
-        }
         initialized = false;
     }
 }

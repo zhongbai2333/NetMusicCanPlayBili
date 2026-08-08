@@ -48,6 +48,9 @@ public final class ModItems {
     public static final DeferredItem<BlockItem> LIVE_STREAMER = ITEMS.registerSimpleBlockItem("live_streamer",
             ModBlocks.LIVE_STREAMER);
 
+    public static final DeferredItem<BlockItem> CONTROL_CONSOLE = ITEMS.registerSimpleBlockItem("control_console",
+            ModBlocks.CONTROL_CONSOLE);
+
     public static final DeferredItem<MP4Item> MP4 = ITEMS.registerItem("mp4",
             MP4Item::new,
             Item.Properties::new);
@@ -121,6 +124,7 @@ public final class ModItems {
                         output.accept(VIDEO_PROJECTOR.get());
                         output.accept(SPEAKER.get());
                         output.accept(LIVE_STREAMER.get());
+                        output.accept(CONTROL_CONSOLE.get());
                         output.accept(MP4.get());
                         output.accept(PAD.get());
                         output.accept(MEDIA_MANAGEMENT_TOOL.get());

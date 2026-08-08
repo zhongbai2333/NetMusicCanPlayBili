@@ -92,6 +92,7 @@ public class LyricProjectorRenderer
         state.allowAi = projector.getAllowAi();
 
         if (state.linkedPos == null || projector.getLevel() == null) {
+            ClientLinkRegistry.unlink(projector.getBlockPos());
             syncActivatedState(projector, false);
             return;
         }

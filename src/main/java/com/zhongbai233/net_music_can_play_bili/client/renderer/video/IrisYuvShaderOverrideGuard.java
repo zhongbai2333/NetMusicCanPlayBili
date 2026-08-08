@@ -18,6 +18,10 @@ public final class IrisYuvShaderOverrideGuard {
             "pipeline/yuv420p_entity");
     private static final Identifier NV12_PIPELINE_ID = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
             "pipeline/nv12_entity");
+        private static final Identifier YUV_TRANSLUCENT_PIPELINE_ID = Identifier.fromNamespaceAndPath(
+            NetMusicCanPlayBili.MODID, "pipeline/yuv420p_translucent_entity");
+        private static final Identifier NV12_TRANSLUCENT_PIPELINE_ID = Identifier.fromNamespaceAndPath(
+            NetMusicCanPlayBili.MODID, "pipeline/nv12_translucent_entity");
     private static final AtomicBoolean LOGGED_BYPASS = new AtomicBoolean(false);
 
     private IrisYuvShaderOverrideGuard() {
@@ -31,7 +35,9 @@ public final class IrisYuvShaderOverrideGuard {
 
     public static boolean isYuvPipelineId(RenderPipeline pipeline) {
         return pipeline != null && (YUV_PIPELINE_ID.equals(pipeline.getLocation())
-                || NV12_PIPELINE_ID.equals(pipeline.getLocation()));
+            || NV12_PIPELINE_ID.equals(pipeline.getLocation())
+            || YUV_TRANSLUCENT_PIPELINE_ID.equals(pipeline.getLocation())
+            || NV12_TRANSLUCENT_PIPELINE_ID.equals(pipeline.getLocation()));
     }
 
     private static boolean isBypassPipelineId(RenderPipeline pipeline) {

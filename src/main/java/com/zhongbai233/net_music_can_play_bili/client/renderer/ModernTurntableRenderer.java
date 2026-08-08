@@ -7,6 +7,8 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.LyricProjectorBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.blockentity.ControlConsoleBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.block.ModernTurntableBlock;
 import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
 import it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap;
 import net.minecraft.client.Minecraft;
@@ -23,6 +25,7 @@ import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 
 public class ModernTurntableRenderer
         implements BlockEntityRenderer<ModernTurntableBlockEntity, ModernTurntableRenderer.State> {
@@ -30,9 +33,11 @@ public class ModernTurntableRenderer
     private static final float TRANSLATED_LINE_OFFSET = 12.0F;
 
     private final Font font;
+    private final NetMusicDiscModelAdapter discModel;
 
     public ModernTurntableRenderer(BlockEntityRendererProvider.Context context) {
         this.font = context.font();
+        this.discModel = new NetMusicDiscModelAdapter(context);
     }
 
     @Override
@@ -51,6 +56,11 @@ public class ModernTurntableRenderer
         state.transLyricColor = ConfigEvent.PLAYER_TRANSLATED_COLOR;
         state.y = 0.5F;
         state.projected = false;
+        state.hasDisc = turntable.hasDisc();
+        state.playing = turntable.isPlaying();
+        state.facing = turntable.getBlockState().getValue(ModernTurntableBlock.FACING);
+        state.gameTime = turntable.getLevel() != null ? turntable.getLevel().getGameTime() : 0L;
+        state.partialTick = partialTick;
 
         if (!GeneralConfig.ENABLE_PLAYER_LYRICS.get() || !turntable.isPlaying()) {
             return;
@@ -90,6 +100,9 @@ public class ModernTurntableRenderer
 
     @Override
     public void submit(State state, PoseStack poseStack, SubmitNodeCollector collector, CameraRenderState cameraState) {
+        discModel.submit(state.hasDisc, state.playing, state.facing, state.gameTime, state.partialTick,
+            state.lightCoords, state.breakProgress, poseStack, collector);
+
         boolean hasCurrent = state.currentLine != null && !state.currentLine.getString().isBlank();
         boolean hasTranslated = state.translatedLine != null && !state.translatedLine.getString().isBlank();
         if (!hasCurrent && !hasTranslated) {
@@ -141,6 +154,11 @@ public class ModernTurntableRenderer
         public int transLyricColor = ConfigEvent.PLAYER_TRANSLATED_COLOR;
         public float y = 0.5F;
         public boolean projected;
+        public boolean hasDisc;
+        public boolean playing;
+        public Direction facing = Direction.SOUTH;
+        public long gameTime;
+        public float partialTick;
     }
 
     private static boolean isLinkedToProjector(ModernTurntableBlockEntity turntable) {
@@ -150,6 +168,15 @@ public class ModernTurntableRenderer
         }
         for (BlockPos sourcePos : ClientLinkRegistry.getSources(turntable.getBlockPos())) {
             if (level.getBlockEntity(sourcePos) instanceof LyricProjectorBlockEntity) {
+                return true;
+            }
+            if (level.getBlockEntity(sourcePos) instanceof ControlConsoleBlockEntity console
+                    && console.document().hasSourceBinding()
+                    && console.document().sourceKind()
+                        == com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleDocument.SourceKind.TURNTABLE
+                    && console.document().sourceX() == turntable.getBlockPos().getX()
+                    && console.document().sourceY() == turntable.getBlockPos().getY()
+                    && console.document().sourceZ() == turntable.getBlockPos().getZ()) {
                 return true;
             }
         }

@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.init;
 
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.blockentity.ControlConsoleBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.LyricProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.SpeakerBlockEntity;
@@ -51,6 +52,13 @@ public final class ModBlockEntities {
                     () -> new BlockEntityType<>(
                             LiveStreamerBlockEntity::new,
                             Set.of(ModBlocks.LIVE_STREAMER.get())));
+
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<ControlConsoleBlockEntity>> CONTROL_CONSOLE = BLOCK_ENTITY_TYPES
+            .register(
+                    "control_console",
+                    () -> new BlockEntityType<>(
+                            ControlConsoleBlockEntity::new,
+                            Set.of(ModBlocks.CONTROL_CONSOLE.get())));
 
     private ModBlockEntities() {
     }

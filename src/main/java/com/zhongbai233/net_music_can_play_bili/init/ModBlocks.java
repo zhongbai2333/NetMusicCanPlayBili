@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.init;
 
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.block.LiveStreamerBlock;
+import com.zhongbai233.net_music_can_play_bili.block.ControlConsoleBlock;
 import com.zhongbai233.net_music_can_play_bili.block.LyricProjectorBlock;
 import com.zhongbai233.net_music_can_play_bili.block.ModernTurntableBlock;
 import com.zhongbai233.net_music_can_play_bili.block.SpeakerBlock;
@@ -32,6 +33,10 @@ public final class ModBlocks {
     public static final DeferredBlock<Block> LIVE_STREAMER = BLOCKS.register(
             "live_streamer",
             LiveStreamerBlock::new);
+
+    public static final DeferredBlock<Block> CONTROL_CONSOLE = BLOCKS.register(
+            "control_console",
+            ControlConsoleBlock::new);
 
     private ModBlocks() {
     }

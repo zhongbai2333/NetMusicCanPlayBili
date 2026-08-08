@@ -261,11 +261,38 @@ public class ClientAudioOutputRegistry {
         RELAY_TURNTABLE.remove(speakerPos);
         SpeakerAudioRelay relay = RELAYS.remove(speakerPos);
         if (relay != null) {
-            relay.cleanup();
             for (AudioEntry entry : OUTPUTS.values()) {
                 entry.output().removeRelay(relay);
             }
+            relay.cleanup();
         }
+    }
+
+    /** 中控台虚拟音源复用主 PCM，位置由元素局部坐标驱动。 */
+    public static void registerConsoleRelay(BlockPos consoleElementKey, BlockPos turntablePos, float[] worldPos,
+            int channelIndex, float volume, boolean autoMixJoc, float maxDistance) {
+        if (consoleElementKey == null || turntablePos == null || worldPos == null) {
+            return;
+        }
+        SpeakerAudioRelay relay = RELAYS.get(consoleElementKey);
+        if (relay == null) {
+            relay = new SpeakerAudioRelay();
+            relay.setChannelIndex(channelIndex);
+            relay.setAutoMixJoc(autoMixJoc);
+            relay.setUserVolume(volume);
+            relay.setMaxDistance(maxDistance);
+            registerRelay(consoleElementKey, turntablePos, relay);
+        } else {
+            relay.setChannelIndex(channelIndex);
+            relay.setAutoMixJoc(autoMixJoc);
+            relay.setUserVolume(volume);
+            relay.setMaxDistance(maxDistance);
+        }
+        relay.setSpeakerPos(worldPos);
+    }
+
+    public static void unregisterConsoleRelay(BlockPos consoleElementKey) {
+        clearMachineOverrideForSpeaker(consoleElementKey);
     }
 
     /** 注册音响 relay 并关联到对应的唱片机 handler */
@@ -276,10 +303,10 @@ public class ClientAudioOutputRegistry {
         SpeakerAudioRelay old = RELAYS.put(speakerPos, relay);
         RELAY_TURNTABLE.put(speakerPos, turntablePos);
         if (old != null) {
-            old.cleanup();
             for (AudioEntry entry : OUTPUTS.values()) {
                 entry.output().removeRelay(old);
             }
+            old.cleanup();
         }
         BlockPos key = keyFor(turntablePos);
         AudioEntry output = OUTPUTS.get(key);
@@ -290,6 +317,11 @@ public class ClientAudioOutputRegistry {
 
     /** 更新音响 relay 的声道和音量 */
     public static void updateRelayConfig(BlockPos speakerPos, int channelIndex, float volume, boolean autoMixJoc) {
+        updateRelayConfig(speakerPos, channelIndex, volume, autoMixJoc, AudioUtils.MAX_AUDIBLE_DISTANCE);
+    }
+
+    public static void updateRelayConfig(BlockPos speakerPos, int channelIndex, float volume, boolean autoMixJoc,
+            float maxDistance) {
         if (speakerPos == null)
             return;
         SpeakerAudioRelay relay = RELAYS.get(speakerPos);
@@ -297,6 +329,17 @@ public class ClientAudioOutputRegistry {
             relay.setChannelIndex(channelIndex);
             relay.setAutoMixJoc(autoMixJoc);
             relay.setUserVolume(volume);
+            relay.setMaxDistance(maxDistance);
+        }
+    }
+
+    public static void updateRelayRangeGain(BlockPos speakerPos, float rangeGain) {
+        if (speakerPos == null) {
+            return;
+        }
+        SpeakerAudioRelay relay = RELAYS.get(speakerPos);
+        if (relay != null) {
+            relay.setRangeGain(rangeGain);
         }
     }
 

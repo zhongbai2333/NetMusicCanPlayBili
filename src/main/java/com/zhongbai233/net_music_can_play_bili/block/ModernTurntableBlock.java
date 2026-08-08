@@ -120,6 +120,17 @@ public class ModernTurntableBlock extends HorizontalDirectionalBlock implements 
                     pos.getX(), pos.getY(), pos.getZ()).withStyle(ChatFormatting.GOLD));
             return InteractionResult.SUCCESS;
         }
+        if (stack.getItem() == com.zhongbai233.net_music_can_play_bili.init.ModItems.CONTROL_CONSOLE.get()) {
+            if (level.isClientSide()) {
+                return InteractionResult.SUCCESS;
+            }
+                LinkHelper.writeControlConsoleLinkToItem(stack, pos, level.dimension().identifier().toString(),
+                    LinkHelper.ControlConsoleSourceKind.TURNTABLE);
+            player.sendSystemMessage(Component.translatable(
+                    "message.net_music_can_play_bili.control_console.item_linked",
+                    pos.getX(), pos.getY(), pos.getZ()).withStyle(ChatFormatting.GOLD));
+            return InteractionResult.SUCCESS;
+        }
         if (level.isClientSide()) {
             return InteractionResult.SUCCESS;
         }

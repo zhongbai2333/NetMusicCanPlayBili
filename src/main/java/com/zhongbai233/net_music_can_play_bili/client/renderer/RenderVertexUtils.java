@@ -15,8 +15,14 @@ public final class RenderVertexUtils {
 
     public static void texturedVertex(VertexConsumer buffer, PoseStack.Pose pose, float x, float y, float z,
             float u, float v) {
+        texturedVertex(buffer, pose, x, y, z, u, v, 1.0F);
+        }
+
+        public static void texturedVertex(VertexConsumer buffer, PoseStack.Pose pose, float x, float y, float z,
+            float u, float v, float opacity) {
         buffer.addVertex(pose, x, y, z)
-                .setColor(0xFFFFFFFF)
+            .setColor(com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoOpacityRoute
+                .whiteVertexColor(opacity))
                 .setUv(u, v)
                 .setOverlay(OverlayTexture.NO_OVERLAY)
                 .setLight(FULL_BRIGHT)

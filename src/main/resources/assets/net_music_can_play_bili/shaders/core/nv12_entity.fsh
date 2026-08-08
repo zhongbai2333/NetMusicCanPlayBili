@@ -30,31 +30,23 @@ void main() {
     float u = uv.r;
     float v = uv.g;
 
+    vec4 color;
 #ifdef BILI_YUV_DEBUG_CONSTANT
-    fragColor = vec4(0.0, 1.0, 1.0, 1.0);
-    return;
-#endif
+    color = vec4(0.0, 1.0, 1.0, 1.0);
 
-#ifdef BILI_YUV_DEBUG_PLANES
-    fragColor = vec4(y, u, v, 1.0);
-    return;
-#endif
+#elif defined(BILI_YUV_DEBUG_PLANES)
+    color = vec4(y, u, v, 1.0);
 
-#ifdef BILI_YUV_DEBUG_Y_ONLY
-    fragColor = vec4(y, y, y, 1.0);
-    return;
-#endif
+#elif defined(BILI_YUV_DEBUG_Y_ONLY)
+    color = vec4(y, y, y, 1.0);
 
-#ifdef BILI_YUV_DEBUG_U_ONLY
-    fragColor = vec4(u, u, u, 1.0);
-    return;
-#endif
+#elif defined(BILI_YUV_DEBUG_U_ONLY)
+    color = vec4(u, u, u, 1.0);
 
-#ifdef BILI_YUV_DEBUG_V_ONLY
-    fragColor = vec4(v, v, v, 1.0);
-    return;
-#endif
+#elif defined(BILI_YUV_DEBUG_V_ONLY)
+    color = vec4(v, v, v, 1.0);
 
+#else
     float yy = 1.16438356 * (y - 0.0625);
     float uu = u - 0.5;
     float vv = v - 0.5;
@@ -63,7 +55,12 @@ void main() {
         yy - 0.21324861 * uu - 0.53290933 * vv,
         yy + 2.11240179 * uu
     );
-    vec4 color = vec4(clamp(rgb, 0.0, 1.0), 1.0);
-    color *= ColorModulator;
+    color = vec4(clamp(rgb, 0.0, 1.0), 1.0);
+#endif
+#ifdef PER_FACE_LIGHTING
+    color *= (gl_FrontFacing ? vertexPerFaceColorFront : vertexPerFaceColorBack) * ColorModulator;
+#else
+    color *= vertexColor * ColorModulator;
+#endif
     fragColor = color;
 }

@@ -378,6 +378,8 @@ public final class MP4PlaybackSyncManager {
         MP4DeviceLocationIndex.clear();
         MP4DeviceHolderTracker.clear();
         PadDeviceHolderTracker.clear();
+        com.zhongbai233.net_music_can_play_bili.server.ControlConsoleEditLeaseRegistry.clear();
+        com.zhongbai233.net_music_can_play_bili.server.ControlConsoleConsumerLeaseRegistry.clear();
     }
 
     @SubscribeEvent
@@ -385,6 +387,8 @@ public final class MP4PlaybackSyncManager {
         if (event.getEntity() instanceof ServerPlayer player) {
             UUID playerId = player.getUUID();
             NetworkRateLimiter.removePlayer(playerId);
+            com.zhongbai233.net_music_can_play_bili.server.ControlConsoleEditLeaseRegistry.releasePlayer(playerId);
+            com.zhongbai233.net_music_can_play_bili.server.ControlConsoleConsumerLeaseRegistry.releasePlayer(playerId);
             AudioLinkIndex.removeHeadphonePlayer(playerId);
             AudioLinkIndex.removeHeadphoneOwner(playerId);
         }
@@ -398,6 +402,12 @@ public final class MP4PlaybackSyncManager {
         }
         MP4DeviceHolderTracker.tick(server);
         PadDeviceHolderTracker.tick(server);
+        if (server.getTickCount() % 20 == 0) {
+            com.zhongbai233.net_music_can_play_bili.server.ControlConsoleEditLeaseRegistry
+                .cleanupExpired(System.currentTimeMillis());
+                com.zhongbai233.net_music_can_play_bili.server.ControlConsoleConsumerLeaseRegistry
+                    .cleanupExpired(System.currentTimeMillis());
+        }
         if (server.getTickCount() % DISCOVERY_INTERVAL_TICKS == 0) {
             for (ServerLevel level : server.getAllLevels()) {
                 for (ServerPlayer player : level.players()) {

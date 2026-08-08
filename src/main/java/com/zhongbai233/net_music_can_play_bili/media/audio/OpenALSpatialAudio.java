@@ -25,6 +25,10 @@ import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTr
 
 import java.util.ArrayDeque;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
@@ -55,6 +59,16 @@ public class OpenALSpatialAudio {
     private static volatile OpenAlHandles CACHED_HANDLES;
     private static final Object CACHE_LOCK = new Object();
     private static final ConcurrentLinkedQueue<NativeResources> PENDING_NATIVE_DELETES = new ConcurrentLinkedQueue<>();
+    private static final Object NATIVE_DELETE_LOCK = new Object();
+    private static final AtomicBoolean NATIVE_DELETE_DRAIN_SCHEDULED = new AtomicBoolean();
+        private static final AtomicLong NEXT_NATIVE_DELETE_RETRY_NANOS = new AtomicLong();
+        private static final long NATIVE_DELETE_RETRY_NANOS = Long.getLong(
+            "ncpb.close_diag.openal_retry_ms", 500L) * 1_000_000L;
+    private static final ExecutorService NATIVE_DELETE_EXECUTOR = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "OpenALSpatialCleanup");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private int[] bedSources; // 床声道 OpenAL 声源 ID
     private int[] objectSources; // 动态对象 OpenAL 声源 ID
@@ -96,7 +110,9 @@ public class OpenALSpatialAudio {
         if (!ensureOpenAlContext("init")) {
             return false;
         }
-        drainPendingNativeDeletes();
+        synchronized (NATIVE_DELETE_LOCK) {
+            drainPendingNativeDeletes();
+        }
         cleanup();
         try {
             detectAudioFormat();
@@ -453,21 +469,41 @@ public class OpenALSpatialAudio {
             MemoryResourceTracker.freed(Category.AUDIO_STAGING, uploadScratchToFree.capacity());
             MemoryUtil.memFree(uploadScratchToFree);
         }
-        Thread cleanupThread = new Thread(
-                () -> safeCleanupNative(new NativeResources(bedSourcesToDelete, objectSourcesToDelete,
-                        bedBuffersToDelete, objBuffersToDelete)),
-                "OpenALSpatialCleanup");
-        cleanupThread.setDaemon(true);
-        cleanupThread.start();
-    }
-
-    private void safeCleanupNative(NativeResources resources) {
-        if (!ensureOpenAlContext("cleanup")) {
-            PENDING_NATIVE_DELETES.offer(resources);
+        int sourceCount = countSources(bedSourcesToDelete) + countSources(objectSourcesToDelete);
+        int bufferCount = countBuffers(bedBuffersToDelete) + countBuffers(objBuffersToDelete);
+        if (sourceCount == 0 && bufferCount == 0) {
             return;
         }
-        deleteNativeResources(resources);
-        drainPendingNativeDeletes();
+        long operationId = AudioNativeCloseDiagnostics.global().begin(sourceCount, bufferCount, System.nanoTime());
+        NativeResources resources = new NativeResources(operationId, bedSourcesToDelete, objectSourcesToDelete,
+                bedBuffersToDelete, objBuffersToDelete);
+        PENDING_NATIVE_DELETES.offer(resources);
+        schedulePendingNativeDeleteDrain();
+    }
+
+    private static void schedulePendingNativeDeleteDrain() {
+        if (!PENDING_NATIVE_DELETES.isEmpty() && NATIVE_DELETE_DRAIN_SCHEDULED.compareAndSet(false, true)) {
+            NATIVE_DELETE_EXECUTOR.execute(() -> {
+                boolean contextAvailable = false;
+                try {
+                    synchronized (NATIVE_DELETE_LOCK) {
+                        contextAvailable = ensureOpenAlContext("pending cleanup");
+                        if (contextAvailable) {
+                            drainPendingNativeDeletes();
+                        } else {
+                            for (NativeResources pending : PENDING_NATIVE_DELETES) {
+                                AudioNativeCloseDiagnostics.global().deferred(pending.operationId());
+                            }
+                        }
+                    }
+                } finally {
+                    NATIVE_DELETE_DRAIN_SCHEDULED.set(false);
+                }
+                if (contextAvailable && !PENDING_NATIVE_DELETES.isEmpty()) {
+                    schedulePendingNativeDeleteDrain();
+                }
+            });
+        }
     }
 
     private static void drainPendingNativeDeletes() {
@@ -478,49 +514,82 @@ public class OpenALSpatialAudio {
     }
 
     private static void deleteNativeResources(NativeResources resources) {
-        int[] bedSourcesToDelete = resources.bedSources();
-        int[] objectSourcesToDelete = resources.objectSources();
-        int[][] bedBuffersToDelete = resources.bedBuffers();
-        int[][] objBuffersToDelete = resources.objectBuffers();
-        if (bedSourcesToDelete != null) {
-            for (int src : bedSourcesToDelete) {
-                try {
-                    stopAndDelete(src);
-                } catch (Throwable ignored) {
-                }
-            }
-        }
-        if (objectSourcesToDelete != null) {
-            for (int src : objectSourcesToDelete) {
-                try {
-                    stopAndDelete(src);
-                } catch (Throwable ignored) {
-                }
-            }
-        }
-        if (bedBuffersToDelete != null) {
-            for (int[] chBufs : bedBuffersToDelete) {
-                for (int buf : chBufs) {
+        try {
+            int[] bedSourcesToDelete = resources.bedSources();
+            int[] objectSourcesToDelete = resources.objectSources();
+            int[][] bedBuffersToDelete = resources.bedBuffers();
+            int[][] objBuffersToDelete = resources.objectBuffers();
+            if (bedSourcesToDelete != null) {
+                for (int src : bedSourcesToDelete) {
                     try {
-                        AL10.alDeleteBuffers(buf);
+                        stopAndDelete(src);
                     } catch (Throwable ignored) {
                     }
                 }
             }
-        }
-        if (objBuffersToDelete != null) {
-            for (int[] objBufs : objBuffersToDelete) {
-                for (int buf : objBufs) {
+            if (objectSourcesToDelete != null) {
+                for (int src : objectSourcesToDelete) {
                     try {
-                        AL10.alDeleteBuffers(buf);
+                        stopAndDelete(src);
                     } catch (Throwable ignored) {
                     }
                 }
             }
+            if (bedBuffersToDelete != null) {
+                for (int[] chBufs : bedBuffersToDelete) {
+                    for (int buf : chBufs) {
+                        try {
+                            AL10.alDeleteBuffers(buf);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }
+            }
+            if (objBuffersToDelete != null) {
+                for (int[] objBufs : objBuffersToDelete) {
+                    for (int buf : objBufs) {
+                        try {
+                            AL10.alDeleteBuffers(buf);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }
+            }
+        } finally {
+            AudioNativeCloseDiagnostics.global().complete(resources.operationId(), System.nanoTime());
         }
     }
 
-    private record NativeResources(int[] bedSources, int[] objectSources, int[][] bedBuffers,
+    public static int pendingNativeDeleteBatches() {
+        return PENDING_NATIVE_DELETES.size();
+    }
+
+    public static void tickNativeDeletes(long nowNanos) {
+        if (PENDING_NATIVE_DELETES.isEmpty()) {
+            return;
+        }
+        long next = NEXT_NATIVE_DELETE_RETRY_NANOS.get();
+        if (nowNanos >= next && NEXT_NATIVE_DELETE_RETRY_NANOS.compareAndSet(next,
+                nowNanos + Math.max(1L, NATIVE_DELETE_RETRY_NANOS))) {
+            schedulePendingNativeDeleteDrain();
+        }
+    }
+
+    private static int countSources(int[] sources) {
+        return sources == null ? 0 : sources.length;
+    }
+
+    private static int countBuffers(int[][] buffers) {
+        int count = 0;
+        if (buffers != null) {
+            for (int[] group : buffers) {
+                count += group == null ? 0 : group.length;
+            }
+        }
+        return count;
+    }
+
+    private record NativeResources(long operationId, int[] bedSources, int[] objectSources, int[][] bedBuffers,
             int[][] objectBuffers) {
     }
 

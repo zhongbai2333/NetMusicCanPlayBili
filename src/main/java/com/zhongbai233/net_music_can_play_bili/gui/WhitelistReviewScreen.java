@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.gui;
 
+import com.zhongbai233.net_music_can_play_bili.gui.core.WhitelistReviewSelection;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistReviewActionPacket;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistReviewPacket;
 import net.minecraft.client.Minecraft;
@@ -33,10 +34,18 @@ public class WhitelistReviewScreen extends Screen {
     private double scrollbarDragOffsetY;
 
     public WhitelistReviewScreen(WhitelistReviewPacket payload) {
+        this(payload, "");
+    }
+
+    public WhitelistReviewScreen(WhitelistReviewPacket payload, String selectedId) {
         super(Component.literal("白名单统一审核"));
         lastPayload = payload;
         this.entries = safeEntries(payload);
-        this.selectedIndex = entries.isEmpty() ? -1 : 0;
+        this.selectedIndex = indexOf(selectedId);
+        if (selectedIndex < 0 && !entries.isEmpty()) {
+            selectedIndex = 0;
+        }
+        ensureSelectedVisible();
     }
 
     public static WhitelistReviewPacket lastPayload() {
@@ -281,15 +290,8 @@ public class WhitelistReviewScreen extends Screen {
     }
 
     private int indexOf(String id) {
-        if (id == null || id.isBlank()) {
-            return -1;
-        }
-        for (int i = 0; i < entries.size(); i++) {
-            if (id.equals(entries.get(i).id())) {
-                return i;
-            }
-        }
-        return -1;
+        return WhitelistReviewSelection.indexOf(entries.stream()
+            .map(entry -> entry.id()).toList(), id);
     }
 
     private void clampScrollOffset() {

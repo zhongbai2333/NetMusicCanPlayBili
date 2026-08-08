@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
 import com.mojang.blaze3d.pipeline.ColorTargetState;
+import com.mojang.blaze3d.pipeline.BlendFunction;
 import com.mojang.blaze3d.pipeline.DepthStencilState;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.platform.CompareOp;
@@ -13,8 +14,9 @@ import net.minecraft.resources.Identifier;
 import net.neoforged.neoforge.client.event.RegisterRenderPipelinesEvent;
 
 import java.util.Locale;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 
 /**
@@ -48,7 +50,14 @@ public final class YuvVideoRenderTypes {
             .withShaderDefine("NO_OVERLAY")
             .build();
 
-        private static final Map<Identifier, RenderType> RGBA_ENTITY_CACHE = new ConcurrentHashMap<>();
+        private static final int MAX_RGBA_ENTITY_CACHE_ENTRIES = 64;
+        private static final Map<Identifier, RenderType> RGBA_ENTITY_CACHE = Collections.synchronizedMap(
+                        new LinkedHashMap<>(MAX_RGBA_ENTITY_CACHE_ENTRIES, 0.75F, true) {
+                                @Override
+                                protected boolean removeEldestEntry(Map.Entry<Identifier, RenderType> eldest) {
+                                        return size() > MAX_RGBA_ENTITY_CACHE_ENTRIES;
+                                }
+                        });
 
     private YuvVideoRenderTypes() {
     }
@@ -81,8 +90,9 @@ public final class YuvVideoRenderTypes {
                 .withFragmentShader(fragmentShader)
                 .withShaderDefine("NO_OVERLAY")
                 .withShaderDefine("ALPHA_CUTOUT", 0.1F)
-                                // 视频面片按全亮不透明表面处理，不声明 lightmap，减少光影/后处理 pass 误读遗留 lightmap。
-                .withColorTargetState(ColorTargetState.DEFAULT)
+                                // 视频面片按全亮表面处理，不声明 lightmap，减少光影/后处理 pass 误读遗留 lightmap。
+                                // 中控台淡化通过 vertexColor alpha 传递，必须启用 framebuffer 混合。
+                .withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
                 .withDepthStencilState(YUV_NO_DEPTH_WRITE
                         ? new DepthStencilState(CompareOp.LESS_THAN_OR_EQUAL, false)
                         : DepthStencilState.DEFAULT)
@@ -108,7 +118,7 @@ public final class YuvVideoRenderTypes {
                 YUV420P_TEXTURED_PROBE_ENTITY);
         // 不缓存 YUV RenderType：动态纹理变化时重建绑定，避免 Iris 复用过期 sampler。
         // 采样器沿用 Sampler0/1/2，兼容 Iris 对原版 sampler 名的校验。
-        return RenderType.create(
+        return createYuvRenderType(
                 "bili_yuv420p_entity",
                 RenderSetup.builder(YUV420P_ENTITY)
                         .withTexture("Sampler0", yTexture)
@@ -129,7 +139,7 @@ public final class YuvVideoRenderTypes {
             Identifier placeholderTexture) {
         IrisShaderpackCompat.prepareYuvPipelineForCurrentShaderpackState(NV12_ENTITY,
                 YUV420P_TEXTURED_PROBE_ENTITY);
-        return RenderType.create(
+        return createYuvRenderType(
                 name,
                 RenderSetup.builder(NV12_ENTITY)
                         .withTexture("Sampler0", yTexture)
@@ -137,6 +147,13 @@ public final class YuvVideoRenderTypes {
                         .withTexture("Sampler2", placeholderTexture)
                         .createRenderSetup());
     }
+
+        private static RenderType createYuvRenderType(String name, RenderSetup setup) {
+                if (IrisShaderpackCompat.shouldForceSolidYuvRenderType()) {
+                        return new SolidClassifiedVideoRenderType(name, setup);
+        }
+                return RenderType.create(name, setup);
+        }
 
     static RenderType yOnlyTexturedProbeEntity(Identifier yTexture) {
         IrisShaderpackCompat.prepareYuvPipelineForCurrentShaderpackState(YUV420P_ENTITY,
@@ -155,11 +172,13 @@ public final class YuvVideoRenderTypes {
     }
 
     public static RenderType videoRgbaEntity(Identifier texture) {
-        return RGBA_ENTITY_CACHE.computeIfAbsent(texture, key -> {
-            LOGGER.debug("创建视频 RGBA Iris 兼容 RenderType: texture={}, pipeline=ENTITY_SOLID, samplers=Sampler0/1/2, lightmap=off",
-                    key);
-                        return videoRgbaEntity("bili_video_rgba_entity", key);
-        });
+        synchronized (RGBA_ENTITY_CACHE) {
+            return RGBA_ENTITY_CACHE.computeIfAbsent(texture, key -> {
+                LOGGER.debug("创建视频 RGBA Iris 兼容 RenderType: texture={}, pipeline=ENTITY_SOLID, samplers=Sampler0/1/2, lightmap=off",
+                        key);
+                return videoRgbaEntity("bili_video_rgba_entity", key);
+            });
+                }
     }
 
         public static RenderType padVideoRgbaEntity(Identifier texture) {

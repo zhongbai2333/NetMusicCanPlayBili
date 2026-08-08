@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 立体声音频的 OpenAL 空间播放器
@@ -39,6 +40,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     private final SpatialFrontSmoother frontSmoother = new SpatialFrontSmoother();
     private final Thread worker;
     private volatile boolean closed;
+    private final AtomicBoolean cleanupStarted = new AtomicBoolean();
     private volatile boolean started;
     private long totalSamplesFed;
     private volatile long totalInputSamples;
@@ -248,7 +250,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
                 float gain = spatialGainForDistance(distance, userVolume);
                 lastDistance = distance;
                 lastGain = gain;
-                float gv = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays.size(),
+                float gv = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays,
                         followLocalPlayerFront)
                                 ? 0f
                                 : gain * gameVolume();
@@ -456,6 +458,9 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     }
 
     public void cleanup() {
+        if (!cleanupStarted.compareAndSet(false, true)) {
+            return;
+        }
         hardStopOutput();
         closed = true;
         pcmQueue.clear();
@@ -466,6 +471,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
             spatialAudio.cleanup();
             spatialAudio = null;
         }
+        relays.clear();
         initialized = false;
         LOGGER.debug("StereoOpenALHandler closed ({} blocks)", frameCount);
     }

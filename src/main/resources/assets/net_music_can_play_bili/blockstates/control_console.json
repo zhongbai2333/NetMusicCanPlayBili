@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "net_music_can_play_bili:block/control_console"
+    }
+  }
+}

@@ -13,6 +13,8 @@ import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputReg
 import com.zhongbai233.net_music_can_play_bili.media.stream.FlvStreamParser;
 import com.zhongbai233.net_music_can_play_bili.media.stream.LiveReconnectPolicy;
 import com.zhongbai233.net_music_can_play_bili.media.stream.LiveVideoSampleBus;
+import com.zhongbai233.net_music_can_play_bili.media.stream.CancellableHttpTransport;
+import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRequestCloseDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.LifecycleClose;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
@@ -28,7 +30,6 @@ import java.io.InputStream;
 import java.net.URI;
 import java.net.URL;
 import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -472,23 +473,21 @@ public final class BiliLiveAudioStreamHandler implements IAudioStreamHandler {
         URL target = uri.toURL();
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri).GET();
         BiliRequestHeaders.applyLiveHeaders(builder, target);
-        try {
-            // 直播是长连接，只保留连接超时，不设置整体响应超时。
-            HttpResponse<InputStream> response = BiliWbiSigner.HTTP.send(builder.build(),
-                    HttpResponse.BodyHandlers.ofInputStream());
-            BiliRequestHeaders.recordBiliCdnResponse(target, response.statusCode());
-            InputStream body = response.body();
-            if (response.statusCode() != 200) {
-                LifecycleClose.closeQuietly(body);
-                throw new IOException("直播流 HTTP " + response.statusCode() + " host=" + target.getHost());
-            }
-            if (body == null) {
-                throw new IOException("直播流响应为空: host=" + target.getHost());
-            }
-            return new BufferedInputStream(body, READ_BUFFER_BYTES);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("打开直播流时被中断", e);
+        HttpRequestCloseDiagnostics diagnostics = HttpRequestCloseDiagnostics.global();
+        long operation = diagnostics.begin("live-flv", target.getHost(), -1L, -1L, System.nanoTime());
+        // 直播是长连接，只保留连接超时，不设置整体响应超时。session.close() 中断 worker
+        // 时，transport 会取消仍在等待 headers 的根 future；body 发布后则由 bodyRef 关闭。
+        CancellableHttpTransport.Response response = CancellableHttpTransport.send(
+                BiliWbiSigner.HTTP, builder.build(), diagnostics, operation);
+        BiliRequestHeaders.recordBiliCdnResponse(target, response.statusCode());
+        InputStream body = response.body();
+        if (response.statusCode() != 200) {
+            LifecycleClose.closeQuietly(body);
+            throw new IOException("直播流 HTTP " + response.statusCode() + " host=" + target.getHost());
         }
+        if (body == null) {
+            throw new IOException("直播流响应为空: host=" + target.getHost());
+        }
+        return new BufferedInputStream(body, READ_BUFFER_BYTES);
     }
 }

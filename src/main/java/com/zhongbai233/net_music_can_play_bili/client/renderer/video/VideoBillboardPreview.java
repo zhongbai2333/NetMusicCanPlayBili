@@ -19,7 +19,9 @@ import com.zhongbai233.net_music_can_play_bili.client.VideoFeatureFlags;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.ProjectorScreenBounds;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.RenderVertexUtils;
+import com.zhongbai233.net_music_can_play_bili.editor.core.media.ControlConsoleVideoStatePolicy;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseExecutor;
+import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.rendertype.RenderType;
@@ -72,6 +74,28 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @EventBusSubscriber(modid = NetMusicCanPlayBili.MODID, value = Dist.CLIENT)
 public final class VideoBillboardPreview {
+    /**
+     * 根据相机相对空间中的屏幕姿态，选择提示底片远离玩家的一侧。
+     * BER 的最终矩阵以相机为原点，因此屏幕局部 +Z 法线与屏幕中心的点积
+     * 可以直接判断哪一面朝向玩家。
+     */
+    public static float cameraRelativeBackOffset(Matrix4f screenPose, float configuredOffset) {
+        float distance = Math.abs(configuredOffset);
+        if (screenPose == null || distance <= 0.0F) {
+            return 0.0F;
+        }
+        Vector4f center = new Vector4f(0.0F, 0.0F, 0.0F, 1.0F).mul(screenPose);
+        Vector4f positiveZ = new Vector4f(0.0F, 0.0F, 1.0F, 1.0F).mul(screenPose);
+        float normalX = positiveZ.x - center.x;
+        float normalY = positiveZ.y - center.y;
+        float normalZ = positiveZ.z - center.z;
+        float towardCameraDot = normalX * -center.x + normalY * -center.y + normalZ * -center.z;
+        if (Math.abs(towardCameraDot) < 1.0e-6F) {
+            return configuredOffset;
+        }
+        return towardCameraDot > 0.0F ? -distance : distance;
+    }
+
     public static ProjectorFrameSnapshot currentProjectorFrame(BlockPos projectorPos) {
         if (projectorPos != null) {
             for (VideoPlaybackInstance instance : INSTANCES.values()) {
@@ -213,6 +237,7 @@ public final class VideoBillboardPreview {
 
     private static final Map<String, VideoPlaybackInstance> INSTANCES = new ConcurrentHashMap<>();
     private static final Map<String, PendingLoading> PENDING_LOADING = new ConcurrentHashMap<>();
+    private static final Map<String, PendingLoading> PENDING_FAILURE = new ConcurrentHashMap<>();
 
     private static final AtomicBoolean started = new AtomicBoolean(false);
     private static final AtomicBoolean loggedIrisYuvRenderType = new AtomicBoolean(false);
@@ -225,6 +250,24 @@ public final class VideoBillboardPreview {
                     Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, 0, 0, false, false, 0.0F);
         }
     }
+
+        public record ControlConsoleVideoSnapshot(String sessionId, ControlConsoleVideoStatePolicy.State state,
+            ProjectorFrameSnapshot frame) {
+        }
+
+        public record ResourceDiagnostics(int instances, int runningInstances, int failedInstances, int pendingLoading,
+            int pendingFailure, int projectorReferences, int berManagedProjectors, int guiConsumers) {
+        }
+
+        public enum BenchUploadFormat {
+        RGBA,
+        YUV420P,
+        NV12
+        }
+
+        public record BenchUploadResources(boolean rgbaTexture, boolean yuvTextures, long textureStagingBytes,
+            long gpuPboBytes) {
+        }
 
     private static final AtomicBoolean loggedYuvImmediateStage = new AtomicBoolean(false);
     private static final AtomicLong decodeGeneration = new AtomicLong();
@@ -347,6 +390,151 @@ public final class VideoBillboardPreview {
     public static ProjectorFrameSnapshot currentPreviewFrame(String sessionId) {
         VideoPlaybackInstance instance = INSTANCES.get(sessionId != null ? sessionId : "");
         return instance != null ? instance.previewFrameSnapshot() : ProjectorFrameSnapshot.empty();
+    }
+
+    public static ControlConsoleVideoSnapshot currentControlConsoleVideo(BlockPos consolePos,
+            boolean sourcePlaying, boolean videoExpected) {
+        if (consolePos == null) {
+            return null;
+        }
+        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+            if (!instance.containsProjector(consolePos)) {
+                continue;
+            }
+            boolean failed = instance.hasTerminalFailure();
+            ProjectorFrameSnapshot realFrame = instance.realFrameSnapshot(consolePos);
+            ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(
+                    sourcePlaying, videoExpected, failed, realFrame.hasFrame());
+            ProjectorFrameSnapshot displayFrame = switch (state) {
+                // 与普通视频投影仪完全一致：Iris 会捕获 BER 的多平面 YUV，
+                // 因此 ACTIVE 状态也必须使用安全显示快照，避免控制台出现摩尔纹。
+                case ACTIVE -> IrisShaderpackCompat.shouldApplyIrisYuvCompatibility()
+                        && realFrame.yuv() ? instance.displayFrameSnapshot(consolePos) : realFrame;
+                case ERROR -> instance.failurePlaceholderSnapshot();
+                case BUFFERING -> instance.displayFrameSnapshot(consolePos);
+                case IDLE -> VideoPlaybackInstance.idlePlaceholderSnapshot();
+            };
+            return new ControlConsoleVideoSnapshot(instance.sessionId(), state, displayFrame);
+        }
+        for (Map.Entry<String, PendingLoading> entry : PENDING_FAILURE.entrySet()) {
+            if (entry.getValue().projectorPositions().contains(consolePos)) {
+                ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(
+                        sourcePlaying, videoExpected, true, false);
+                ProjectorFrameSnapshot frame = state == ControlConsoleVideoStatePolicy.State.IDLE
+                        ? VideoPlaybackInstance.idlePlaceholderSnapshot() : networkErrorSnapshot();
+                return new ControlConsoleVideoSnapshot(entry.getKey(), state, frame);
+            }
+        }
+        for (Map.Entry<String, PendingLoading> entry : PENDING_LOADING.entrySet()) {
+            if (entry.getValue().projectorPositions().contains(consolePos)) {
+                ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(
+                        sourcePlaying, videoExpected, false, false);
+                ProjectorFrameSnapshot frame = state == ControlConsoleVideoStatePolicy.State.IDLE
+                        ? VideoPlaybackInstance.idlePlaceholderSnapshot()
+                        : VideoPlaybackInstance.loadingPlaceholderSnapshot(entry.getValue().startedNanoTime());
+                return new ControlConsoleVideoSnapshot(entry.getKey(), state, frame);
+            }
+        }
+        ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(
+                sourcePlaying, videoExpected, false, false);
+        return new ControlConsoleVideoSnapshot(null, state,
+                state == ControlConsoleVideoStatePolicy.State.IDLE
+                        ? VideoPlaybackInstance.idlePlaceholderSnapshot() : ProjectorFrameSnapshot.empty());
+    }
+
+    public static boolean hasTerminalFailure(String sessionId) {
+        String normalized = sessionId != null ? sessionId : "";
+        VideoPlaybackInstance instance = INSTANCES.get(normalized);
+        return (instance != null && instance.hasTerminalFailure()) || PENDING_FAILURE.containsKey(normalized);
+    }
+
+    public static boolean hasGuiConsumer(String sessionId) {
+        VideoPlaybackInstance instance = INSTANCES.get(sessionId != null ? sessionId : "");
+        return instance != null && instance.hasGuiConsumer();
+    }
+
+    public static void markPendingFailure(String sessionId, Collection<BlockPos> projectorPositions) {
+        String normalized = sessionId != null ? sessionId : "";
+        List<BlockPos> positions = immutablePositions(projectorPositions);
+        if (normalized.isBlank() || positions.isEmpty()) {
+            return;
+        }
+        PENDING_LOADING.remove(normalized);
+        PENDING_FAILURE.put(normalized, new PendingLoading(positions, System.nanoTime()));
+    }
+
+    public static void detachControlConsoleConsumer(BlockPos consolePos) {
+        if (consolePos == null) {
+            return;
+        }
+        PENDING_LOADING.replaceAll((sessionId, pending) -> pending.withoutProjector(consolePos));
+        PENDING_LOADING.entrySet().removeIf(entry -> entry.getValue().projectorPositions().isEmpty());
+        PENDING_FAILURE.replaceAll((sessionId, pending) -> pending.withoutProjector(consolePos));
+        PENDING_FAILURE.entrySet().removeIf(entry -> entry.getValue().projectorPositions().isEmpty());
+        INSTANCES.values().forEach(instance -> instance.removeProjector(consolePos));
+        INSTANCES.entrySet().removeIf(entry -> {
+            VideoPlaybackInstance instance = entry.getValue();
+            if (instance.hasVideoConsumer()) {
+                return false;
+            }
+            instance.stop();
+            return true;
+        });
+    }
+
+    public static ResourceDiagnostics resourceDiagnostics() {
+        int runningInstances = 0;
+        int failedInstances = 0;
+        int projectorReferences = 0;
+        int guiConsumers = 0;
+        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+            if (instance.isRunning()) runningInstances++;
+            if (instance.hasTerminalFailure()) failedInstances++;
+            projectorReferences += instance.projectorCount();
+            if (instance.hasGuiConsumer()) guiConsumers++;
+        }
+        return new ResourceDiagnostics(INSTANCES.size(), runningInstances, failedInstances, PENDING_LOADING.size(),
+                PENDING_FAILURE.size(), projectorReferences, berManagedProjectorPositions.size(), guiConsumers);
+    }
+
+    public static BenchUploadResources benchUploadResources() {
+        return new BenchUploadResources(texture != null || packedBenchTexture != null, yuvTextureSet != null,
+                MemoryResourceTracker.usage(MemoryResourceTracker.Category.TEXTURE_STAGING).currentBytes(),
+                MemoryResourceTracker.usage(MemoryResourceTracker.Category.GPU_PBO).currentBytes());
+    }
+
+    public static long uploadFrameOnClientThreadForBench(BenchUploadFormat format, byte[] frame,
+            int frameWidth, int frameHeight) {
+        return switch (java.util.Objects.requireNonNull(format, "format")) {
+            case RGBA -> uploadFrameSyncForBench(frame, frameWidth, frameHeight);
+            case YUV420P -> uploadYuv420FrameSyncForBench(frame, frameWidth, frameHeight);
+            case NV12 -> uploadNv12FrameSyncForBench(frame, frameWidth, frameHeight);
+        };
+    }
+
+    public static void releaseBenchUploadResources() {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.isSameThread()) {
+            releaseTexture();
+            return;
+        }
+        CompletableFuture<Void> released = new CompletableFuture<>();
+        minecraft.execute(() -> {
+            try {
+                releaseTexture();
+                released.complete(null);
+            } catch (Throwable error) {
+                released.completeExceptionally(error);
+            }
+        });
+        try {
+            released.get();
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted while releasing video bench resources", error);
+        } catch (ExecutionException error) {
+            throw new IllegalStateException("failed to release video bench resources", error.getCause());
+        }
     }
 
     public static void pumpPreviewFrame(String sessionId) {
@@ -645,6 +833,7 @@ public final class VideoBillboardPreview {
         }
         INSTANCES.clear();
         PENDING_LOADING.clear();
+        PENDING_FAILURE.clear();
         running = false;
         started.set(false);
         hasFrame = false;
@@ -703,6 +892,7 @@ public final class VideoBillboardPreview {
     public static void stopIfSession(String sessionId) {
         String normalized = sessionId != null ? sessionId : "";
         clearPendingLoading(normalized);
+        PENDING_FAILURE.remove(normalized);
         ModernTurntableVideoClient.forgetSession(normalized);
         // YUV 立即渲染路径未激活时捕获的姿态不会被消费，会话结束必须显式清理。
         PROJECTOR_IMMEDIATE_POSES.keySet().removeIf(key -> key.sessionId().equals(normalized));
@@ -725,6 +915,8 @@ public final class VideoBillboardPreview {
         PROJECTOR_IMMEDIATE_POSES.keySet().removeIf(key -> key.projectorPos().equals(projectorPos));
         PENDING_LOADING.replaceAll((sessionId, pending) -> pending.withoutProjector(projectorPos));
         PENDING_LOADING.entrySet().removeIf(entry -> entry.getValue().projectorPositions().isEmpty());
+        PENDING_FAILURE.replaceAll((sessionId, pending) -> pending.withoutProjector(projectorPos));
+        PENDING_FAILURE.entrySet().removeIf(entry -> entry.getValue().projectorPositions().isEmpty());
         INSTANCES.values().forEach(instance -> instance.removeProjector(projectorPos));
         INSTANCES.entrySet().removeIf(entry -> {
             if (entry.getValue().hasProjectors()) {
@@ -757,7 +949,7 @@ public final class VideoBillboardPreview {
         }
     }
 
-    static boolean isProjectorRenderedByBer(BlockPos projectorPos) {
+    public static boolean isProjectorRenderedByBer(BlockPos projectorPos) {
         return projectorPos != null && berManagedProjectorPositions.contains(projectorPos);
     }
 
@@ -830,6 +1022,11 @@ public final class VideoBillboardPreview {
             PENDING_LOADING.put(normalized,
                     new PendingLoading(immutablePositions(projectorPositions), pending.startedNanoTime()));
         }
+        PendingLoading failed = PENDING_FAILURE.get(normalized);
+        if (failed != null) {
+            PENDING_FAILURE.put(normalized,
+                new PendingLoading(immutablePositions(projectorPositions), failed.startedNanoTime()));
+        }
         VideoPlaybackInstance instance = INSTANCES.get(normalized);
         if (instance != null) {
             instance.replaceProjectors(projectorPositions);
@@ -848,6 +1045,7 @@ public final class VideoBillboardPreview {
         if (normalized.isBlank() || positions.isEmpty()) {
             return;
         }
+        PENDING_FAILURE.remove(normalized);
         PENDING_LOADING.compute(normalized, (ignored, existing) -> new PendingLoading(positions,
                 existing != null ? existing.startedNanoTime() : System.nanoTime()));
     }
@@ -2272,7 +2470,7 @@ public final class VideoBillboardPreview {
     }
 
     static boolean shouldDrawYuvImmediateWithIris() {
-        return IrisShaderpackCompat.shouldApplyIrisYuvCompatibility();
+        return IrisShaderpackCompat.shouldDrawYuvImmediate();
     }
 
     private static void renderProjectorYuvImmediate(RenderLevelStageEvent event, String route) {
@@ -2327,6 +2525,13 @@ public final class VideoBillboardPreview {
         }
         PROJECTOR_IMMEDIATE_POSES.put(new ProjectorImmediateKey(sessionId, projectorPos.immutable()),
                 new ProjectorImmediatePose(new Matrix4f(pose), halfHeight));
+    }
+
+    public static void captureProjectorImmediatePose(String sessionId, BlockPos projectorPos, Matrix4f pose,
+            float halfHeight, float opacity) {
+        if (opacity > 0.0F) {
+            captureProjectorImmediatePose(sessionId, projectorPos, pose, halfHeight);
+        }
     }
 
     static boolean drawCapturedProjectorYuvImmediate(RenderLevelStageEvent event, String sessionId,
@@ -2746,7 +2951,8 @@ public final class VideoBillboardPreview {
                     || frame.yTexture() == null || frame.uTexture() == null || frame.vTexture() == null) {
                 return false;
             }
-            submitLocalTexturedQuad(collector, poseStack, yuvRenderTypeForSnapshot(frame), halfWidth, halfHeight);
+            submitLocalTexturedQuad(collector, poseStack, yuvRenderTypeForSnapshot(frame), halfWidth, halfHeight,
+                    0.0F, 1.0F);
             return true;
         }
         if (frame.rgbaTexture() == null) {
@@ -2756,7 +2962,51 @@ public final class VideoBillboardPreview {
                 frame.emissiveRgba()
                         ? RenderTypes.itemCutout(frame.rgbaTexture())
                         : YuvVideoRenderTypes.videoRgbaEntity(frame.rgbaTexture()),
-                -halfWidth, halfHeight, halfWidth, -halfHeight, rgbaDepthOffset);
+                -halfWidth, halfHeight, halfWidth, -halfHeight, rgbaDepthOffset, 1.0F);
+        if (frame.loadingProgressOverlay()) {
+            submitLoadingProgressOnPose(collector, poseStack, halfWidth, halfHeight);
+        }
+        return true;
+    }
+
+    public static boolean submitProjectorFrameOnPose(
+            net.minecraft.client.renderer.SubmitNodeCollector collector,
+            PoseStack poseStack,
+            ProjectorFrameSnapshot frame,
+            float halfWidth,
+            float halfHeight,
+            float rgbaDepthOffset,
+            float opacity) {
+        VideoOpacityRoute opacityRoute = VideoOpacityRoute.choose(opacity);
+        if (opacityRoute == VideoOpacityRoute.SKIP) {
+            return false;
+        }
+        float normalizedOpacity = VideoOpacityRoute.normalize(opacity);
+        if (frame == null || !frame.hasFrame() || frame.width() <= 0 || frame.height() <= 0
+                || halfWidth <= 0.0F || halfHeight <= 0.0F) {
+            return false;
+        }
+        if (frame.yuv()) {
+            if (!isCustomYuvShaderAvailable()
+                    || frame.yTexture() == null || frame.uTexture() == null || frame.vTexture() == null) {
+                return false;
+            }
+            submitLocalTexturedQuad(collector, poseStack, yuvRenderTypeForSnapshot(frame), halfWidth, halfHeight,
+                    0.0F, normalizedOpacity);
+            return true;
+        }
+        if (frame.rgbaTexture() == null) {
+            return false;
+        }
+        submitLocalTexturedQuad(collector, poseStack,
+                frame.emissiveRgba()
+                ? (opacityRoute == VideoOpacityRoute.TRANSLUCENT
+                    ? RenderTypes.itemTranslucent(frame.rgbaTexture())
+                    : RenderTypes.itemCutout(frame.rgbaTexture()))
+                : (opacityRoute == VideoOpacityRoute.TRANSLUCENT
+                    ? RenderTypes.entityTranslucent(frame.rgbaTexture())
+                    : YuvVideoRenderTypes.videoRgbaEntity(frame.rgbaTexture())),
+                -halfWidth, halfHeight, halfWidth, -halfHeight, rgbaDepthOffset, normalizedOpacity);
         if (frame.loadingProgressOverlay()) {
             submitLoadingProgressOnPose(collector, poseStack, halfWidth, halfHeight);
         }
@@ -2823,8 +3073,20 @@ public final class VideoBillboardPreview {
             float halfWidth,
             float halfHeight) {
         submitLocalTexturedQuad(collector, poseStack, renderType, -halfWidth, halfHeight, halfWidth, -halfHeight,
-                0.0F);
+            0.0F, 1.0F);
     }
+
+        private static void submitLocalTexturedQuad(
+            net.minecraft.client.renderer.SubmitNodeCollector collector,
+            PoseStack poseStack,
+            RenderType renderType,
+            float halfWidth,
+            float halfHeight,
+            float z,
+            float opacity) {
+        submitLocalTexturedQuad(collector, poseStack, renderType, -halfWidth, halfHeight, halfWidth, -halfHeight,
+            z, opacity);
+        }
 
     private static void submitLocalTexturedQuad(
             net.minecraft.client.renderer.SubmitNodeCollector collector,
@@ -2835,6 +3097,19 @@ public final class VideoBillboardPreview {
             float right,
             float bottom,
             float z) {
+        submitLocalTexturedQuad(collector, poseStack, renderType, left, top, right, bottom, z, 1.0F);
+    }
+
+    private static void submitLocalTexturedQuad(
+            net.minecraft.client.renderer.SubmitNodeCollector collector,
+            PoseStack poseStack,
+            RenderType renderType,
+            float left,
+            float top,
+            float right,
+            float bottom,
+            float z,
+            float opacity) {
         collector.submitCustomGeometry(
                 poseStack,
                 renderType,
@@ -2844,13 +3119,13 @@ public final class VideoBillboardPreview {
                             left, bottom, z,
                             right, bottom, z,
                             right, top, z,
-                            false);
+                            false, opacity);
                     emitQuad(buffer, pose,
                             left, top, z,
                             left, bottom, z,
                             right, bottom, z,
                             right, top, z,
-                            true);
+                            true, opacity);
                 });
     }
 
@@ -3109,23 +3384,33 @@ public final class VideoBillboardPreview {
             float p1x, float p1y, float p1z,
             float p2x, float p2y, float p2z,
             float p3x, float p3y, float p3z,
-            boolean reverse) {
+            boolean reverse,
+            float opacity) {
         if (reverse) {
-            vertex(buffer, pose, p3x, p3y, p3z, 1.0F, 0.0F);
-            vertex(buffer, pose, p2x, p2y, p2z, 1.0F, 1.0F);
-            vertex(buffer, pose, p1x, p1y, p1z, 0.0F, 1.0F);
-            vertex(buffer, pose, p0x, p0y, p0z, 0.0F, 0.0F);
+            vertex(buffer, pose, p3x, p3y, p3z, 1.0F, 0.0F, opacity);
+            vertex(buffer, pose, p2x, p2y, p2z, 1.0F, 1.0F, opacity);
+            vertex(buffer, pose, p1x, p1y, p1z, 0.0F, 1.0F, opacity);
+            vertex(buffer, pose, p0x, p0y, p0z, 0.0F, 0.0F, opacity);
         } else {
-            vertex(buffer, pose, p0x, p0y, p0z, 0.0F, 0.0F);
-            vertex(buffer, pose, p1x, p1y, p1z, 0.0F, 1.0F);
-            vertex(buffer, pose, p2x, p2y, p2z, 1.0F, 1.0F);
-            vertex(buffer, pose, p3x, p3y, p3z, 1.0F, 0.0F);
+            vertex(buffer, pose, p0x, p0y, p0z, 0.0F, 0.0F, opacity);
+            vertex(buffer, pose, p1x, p1y, p1z, 0.0F, 1.0F, opacity);
+            vertex(buffer, pose, p2x, p2y, p2z, 1.0F, 1.0F, opacity);
+            vertex(buffer, pose, p3x, p3y, p3z, 1.0F, 0.0F, opacity);
         }
     }
 
+    private static void emitQuad(VertexConsumer buffer, PoseStack.Pose pose,
+            float p0x, float p0y, float p0z,
+            float p1x, float p1y, float p1z,
+            float p2x, float p2y, float p2z,
+            float p3x, float p3y, float p3z,
+            boolean reverse) {
+        emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z, reverse, 1.0F);
+    }
+
     private static void vertex(VertexConsumer buffer, PoseStack.Pose pose, float x, float y, float z, float u,
-            float v) {
-        RenderVertexUtils.texturedVertex(buffer, pose, x, y, z, u, v);
+            float v, float opacity) {
+        RenderVertexUtils.texturedVertex(buffer, pose, x, y, z, u, v, opacity);
     }
 
     static boolean isProjectorScreenRenderable(Minecraft minecraft, Camera camera,

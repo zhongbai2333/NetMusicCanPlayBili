@@ -161,10 +161,6 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
         }
     }
 
-    /** 此音响的独立音频 relay（客户端） */
-    @Nullable
-    private transient SpeakerAudioRelay audioRelay;
-
     /**
      * 客户端：根据链接状态注册/清除音频 relay，每个音响有独立的 OpenAL 管线
      */
@@ -173,16 +169,10 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
         if (linkedTurntablePos != null) {
             // 每次重新同步都创建新的 relay；clearMachineOverrideForSpeaker 会 cleanup 旧 relay
             SpeakerAudioRelay relay = new SpeakerAudioRelay();
-            audioRelay = relay;
             relay.setChannelIndex(channelIndex);
             relay.setUserVolume(volume);
             ClientAudioOutputRegistry.registerRelay(worldPosition, linkedTurntablePos, relay);
             ClientAudioOutputRegistry.updateRelayConfig(worldPosition, channelIndex, volume, autoMixJoc);
-        } else {
-            if (audioRelay != null) {
-                audioRelay.cleanup();
-                audioRelay = null;
-            }
         }
     }
 

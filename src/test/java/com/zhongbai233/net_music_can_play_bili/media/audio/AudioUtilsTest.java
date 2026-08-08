@@ -40,4 +40,16 @@ class AudioUtilsTest {
         assertEquals(0.0f, AudioUtils.spatialGainForDistance(1.5f, 0.0f, 1.0f));
         assertEquals(0.0f, AudioUtils.spatialGainForDistance(1.5f, 1.0f, 0.0f));
     }
+
+    @Test
+    void absoluteDistanceKeepsVolumeIndependentFromListeningRange() {
+        float atRange = AudioUtils.spatialGainForDistance(32.0F, 32.0F, 0.5F, true);
+        float beyondRange = AudioUtils.spatialGainForDistance(35.0F, 32.0F, 0.5F, true);
+        float farBeyondRange = AudioUtils.spatialGainForDistance(64.0F, 32.0F, 0.5F, true);
+
+        assertTrue(atRange > beyondRange);
+        assertTrue(beyondRange > 0.0F);
+        assertEquals(0.0F, farBeyondRange);
+        assertEquals(0.0F, AudioUtils.spatialGainForDistance(32.0F, 32.0F, 0.0F, true));
+    }
 }

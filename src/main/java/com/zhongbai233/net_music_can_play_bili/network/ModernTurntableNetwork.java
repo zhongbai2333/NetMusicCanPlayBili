@@ -34,6 +34,34 @@ public final class ModernTurntableNetwork {
                 HolographicGlassesConfigPacket.STREAM_CODEC,
                 HolographicGlassesConfigPacket::handle);
         registrar.playToServer(
+                ControlConsoleConfigPacket.TYPE,
+                ControlConsoleConfigPacket.STREAM_CODEC,
+                ControlConsoleConfigPacket::handle);
+        registrar.playToServer(
+                ControlConsoleAccessPacket.TYPE,
+                ControlConsoleAccessPacket.STREAM_CODEC,
+                ControlConsoleAccessPacket::handle);
+        registrar.playToServer(
+                ControlConsoleEditLeasePacket.TYPE,
+                ControlConsoleEditLeasePacket.STREAM_CODEC,
+                ControlConsoleEditLeasePacket::handle);
+        registrar.playToClient(
+                ControlConsoleEditLeaseResultPacket.TYPE,
+                ControlConsoleEditLeaseResultPacket.STREAM_CODEC,
+                ControlConsoleEditLeaseResultPacket::handle);
+        registrar.playToServer(
+                ControlConsoleConsumerLeasePacket.TYPE,
+                ControlConsoleConsumerLeasePacket.STREAM_CODEC,
+                ControlConsoleConsumerLeasePacket::handle);
+        registrar.playToClient(
+                ControlConsoleConsumerLeaseResultPacket.TYPE,
+                ControlConsoleConsumerLeaseResultPacket.STREAM_CODEC,
+                ControlConsoleConsumerLeaseResultPacket::handle);
+        registrar.playToClient(
+                ControlConsoleConfigResultPacket.TYPE,
+                ControlConsoleConfigResultPacket.STREAM_CODEC,
+                ControlConsoleConfigResultPacket::handle);
+        registrar.playToServer(
                 ClearEquippedBindingPacket.TYPE,
                 ClearEquippedBindingPacket.STREAM_CODEC,
                 ClearEquippedBindingPacket::handle);

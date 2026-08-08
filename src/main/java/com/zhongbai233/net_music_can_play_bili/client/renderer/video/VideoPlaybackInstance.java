@@ -31,6 +31,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.EnumSet;
 
 /**
  * 单个同步视频播放会话，负责解码线程、会话专属动态纹理和投影仪列表
@@ -77,6 +78,8 @@ final class VideoPlaybackInstance {
             NetMusicCanPlayBili.MODID, "textures/gui/video_loading/iris_translucent_warning_base.png");
     private static final Identifier NETWORK_ERROR_PLACEHOLDER_TEXTURE = Identifier.fromNamespaceAndPath(
             NetMusicCanPlayBili.MODID, "textures/gui/video_loading/network_error_base.png");
+        private static final Identifier IDLE_PLACEHOLDER_TEXTURE = Identifier.fromNamespaceAndPath(
+            NetMusicCanPlayBili.MODID, "textures/gui/video_loading/idle_base.png");
     private static final boolean NETWORK_ERROR_PLACEHOLDER_ENABLED = Boolean.parseBoolean(
             System.getProperty("ncpb.video.pipeline.network_error_placeholder", "true"));
     private static final int LOADING_PLACEHOLDER_WIDTH = 320;
@@ -127,8 +130,10 @@ final class VideoPlaybackInstance {
     private volatile boolean prewarmVisible = true;
     private volatile boolean loggedOffscreenPause;
     private volatile boolean networkFailure;
+    private volatile boolean terminalFailure;
     private volatile boolean networkFailureNotified;
     private volatile boolean guiConsumer;
+    private volatile boolean stopRequested;
     private int consecutiveBadUploads;
 
     VideoPlaybackInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
@@ -204,6 +209,7 @@ final class VideoPlaybackInstance {
         prewarmVisible = true;
         loggedOffscreenPause = false;
         networkFailure = false;
+        terminalFailure = false;
         networkFailureNotified = false;
         consecutiveBadUploads = 0;
         frameQueue.clear();
@@ -338,6 +344,7 @@ final class VideoPlaybackInstance {
                 return;
             }
             networkFailure = MediaNetworkFailureClassifier.isNetworkFailure(error);
+            terminalFailure = true;
             if (networkFailure) {
                 notifyNetworkFailure();
             }
@@ -608,6 +615,7 @@ final class VideoPlaybackInstance {
         firstDecodedNanoTime = 0L;
         startupBufferReady = false;
         networkFailure = false;
+        terminalFailure = false;
         networkFailureNotified = false;
         startNanoTime = System.nanoTime();
         lastUploadPumpNanoTime = System.nanoTime();
@@ -797,7 +805,7 @@ final class VideoPlaybackInstance {
         if (projectorPos != null && !projectorPositions.contains(projectorPos)) {
             return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
         }
-        if (networkFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
+        if (terminalFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
             return placeholderSnapshot(PlaceholderKind.NETWORK_ERROR);
         }
         if (!hasFrame) {
@@ -816,7 +824,7 @@ final class VideoPlaybackInstance {
         // VideoProjectorRenderer 会造成不可见颜色写入或随视角变化的深度闪烁。
         // 与旧的全局提交路径保持一致：该兼容模式下用明确的警告占位图替代 YUV
         // 面片，而不是先因 hasFrame 返回实际视频，导致下方警告分支永远不可达。
-        if (networkFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
+        if (terminalFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
             return placeholderSnapshot(PlaceholderKind.NETWORK_ERROR);
         }
         boolean irisWarning = shouldShowIrisTranslucencyWarning();
@@ -830,6 +838,17 @@ final class VideoPlaybackInstance {
             return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
         }
         return placeholderSnapshot(PlaceholderKind.LOADING);
+    }
+
+    VideoBillboardPreview.ProjectorFrameSnapshot realFrameSnapshot(BlockPos projectorPos) {
+        if (projectorPos != null && !projectorPositions.contains(projectorPos)) {
+            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
+        }
+        return hasFrame ? currentFrameSnapshot() : VideoBillboardPreview.ProjectorFrameSnapshot.empty();
+    }
+
+    VideoBillboardPreview.ProjectorFrameSnapshot failurePlaceholderSnapshot() {
+        return placeholderSnapshot(PlaceholderKind.NETWORK_ERROR);
     }
 
     private VideoBillboardPreview.ProjectorFrameSnapshot placeholderSnapshot(PlaceholderKind kind) {
@@ -859,11 +878,18 @@ final class VideoPlaybackInstance {
                 LOADING_PLACEHOLDER_WIDTH, LOADING_PLACEHOLDER_HEIGHT, true, true, 0.0F);
     }
 
+    static VideoBillboardPreview.ProjectorFrameSnapshot idlePlaceholderSnapshot() {
+        return new VideoBillboardPreview.ProjectorFrameSnapshot(true, false, IDLE_PLACEHOLDER_TEXTURE,
+                null, null, null,
+                com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
+                LOADING_PLACEHOLDER_WIDTH, LOADING_PLACEHOLDER_HEIGHT, true, false, 0.0F);
+    }
+
     VideoBillboardPreview.ProjectorFrameSnapshot turntableFrameSnapshot(BlockPos turntablePos) {
         if (turntablePos == null || !anchor.isForTurntable(turntablePos)) {
             return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
         }
-        if (networkFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
+        if (terminalFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
             return placeholderSnapshot(PlaceholderKind.NETWORK_ERROR);
         }
         if (!hasFrame) {
@@ -887,7 +913,7 @@ final class VideoPlaybackInstance {
     }
 
     VideoBillboardPreview.ProjectorFrameSnapshot previewFrameSnapshot() {
-        if (networkFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
+        if (terminalFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
             return placeholderSnapshot(PlaceholderKind.NETWORK_ERROR);
         }
         if (!hasFrame) {
@@ -1061,7 +1087,7 @@ final class VideoPlaybackInstance {
     }
 
     private boolean shouldShowIrisTranslucencyWarning() {
-        return hasFrame && yuvTextureSet != null && VideoBillboardPreview.shouldDrawYuvImmediateWithIris();
+        return hasFrame && yuvTextureSet != null && IrisShaderpackCompat.shouldApplyIrisYuvCompatibility();
     }
 
     boolean isWithinAudioRange(Minecraft minecraft) {
@@ -1144,8 +1170,24 @@ final class VideoPlaybackInstance {
         return sessionId.equals(candidateSessionId != null ? candidateSessionId : "");
     }
 
+    boolean hasProjector(BlockPos pos) {
+        return pos != null && projectorPositions.contains(pos);
+    }
+
+    String sessionId() {
+        return sessionId;
+    }
+
+    long startNanoTime() {
+        return startNanoTime;
+    }
+
     boolean hasProjectors() {
         return !projectorPositions.isEmpty();
+    }
+
+    int projectorCount() {
+        return projectorPositions.size();
     }
 
     boolean hasVideoConsumer() {
@@ -1194,6 +1236,10 @@ final class VideoPlaybackInstance {
 
     boolean hasNetworkFailure() {
         return networkFailure;
+    }
+
+    boolean hasTerminalFailure() {
+        return terminalFailure;
     }
 
     synchronized boolean retryNetworkFailure() {
@@ -1260,14 +1306,47 @@ final class VideoPlaybackInstance {
         return new VideoBillboardPreview.VideoStatus(targetWidth, targetHeight, fps, hasFrame, true);
     }
 
-    void stop() {
+    synchronized void stop() {
+        if (stopRequested) {
+            return;
+        }
+        stopRequested = true;
+        long now = System.nanoTime();
+        AutoCloseable dec = decoder;
+        CompletableFuture<Void> threadExit = decodeExit;
+        CompletableFuture<Void> nativeTermination = dec instanceof com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder nativeDecoder
+                ? nativeDecoder.terminationFuture() : null;
+        EnumSet<VideoCloseDiagnostics.Phase> required = EnumSet.of(
+                VideoCloseDiagnostics.Phase.FRAME_QUEUE_CLEARED,
+                VideoCloseDiagnostics.Phase.RENDER_RELEASE_RETURNED);
+        if (dec != null) {
+            required.add(VideoCloseDiagnostics.Phase.DECODER_CLOSE_RETURNED);
+        }
+        if (threadExit != null && !threadExit.isDone()) {
+            required.add(VideoCloseDiagnostics.Phase.DECODE_THREAD_EXITED);
+        }
+        if (nativeTermination != null && !nativeTermination.isDone()) {
+            required.add(VideoCloseDiagnostics.Phase.NATIVE_TERMINATED);
+        }
+        long closeOperation = VideoCloseDiagnostics.global().begin(sessionId, required, now);
         running = false;
         generation.incrementAndGet();
         frameQueue.clear();
-        AutoCloseable dec = decoder;
+        VideoCloseDiagnostics.global().complete(closeOperation,
+                VideoCloseDiagnostics.Phase.FRAME_QUEUE_CLEARED, System.nanoTime());
         decoder = null;
         if (dec != null) {
-            MediaCloseExecutor.closeAsync(dec, "video decoder " + sessionId);
+            MediaCloseExecutor.closeAsync(dec, "video decoder " + sessionId).thenRun(() ->
+                    VideoCloseDiagnostics.global().complete(closeOperation,
+                            VideoCloseDiagnostics.Phase.DECODER_CLOSE_RETURNED, System.nanoTime()));
+        }
+        if (threadExit != null && !threadExit.isDone()) {
+            threadExit.thenRun(() -> VideoCloseDiagnostics.global().complete(closeOperation,
+                    VideoCloseDiagnostics.Phase.DECODE_THREAD_EXITED, System.nanoTime()));
+        }
+        if (nativeTermination != null && !nativeTermination.isDone()) {
+            nativeTermination.thenRun(() -> VideoCloseDiagnostics.global().complete(closeOperation,
+                    VideoCloseDiagnostics.Phase.NATIVE_TERMINATED, System.nanoTime()));
         }
         Thread thread = decodeThread;
         if (thread != null) {
@@ -1275,9 +1354,18 @@ final class VideoPlaybackInstance {
         }
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.isSameThread()) {
-            releaseTexture();
+            releaseTextureAndReport(closeOperation);
         } else {
-            minecraft.execute(this::releaseTexture);
+            minecraft.execute(() -> releaseTextureAndReport(closeOperation));
+        }
+    }
+
+    private void releaseTextureAndReport(long closeOperation) {
+        try {
+            releaseTexture();
+        } finally {
+            VideoCloseDiagnostics.global().complete(closeOperation,
+                    VideoCloseDiagnostics.Phase.RENDER_RELEASE_RETURNED, System.nanoTime());
         }
     }
 

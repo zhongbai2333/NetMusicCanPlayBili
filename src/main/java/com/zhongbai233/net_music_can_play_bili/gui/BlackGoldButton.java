@@ -37,7 +37,9 @@ public class BlackGoldButton extends Button {
         int tc = this.active
                 ? (this.isHoveredOrFocused() ? accentColor : BlackGoldScreen.TEXT_PRIMARY)
                 : BlackGoldScreen.TEXT_DIM;
-        g.centeredText(font, getMessage(), getX() + width / 2,
+        Component visibleMessage = Component.literal(BlackGoldUi.ellipsize(font, getMessage().getString(),
+            Math.max(0, width - 10)));
+        g.centeredText(font, visibleMessage, getX() + width / 2,
                 getY() + (height - 8) / 2, tc);
     }
 }

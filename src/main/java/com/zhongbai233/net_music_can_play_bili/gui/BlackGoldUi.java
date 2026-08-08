@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.gui;
 
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.Font;
 import net.minecraft.network.chat.Component;
 
 public final class BlackGoldUi {
@@ -14,6 +15,36 @@ public final class BlackGoldUi {
     public static final int TEXT_DIM = 0xFF605848;
 
     private BlackGoldUi() {
+    }
+
+    /** 按实际字体像素宽度省略文本，避免动态名称越出所属控件或面板。 */
+    public static String ellipsize(Font font, String text, int maxWidth) {
+        String safe = text == null ? "" : text;
+        if (maxWidth <= 0) {
+            return "";
+        }
+        if (font.width(safe) <= maxWidth) {
+            return safe;
+        }
+        String ellipsis = "…";
+        int ellipsisWidth = font.width(ellipsis);
+        if (ellipsisWidth > maxWidth) {
+            return "";
+        }
+        StringBuilder result = new StringBuilder();
+        int width = 0;
+        for (int offset = 0; offset < safe.length();) {
+            int codePoint = safe.codePointAt(offset);
+            String glyph = new String(Character.toChars(codePoint));
+            int glyphWidth = font.width(glyph);
+            if (width + glyphWidth + ellipsisWidth > maxWidth) {
+                break;
+            }
+            result.append(glyph);
+            width += glyphWidth;
+            offset += Character.charCount(codePoint);
+        }
+        return result.append(ellipsis).toString();
     }
 
     public static void drawBackground(GuiGraphicsExtractor g, int width, int height) {

@@ -1,15 +1,43 @@
+buildscript {
+    if (providers.gradleProperty('enableModBench').map { it.toBoolean() }.orElse(false).get()) {
+        repositories {
+            mavenLocal {
+                content {
+                    includeGroup 'com.zhongbai233.bench'
+                }
+            }
+        }
+        dependencies {
+            classpath "com.zhongbai233.bench:bench-gradle-plugin:${providers.gradleProperty('modbench_version').get()}"
+        }
+    }
+}
+
 plugins {
     id 'java-library'
     id 'maven-publish'
     id 'idea'
+    id 'eclipse'
     id 'net.neoforged.moddev' version '2.0.141'
 }
 
 version = mod_version
 group = mod_group_id
 
+def modBenchEnabled = providers.gradleProperty('enableModBench')
+        .map { it.toBoolean() }
+        .orElse(false)
+        .get()
+if (modBenchEnabled) {
+    apply plugin: 'com.zhongbai233.minecraft-bench'
+}
+
 repositories {
-    mavenLocal()
+    mavenLocal {
+        content {
+            includeGroup 'com.zhongbai233.bench'
+        }
+    }
     mavenCentral()
     maven {
         name = "Modrinth"
@@ -68,6 +96,8 @@ neoForge {
             jvmProp 'ncpb.video.iris.allow_three_plane', prop('ncpbIrisAllowThreePlane', 'true')
             jvmProp 'ncpb.video.iris.program', prop('ncpbIrisYuvProgram', 'ENTITIES_TRANSLUCENT')
             jvmProp 'ncpb.video.iris.yuv_bypass', prop('ncpbIrisYuvBypass', 'true')
+            // 实验：沿用 YUV/NV12 pipeline，但让 26.1 feature renderer 将其归入 solid/cutout 阶段。
+            jvmProp 'ncpb.video.iris.force_solid_render_type', prop('ncpbIrisForceSolidRenderType', 'false')
             jvmArgument '-Dncpb.video.yuv.upload_planes=true'
             jvmProp 'ncpb.video.yuv.no_depth_write', prop('ncpbYuvNoDepthWrite', 'false')
             jvmProp 'ncpb.video.yuv.immediate_stage', prop('ncpbYuvImmediateStage', 'after_level')
@@ -247,18 +277,45 @@ tasks.register("runWithRenderDoc", Exec) {
 
 
 dependencies {
+    // 通用场景编辑器核心的公开 API 暴露 JOML 只读/值类型，不能依赖 Minecraft 的传递 classpath。
+    api 'org.joml:joml:1.10.8'
+
     compileOnly "maven.modrinth:net-music:mCrjhdSq"
     compileOnly "maven.modrinth:iris:YEGDGnJM"
 
     testImplementation platform('org.junit:junit-bom:5.13.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testCompileOnly "net.neoforged:neoforge:${neo_version}"
     // 测试直接构造 B站 API 的 JSON 响应，因此编译期也需要 gson。
     testImplementation 'com.google.code.gson:gson:2.13.1'
 }
 
+if (modBenchEnabled) {
+    modBench {
+        targetMod = 'net_music_can_play_bili'
+        expectedProviderCount = 1
+        seed = 233
+        phaseTimeoutTicks = 1200
+        clientWorldPreset = 'void'
+        clientRequireWindowFocus = false
+    }
+}
+
+configurations {
+    testCompileOnly.extendsFrom(compileOnly)
+}
+
 tasks.named('test') {
     useJUnitPlatform()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs.add('-Xlint:-classfile')
+}
+
+tasks.named('compileTestJava', JavaCompile) {
+    options.compilerArgs.add('-Xlint:none')
 }
 
 // 用 Gradle 属性展开模组元数据模板。
@@ -304,5 +361,14 @@ idea {
     module {
         downloadSources = true
         downloadJavadoc = true
+    }
+}
+
+// ModBench 创建 bench source set；显式加入 Buildship 模型，VS Code 才能解析其 API 和 Minecraft classpath。
+eclipse {
+    classpath {
+        if (modBenchEnabled) {
+            sourceSets += [sourceSets.bench]
+        }
     }
 }

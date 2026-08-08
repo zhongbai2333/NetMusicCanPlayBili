@@ -91,6 +91,29 @@ public final class AudioUtils {
         return baseGain * fadeGain;
     }
 
+    /** 使用绝对听距和独立输出增益的空间衰减。 */
+    public static float spatialGainForDistance(float d, float maxDistance, float outputGain,
+            boolean absoluteDistance) {
+        float range = Float.isFinite(maxDistance) && maxDistance > 0.0F
+            ? Math.min(maxDistance, 4096.0F) : MAX_AUDIBLE_DISTANCE;
+        float gain = clampGain(outputGain);
+        if (gain <= 0.0F) {
+            return 0.0F;
+        }
+        float baseGain = gainForDistance(d) * gain;
+        if (d <= range) {
+            return baseGain;
+        }
+        float fadeDistance = Math.max(0.001F, range * AUDIBLE_FADE_FRACTION);
+        float fadeEnd = range + fadeDistance;
+        if (d >= fadeEnd) {
+            return 0.0F;
+        }
+        float remaining = clampGain((fadeEnd - d) / fadeDistance);
+        float fadeGain = remaining * remaining * (3.0F - 2.0F * remaining);
+        return baseGain * fadeGain;
+    }
+
     /** 格式化坐标为可读字符串 */
     public static String fmtPos(float[] p) {
         if (p == null) {

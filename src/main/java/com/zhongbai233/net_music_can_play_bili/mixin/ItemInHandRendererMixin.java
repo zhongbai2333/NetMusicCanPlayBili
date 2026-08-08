@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.mixin;
 
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.zhongbai233.net_music_can_play_bili.client.ControlConsoleRoamingSession;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.HandheldArmRenderer;
@@ -26,6 +27,11 @@ public abstract class ItemInHandRendererMixin {
     private void net_music_can_play_bili$renderMp4AsMap(AbstractClientPlayer player, float partialTick, float pitch,
             InteractionHand hand, float swingProgress, ItemStack stack, float equipProgress, PoseStack poseStack,
             SubmitNodeCollector collector, int light, CallbackInfo ci) {
+        // 灵魂漫游使用代理相机，不能把真实玩家的手臂/手持物带入画面。
+        if (ControlConsoleRoamingSession.isActive()) {
+            ci.cancel();
+            return;
+        }
         if (stack.is(ModItems.MP4.get())) {
             MP4ItemScreenRenderer.renderMapLike(player, partialTick, pitch, hand, stack, swingProgress, equipProgress,
                     poseStack, collector, light, new HandheldArmRenderer() {

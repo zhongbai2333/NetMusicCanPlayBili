@@ -62,6 +62,18 @@ public final class IrisShaderpackCompat {
         return Boolean.parseBoolean(System.getProperty(ENABLE_YUV_SHADERPACK_BYPASS, "true"));
     }
 
+    static boolean isSolidYuvRenderTypeExperimentEnabled() {
+        return IrisVideoRenderTypePolicy.isSolidClassificationEnabled();
+    }
+
+    static boolean shouldForceSolidYuvRenderType() {
+        return IrisVideoRenderTypePolicy.shouldForceSolidClassification(shouldApplyIrisYuvCompatibility());
+    }
+
+    static boolean shouldDrawYuvImmediate() {
+        return IrisVideoRenderTypePolicy.shouldUseImmediateDraw(shouldApplyIrisYuvCompatibility());
+    }
+
     static boolean shouldApplyIrisYuvCompatibility() {
         return isForceYuvShaderEnabled() && isShaderPackInUse();
     }

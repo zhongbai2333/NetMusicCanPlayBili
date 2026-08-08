@@ -4,6 +4,7 @@ import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
@@ -12,9 +13,13 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
+import net.neoforged.neoforge.event.level.ChunkEvent;
+import com.mojang.logging.LogUtils;
+import org.slf4j.Logger;
 
 @EventBusSubscriber(value = Dist.CLIENT)
 public final class ClientMediaLifecycleHandler {
+    private static final Logger LOGGER = LogUtils.getLogger();
     private static final long TICK_FALLBACK_AFTER_NANOS = 250_000_000L;
 
     private static volatile long lastFrameUpdateNanos;
@@ -25,11 +30,31 @@ public final class ClientMediaLifecycleHandler {
 
     @SubscribeEvent
     public static void onPlayerLoggedOut(ClientPlayerNetworkEvent.LoggingOut event) {
+        com.zhongbai233.net_music_can_play_bili.client.ControlConsoleClient.clearLease();
         cleanupClientPlayback();
     }
 
     @SubscribeEvent
+    public static void onChunkUnload(ChunkEvent.Unload event) {
+        if (event.getLevel() instanceof ClientLevel level) {
+            var pos = event.getChunk().getPos();
+            com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainPreviewManager
+                    .markChunkUnloaded(level, pos.x(), pos.z());
+        }
+    }
+
+    @SubscribeEvent
+    public static void onChunkLoad(ChunkEvent.Load event) {
+        if (event.getLevel() instanceof ClientLevel level) {
+            var pos = event.getChunk().getPos();
+            com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainPreviewManager
+                    .markChunkLoaded(level, pos.x(), pos.z());
+        }
+    }
+
+    @SubscribeEvent
     public static void onRenderFrame(RenderFrameEvent.Pre event) {
+        com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleRenderer.updateConsumerFades();
         com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer
                 .renderHeldOffscreenGuiFrameStart();
         com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer
@@ -46,6 +71,17 @@ public final class ClientMediaLifecycleHandler {
 
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
+        long lifecycleNow = System.nanoTime();
+        for (String warning : com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoCloseDiagnostics
+                .tickGlobal()) {
+            LOGGER.warn(warning);
+        }
+        com.zhongbai233.net_music_can_play_bili.media.audio.OpenALSpatialAudio
+                .tickNativeDeletes(lifecycleNow);
+        for (String warning : com.zhongbai233.net_music_can_play_bili.media.audio.AudioNativeCloseDiagnostics
+                .tickGlobal()) {
+            LOGGER.warn(warning);
+        }
         com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryDiagnostics.tick();
         com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection
                 .tick(ClientMediaLifecycleHandler::emergencyCleanupClientPlayback);
@@ -54,6 +90,7 @@ public final class ClientMediaLifecycleHandler {
         if (mc.level != lastTrackedLevel) {
             lastTrackedLevel = mc.level;
             if (lastTrackedLevel == null) {
+                com.zhongbai233.net_music_can_play_bili.client.ControlConsoleClient.clearLease();
                 cleanupClientPlayback();
             }
         }
@@ -64,6 +101,8 @@ public final class ClientMediaLifecycleHandler {
         com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient.tickHotbarVideoFrames();
         com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient.stopDevicesOutsideHotbar();
         com.zhongbai233.net_music_can_play_bili.client.pad.PadMapClientCache.tick();
+        com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainPreviewManager.tick();
+        com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleRenderer.tickConsumers();
         com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer.tickHeldMapLayers();
 
         if (!ClientAudioOutputRegistry.isActive()) {
@@ -123,6 +162,7 @@ public final class ClientMediaLifecycleHandler {
         }
         com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview.stop();
         com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient.clear();
+        com.zhongbai233.net_music_can_play_bili.client.LiveStreamerVideoClient.clear();
         com.zhongbai233.net_music_can_play_bili.client.sync.ModernTurntableTimeline.clear();
         com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry.clear();
         com.zhongbai233.net_music_can_play_bili.client.audio.SyncedStreamRecoveryRegistry.clear();
@@ -137,6 +177,8 @@ public final class ClientMediaLifecycleHandler {
         com.zhongbai233.net_music_can_play_bili.client.PadFocusState.resetAll();
         com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer.releaseAll();
         com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer.releaseAll();
+        com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainPreviewManager.clear();
+        com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleRenderer.clearConsumers();
         com.zhongbai233.net_music_can_play_bili.client.MP4AutoResumeClient.reset();
         HttpAudioStreamHandler.closeModernStreams();
         ClientAudioOutputRegistry.cleanup();

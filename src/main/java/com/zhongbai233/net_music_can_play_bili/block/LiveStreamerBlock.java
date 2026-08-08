@@ -96,6 +96,17 @@ public class LiveStreamerBlock extends HorizontalDirectionalBlock implements Ent
                     pos.getX(), pos.getY(), pos.getZ()).withStyle(ChatFormatting.GOLD));
             return InteractionResult.SUCCESS;
         }
+        if (stack.getItem() == ModItems.CONTROL_CONSOLE.get()) {
+            if (level.isClientSide()) {
+                return InteractionResult.SUCCESS;
+            }
+                LinkHelper.writeControlConsoleLinkToItem(stack, pos, level.dimension().identifier().toString(),
+                    LinkHelper.ControlConsoleSourceKind.LIVE_STREAMER);
+            player.sendSystemMessage(Component.translatable(
+                    "message.net_music_can_play_bili.control_console.item_linked",
+                    pos.getX(), pos.getY(), pos.getZ()).withStyle(ChatFormatting.GOLD));
+            return InteractionResult.SUCCESS;
+        }
         if (level.isClientSide()) {
             LiveStreamerClientHooks.openLiveStreamerScreen(pos);
         }

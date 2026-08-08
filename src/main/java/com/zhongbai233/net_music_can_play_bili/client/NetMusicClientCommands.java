@@ -65,6 +65,7 @@ public final class NetMusicClientCommands {
 
     private static LiteralArgumentBuilder<CommandSourceStack> videoCommands() {
         return literal("video")
+                .then(literal("status").executes(NetMusicClientCommands::showVideoLifecycleStatus))
                 .then(literal("placeholders").executes(NetMusicClientCommands::openVideoPlaceholderDebug))
                 .then(literal("retry").executes(NetMusicClientCommands::retryFailedVideos));
     }
@@ -141,6 +142,13 @@ public final class NetMusicClientCommands {
                 ? "已重试 " + retried + " 个网络失败的视频会话"
                 : "当前没有可重试的网络失败视频"));
         return retried > 0 ? 1 : 0;
+    }
+
+    private static int showVideoLifecycleStatus(CommandContext<CommandSourceStack> ctx) {
+        for (String line : ModernTurntableVideoClient.describeVideoLifecycle()) {
+            feedback(Component.literal(line));
+        }
+        return 1;
     }
 
     private static void feedback(Component msg) {

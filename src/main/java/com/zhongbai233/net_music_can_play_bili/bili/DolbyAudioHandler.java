@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bili.client.audio.AudioOutputHandle {
 
@@ -46,6 +47,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
     private final SpatialFrontSmoother frontSmoother = new SpatialFrontSmoother();
     private final Thread worker;
     private volatile boolean closed;
+    private final AtomicBoolean cleanupStarted = new AtomicBoolean();
     private boolean playbackStarted;
     private long lastFrameFeedNanos;
     private double frameBudget;
@@ -371,6 +373,9 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
     }
 
     public void cleanup() {
+        if (!cleanupStarted.compareAndSet(false, true)) {
+            return;
+        }
         hardStopOutput();
         closed = true;
         rawQueue.clear();
@@ -383,6 +388,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
             spatialAudio.cleanup();
             spatialAudio = null;
         }
+        relays.clear();
         initialized = false;
         LOGGER.debug("DolbyAudioHandler closed ({} frames)", frameCount);
     }
@@ -821,7 +827,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         }
         sa.updatePositions(bedPositions, objectPositions, lp, forward);
         float d = distance(lp, mp), g = spatialGainForDistance(d, userVolume);
-        float gv = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays.size(),
+        float gv = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays,
                 followLocalPlayerFront)
                         ? 0f
                         : g * gameVolume();

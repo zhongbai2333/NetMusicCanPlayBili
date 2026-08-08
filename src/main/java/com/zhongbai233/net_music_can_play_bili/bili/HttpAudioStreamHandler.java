@@ -56,6 +56,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -740,12 +741,12 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     private static RangeBytes readRangeRace(List<URL> candidates, long start, long end) throws IOException {
         int count = Math.min(RANGE_RACE_MAX_CANDIDATES, candidates.size());
         CompletableFuture<RangeBytes> first = new CompletableFuture<>();
-        List<CompletableFuture<?>> tasks = new java.util.ArrayList<>(count);
+        List<Future<?>> tasks = new java.util.ArrayList<>(count);
         AtomicInteger failures = new AtomicInteger();
         AtomicReference<IOException> lastError = new AtomicReference<>();
         for (int i = 0; i < count; i++) {
             URL candidate = candidates.get(i);
-            tasks.add(CompletableFuture.runAsync(() -> {
+            tasks.add(RANGE_RACE_EXECUTOR.submit(() -> {
                 if (first.isDone()) {
                     return;
                 }

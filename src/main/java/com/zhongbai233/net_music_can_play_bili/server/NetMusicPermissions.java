@@ -29,12 +29,17 @@ public final class NetMusicPermissions {
             "NetMusic Bili whitelist manage",
             "允许管理 Bili/NetMusic 链接白名单并打开审核界面。",
             NetMusicPermissions::defaultOpLevelFour);
+    public static final PermissionNode<Boolean> CONTROL_CONSOLE_ADMIN = booleanNode(
+            "control_console.admin",
+            "NetMusic Bili control console admin",
+            "允许绕过中控台 owner/accessMode 编辑限制并恢复无人认领的中控台。",
+            NetMusicPermissions::defaultOpLevelFour);
 
     private NetMusicPermissions() {
     }
 
     public static void onPermissionGather(PermissionGatherEvent.Nodes event) {
-        event.addNodes(AUDIT_SOURCES, PAD_REFRESH, WHITELIST_MANAGE);
+        event.addNodes(AUDIT_SOURCES, PAD_REFRESH, WHITELIST_MANAGE, CONTROL_CONSOLE_ADMIN);
     }
 
     public static boolean has(CommandSourceStack source, PermissionNode<Boolean> node) {

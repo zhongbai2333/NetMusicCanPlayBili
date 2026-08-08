@@ -85,6 +85,10 @@ public final class ClientMemoryDiagnostics {
                     nativeStats.d3d11SurfaceCurrent(), nativeStats.d3d11SurfacePeak(),
                     mib(nativeStats.d3d11LogicalBytesCurrent()), mib(nativeStats.d3d11LogicalBytesPeak()));
             }
+                    for (String line : com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient
+                        .describeVideoLifecycle()) {
+                    LOGGER.info("NCPB视频生命周期: {}", line);
+                    }
     }
 
     private static BufferUsage bufferUsage(String requestedName) {

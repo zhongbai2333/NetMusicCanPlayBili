@@ -23,12 +23,20 @@ public final class ClientLinkRegistry {
 
     /** 注册一个链接：来源方块→目标方块 */
     public static void link(BlockPos sourcePos, BlockPos targetPos) {
+        if (sourcePos == null || targetPos == null) {
+            return;
+        }
+        // 一个来源只能指向一个目标；重绑前清除旧目标，避免旧唱片机永久显示“已连接投影仪”。
+        unlink(sourcePos);
         LINKS.computeIfAbsent(targetPos.immutable(), k -> new CopyOnWriteArraySet<>())
                 .add(sourcePos.immutable());
     }
 
     /** 移除指定来源方块的所有链接 */
     public static void unlink(BlockPos sourcePos) {
+        if (sourcePos == null) {
+            return;
+        }
         LINKS.values().forEach(set -> set.remove(sourcePos));
         LINKS.entrySet().removeIf(e -> e.getValue().isEmpty());
     }

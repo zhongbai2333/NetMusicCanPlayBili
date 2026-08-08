@@ -23,6 +23,17 @@ public final class LinkHelper {
     public static final String LINK_X = "linked_x";
     public static final String LINK_Y = "linked_y";
     public static final String LINK_Z = "linked_z";
+    public static final String LINK_DIMENSION = "linked_dimension";
+    public static final String LINK_SOURCE_KIND = "linked_source_kind";
+
+    public enum ControlConsoleSourceKind {
+        TURNTABLE,
+        LIVE_STREAMER
+    }
+
+    public record ControlConsoleLink(BlockPos pos, String dimension, ControlConsoleSourceKind sourceKind,
+            boolean legacy) {
+    }
 
     private LinkHelper() {
     }
@@ -38,6 +49,36 @@ public final class LinkHelper {
         stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY,
                 existing -> existing.update(existingTag -> existingTag.merge(tag)));
         stack.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true);
+    }
+
+    public static void writeControlConsoleLinkToItem(ItemStack stack, BlockPos targetPos, String dimension,
+            ControlConsoleSourceKind sourceKind) {
+        writeLinkToItem(stack, targetPos);
+        CompoundTag tag = new CompoundTag();
+        tag.putString(LINK_DIMENSION, dimension);
+        tag.putString(LINK_SOURCE_KIND, sourceKind.name());
+        stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY,
+                existing -> existing.update(existingTag -> existingTag.merge(tag)));
+    }
+
+    @Nullable
+    public static ControlConsoleLink readControlConsoleLinkFromItem(ItemStack stack) {
+        BlockPos pos = readLinkFromItem(stack);
+        if (pos == null) {
+            return null;
+        }
+        CustomData customData = stack.get(DataComponents.CUSTOM_DATA);
+        CompoundTag tag = customData != null ? customData.copyTag() : new CompoundTag();
+        String dimension = tag.getString(LINK_DIMENSION).orElse("");
+        String kindName = tag.getString(LINK_SOURCE_KIND).orElse("");
+        if (dimension.isBlank() || kindName.isBlank()) {
+            return new ControlConsoleLink(pos, null, null, true);
+        }
+        try {
+            return new ControlConsoleLink(pos, dimension, ControlConsoleSourceKind.valueOf(kindName), false);
+        } catch (IllegalArgumentException invalid) {
+            return null;
+        }
     }
 
     /** 从物品读取链接目标位置，若未设置则返回 null */
@@ -61,6 +102,8 @@ public final class LinkHelper {
             tag.remove(LINK_X);
             tag.remove(LINK_Y);
             tag.remove(LINK_Z);
+            tag.remove(LINK_DIMENSION);
+            tag.remove(LINK_SOURCE_KIND);
         }));
         CustomData remaining = stack.get(DataComponents.CUSTOM_DATA);
         if (remaining != null && remaining.isEmpty()) {

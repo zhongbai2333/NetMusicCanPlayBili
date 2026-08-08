@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.mixin;
 
 import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapClientCache;
+import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainPreviewManager;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.core.BlockPos;
@@ -26,6 +27,7 @@ public abstract class ClientPacketListenerBlockUpdateMixin {
         BlockPos pos = packet.getPos();
         if (net_music_can_play_bili$isLoaded(pos.getX(), pos.getZ())) {
             PadMapClientCache.markBlockDirty(level, pos);
+            TerrainPreviewManager.markBlockDirty(level, pos);
         }
     }
 
@@ -35,6 +37,7 @@ public abstract class ClientPacketListenerBlockUpdateMixin {
         packet.runUpdates((pos, state) -> {
             if (net_music_can_play_bili$isLoaded(pos.getX(), pos.getZ())) {
                 PadMapClientCache.markChunkDirty(level, Math.floorDiv(pos.getX(), 16), Math.floorDiv(pos.getZ(), 16));
+                TerrainPreviewManager.markBlockDirty(level, pos);
             }
         });
     }

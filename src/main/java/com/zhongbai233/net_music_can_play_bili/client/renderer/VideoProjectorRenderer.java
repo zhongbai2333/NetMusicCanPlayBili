@@ -20,7 +20,6 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
-import org.joml.Vector4f;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 
@@ -151,30 +150,9 @@ public class VideoProjectorRenderer
             VideoBillboardPreview.submitProjectorPrivacyOverlayOnPose(collector, poseStack, halfWidth, halfHeight);
         } else {
             VideoBillboardPreview.submitProjectorFrameOnPose(collector, poseStack, frame, halfWidth, halfHeight,
-                    cameraRelativeBackOffset(screenPose, frame.rgbaDepthOffset()));
+                    VideoBillboardPreview.cameraRelativeBackOffset(screenPose, frame.rgbaDepthOffset()));
         }
         poseStack.popPose();
-    }
-
-    /**
-     * BER 的最终矩阵位于相机相对空间，相机即原点。根据屏幕局部 +Z
-     * 法线朝向相机的情况翻转偏移，使 RGBA 回退底片始终位于视频背后。
-     */
-    private static float cameraRelativeBackOffset(Matrix4f screenPose, float configuredOffset) {
-        float distance = Math.abs(configuredOffset);
-        if (distance <= 0.0F) {
-            return 0.0F;
-        }
-        Vector4f center = new Vector4f(0.0F, 0.0F, 0.0F, 1.0F).mul(screenPose);
-        Vector4f positiveZ = new Vector4f(0.0F, 0.0F, 1.0F, 1.0F).mul(screenPose);
-        float normalX = positiveZ.x - center.x;
-        float normalY = positiveZ.y - center.y;
-        float normalZ = positiveZ.z - center.z;
-        float towardCameraDot = normalX * -center.x + normalY * -center.y + normalZ * -center.z;
-        if (Math.abs(towardCameraDot) < 1.0e-6F) {
-            return configuredOffset;
-        }
-        return towardCameraDot > 0.0F ? -distance : distance;
     }
 
     @Override

@@ -1,11 +1,22 @@
 pluginManagement {
     repositories {
-        mavenLocal()
+        // ModBench 当前发布到本地 Maven。默认构建不会应用插件；需要 Bench 时先在
+        // ../BenchMod 执行 publishToMavenLocal，再传入 -PenableModBench=true。
+        mavenLocal {
+            content {
+                includeGroup 'com.zhongbai233.bench'
+                includeGroup 'com.zhongbai233.minecraft-bench'
+            }
+        }
         gradlePluginPortal()
         maven { url = 'https://maven.neoforged.net/releases' }
+    }
+    plugins {
+        id 'com.zhongbai233.minecraft-bench' version providers.gradleProperty('modbench_version').get()
     }
 }
 
 plugins {
-    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.8.0'
+    // Gradle 9 使用 1.0.0+；daemon JVM 标准会让 wrapper 和 IDE 自动选择 Java 25。
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
 }

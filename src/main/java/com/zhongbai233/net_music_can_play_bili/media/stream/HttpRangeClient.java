@@ -13,7 +13,6 @@ import java.io.InputStream;
 import java.net.URI;
 import java.net.URL;
 import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -102,13 +101,11 @@ public final class HttpRangeClient {
                 : HttpRequest.newBuilder(URI.create(requestUrl.toString())).timeout(timeout).GET();
         BiliRequestHeaders.applyBiliCdnHeaders(builder, requestUrl);
 
-        HttpResponse<InputStream> response;
-        try {
-            response = BiliWbiSigner.HTTP.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("CDN request interrupted", e);
-        }
+        HttpRequestCloseDiagnostics diagnostics = HttpRequestCloseDiagnostics.global();
+        long operationId = diagnostics.begin(start != null ? "range" : "get", safeHost(requestUrl),
+                start != null ? start : -1L, endInclusive != null ? endInclusive : -1L, System.nanoTime());
+        CancellableHttpTransport.Response response = CancellableHttpTransport.send(
+                BiliWbiSigner.HTTP, builder.build(), diagnostics, operationId);
 
         if (HttpRangeHeaders.isRedirectStatus(response.statusCode())) {
             Optional<String> location = response.headers().firstValue("Location");

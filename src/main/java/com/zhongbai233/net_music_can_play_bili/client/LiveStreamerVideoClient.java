@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -32,6 +33,9 @@ public final class LiveStreamerVideoClient {
 
     /** 每个 session 最近一次的决策指纹，只在状态变化时输出日志。 */
     private static final ConcurrentHashMap<String, String> LAST_DECISION = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, Integer> ACTIVE_QUALITY = new ConcurrentHashMap<>();
+    private static final MediaConsumerRegistry<BlockPos> CONTROL_CONSOLE_CONSUMERS = new MediaConsumerRegistry<>();
+    private static final ConcurrentHashMap<BlockPos, Integer> CONTROL_CONSOLE_QUALITY = new ConcurrentHashMap<>();
 
     private LiveStreamerVideoClient() {
     }
@@ -44,8 +48,11 @@ public final class LiveStreamerVideoClient {
         }
         int rawSourceCount = ClientLinkRegistry.getSources(livePos).size();
         List<VideoProjectorBlockEntity> projectors = findLinkedVideoProjectors(livePos);
+        LinkedHashSet<BlockPos> positions = new LinkedHashSet<>();
+        projectors.stream().map(projector -> projector.getBlockPos().immutable()).forEach(positions::add);
+        positions.addAll(CONTROL_CONSOLE_CONSUMERS.consumersFor(livePos));
         boolean holographicConsumer = HolographicGlassesClient.handlesTurntable(livePos);
-        if (projectors.isEmpty() && !holographicConsumer) {
+        if (positions.isEmpty() && !holographicConsumer) {
             logDecision(sessionId, "no-consumer", "直播画面暂无消费端: pos=" + livePos + " session=" + sessionId
                     + " registrySources=" + rawSourceCount + "（需要链接视频投影仪或佩戴全息眼镜）");
             VideoBillboardPreview.stopIfSession(sessionId);
@@ -55,29 +62,54 @@ public final class LiveStreamerVideoClient {
             logDecision(sessionId, "wait-audio", "直播画面等待音频输出就绪: pos=" + livePos + " session=" + sessionId);
             return;
         }
-        List<BlockPos> positions = projectors.stream()
-                .map(projector -> projector.getBlockPos().immutable())
-                .toList();
+        List<BlockPos> consumerPositions = List.copyOf(positions);
+        int qualityCeiling = qualityCeiling(projectors, CONTROL_CONSOLE_CONSUMERS.consumersFor(livePos));
         if (VideoBillboardPreview.isSessionRunning(sessionId)) {
-            VideoBillboardPreview.updateSessionProjectors(sessionId, positions);
-            logDecision(sessionId, "running:" + positions.size(),
-                    "直播画面会话运行中: session=" + sessionId + " projectors=" + positions.size());
-            return;
+            if (!java.util.Objects.equals(ACTIVE_QUALITY.get(sessionId), qualityCeiling)) {
+                VideoBillboardPreview.stopIfSession(sessionId);
+            } else {
+                VideoBillboardPreview.updateSessionProjectors(sessionId, consumerPositions);
+                logDecision(sessionId, "running:" + consumerPositions.size(),
+                    "直播画面会话运行中: session=" + sessionId + " consumers=" + consumerPositions.size());
+                return;
+            }
         }
-        int qualityCeiling = qualityCeiling(projectors);
         int width = qualityCeiling >= HIGH_QUALITY_CEILING ? 1920 : 1280;
         int height = qualityCeiling >= HIGH_QUALITY_CEILING ? 1080 : 720;
         LOGGER.info("直播画面会话启动: session={} pos={} {}x{}@{}fps projectors={} holographic={}",
-                sessionId, livePos, width, height, DEFAULT_FPS, positions.size(), holographicConsumer);
+                sessionId, livePos, width, height, DEFAULT_FPS, consumerPositions.size(), holographicConsumer);
         LAST_DECISION.put(sessionId, "started");
+        ACTIVE_QUALITY.put(sessionId, qualityCeiling);
         VideoBillboardPreview.startLiveSession(LiveVideoSampleBus.busUrl(sessionId), width, height, DEFAULT_FPS,
-                sessionId, positions, livePos);
+                sessionId, consumerPositions, livePos);
+    }
+
+    public static void registerControlConsoleConsumer(BlockPos livePos, BlockPos consolePos, int qualityCeiling) {
+        if (livePos != null && consolePos != null) {
+            CONTROL_CONSOLE_CONSUMERS.register(livePos.immutable(), consolePos.immutable());
+            CONTROL_CONSOLE_QUALITY.put(consolePos.immutable(), qualityCeiling);
+        }
+    }
+
+    public static void unregisterControlConsoleConsumer(BlockPos consolePos) {
+        CONTROL_CONSOLE_CONSUMERS.unregister(consolePos);
+        if (consolePos != null) {
+            CONTROL_CONSOLE_QUALITY.remove(consolePos);
+        }
+    }
+
+    public static void clear() {
+        CONTROL_CONSOLE_CONSUMERS.clear();
+        CONTROL_CONSOLE_QUALITY.clear();
+        LAST_DECISION.clear();
+        ACTIVE_QUALITY.clear();
     }
 
     /** 直播会话结束时停止渲染实例。 */
     public static void forget(String sessionId) {
         if (sessionId != null && !sessionId.isBlank()) {
             LAST_DECISION.remove(sessionId);
+            ACTIVE_QUALITY.remove(sessionId);
             VideoBillboardPreview.stopIfSession(sessionId);
         }
     }
@@ -99,13 +131,20 @@ public final class LiveStreamerVideoClient {
         return timeline.audibleMillis() >= 0L || timeline.fedMillis() >= 0L;
     }
 
-    private static int qualityCeiling(List<VideoProjectorBlockEntity> projectors) {
-        return projectors.stream()
+        private static int qualityCeiling(List<VideoProjectorBlockEntity> projectors,
+            java.util.Collection<BlockPos> consoleConsumers) {
+        int projectorQuality = projectors.stream()
                 .mapToInt(projector -> projector.getPreferredQuality() > 0
                         ? projector.getPreferredQuality()
                         : DEFAULT_QUALITY_CEILING)
                 .max()
-                .orElse(DEFAULT_QUALITY_CEILING);
+                .orElse(0);
+        int consoleQuality = consoleConsumers.stream()
+            .mapToInt(pos -> CONTROL_CONSOLE_QUALITY.getOrDefault(pos, DEFAULT_QUALITY_CEILING))
+            .max()
+            .orElse(0);
+        int selected = Math.max(projectorQuality, consoleQuality);
+        return selected > 0 ? selected : DEFAULT_QUALITY_CEILING;
     }
 
     private static List<VideoProjectorBlockEntity> findLinkedVideoProjectors(BlockPos livePos) {

@@ -4,6 +4,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.media.stream.CdnHealthTracker;
+import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeClient;
 import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import org.slf4j.Logger;
@@ -11,9 +12,6 @@ import org.slf4j.Logger;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.URL;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
@@ -23,6 +21,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -223,10 +222,10 @@ public final class BiliCdnSelector {
     private static String raceFirstReadableCandidate(List<String> candidates) {
         int count = Math.min(MAX_RACE_CANDIDATES, candidates.size());
         CompletableFuture<String> first = new CompletableFuture<>();
-        List<CompletableFuture<?>> tasks = new ArrayList<>(count);
+        List<Future<?>> tasks = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
             String url = candidates.get(i);
-            tasks.add(CompletableFuture.runAsync(() -> {
+            tasks.add(EXECUTOR.submit(() -> {
                 if (first.isDone()) {
                     return;
                 }
@@ -249,14 +248,9 @@ public final class BiliCdnSelector {
         try {
             URL parsed = URI.create(url).toURL();
             URL requestUrl = com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync.strip(parsed);
-            HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(requestUrl.toString()))
-                    .timeout(Duration.ofMillis(RACE_TIMEOUT_MILLIS))
-                    .GET()
-                    .header("Range", "bytes=0-" + (RACE_BYTES - 1));
-            BiliRequestHeaders.applyBiliCdnHeaders(builder, requestUrl);
-            HttpResponse<InputStream> response = BiliWbiSigner.HTTP.send(builder.build(),
-                    HttpResponse.BodyHandlers.ofInputStream());
-            try (InputStream body = response.body()) {
+                try (HttpRangeClient.CdnResponse response = new HttpRangeClient().getRangeDirect(
+                    requestUrl, 0L, RACE_BYTES - 1L)) {
+                InputStream body = response.body();
                 int status = response.statusCode();
                 BiliRequestHeaders.recordBiliCdnResponse(parsed, status);
                 if (status != 200 && status != 206) {
@@ -268,7 +262,7 @@ public final class BiliCdnSelector {
                 byte[] bytes = body.readNBytes(1);
                 if (bytes.length > 0) {
                     CdnHealthTracker.recordSuccess(parsed, System.currentTimeMillis() - started,
-                            response.headers().firstValueAsLong("Content-Length").orElse(bytes.length));
+                            response.contentLength() >= 0L ? response.contentLength() : bytes.length);
                     return true;
                 }
                 CdnHealthTracker.recordFailure(parsed, CdnHealthTracker.FailureKind.EMPTY);

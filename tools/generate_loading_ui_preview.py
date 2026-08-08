@@ -175,6 +175,19 @@ def draw_network_error_base() -> bytearray:
     return px
 
 
+def draw_idle_base() -> bytearray:
+    """静态待机卡片；与 loading/error 共用同一套像素字体和面板语言。"""
+    px = bytearray(WIDTH * HEIGHT * 4)
+    fill(px, 0, 0, WIDTH, HEIGHT, BG)
+    fill(px, 18, 18, WIDTH - 36, HEIGHT - 36, PANEL)
+    rect(px, 18, 18, WIDTH - 36, HEIGHT - 36, GOLD_DIM)
+
+    draw_centered_text(px, "READY TO PLAY", 57, TEXT)
+    draw_centered_text(px, "CONNECT A SOURCE", 79, 0xFFB8C1CC)
+    draw_centered_text(px, "NO MEDIA", 101, 0xFF8F9BA8)
+    return px
+
+
 def draw_progress_layer(elapsed_ns: int, queued_frames: int, capacity: int) -> bytearray:
     px = bytearray(WIDTH * HEIGHT * 4)
     fill(px, 0, 0, WIDTH, HEIGHT, TRANSPARENT)
@@ -265,6 +278,8 @@ def save_png(path: Path, rgba: bytearray, width: int = WIDTH, height: int = HEIG
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, default=Path("build/generated-preview/loading-ui"))
+    parser.add_argument("--resource-out", type=Path, default=None,
+                        help="also write the idle placeholder directly to a resource directory")
     parser.add_argument("--capacity", type=int, default=3)
     args = parser.parse_args()
 
@@ -283,7 +298,11 @@ def main() -> None:
 
     save_png(base_dir / "iris_translucent_warning_base.png", draw_loading_base(0, True))
     save_png(base_dir / "network_error_base.png", draw_network_error_base())
+    save_png(base_dir / "idle_base.png", draw_idle_base())
     save_png(overlay_dir / "holographic_privacy_overlay.png", draw_holographic_privacy_overlay())
+    if args.resource_out is not None:
+        args.resource_out.mkdir(parents=True, exist_ok=True)
+        save_png(args.resource_out / "idle_base.png", draw_idle_base())
     print(f"Generated loading UI previews in {args.out.resolve()}")
 
 

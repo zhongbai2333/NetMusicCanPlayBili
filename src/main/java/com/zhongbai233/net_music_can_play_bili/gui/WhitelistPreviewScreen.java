@@ -6,6 +6,7 @@ import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillbo
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaAudioRouting;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTimelineView;
+import com.zhongbai233.net_music_can_play_bili.gui.core.WhitelistReviewSelection;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.media.stream.MediaNetworkFailureClassifier;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistPreviewPacket;
@@ -45,6 +46,7 @@ public class WhitelistPreviewScreen extends Screen {
     private String resolvingVideoKey = "";
     private boolean videoResolveFailed;
     private boolean videoResolveNetworkFailure;
+    private boolean confirmingDelete;
 
     public WhitelistPreviewScreen(WhitelistPreviewPacket payload) {
         super(Component.literal("白名单视频预览"));
@@ -73,6 +75,7 @@ public class WhitelistPreviewScreen extends Screen {
         this.resolvingVideoKey = "";
         this.videoResolveFailed = false;
         this.videoResolveNetworkFailure = false;
+        this.confirmingDelete = false;
         beginDurationProbe(next);
         startPlayback(next);
         rebuildButtons();
@@ -89,6 +92,13 @@ public class WhitelistPreviewScreen extends Screen {
         clearWidgets();
         int bx = boxX();
         int by = boxY();
+        if (confirmingDelete) {
+            addRenderableWidget(new BlackGoldButton(bx + 151, controlY(by), 74, 20,
+                Component.literal("确认删除"), button -> confirmDelete(), 0xFFFF6B6B));
+            addRenderableWidget(new BlackGoldButton(bx + 235, controlY(by), 74, 20,
+                Component.literal("取消"), button -> cancelDelete(), BlackGoldUi.GOLD_DIM));
+            return;
+        }
         BlackGoldButton previous = new BlackGoldButton(bx + 112, controlY(by), 64, 20,
                 Component.literal("上一个"), button -> previewSibling(-1), BlackGoldUi.GOLD);
         previous.active = siblingId(-1) != null;
@@ -99,6 +109,10 @@ public class WhitelistPreviewScreen extends Screen {
                 Component.literal("下一个"), button -> previewSibling(1), BlackGoldUi.GOLD);
         next.active = siblingId(1) != null;
         addRenderableWidget(next);
+        BlackGoldButton delete = new BlackGoldButton(bx + BOX_W - 82, controlY(by), 66, 20,
+            Component.literal("删除"), button -> requestDelete(), 0xFFFF6B6B);
+        delete.active = currentEntry() != null;
+        addRenderableWidget(delete);
     }
 
     @Override
@@ -108,6 +122,10 @@ public class WhitelistPreviewScreen extends Screen {
 
     @Override
     public void onClose() {
+        if (confirmingDelete) {
+            cancelDelete();
+            return;
+        }
         stopCurrentPlayback();
         returnToReviewMenu();
     }
@@ -137,6 +155,9 @@ public class WhitelistPreviewScreen extends Screen {
         drawVideo(g, bx, by);
         drawProgress(g, bx, by, mx, my);
         drawFooter(g, bx, by);
+        if (confirmingDelete) {
+            drawDeleteConfirmation(g, bx, by);
+        }
         super.extractRenderState(g, mx, my, pt);
     }
 
@@ -207,9 +228,27 @@ public class WhitelistPreviewScreen extends Screen {
     }
 
     private void drawFooter(GuiGraphicsExtractor g, int bx, int by) {
-        g.text(font, Component.literal("可拖动进度条调整播放位置"),
+        g.text(font, Component.literal(confirmingDelete
+                ? "删除后将立即从白名单移除，且无法在此界面撤销"
+                : "可拖动进度条调整播放位置"),
                 bx + 16, by + BOX_H - 20, BlackGoldUi.TEXT_DIM, false);
     }
+
+        private void drawDeleteConfirmation(GuiGraphicsExtractor g, int bx, int by) {
+        int x = bx + 72;
+        int y = by + 132;
+        int w = BOX_W - 144;
+        int h = 74;
+        g.fillGradient(x, y, x + w, y + h, 0xF0101010, 0xF0181818);
+        g.fillGradient(x, y, x + w, y + 2, 0xFFFF6B6B, 0xFFFF6B6B);
+        g.centeredText(font, Component.literal("确认删除这条白名单记录？"),
+            x + w / 2, y + 15, 0xFFFF8A78);
+        WhitelistReviewPacket.Entry entry = currentEntry();
+        String id = entry == null ? "当前条目" : trim(entry.id(), 38);
+        g.centeredText(font, Component.literal(id), x + w / 2, y + 37, BlackGoldUi.TEXT_PRIMARY);
+        g.centeredText(font, Component.literal("此操作需要再次点击下方“确认删除”"),
+            x + w / 2, y + 53, BlackGoldUi.TEXT_DIM);
+        }
 
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean cancelled) {
@@ -223,6 +262,9 @@ public class WhitelistPreviewScreen extends Screen {
         if (event.x() >= cx && event.x() <= cx + CLOSE_SIZE && event.y() >= cy && event.y() <= cy + CLOSE_SIZE) {
             onClose();
             return true;
+        }
+        if (confirmingDelete) {
+            return super.mouseClicked(event, cancelled);
         }
         String sessionId = WhitelistPreviewPacket.sessionId(payload.previewId(), payload.elapsedMillis());
         if (hitVideo(bx, by, event.x(), event.y()) && videoResolveFailed) {
@@ -349,7 +391,9 @@ public class WhitelistPreviewScreen extends Screen {
     private void returnToReviewMenu() {
         WhitelistReviewPacket last = WhitelistReviewScreen.lastPayload();
         if (last != null) {
-            Minecraft.getInstance().setScreen(new WhitelistReviewScreen(last));
+            WhitelistReviewPacket.Entry current = currentEntry();
+            Minecraft.getInstance().setScreen(new WhitelistReviewScreen(last,
+                    current == null ? "" : current.id()));
         } else {
             Minecraft.getInstance().setScreen(null);
         }
@@ -554,6 +598,31 @@ public class WhitelistPreviewScreen extends Screen {
                 WhitelistReviewActionPacket.Action.PREVIEW, id));
     }
 
+    private void requestDelete() {
+        if (currentEntry() == null) {
+            return;
+        }
+        confirmingDelete = true;
+        rebuildButtons();
+    }
+
+    private void cancelDelete() {
+        confirmingDelete = false;
+        rebuildButtons();
+    }
+
+    private void confirmDelete() {
+        WhitelistReviewPacket.Entry entry = currentEntry();
+        if (entry == null) {
+            cancelDelete();
+            return;
+        }
+        confirmingDelete = false;
+        stopCurrentPlayback();
+        ClientPacketDistributor.sendToServer(new WhitelistReviewActionPacket(
+                WhitelistReviewActionPacket.Action.REMOVE, entry.id()));
+    }
+
     private String siblingId(int direction) {
         WhitelistReviewPacket last = WhitelistReviewScreen.lastPayload();
         if (last == null || last.entries() == null || last.entries().isEmpty() || payload == null) {
@@ -573,23 +642,22 @@ public class WhitelistPreviewScreen extends Screen {
         return last.entries().get(next).id();
     }
 
+    private WhitelistReviewPacket.Entry currentEntry() {
+        WhitelistReviewPacket last = WhitelistReviewScreen.lastPayload();
+        if (last == null || last.entries() == null || payload == null) {
+            return null;
+        }
+        for (WhitelistReviewPacket.Entry entry : last.entries()) {
+            if (matchesCurrentEntry(entry)) {
+                return entry;
+            }
+        }
+        return null;
+    }
+
     private boolean matchesCurrentEntry(WhitelistReviewPacket.Entry entry) {
-        if (entry == null || payload == null) {
-            return false;
-        }
-        String id = entry.id() == null ? "" : entry.id().trim();
-        String raw = payload.rawUrl() == null ? "" : payload.rawUrl().trim();
-        if (id.equals(raw)) {
-            return true;
-        }
-        if (id.regionMatches(true, 0, "url:", 0, 4)) {
-            return id.substring(4).equals(raw);
-        }
-        if (id.regionMatches(true, 0, "bili:", 0, 5)) {
-            String biliId = id.substring(5);
-            return raw.equals(biliId) || raw.startsWith(biliId + "|p=");
-        }
-        return false;
+        return entry != null && payload != null
+                && WhitelistReviewSelection.matchesPreview(entry.id(), payload.rawUrl());
     }
 
     private float progressForMillis(long millis) {
