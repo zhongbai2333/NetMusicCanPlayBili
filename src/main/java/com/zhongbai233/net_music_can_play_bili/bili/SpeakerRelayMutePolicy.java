@@ -18,4 +18,12 @@ final class SpeakerRelayMutePolicy {
         }
         return relays.stream().anyMatch(relay -> relay.takesOverMainOutput() && relay.hasOutputIntent());
     }
+
+    static boolean shouldMuteMain(boolean enabled, Collection<SpeakerAudioRelay> relays,
+            boolean privateHeadphoneRoute, boolean consoleRouteSuppressed) {
+        if (!enabled || privateHeadphoneRoute) {
+            return false;
+        }
+        return consoleRouteSuppressed || shouldMuteMain(enabled, relays, privateHeadphoneRoute);
+    }
 }

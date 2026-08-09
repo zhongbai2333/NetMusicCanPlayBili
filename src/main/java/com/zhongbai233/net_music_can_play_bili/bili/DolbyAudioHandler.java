@@ -67,6 +67,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
     private volatile boolean forceStaticJoc;
     private volatile float lastAudioLevel;
     private volatile long lastAudioLevelNanos;
+    private volatile boolean consoleRouteSuppressed;
 
     /** 音响转发目标列表（线程安全） */
     private final java.util.concurrent.CopyOnWriteArrayList<SpeakerAudioRelay> relays = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -315,6 +316,11 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         if (relay != null) {
             relays.remove(relay);
         }
+    }
+
+    @Override
+    public void setConsoleRouteSuppressed(boolean suppressed) {
+        consoleRouteSuppressed = suppressed;
     }
 
     public float audioLevel() {
@@ -828,7 +834,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         sa.updatePositions(bedPositions, objectPositions, lp, forward);
         float d = distance(lp, mp), g = spatialGainForDistance(d, userVolume);
         float gv = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays,
-                followLocalPlayerFront)
+            followLocalPlayerFront, consoleRouteSuppressed)
                         ? 0f
                         : g * gameVolume();
         for (int ch = 0; ch < numBedChannels; ch++)

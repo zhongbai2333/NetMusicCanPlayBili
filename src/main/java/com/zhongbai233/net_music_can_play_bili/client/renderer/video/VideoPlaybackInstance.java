@@ -54,6 +54,10 @@ final class VideoPlaybackInstance {
             "ncpb.video.pipeline.runtime_lag_restart_cooldown_ms", 5_000L);
     private static final long DECODER_RESTART_CLOSE_TIMEOUT_MILLIS = Long.getLong(
             "ncpb.video.pipeline.decoder_restart_close_timeout_ms", 3_000L);
+        private static final long FIRST_FRAME_TIMEOUT_MILLIS = Long.getLong(
+            "ncpb.video.pipeline.first_frame_timeout_ms", 20_000L);
+        private static final int MAX_FIRST_FRAME_RECOVERY_ATTEMPTS = Integer.getInteger(
+            "ncpb.video.pipeline.first_frame_recovery_attempts", 2);
     private static final boolean OFFSCREEN_PAUSE_DECODE = Boolean.parseBoolean(
             System.getProperty("ncpb.video.offscreen.pause_decode", "true"));
     private static final long OFFSCREEN_GRACE_NANOS = Long.getLong("ncpb.video.offscreen.grace_ms", 500L)
@@ -135,6 +139,7 @@ final class VideoPlaybackInstance {
     private volatile long offscreenSinceNanoTime;
     private volatile long runtimeLagSinceNanoTime;
     private volatile long lastRuntimeLagRestartNanoTime;
+    private volatile boolean restartInProgress;
     private volatile boolean prewarmVisible = true;
     private volatile boolean loggedOffscreenPause;
     private volatile boolean networkFailure;
@@ -142,6 +147,7 @@ final class VideoPlaybackInstance {
     private volatile boolean networkFailureNotified;
     private volatile boolean guiConsumer;
     private volatile boolean stopRequested;
+    private volatile int firstFrameRecoveryAttempts;
     private int consecutiveBadUploads;
 
     VideoPlaybackInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
@@ -219,6 +225,7 @@ final class VideoPlaybackInstance {
         networkFailure = false;
         terminalFailure = false;
         networkFailureNotified = false;
+        firstFrameRecoveryAttempts = 0;
         consecutiveBadUploads = 0;
         frameQueue.clear();
         startNanoTime = System.nanoTime();
@@ -630,6 +637,11 @@ final class VideoPlaybackInstance {
     }
 
     private void restartDecoder(int nextWidth, int nextHeight, long restartOffsetMillis, boolean keepVisibleFrame) {
+        if (restartInProgress) {
+            LOGGER.debug("视频解码器重启正在等待旧 worker 退出，忽略重复请求: session={}", sessionId);
+            return;
+        }
+        restartInProgress = true;
         long gen = generation.incrementAndGet();
         boolean preserveVisibleFrame = keepVisibleFrame
                 && nextWidth == targetWidth
@@ -678,19 +690,20 @@ final class VideoPlaybackInstance {
         // publishing state.
         running = true;
         CompletableFuture<Void> closeBarrier = CompletableFuture
-                .allOf(closeCompletion, nativeTermination, oldDecodeExit)
-                .orTimeout(Math.max(1L, DECODER_RESTART_CLOSE_TIMEOUT_MILLIS), TimeUnit.MILLISECONDS)
-                .handle((ignored, error) -> {
-                    if (error != null && gen == generation.get() && running) {
-                        LOGGER.warn("旧视频解码器关闭超时，允许新 generation 启动: session={}, timeout={}ms",
+                .allOf(closeCompletion, nativeTermination, oldDecodeExit);
+        CompletableFuture.delayedExecutor(Math.max(1L, DECODER_RESTART_CLOSE_TIMEOUT_MILLIS),
+                TimeUnit.MILLISECONDS).execute(() -> {
+                    if (!closeBarrier.isDone() && gen == generation.get() && running && !stopRequested) {
+                        LOGGER.warn("旧视频解码器关闭超时，继续等待后再启动新 generation: session={}, timeout={}ms",
                                 sessionId, DECODER_RESTART_CLOSE_TIMEOUT_MILLIS);
                     }
-                    return null;
                 });
         closeBarrier.thenRun(() -> {
-            if (gen != generation.get() || !running || !hasVideoConsumer()) {
+            if (gen != generation.get() || !running || stopRequested || !hasVideoConsumer()) {
+                restartInProgress = false;
                 return;
             }
+            restartInProgress = false;
             startDecodeThread(gen, preserveVisibleFrame
                     ? "bili-video-" + sessionId + "-resume"
                     : "bili-video-" + sessionId + "-adaptive");
@@ -1279,6 +1292,55 @@ final class VideoPlaybackInstance {
 
     boolean hasFrame() {
         return hasFrame;
+    }
+
+    /**
+     * 周期同步调用的首帧 watchdog。重启始终复用实例内的关闭屏障，避免旧 native worker
+     * 尚未退出时创建第二个实例；重试耗尽后保留 session 引用并显示明确错误画面。
+     */
+    synchronized boolean ensureFirstFrameProgress() {
+        if (!running || hasFrame || terminalFailure) {
+            return false;
+        }
+        long waitingMillis = startNanoTime > 0L
+                ? Math.max(0L, (System.nanoTime() - startNanoTime) / 1_000_000L) : 0L;
+        VideoFirstFrameRecoveryPolicy.Decision decision = VideoFirstFrameRecoveryPolicy.decide(
+                running, hasFrame, restartInProgress, waitingMillis, FIRST_FRAME_TIMEOUT_MILLIS,
+                firstFrameRecoveryAttempts, MAX_FIRST_FRAME_RECOVERY_ATTEMPTS);
+        if (decision == VideoFirstFrameRecoveryPolicy.Decision.RESTART) {
+            firstFrameRecoveryAttempts++;
+            long restartOffsetMillis = currentRestartOffsetMillis();
+            LOGGER.warn("视频首帧等待超时，执行受控恢复: session={}, wait={}ms, attempt={}/{}, offset={}ms",
+                    sessionId, waitingMillis, firstFrameRecoveryAttempts, MAX_FIRST_FRAME_RECOVERY_ATTEMPTS,
+                    restartOffsetMillis);
+            restartDecoder(targetWidth, targetHeight, restartOffsetMillis, false);
+        } else if (decision == VideoFirstFrameRecoveryPolicy.Decision.FAIL) {
+            failStalledStartup(waitingMillis);
+        }
+        return true;
+    }
+
+    private void failStalledStartup(long waitingMillis) {
+        long gen = generation.incrementAndGet();
+        AutoCloseable stalledDecoder = decoder;
+        decoder = null;
+        Thread stalledThread = decodeThread;
+        if (stalledThread != null) {
+            stalledThread.interrupt();
+        }
+        frameQueue.clear();
+        restartInProgress = false;
+        networkFailure = false;
+        terminalFailure = true;
+        // 保留 running 标记，使共享 session 不会在本 tick 被跨实例替换；下次同步会命中
+        // terminalFailure，并稳定显示 ERROR，等待新 session 或显式刷新。
+        running = true;
+        if (stalledDecoder instanceof com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder nativeDecoder) {
+            nativeDecoder.requestClose();
+        }
+        MediaCloseExecutor.closeAsync(stalledDecoder, "stalled startup video decoder " + sessionId);
+        LOGGER.error("视频首帧恢复次数耗尽，结束永久 Loading: session={}, generation={}, wait={}ms, attempts={}",
+                sessionId, gen, waitingMillis, firstFrameRecoveryAttempts);
     }
 
     boolean hasNetworkFailure() {

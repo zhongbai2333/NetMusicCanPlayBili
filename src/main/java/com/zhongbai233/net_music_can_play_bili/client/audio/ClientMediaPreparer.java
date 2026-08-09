@@ -39,13 +39,14 @@ public final class ClientMediaPreparer {
 
     public static PreparedMedia prepare(String rawUrl, String playUrl, String songName, boolean allowDolby,
             boolean enableLyrics) {
-        String preparedUrl = resolvePlayableUrl(rawUrl, playUrl, songName, allowDolby);
+        AudioResolution audio = resolveAudio(rawUrl, playUrl, songName, allowDolby);
         LyricRecord lyricRecord = enableLyrics ? buildLyric(rawUrl, songName) : null;
-        return new PreparedMedia(preparedUrl, lyricRecord);
+        return new PreparedMedia(audio.playUrl(), lyricRecord, audio.presence());
     }
 
     public static PreparedMedia prepareAudioOnly(String rawUrl, String playUrl, String songName, boolean allowDolby) {
-        return new PreparedMedia(resolvePlayableUrl(rawUrl, playUrl, songName, allowDolby), null);
+        AudioResolution audio = resolveAudio(rawUrl, playUrl, songName, allowDolby);
+        return new PreparedMedia(audio.playUrl(), null, audio.presence());
     }
 
     /** B站直链刷新会访问网络，必须通过此入口移出 Minecraft 客户端线程。 */
@@ -64,9 +65,13 @@ public final class ClientMediaPreparer {
     }
 
     public static String resolvePlayableUrl(String rawUrl, String playUrl, String songName, boolean allowDolby) {
+        return resolveAudio(rawUrl, playUrl, songName, allowDolby).playUrl();
+    }
+
+    private static AudioResolution resolveAudio(String rawUrl, String playUrl, String songName, boolean allowDolby) {
         String storedSelection = storedBiliSelection(rawUrl, playUrl);
         if (storedSelection == null) {
-            return playUrl;
+            return new AudioResolution(playUrl, AudioPresence.PRESENT);
         }
 
         try {
@@ -74,10 +79,13 @@ public final class ClientMediaPreparer {
             String syncedUrl = PlaybackSync.transferSync(playUrl, resolvedUrl);
             LOGGER.debug("客户端刷新 B站 直链: song='{}' host={} stored={} allowDolby={}", songName,
                     hostOf(syncedUrl), storedSelection, allowDolby);
-            return syncedUrl;
+            return new AudioResolution(syncedUrl, AudioPresence.PRESENT);
+        } catch (BiliApiClient.NoAudioStreamException e) {
+            LOGGER.debug("B站媒体确认没有可用音频流: stored={}", storedSelection);
+            return new AudioResolution(playUrl, AudioPresence.ABSENT);
         } catch (Exception e) {
             NetMusic.LOGGER.error("B站客户端本地解析播放直链失败: {}", storedSelection, e);
-            return playUrl;
+            return new AudioResolution(playUrl, AudioPresence.FAILED);
         }
     }
 
@@ -126,6 +134,19 @@ public final class ClientMediaPreparer {
         }
     }
 
-    public record PreparedMedia(String playUrl, LyricRecord lyricRecord) {
+    public record PreparedMedia(String playUrl, LyricRecord lyricRecord, AudioPresence audioPresence) {
+        public PreparedMedia(String playUrl, LyricRecord lyricRecord) {
+            this(playUrl, lyricRecord, AudioPresence.UNKNOWN);
+        }
+    }
+
+    public enum AudioPresence {
+        UNKNOWN,
+        PRESENT,
+        ABSENT,
+        FAILED
+    }
+
+    private record AudioResolution(String playUrl, AudioPresence presence) {
     }
 }

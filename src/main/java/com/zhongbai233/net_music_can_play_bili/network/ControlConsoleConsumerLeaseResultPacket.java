@@ -10,7 +10,8 @@ import java.util.Objects;
 import java.util.UUID;
 
 /** 服务端对消费资格的授权结果。 */
-public record ControlConsoleConsumerLeaseResultPacket(BlockPos pos, Status status, UUID leaseId)
+public record ControlConsoleConsumerLeaseResultPacket(BlockPos pos, Status status, UUID leaseId,
+    long consumerGeneration)
         implements CustomPacketPayload {
     public static final Type<ControlConsoleConsumerLeaseResultPacket> TYPE = new Type<>(
             NetworkPayloadIds.id("control_console_consumer_lease_result"));
@@ -21,7 +22,7 @@ public record ControlConsoleConsumerLeaseResultPacket(BlockPos pos, Status statu
                     BlockPos pos = BlockPos.STREAM_CODEC.decode(buf);
                     Status status = Status.fromId(buf.readVarInt());
                     UUID leaseId = buf.readBoolean() ? buf.readUUID() : null;
-                    return new ControlConsoleConsumerLeaseResultPacket(pos, status, leaseId);
+                    return new ControlConsoleConsumerLeaseResultPacket(pos, status, leaseId, buf.readVarLong());
                 }
 
                 @Override
@@ -32,6 +33,7 @@ public record ControlConsoleConsumerLeaseResultPacket(BlockPos pos, Status statu
                     if (packet.leaseId() != null) {
                         buf.writeUUID(packet.leaseId());
                     }
+                    buf.writeVarLong(packet.consumerGeneration());
                 }
             };
 

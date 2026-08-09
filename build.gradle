@@ -73,6 +73,9 @@ neoForge {
         client {
             client()
 
+            // Java 25 对 System.load 等 native 入口要求显式授权；FFmpeg/EAC3 解码器由本模组加载。
+            jvmArgument "--enable-native-access=${mod_id}"
+
             def prop = { name, defaultValue -> providers.gradleProperty(name).orElse(defaultValue).get() }
             def jvmProp = { key, value -> jvmArgument "-D${key}=${value}" }
 
@@ -138,6 +141,8 @@ neoForge {
 
             // FFmpeg/native 解码默认参数；普通播放走平台 auto，必要时可用 -PncpbNativeHwaccel=d3d11va/vaapi/none 覆盖。
             jvmProp 'ncpb.video.native.hwaccel', prop('ncpbNativeHwaccel', 'auto')
+            // 需要排查“音频启动但视频未入场”时开启，输出 stop/wait/schedule 视频决策。
+            jvmProp 'bili.video.turntable.log_sync_decisions', prop('ncpbVideoLogSyncDecisions', 'false')
             // 手持 MP4/Pad 视频默认保持原 native auto 行为；排查时可用 d3d11va/none 覆盖。
             jvmProp 'ncpb.mp4.video.native.hwaccel', prop('ncpbHandheldNativeHwaccel', 'auto')
 

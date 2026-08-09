@@ -32,6 +32,8 @@ public class ClientAudioOutputRegistry {
     private static final ConcurrentMap<BlockPos, SpeakerAudioRelay> RELAYS = new ConcurrentHashMap<>();
     /** relay → turntable 反向映射 */
     private static final ConcurrentMap<BlockPos, BlockPos> RELAY_TURNTABLE = new ConcurrentHashMap<>();
+    /** 中控台 relay 渐出后仍需保持的主输出抑制状态。 */
+    private static final ConcurrentMap<BlockPos, Boolean> CONSOLE_ROUTE_SUPPRESSED = new ConcurrentHashMap<>();
 
     private static volatile float[] listenerPos;
 
@@ -65,6 +67,10 @@ public class ClientAudioOutputRegistry {
         }
         AudioEntry entry = new AudioEntry(key, centerFor(pos), handler, OutputKind.DOLBY, System.currentTimeMillis(),
                 startOffsetTicks(startOffsetSeconds), normalizedSessionId, ownerId);
+        if (pos != null) {
+            CONSOLE_ROUTE_SUPPRESSED.remove(pos.immutable());
+        }
+        handler.setConsoleRouteSuppressed(false);
         handler.setUserVolume(ownerId != null ? OWNER_VOLUMES.getOrDefault(ownerId, 1.0F)
                 : ClientAudioOutputPolicy.volume(pos));
         cleanupAfterPut(OUTPUTS.put(key, entry, entry.createdAtMillis()));
@@ -110,6 +116,10 @@ public class ClientAudioOutputRegistry {
         }
         AudioEntry entry = new AudioEntry(key, centerFor(pos), handler, OutputKind.STEREO, System.currentTimeMillis(),
                 startOffsetTicks(startOffsetSeconds), normalizedSessionId, ownerId);
+        if (pos != null) {
+            CONSOLE_ROUTE_SUPPRESSED.remove(pos.immutable());
+        }
+        handler.setConsoleRouteSuppressed(false);
         handler.setUserVolume(ownerId != null ? OWNER_VOLUMES.getOrDefault(ownerId, 1.0F)
                 : ClientAudioOutputPolicy.volume(pos));
         cleanupAfterPut(OUTPUTS.put(key, entry, entry.createdAtMillis()));
@@ -274,6 +284,11 @@ public class ClientAudioOutputRegistry {
         if (consoleElementKey == null || turntablePos == null || worldPos == null) {
             return;
         }
+        CONSOLE_ROUTE_SUPPRESSED.put(turntablePos.immutable(), Boolean.TRUE);
+        AudioEntry output = OUTPUTS.get(keyFor(turntablePos));
+        if (output != null) {
+            output.output().setConsoleRouteSuppressed(true);
+        }
         SpeakerAudioRelay relay = RELAYS.get(consoleElementKey);
         if (relay == null) {
             relay = new SpeakerAudioRelay();
@@ -292,7 +307,15 @@ public class ClientAudioOutputRegistry {
     }
 
     public static void unregisterConsoleRelay(BlockPos consoleElementKey) {
+        BlockPos turntablePos = RELAY_TURNTABLE.get(consoleElementKey);
         clearMachineOverrideForSpeaker(consoleElementKey);
+        if (turntablePos != null) {
+            CONSOLE_ROUTE_SUPPRESSED.put(turntablePos.immutable(), Boolean.TRUE);
+            AudioEntry output = OUTPUTS.get(keyFor(turntablePos));
+            if (output != null) {
+                output.output().setConsoleRouteSuppressed(true);
+            }
+        }
     }
 
     /** 注册音响 relay 并关联到对应的唱片机 handler */
@@ -627,6 +650,7 @@ public class ClientAudioOutputRegistry {
         OUTPUTS.clear();
         RELAYS.clear();
         RELAY_TURNTABLE.clear();
+        CONSOLE_ROUTE_SUPPRESSED.clear();
         listenerPos = null;
         ClientMinecartAudioAnchors.clear();
         MINECART_KEYS.clear();

@@ -30,6 +30,7 @@ import com.zhongbai233.net_music_can_play_bili.editor.core.camera.CameraFrame;
 import com.zhongbai233.net_music_can_play_bili.editor.core.camera.CameraMatrices;
 import com.zhongbai233.net_music_can_play_bili.editor.core.camera.EditorCameraController;
 import com.zhongbai233.net_music_can_play_bili.editor.core.camera.EditorCameraMode;
+import com.zhongbai233.net_music_can_play_bili.editor.core.camera.EditorMouseDragPolicy;
 import com.zhongbai233.net_music_can_play_bili.editor.core.camera.EditorCameraState;
 import com.zhongbai233.net_music_can_play_bili.editor.core.camera.StandardCameraView;
 import com.zhongbai233.net_music_can_play_bili.editor.core.projection.EditorProjection;
@@ -80,6 +81,8 @@ public class HolographicScreenConfigTestScreen extends Screen {
     private static final double ORBIT_FOV_DEGREES = HolographicScreenSettings.ORBIT_FOV_DEGREES;
     private static final double ORBIT_DEFAULT_CAMERA_DISTANCE = HolographicScreenSettings.ORBIT_DEFAULT_CAMERA_DISTANCE;
     private static final double ORBIT_TARGET_Y = HolographicScreenSettings.ORBIT_TARGET_Y;
+    /** 中控台首次打开时保留约 20% 额外画面边距，避免本体和附近元素贴满视口。 */
+    private static final double CONTROL_CONSOLE_INITIAL_FOCUS_RADIUS = 1.25D;
     private static final int ICON_W = 22;
     private static final int ICON_H = 18;
     private static final int ICON_GAP = 3;
@@ -205,14 +208,16 @@ public class HolographicScreenConfigTestScreen extends Screen {
     public static HolographicScreenConfigTestScreen forControlConsole(BlockPos pos) {
         HolographicScreenConfigTestScreen screen = new HolographicScreenConfigTestScreen(false,
                 java.util.Objects.requireNonNull(pos, "pos"));
-        // 直接从中控台进入时，先以中控台本体为建模中心，而不是抢焦到主屏。
+        // 右键直接进入时默认不选中任何元素，并以中控台本体为建模中心。
+        screen.selectedScreen = -1;
         screen.initialFocusElement = -2;
         return screen;
     }
 
     public static HolographicScreenConfigTestScreen forControlConsole(BlockPos pos, int selectedElement) {
         HolographicScreenConfigTestScreen screen = forControlConsole(pos);
-        screen.selectedScreen = Math.max(0, Math.min(screen.screens.size() - 1, selectedElement));
+        // 文档元素会在 init() 中加载，此处先保留请求索引，加载后再校验。
+        screen.selectedScreen = Math.max(0, selectedElement);
         screen.initialFocusElement = screen.selectedScreen;
         return screen;
     }
@@ -1051,7 +1056,9 @@ public class HolographicScreenConfigTestScreen extends Screen {
             screens.add(restored);
         }
         consoleElementsLoaded = true;
-        selectedScreen = screens.isEmpty() ? -1 : Math.min(Math.max(selectedScreen, 0), screens.size() - 1);
+        selectedScreen = screens.isEmpty() || selectedScreen < 0
+            ? -1
+            : Math.min(selectedScreen, screens.size() - 1);
     }
 
     private void updateConsoleDraft(String name, double rangeX, double rangeY, double rangeZ) {
@@ -1624,8 +1631,12 @@ public class HolographicScreenConfigTestScreen extends Screen {
                     && sceneHit.type == SceneHitType.NONE;
             draggingPreview = true;
             previewDragButton = event.button();
-                dragMode = event.button() == 1 && !navigationMode() ? DragMode.PAN
-                    : activeHandle == GizmoHandle.NONE ? DragMode.CAMERA : DragMode.GIZMO;
+            dragMode = switch (EditorMouseDragPolicy.action(event.button(), firstPersonPreview,
+                    activeHandle != GizmoHandle.NONE)) {
+                case ORBIT -> DragMode.CAMERA;
+                case PAN -> DragMode.PAN;
+                case GIZMO -> DragMode.GIZMO;
+            };
             if (dragMode == DragMode.GIZMO) {
                 gizmoDragSession = createGizmoDragSession(event.x(), event.y(), cameraFrame, activeHandle);
                 if (gizmoDragSession == null) {
@@ -2490,7 +2501,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
     /** 直接进入中控台建模时的默认目标点，位于中控台局部中心。 */
     private void focusControlConsoleCenter() {
         setPreviewCamera(cameraController.focus(previewCamera, new Vector3d(0.0D, 0.5D, 0.0D),
-                1.0D, currentPreviewViewport(), EDITOR_WORLD_UP));
+                CONTROL_CONSOLE_INITIAL_FOCUS_RADIUS, currentPreviewViewport(), EDITOR_WORLD_UP));
         syncLegacyPreviewScale();
     }
 

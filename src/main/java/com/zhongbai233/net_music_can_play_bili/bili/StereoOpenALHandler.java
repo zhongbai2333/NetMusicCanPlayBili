@@ -61,6 +61,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     private volatile float userVolume = 1.0f;
     private volatile float lastAudioLevel;
     private volatile long lastAudioLevelNanos;
+    private volatile boolean consoleRouteSuppressed;
 
     /** 音响转发目标列表 */
     private final java.util.concurrent.CopyOnWriteArrayList<SpeakerAudioRelay> relays = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -251,7 +252,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
                 lastDistance = distance;
                 lastGain = gain;
                 float gv = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays,
-                        followLocalPlayerFront)
+                    followLocalPlayerFront, consoleRouteSuppressed)
                                 ? 0f
                                 : gain * gameVolume();
                 spatialAudio.setBedGain(0, gv);
@@ -401,6 +402,11 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     public void removeRelay(SpeakerAudioRelay relay) {
         if (relay != null)
             relays.remove(relay);
+    }
+
+    @Override
+    public void setConsoleRouteSuppressed(boolean suppressed) {
+        consoleRouteSuppressed = suppressed;
     }
 
     public float audioLevel() {

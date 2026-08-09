@@ -525,7 +525,7 @@ public final class BiliApiClient {
         }
 
         if (streams.isEmpty()) {
-            throw new RuntimeException("该视频没有可用的 DASH 音频流");
+            throw new NoAudioStreamException("该视频没有可用的 DASH 音频流");
         }
 
         int selectedQuality = -1;
@@ -556,6 +556,13 @@ public final class BiliApiClient {
                 selectedCandidates.size(), hostOf(selectedUrl));
         CdnUrlFallbacks.registerAlternates(selectedCandidates);
         return selectedUrl;
+    }
+
+    /** B站 playurl 请求成功，但媒体没有任何可用音频候选。 */
+    public static final class NoAudioStreamException extends Exception {
+        public NoAudioStreamException(String message) {
+            super(message);
+        }
     }
 
     private static void addAudioStreamCandidates(Map<Integer, List<String>> streams, JsonObject stream) {

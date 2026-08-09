@@ -19,7 +19,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 /** 玩家申请、续期或释放中控台媒体消费资格。 */
-public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUID leaseId)
+public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUID leaseId, long consumerGeneration)
         implements CustomPacketPayload {
     public static final Type<ControlConsoleConsumerLeasePacket> TYPE = new Type<>(
             NetworkPayloadIds.id("control_console_consumer_lease"));
@@ -30,7 +30,7 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
                     BlockPos pos = BlockPos.STREAM_CODEC.decode(buf);
                     Action action = Action.fromId(buf.readVarInt());
                     UUID leaseId = buf.readBoolean() ? buf.readUUID() : null;
-                    return new ControlConsoleConsumerLeasePacket(pos, action, leaseId);
+                    return new ControlConsoleConsumerLeasePacket(pos, action, leaseId, buf.readVarLong());
                 }
 
                 @Override
@@ -41,6 +41,7 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
                     if (packet.leaseId() != null) {
                         buf.writeUUID(packet.leaseId());
                     }
+                    buf.writeVarLong(packet.consumerGeneration());
                 }
             };
 
@@ -72,7 +73,8 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
                 || !level.hasChunk(Math.floorDiv(payload.pos().getX(), 16),
                     Math.floorDiv(payload.pos().getZ(), 16))
                 || !(level.getBlockEntity(payload.pos()) instanceof ControlConsoleBlockEntity console)) {
-            send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.REJECTED, null);
+                send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.REJECTED, null,
+                    payload.consumerGeneration());
             return;
         }
         long now = System.currentTimeMillis();
@@ -82,7 +84,8 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
             if (payload.leaseId() != null) {
                 ControlConsoleConsumerLeaseRegistry.release(key, payload.leaseId());
             }
-            send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.REJECTED, null);
+                send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.REJECTED, null,
+                    payload.consumerGeneration());
             return;
         }
         var range = ControlConsoleRangeGate.evaluate(existing,
@@ -94,7 +97,8 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
             if (payload.leaseId() != null) {
                 ControlConsoleConsumerLeaseRegistry.release(key, payload.leaseId());
             }
-            send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.OUTSIDE, null);
+                send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.OUTSIDE, null,
+                    payload.consumerGeneration());
             return;
         }
         UUID leaseId;
@@ -103,7 +107,8 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
                 // 客户端越界后会忘记 leaseId；同一玩家重入时可安全取回并续期自己的现有租约。
                 leaseId = ControlConsoleConsumerLeaseRegistry.acquireOrRenew(key, now);
             } else if (!ControlConsoleConsumerLeaseRegistry.renew(key, payload.leaseId(), now)) {
-                send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.REJECTED, null);
+                send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.REJECTED, null,
+                    payload.consumerGeneration());
                 return;
             } else {
                 leaseId = payload.leaseId();
@@ -111,7 +116,8 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
         } else {
             leaseId = ControlConsoleConsumerLeaseRegistry.acquireOrRenew(key, now);
         }
-        send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.GRANTED, leaseId);
+        send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.GRANTED, leaseId,
+            payload.consumerGeneration());
     }
 
     public static ControlConsoleConsumerLeaseRegistry.Key key(ServerLevel level, BlockPos pos, UUID playerId) {
@@ -136,8 +142,9 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
     }
 
     private static void send(ServerPlayer player, BlockPos pos,
-            ControlConsoleConsumerLeaseResultPacket.Status status, UUID leaseId) {
-        PacketDistributor.sendToPlayer(player, new ControlConsoleConsumerLeaseResultPacket(pos, status, leaseId));
+            ControlConsoleConsumerLeaseResultPacket.Status status, UUID leaseId, long consumerGeneration) {
+        PacketDistributor.sendToPlayer(player,
+                new ControlConsoleConsumerLeaseResultPacket(pos, status, leaseId, consumerGeneration));
     }
 
     public enum Action {

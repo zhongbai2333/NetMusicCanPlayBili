@@ -223,11 +223,11 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         }
 
         try {
-            awaitFormat(url, closed, bodyRef, worker, formatReady);
+            awaitFormat(url, closed, bodyRef, worker, formatReady, errorRef);
             LOGGER.debug("HTTP 音频格式就绪: cost={}ms session={} offset={}s host={}",
                     System.currentTimeMillis() - started,
                     request != null ? request.sessionId() : "", startOffsetSeconds, url.getHost());
-        } catch (IOException e) {
+        } catch (IOException | UnsupportedAudioFileException e) {
             closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipelineRef.get(), streamControl);
             throw e;
         }
@@ -1150,15 +1150,30 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             AtomicBoolean closed,
             AtomicReference<InputStream> bodyRef,
             Thread worker,
-            CountDownLatch formatReady) throws IOException {
+            CountDownLatch formatReady,
+            AtomicReference<Exception> errorRef) throws IOException, UnsupportedAudioFileException {
+        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(FORMAT_WAIT_SECONDS);
         try {
-            if (!formatReady.await(FORMAT_WAIT_SECONDS, TimeUnit.SECONDS)) {
-                closed.set(true);
-                closeBody(bodyRef);
-                worker.interrupt();
-                BiliPlaybackDiagnostics.markClosed(url);
-                throw new IOException("timed out waiting for audio format");
+            while (!formatReady.await(100L, TimeUnit.MILLISECONDS)) {
+                Exception failure = errorRef.get();
+                if (failure instanceof UnsupportedAudioFileException unsupported) {
+                    throw unsupported;
+                }
+                if (failure instanceof IOException io) {
+                    throw io;
+                }
+                if (failure != null) {
+                    throw new IOException("Audio stream handling failed", failure);
+                }
+                if (System.nanoTime() >= deadlineNanos) {
+                    closed.set(true);
+                    closeBody(bodyRef);
+                    worker.interrupt();
+                    BiliPlaybackDiagnostics.markClosed(url);
+                    throw new IOException("timed out waiting for audio format");
+                }
             }
+            throwIfFailed(errorRef);
         } catch (InterruptedException e) {
             closed.set(true);
             closeBody(bodyRef);

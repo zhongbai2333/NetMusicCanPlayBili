@@ -13,10 +13,11 @@ import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
 import com.zhongbai233.net_music_can_play_bili.media.sync.AudioStartupSync;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
-import net.minecraft.sounds.SoundSource;
 import org.slf4j.Logger;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -33,6 +34,12 @@ public final class ModernTurntablePlaybackCoordinator {
             Long.getLong("ncpb.bili.audio.prepare_timeout_seconds", 20L));
     private static final AtomicLong COMPAT_PREPARE_SEQUENCE = new AtomicLong();
     private static final ConcurrentHashMap<BlockPos, Long> LATEST_COMPAT_PREPARE = new ConcurrentHashMap<>();
+    private static final ScheduledExecutorService VIDEO_RESYNC_EXECUTOR = Executors.newSingleThreadScheduledExecutor(
+            r -> {
+                Thread thread = new Thread(r, "ModernTurntableVideoResync");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     private ModernTurntablePlaybackCoordinator() {
     }
@@ -86,10 +93,6 @@ public final class ModernTurntablePlaybackCoordinator {
             minecraft.execute(() -> play(command));
             return;
         }
-        if (minecraft.options.getSoundSourceVolume(SoundSource.MASTER) <= 0.0F) {
-            return;
-        }
-
         String liveRoomId = com.zhongbai233.net_music_can_play_bili.bili.BiliLiveRoomInput
                 .roomIdFromPlaceholder(com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync
                         .strip(command.playUrl()));
@@ -138,6 +141,15 @@ public final class ModernTurntablePlaybackCoordinator {
         if (prepared == null) {
             prepared = new ClientMediaPreparer.PreparedMedia(command.playUrl(), null);
         }
+        if (command.hasSession()) {
+            ModernTurntableVideoClient.publishAudioPresence(command.sessionId(), prepared.audioPresence());
+        }
+        if (prepared.audioPresence() == ClientMediaPreparer.AudioPresence.ABSENT) {
+            LOGGER.debug("现代唱片机确认纯视频媒体，跳过音频提交: pos={} session={} song='{}'",
+                    sourcePos, command.sessionId(), command.songName());
+            syncVideo(command);
+            return;
+        }
         long prepareMillis = TimeUnit.NANOSECONDS.toMillis(Math.max(0L, System.nanoTime() - prepareStartedNanos));
         final long launchElapsedMillis = AudioStartupSync.compensatedOffsetMillis(
                 command.elapsedMillis(), command.totalMillis(), prepareMillis);
@@ -178,6 +190,13 @@ public final class ModernTurntablePlaybackCoordinator {
                 false);
         if (!submitted) {
             ModernTurntablePlaybackTracker.finish(sourcePos, command.sessionId());
+            return;
+        }
+        // 初次 play() 早于异步音频准备，视频会因 UNKNOWN AudioPresence 暂停 admission。
+        // 音频已经提交后重新同步一次，允许视频在匹配的 audio timeline 就绪后启动。
+        if (command.hasSession()) {
+            syncVideo(command);
+            scheduleVideoResync(command);
         }
     }
 
@@ -242,6 +261,23 @@ public final class ModernTurntablePlaybackCoordinator {
 
     private static void syncVideo(ClientPlaybackCommand command) {
         ModernTurntableVideoClient.syncFromPlayback(command.rawUrl(), sourcePos(command), command.syncMetadata());
+    }
+
+    private static void scheduleVideoResync(ClientPlaybackCommand command) {
+        long[] delaysMillis = { 100L, 250L, 500L, 1_000L };
+        for (long delayMillis : delaysMillis) {
+            VIDEO_RESYNC_EXECUTOR.schedule(() -> {
+                Minecraft minecraft = Minecraft.getInstance();
+                if (!ModernTurntablePlaybackTracker.isActiveSession(sourcePos(command), command.sessionId())) {
+                    return;
+                }
+                minecraft.execute(() -> {
+                    if (ModernTurntablePlaybackTracker.isActiveSession(sourcePos(command), command.sessionId())) {
+                        syncVideo(command);
+                    }
+                });
+            }, delayMillis, TimeUnit.MILLISECONDS);
+        }
     }
 
     private static void loadLyricsAsync(ClientPlaybackCommand command) {

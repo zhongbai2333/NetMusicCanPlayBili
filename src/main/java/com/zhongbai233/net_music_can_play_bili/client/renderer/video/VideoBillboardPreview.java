@@ -1120,7 +1120,7 @@ public final class VideoBillboardPreview {
         }
         VideoPlaybackInstance instance = INSTANCES.get(normalized);
         if (instance != null) {
-            return instance.isRunning() && !instance.hasFrame();
+            return instance.ensureFirstFrameProgress();
         }
         return running && started.get() && normalized.equals(activeSessionId) && !hasFrame;
     }

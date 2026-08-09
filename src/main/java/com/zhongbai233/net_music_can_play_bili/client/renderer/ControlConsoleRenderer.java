@@ -56,6 +56,8 @@ public final class ControlConsoleRenderer
     private static final Map<BlockPos, ConsumerState> CONSUMERS = new ConcurrentHashMap<>();
     private static final long CONSUMER_LEASE_MILLIS = 3_000L;
     private static final long CONSUMER_RENEW_MILLIS = 1_000L;
+        private static final long VIDEO_HEALTH_CHECK_MILLIS = Long.getLong(
+            "ncpb.control_console.video_health_check_ms", 1_000L);
     private final Font font;
 
     public ControlConsoleRenderer(BlockEntityRendererProvider.Context context) {
@@ -422,6 +424,16 @@ public final class ControlConsoleRenderer
         if (runtime == null) {
             return;
         }
+        if (result.consumerGeneration() != runtime.consumerGeneration) {
+            if (result.status() == com.zhongbai233.net_music_can_play_bili.network
+                    .ControlConsoleConsumerLeaseResultPacket.Status.GRANTED && result.leaseId() != null) {
+                ClientPacketDistributor.sendToServer(new com.zhongbai233.net_music_can_play_bili.network
+                        .ControlConsoleConsumerLeasePacket(result.pos(),
+                                com.zhongbai233.net_music_can_play_bili.network.ControlConsoleConsumerLeasePacket.Action.RELEASE,
+                                result.leaseId(), result.consumerGeneration()));
+            }
+            return;
+        }
         LOGGER.trace("中控台消费租约响应: console={}, status={}, leasePresent={}, active={}, fadingOut={}",
             result.pos(), result.status(), result.leaseId() != null, runtime.active, runtime.fadingOut);
         if (result.status() == com.zhongbai233.net_music_can_play_bili.network
@@ -544,7 +556,7 @@ public final class ControlConsoleRenderer
                     .ControlConsoleConsumerLeasePacket(consolePos,
                     com.zhongbai233.net_music_can_play_bili.network.ControlConsoleConsumerLeasePacket.Action
                             .ACQUIRE_OR_RENEW,
-                    runtime.leaseId));
+                    runtime.leaseId, runtime.consumerGeneration));
             runtime.nextLeaseRequestMillis = now + CONSUMER_RENEW_MILLIS;
         }
         if (runtime.leaseId == null || runtime.leaseExpiresAtMillis <= now) {
@@ -604,9 +616,12 @@ public final class ControlConsoleRenderer
             LiveStreamerVideoClient.registerControlConsoleConsumer(source, consolePos, videoQualityCeiling);
         } else {
             ModernTurntableVideoClient.registerControlConsoleConsumer(source, consolePos, videoQualityCeiling);
-            if (activating && minecraft.level.getBlockEntity(source) instanceof ModernTurntableBlockEntity turntable) {
-                // 最后一个消费者退出会停止共享视频实例；重入后必须从仍在播放的源主动恢复。
+            boolean healthCheckDue = now >= runtime.nextVideoHealthCheckMillis;
+            if ((activating || healthCheckDue)
+                    && minecraft.level.getBlockEntity(source) instanceof ModernTurntableBlockEntity turntable) {
+                // 激活边沿立即恢复；稳态低频确认使首次恢复碰到 pending/decoder 竞态时仍能自愈。
                 ModernTurntableVideoClient.syncFromTurntableIfPossible(turntable);
+                runtime.nextVideoHealthCheckMillis = now + Math.max(100L, VIDEO_HEALTH_CHECK_MILLIS);
             }
         }
         registerAudioForConsole(consolePos, source, document.elements(), result.gain() * entryGain);
@@ -647,6 +662,7 @@ public final class ControlConsoleRenderer
             state.sourcePos = null;
             state.sourceKind = null;
             state.fadeStartedNanos = 0L;
+            state.nextVideoHealthCheckMillis = 0L;
         }
     }
 
@@ -691,11 +707,12 @@ public final class ControlConsoleRenderer
             ClientPacketDistributor.sendToServer(new com.zhongbai233.net_music_can_play_bili.network
                     .ControlConsoleConsumerLeasePacket(consolePos,
                     com.zhongbai233.net_music_can_play_bili.network.ControlConsoleConsumerLeasePacket.Action.RELEASE,
-                    runtime.leaseId));
+                    runtime.leaseId, runtime.consumerGeneration));
         }
         runtime.leaseId = null;
         runtime.leaseExpiresAtMillis = 0L;
         runtime.nextLeaseRequestMillis = 0L;
+        runtime.consumerGeneration++;
     }
 
         private static void registerAudioForConsole(BlockPos consolePos, BlockPos sourcePos,
@@ -776,6 +793,8 @@ public final class ControlConsoleRenderer
         private java.util.UUID leaseId;
         private long leaseExpiresAtMillis;
         private long nextLeaseRequestMillis;
+        private long nextVideoHealthCheckMillis;
+        private long consumerGeneration;
         private String rangeDiagnosticStatus = "";
 
         private ConsumerState(net.minecraft.world.level.Level level) {

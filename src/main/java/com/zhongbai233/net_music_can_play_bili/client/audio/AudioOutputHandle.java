@@ -12,6 +12,10 @@ public interface AudioOutputHandle extends AutoCloseable {
 
     void removeRelay(SpeakerAudioRelay relay);
 
+    /** 保持中控台越界后的主输出静音，不持有 relay 或 OpenAL 资源。 */
+    default void setConsoleRouteSuppressed(boolean suppressed) {
+    }
+
     float audioLevel();
 
     long getPositionTicks();

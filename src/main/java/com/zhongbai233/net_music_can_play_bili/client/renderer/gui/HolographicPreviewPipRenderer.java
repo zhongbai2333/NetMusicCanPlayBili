@@ -47,6 +47,7 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
     private static final float GIZMO_LABEL_SIZE = 0.055F;
     private static final int GIZMO_RING_SEGMENTS = 48;
     private static final float PLAYER_EYE_Y = 1.62F;
+    private static final ThreadLocal<Float> ACTIVE_LINE_WIDTH_SCALE = ThreadLocal.withInitial(() -> 1.0F);
     private static final BlockDisplayContext DEBUG_GARDEN_DISPLAY_CONTEXT = BlockDisplayContext.create();
     private final ProjectionMatrixBuffer orbitProjectionBuffer = new ProjectionMatrixBuffer(
             "ncpb_holographic_orbit_projection");
@@ -66,6 +67,8 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
     @Override
     protected void renderToTexture(HolographicPreviewPipRenderState state, PoseStack poseStack) {
         Minecraft minecraft = Minecraft.getInstance();
+        float previousLineWidthScale = ACTIVE_LINE_WIDTH_SCALE.get();
+        ACTIVE_LINE_WIDTH_SCALE.set(lineWidthScale(state));
         if (!state.renderWorldTerrain()) {
             terrainGpuCache.releaseSession();
         }
@@ -95,7 +98,28 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
             }
         } finally {
             poseStack.popPose();
+            ACTIVE_LINE_WIDTH_SCALE.set(previousLineWidthScale);
         }
+    }
+
+    private static float lineWidthScale(HolographicPreviewPipRenderState state) {
+        if (state.firstPerson()) {
+            return PreviewLineWidthPolicy.firstPerson();
+        }
+        CameraFrame frame = state.cameraFrame();
+        if (frame == null) {
+            return PreviewLineWidthPolicy.perspective(ORBIT_DEFAULT_CAMERA_DISTANCE);
+        }
+        if (frame.mode() == EditorCameraMode.ORTHOGRAPHIC) {
+            float projectionScaleY = Math.abs(frame.matrices().projection().m11());
+            float halfHeight = projectionScaleY > 1.0e-6F ? 1.0F / projectionScaleY : 1.0F;
+            return PreviewLineWidthPolicy.orthographic(halfHeight);
+        }
+        Vector3f cameraPosition = frame.matrices().view().invert().getTranslation(new Vector3f());
+        float dx = cameraPosition.x;
+        float dy = cameraPosition.y - ORBIT_TARGET_Y;
+        float dz = cameraPosition.z;
+        return PreviewLineWidthPolicy.perspective((float) Math.sqrt(dx * dx + dy * dy + dz * dz));
     }
 
     private void renderOrbitPreview(Minecraft minecraft, PoseStack poseStack, HolographicPreviewPipRenderState state) {
@@ -518,15 +542,15 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
         poseStack.popPose();
     }
 
-        /** 屏幕是带厚度的框体：青色内框/向前箭头标记正面，橙色 X 支撑标记背面。 */
+        /** 屏幕是带厚度的框体：局部 +Z 为实际渲染正面，青色内框/箭头标记正面。 */
         private static void drawScreenElement(VertexConsumer edge, PoseStack.Pose pose,
             float halfW, float halfH, boolean selected) {
         float depth = Math.max(0.018F, Math.min(halfW, halfH) * 0.055F);
         int frontColor = selected ? 0xF045E7FF : 0xA845E7FF;
         int backColor = selected ? 0xD0FF9F43 : 0x88FF9F43;
         float frontWidth = selected ? 2.2F : 1.4F;
-        screenWire(edge, pose, -halfW, -halfH, halfW, halfH, -depth, frontColor, frontWidth);
-        screenWire(edge, pose, -halfW, -halfH, halfW, halfH, depth, backColor, selected ? 1.5F : 1.0F);
+        screenWire(edge, pose, -halfW, -halfH, halfW, halfH, depth, frontColor, frontWidth);
+        screenWire(edge, pose, -halfW, -halfH, halfW, halfH, -depth, backColor, selected ? 1.5F : 1.0F);
         line(edge, pose, -halfW, -halfH, -depth, -halfW, -halfH, depth, frontColor, 1.0F);
         line(edge, pose, halfW, -halfH, -depth, halfW, -halfH, depth, frontColor, 1.0F);
         line(edge, pose, -halfW, halfH, -depth, -halfW, halfH, depth, frontColor, 1.0F);
@@ -535,19 +559,19 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
         float insetX = halfW * 0.12F;
         float insetY = halfH * 0.14F;
         screenWire(edge, pose, -halfW + insetX, -halfH + insetY,
-            halfW - insetX, halfH - insetY, -depth - SCREEN_FACE_EPSILON, frontColor, 1.0F);
+            halfW - insetX, halfH - insetY, depth + SCREEN_FACE_EPSILON, frontColor, 1.0F);
         float arrow = Math.max(0.10F, Math.min(halfW, halfH) * 0.30F);
-        float frontZ = -depth - arrow * 0.58F;
-        line(edge, pose, 0.0F, 0.0F, -depth, 0.0F, 0.0F, frontZ, frontColor, 2.0F);
+        float frontZ = depth + arrow * 0.58F;
+        line(edge, pose, 0.0F, 0.0F, depth, 0.0F, 0.0F, frontZ, frontColor, 2.0F);
         line(edge, pose, 0.0F, 0.0F, frontZ, -arrow * 0.32F, 0.0F,
-            frontZ + arrow * 0.34F, frontColor, 1.5F);
+            frontZ - arrow * 0.34F, frontColor, 1.5F);
         line(edge, pose, 0.0F, 0.0F, frontZ, arrow * 0.32F, 0.0F,
-            frontZ + arrow * 0.34F, frontColor, 1.5F);
+            frontZ - arrow * 0.34F, frontColor, 1.5F);
 
-        line(edge, pose, -halfW * 0.72F, -halfH * 0.72F, depth + SCREEN_FACE_EPSILON,
-            halfW * 0.72F, halfH * 0.72F, depth + SCREEN_FACE_EPSILON, backColor, 1.2F);
-        line(edge, pose, -halfW * 0.72F, halfH * 0.72F, depth + SCREEN_FACE_EPSILON,
-            halfW * 0.72F, -halfH * 0.72F, depth + SCREEN_FACE_EPSILON, backColor, 1.2F);
+        line(edge, pose, -halfW * 0.72F, -halfH * 0.72F, -depth - SCREEN_FACE_EPSILON,
+            halfW * 0.72F, halfH * 0.72F, -depth - SCREEN_FACE_EPSILON, backColor, 1.2F);
+        line(edge, pose, -halfW * 0.72F, halfH * 0.72F, -depth - SCREEN_FACE_EPSILON,
+            halfW * 0.72F, -halfH * 0.72F, -depth - SCREEN_FACE_EPSILON, backColor, 1.2F);
         }
 
         /** 字幕元素是窄文本牌，三条不同长度的基线比平面矩形更接近字幕语义。 */
@@ -557,8 +581,8 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
         float textHalfW = Math.max(textHalfH * 2.8F, halfW * 0.72F);
         int color = selected ? 0xFFFFE08A : 0xB8FFD166;
         screenWire(edge, pose, -textHalfW, -textHalfH, textHalfW, textHalfH,
-            -SCREEN_FACE_EPSILON, color, selected ? 2.1F : 1.35F);
-        float z = -SCREEN_FACE_EPSILON * 2.0F;
+            SCREEN_FACE_EPSILON, color, selected ? 2.1F : 1.35F);
+        float z = SCREEN_FACE_EPSILON * 2.0F;
         line(edge, pose, -textHalfW * 0.78F, textHalfH * 0.46F, z,
             textHalfW * 0.78F, textHalfH * 0.46F, z, color, 1.5F);
         line(edge, pose, -textHalfW * 0.66F, 0.0F, z,
@@ -578,11 +602,11 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
         int color = selected ? 0xFFD7B3FF : 0xB8B47CFF;
         box(edge, pose, -bodyHalfW, -bodyHalfH, -depth,
             bodyHalfW, bodyHalfH, depth, color, selected ? 2.0F : 1.25F);
-        drawSpeakerCone(edge, pose, 0.0F, bodyHalfH * 0.38F, -depth - SCREEN_FACE_EPSILON,
+        drawSpeakerCone(edge, pose, 0.0F, bodyHalfH * 0.38F, depth + SCREEN_FACE_EPSILON,
             bodyHalfW * 0.30F, color);
-        drawSpeakerCone(edge, pose, 0.0F, -bodyHalfH * 0.34F, -depth - SCREEN_FACE_EPSILON,
+        drawSpeakerCone(edge, pose, 0.0F, -bodyHalfH * 0.34F, depth + SCREEN_FACE_EPSILON,
             bodyHalfW * 0.58F, color);
-        drawSoundWave(edge, pose, bodyHalfW + 0.06F, -depth - 0.04F,
+        drawSoundWave(edge, pose, bodyHalfW + 0.06F, depth + 0.04F,
             bodyHalfH * 0.48F, color);
         }
 
@@ -755,8 +779,9 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
 
     private static void line(VertexConsumer buffer, PoseStack.Pose pose, float x1, float y1, float z1, float x2,
             float y2, float z2, int color, float lineWidth) {
-        buffer.addVertex(pose, x1, y1, z1).setColor(color).setNormal(0.0F, 1.0F, 0.0F).setLineWidth(lineWidth);
-        buffer.addVertex(pose, x2, y2, z2).setColor(color).setNormal(0.0F, 1.0F, 0.0F).setLineWidth(lineWidth);
+        float visibleWidth = Math.clamp(lineWidth * ACTIVE_LINE_WIDTH_SCALE.get(), 1.0F, 8.0F);
+        buffer.addVertex(pose, x1, y1, z1).setColor(color).setNormal(0.0F, 1.0F, 0.0F).setLineWidth(visibleWidth);
+        buffer.addVertex(pose, x2, y2, z2).setColor(color).setNormal(0.0F, 1.0F, 0.0F).setLineWidth(visibleWidth);
     }
 
     private static void vertex(VertexConsumer buffer, PoseStack.Pose pose, float x, float y, float z, int color) {
