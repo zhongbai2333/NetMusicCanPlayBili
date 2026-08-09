@@ -185,6 +185,12 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     /** 每次客户端位置同步调用：推进 OpenAL 播放 + 更新空间位置 */
     public void tick(float[] machinePos, float[] listenerPos, long targetRelativeTicks,
             boolean followLocalPlayerFront) {
+        tick(machinePos, listenerPos, targetRelativeTicks, followLocalPlayerFront, followLocalPlayerFront);
+        }
+
+        @Override
+        public void tick(float[] machinePos, float[] listenerPos, long targetRelativeTicks,
+            boolean followLocalPlayerFront, boolean muteWorldRelays) {
         if (closed || !initialized)
             return;
         if (net.minecraft.client.Minecraft.getInstance().isPaused())
@@ -261,7 +267,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
         }
         // 驱动所有音响 relay（relay 使用自身存储的音响位置，不传 machinePos）
         for (SpeakerAudioRelay relay : relays) {
-            relay.tick(listenerPos, followLocalPlayerFront);
+            relay.tick(listenerPos, muteWorldRelays);
         }
     }
 

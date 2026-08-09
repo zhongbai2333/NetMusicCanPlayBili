@@ -194,7 +194,7 @@ $$
 
 ### 软件 AV1 默认上限（未来能力）
 
-`media-min-v37` 不包含 dav1d/libaom；FFmpeg 内置 `av1` decoder 在无
+`media-min-v38` 不包含 dav1d/libaom；FFmpeg 内置 `av1` decoder 在无
 hwaccel 时返回 `ENOSYS`。因此以下预算当前不得生成实际播放候选，只保留为
 未来引入软件 decoder 后的策略设计：
 
@@ -330,7 +330,7 @@ AV1 优先复用现有 NV12/YUV shader 路径。不要为了快速接入只实�
 
 ## 分阶段实施
 
-> 实施状态（当前工作区）：Java 请求、候选、首帧回退和 AV1 fMP4 基础路径已实现并通过干净全量测试；FFmpeg/JNI 已由 GitHub Actions 生成 `media-min-v37` 六平台产物，归档 SHA-256、路径结构和 LGPL 文件均已核验，六个平台目录已作为一个整体替换。v37 在 Linux x86_64/ARM64 启用了 H.264 与 AV1 VAAPI。当前 AV1 仅支持硬解，不包含 dav1d/libaom 软件 decoder。后续仍需完成目标平台动态加载及真实 B站 AV1/设备矩阵验证。
+> 实施状态（当前工作区）：Java 请求、候选、首帧回退和 AV1 fMP4 基础路径已实现并通过干净全量测试；FFmpeg/JNI 已由 GitHub Actions 生成 `media-min-v38` 六平台产物，归档 SHA-256、路径结构和 LGPL 文件均已核验，六个平台目录已作为一个整体替换。v38 在 Linux x86_64/ARM64 启用了 H.264 与 AV1 VAAPI。当前 AV1 仅支持硬解，不包含 dav1d/libaom 软件 decoder。后续仍需完成目标平台动态加载及真实 B站 AV1/设备矩阵验证。
 
 ### 阶段 1：纯 Java 候选选择
 

@@ -60,7 +60,10 @@ public class VideoProjectorRenderer
         state.projectionDistanceZ = projector.getProjectionDistanceZ();
         state.frame = VideoBillboardPreview.ProjectorFrameSnapshot.empty();
         state.sessionId = null;
-        state.hideVideoForPrivacy = HolographicGlassesClient.shouldHideProjectorVideos();
+        state.hideVideoForPrivacy = com.zhongbai233.net_music_can_play_bili.client.renderer.video
+            .VideoSurfacePrivacyPolicy.hideVideo(HolographicGlassesClient.shouldHideProjectorVideos(),
+                com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoSurfacePrivacyPolicy
+                    .SurfaceKind.PUBLIC_PROJECTOR);
         state.visible = false;
         BlockPos linkedPos = projector.getLinkedTurntablePos();
         if (linkedPos == null || projector.getLevel() == null) {

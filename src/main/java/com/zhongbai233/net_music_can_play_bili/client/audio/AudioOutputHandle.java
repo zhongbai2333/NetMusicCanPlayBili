@@ -4,7 +4,13 @@ import com.zhongbai233.net_music_can_play_bili.bili.SpeakerAudioRelay;
 
 /** Stereo 与 Dolby OpenAL 输出共享的设备句柄契约。 */
 public interface AudioOutputHandle extends AutoCloseable {
-    void tick(float[] machinePos, float[] listenerPos, long targetRelativeTicks, boolean followLocalPlayerFront);
+    default void tick(float[] machinePos, float[] listenerPos, long targetRelativeTicks,
+            boolean followLocalPlayerFront) {
+        tick(machinePos, listenerPos, targetRelativeTicks, followLocalPlayerFront, followLocalPlayerFront);
+    }
+
+    void tick(float[] machinePos, float[] listenerPos, long targetRelativeTicks,
+            boolean followLocalPlayerFront, boolean muteWorldRelays);
 
     void setUserVolume(float volume);
 

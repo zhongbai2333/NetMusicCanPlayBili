@@ -2951,7 +2951,7 @@ public final class VideoBillboardPreview {
                     || frame.yTexture() == null || frame.uTexture() == null || frame.vTexture() == null) {
                 return false;
             }
-            submitLocalTexturedQuad(collector, poseStack, yuvRenderTypeForSnapshot(frame), halfWidth, halfHeight,
+            submitLocalTexturedQuadSingle(collector, poseStack, yuvRenderTypeForSnapshot(frame), halfWidth, halfHeight,
                     0.0F, 1.0F);
             return true;
         }
@@ -2991,7 +2991,7 @@ public final class VideoBillboardPreview {
                     || frame.yTexture() == null || frame.uTexture() == null || frame.vTexture() == null) {
                 return false;
             }
-            submitLocalTexturedQuad(collector, poseStack, yuvRenderTypeForSnapshot(frame), halfWidth, halfHeight,
+            submitLocalTexturedQuadSingle(collector, poseStack, yuvRenderTypeForSnapshot(frame), halfWidth, halfHeight,
                     0.0F, normalizedOpacity);
             return true;
         }
@@ -3008,7 +3008,7 @@ public final class VideoBillboardPreview {
                     : YuvVideoRenderTypes.videoRgbaEntity(frame.rgbaTexture())),
                 -halfWidth, halfHeight, halfWidth, -halfHeight, rgbaDepthOffset, normalizedOpacity);
         if (frame.loadingProgressOverlay()) {
-            submitLoadingProgressOnPose(collector, poseStack, halfWidth, halfHeight);
+            submitLoadingProgressOnPose(collector, poseStack, halfWidth, halfHeight, normalizedOpacity);
         }
         return true;
     }
@@ -3018,35 +3018,55 @@ public final class VideoBillboardPreview {
             PoseStack poseStack,
             float halfWidth,
             float halfHeight) {
+        return submitLoadingProgressOnPose(collector, poseStack, halfWidth, halfHeight, 1.0F);
+    }
+
+    private static boolean submitLoadingProgressOnPose(
+            net.minecraft.client.renderer.SubmitNodeCollector collector,
+            PoseStack poseStack,
+            float halfWidth,
+            float halfHeight,
+            float opacity) {
         if (collector == null || poseStack == null || halfWidth <= 0.0F || halfHeight <= 0.0F) {
             return false;
         }
-        submitLocalTexturedQuad(collector, poseStack, RenderTypes.itemCutout(LOADING_PROGRESS_FRAME_TEXTURE),
+        VideoOpacityRoute route = VideoOpacityRoute.choose(opacity);
+        if (route == VideoOpacityRoute.SKIP) {
+            return false;
+        }
+        float normalizedOpacity = VideoOpacityRoute.normalize(opacity);
+        RenderType frameRenderType = route == VideoOpacityRoute.TRANSLUCENT
+                ? RenderTypes.itemTranslucent(LOADING_PROGRESS_FRAME_TEXTURE)
+                : RenderTypes.itemCutout(LOADING_PROGRESS_FRAME_TEXTURE);
+        RenderType segmentRenderType = route == VideoOpacityRoute.TRANSLUCENT
+                ? RenderTypes.itemTranslucent(LOADING_PROGRESS_SEGMENT_TEXTURE)
+                : RenderTypes.itemCutout(LOADING_PROGRESS_SEGMENT_TEXTURE);
+        submitLocalTexturedQuad(collector, poseStack, frameRenderType,
                 pixelLeft(LOADING_PROGRESS_X, halfWidth),
                 pixelTop(LOADING_PROGRESS_Y, halfHeight),
                 pixelRight(LOADING_PROGRESS_X + LOADING_PROGRESS_W, halfWidth),
                 pixelBottom(LOADING_PROGRESS_Y + LOADING_PROGRESS_H, halfHeight),
-                0.004F);
-        submitLocalTexturedQuad(collector, poseStack, RenderTypes.itemCutout(LOADING_PROGRESS_FRAME_TEXTURE),
+                0.004F, normalizedOpacity);
+        submitLocalTexturedQuad(collector, poseStack, frameRenderType,
                 pixelLeft(LOADING_PROGRESS_X, halfWidth),
                 pixelTop(LOADING_PROGRESS_Y, halfHeight),
                 pixelRight(LOADING_PROGRESS_X + LOADING_PROGRESS_W, halfWidth),
                 pixelBottom(LOADING_PROGRESS_Y + LOADING_PROGRESS_H, halfHeight),
-                -0.004F);
+                -0.004F, normalizedOpacity);
         int movingX = LOADING_PROGRESS_X + 2 + (int) (((System.nanoTime() / 12_000_000L)
                 % Math.max(1, LOADING_PROGRESS_W - LOADING_PROGRESS_SEGMENT_W - 4)));
-        submitLocalTexturedQuad(collector, poseStack, RenderTypes.itemCutout(LOADING_PROGRESS_SEGMENT_TEXTURE),
+        submitLocalTexturedQuad(collector, poseStack, segmentRenderType,
                 pixelLeft(movingX, halfWidth),
                 pixelTop(LOADING_PROGRESS_Y + 2, halfHeight),
                 pixelRight(movingX + LOADING_PROGRESS_SEGMENT_W, halfWidth),
                 pixelBottom(LOADING_PROGRESS_Y + 2 + LOADING_PROGRESS_SEGMENT_H, halfHeight),
-                0.006F);
-        submitLocalTexturedQuad(collector, poseStack, RenderTypes.itemCutout(LOADING_PROGRESS_SEGMENT_TEXTURE),
+                0.006F, normalizedOpacity);
+        submitLocalTexturedQuad(collector, poseStack, segmentRenderType,
                 pixelLeft(movingX, halfWidth),
                 pixelTop(LOADING_PROGRESS_Y + 2, halfHeight),
                 pixelRight(movingX + LOADING_PROGRESS_SEGMENT_W, halfWidth),
                 pixelBottom(LOADING_PROGRESS_Y + 2 + LOADING_PROGRESS_SEGMENT_H, halfHeight),
-                -0.006F);
+                -0.006F, normalizedOpacity);
         return true;
     }
 
@@ -3117,6 +3137,26 @@ public final class VideoBillboardPreview {
                             right, top, z,
                             true, opacity);
                 });
+    }
+
+    /** YUV pipeline 已关闭 cull；透明表面只提交一次，避免共面正反面争用深度与重复混合。 */
+    private static void submitLocalTexturedQuadSingle(
+            net.minecraft.client.renderer.SubmitNodeCollector collector,
+            PoseStack poseStack,
+            RenderType renderType,
+            float halfWidth,
+            float halfHeight,
+            float z,
+            float opacity) {
+        collector.submitCustomGeometry(
+                poseStack,
+                renderType,
+                (pose, buffer) -> emitQuad(buffer, pose,
+                        -halfWidth, halfHeight, z,
+                        -halfWidth, -halfHeight, z,
+                        halfWidth, -halfHeight, z,
+                        halfWidth, halfHeight, z,
+                        false, opacity));
     }
 
     private static float pixelLeft(int x, float halfWidth) {

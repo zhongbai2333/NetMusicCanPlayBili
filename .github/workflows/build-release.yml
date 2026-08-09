@@ -85,8 +85,8 @@ jobs:
               exit 1
             fi
           done
-          if grep -q 'Release: `media-min-v35`' src/main/resources/native/README.md; then
-            echo 'native/README.md still identifies the pre-AV1 media-min-v35 bundle' >&2
+          if ! grep -Fxq -- '- Release: `media-min-v38`' src/main/resources/native/README.md; then
+            echo 'native/README.md must identify the verified media-min-v38 bundle' >&2
             exit 1
           fi
 

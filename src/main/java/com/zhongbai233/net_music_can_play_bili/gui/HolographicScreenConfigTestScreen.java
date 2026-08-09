@@ -2364,7 +2364,10 @@ public class HolographicScreenConfigTestScreen extends Screen {
     }
 
     private void syncNumericEditBoxes() {
-        PreviewScreenSpec screen = screen();
+        PreviewScreenSpec screen = selectedScreenOrNull();
+        if (screen == null) {
+            return;
+        }
         syncingNumericEditBoxes = true;
         try {
             if (numericDistanceBox != null)

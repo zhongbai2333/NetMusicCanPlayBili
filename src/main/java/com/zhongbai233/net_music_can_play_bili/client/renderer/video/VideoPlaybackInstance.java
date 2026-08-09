@@ -52,6 +52,8 @@ final class VideoPlaybackInstance {
             "ncpb.video.pipeline.runtime_lag_confirm_ms", 1_500L);
         private static final long RUNTIME_LAG_RESTART_COOLDOWN_MILLIS = Long.getLong(
             "ncpb.video.pipeline.runtime_lag_restart_cooldown_ms", 5_000L);
+    private static final long DECODER_STABILIZATION_MILLIS = Long.getLong(
+            "ncpb.video.pipeline.decoder_stabilization_ms", 8_000L);
     private static final long DECODER_RESTART_CLOSE_TIMEOUT_MILLIS = Long.getLong(
             "ncpb.video.pipeline.decoder_restart_close_timeout_ms", 3_000L);
         private static final long FIRST_FRAME_TIMEOUT_MILLIS = Long.getLong(
@@ -119,6 +121,7 @@ final class VideoPlaybackInstance {
     private volatile boolean running;
     private volatile boolean hasFrame;
     private volatile long startNanoTime;
+    private volatile long decoderGenerationStartedNanoTime;
     private volatile Thread decodeThread;
     private volatile AutoCloseable decoder;
     private volatile CompletableFuture<Void> decodeExit = CompletableFuture.completedFuture(null);
@@ -134,6 +137,7 @@ final class VideoPlaybackInstance {
     private volatile long lastUploadPumpNanoTime;
     private volatile long decoderStartOffsetMillis;
     private volatile long lastUploadedPtsNanos = -1L;
+    private volatile long lastUploadedBaseOffsetMillis = -1L;
     private volatile long adaptiveRestartOffsetMillis = -1L;
     private volatile long lastVisibleNanoTime;
     private volatile long offscreenSinceNanoTime;
@@ -217,6 +221,7 @@ final class VideoPlaybackInstance {
         lastUploadPumpNanoTime = System.nanoTime();
         decoderStartOffsetMillis = startOffsetMillis;
         lastUploadedPtsNanos = -1L;
+        lastUploadedBaseOffsetMillis = -1L;
         adaptiveRestartOffsetMillis = -1L;
         lastVisibleNanoTime = System.nanoTime();
         offscreenSinceNanoTime = 0L;
@@ -229,6 +234,7 @@ final class VideoPlaybackInstance {
         consecutiveBadUploads = 0;
         frameQueue.clear();
         startNanoTime = System.nanoTime();
+        decoderGenerationStartedNanoTime = startNanoTime;
         long gen = generation.incrementAndGet();
         startDecodeThread(gen, "bili-video-" + sessionId);
     }
@@ -261,6 +267,9 @@ final class VideoPlaybackInstance {
                     return;
                 }
             } catch (Exception error) {
+                if (gen != generation.get() || !running || isInterruptedWait(error)) {
+                    return;
+                }
                 if (firstFrameLogged) {
                     handleDecodeFailure(gen, error);
                     return;
@@ -416,7 +425,8 @@ final class VideoPlaybackInstance {
     }
 
     private boolean waitWhileOffscreen(long gen) {
-        if (!OFFSCREEN_PAUSE_DECODE || !isOffscreenPauseActive()) {
+        if (!VideoRestartSuppressionPolicy.shouldPauseOffscreen(liveSource, OFFSCREEN_PAUSE_DECODE)
+                || !isOffscreenPauseActive()) {
             return running && gen == generation.get();
         }
         long pauseStartNs = System.nanoTime();
@@ -499,7 +509,8 @@ final class VideoPlaybackInstance {
 
     void pumpUploadOnRenderThread() {
         lastUploadPumpNanoTime = System.nanoTime();
-        if (OFFSCREEN_PAUSE_DECODE && isOffscreenPauseActive()) {
+        if (VideoRestartSuppressionPolicy.shouldPauseOffscreen(liveSource, OFFSCREEN_PAUSE_DECODE)
+                && isOffscreenPauseActive()) {
             return;
         }
         if (!running && frameQueue.isEmpty()) {
@@ -531,6 +542,7 @@ final class VideoPlaybackInstance {
             uploaded = uploadDecodedFrameOnRenderThread(frame.frame());
             uploadNs = System.nanoTime() - uploadStartNs;
             if (uploaded) {
+                lastUploadedBaseOffsetMillis = Math.max(startOffsetMillis, decoderStartOffsetMillis);
                 lastUploadedPtsNanos = frame.ptsNanos();
             }
         } catch (OutOfMemoryError error) {
@@ -546,7 +558,7 @@ final class VideoPlaybackInstance {
     }
 
     private void maybeRestartForRuntimeLag() {
-        if (liveSource || !hasFrame || !hasVideoConsumer() || RUNTIME_LAG_RESTART_MILLIS <= 0L) {
+        if (!restartAllowed() || !hasFrame || !hasVideoConsumer() || RUNTIME_LAG_RESTART_MILLIS <= 0L) {
             runtimeLagSinceNanoTime = 0L;
             return;
         }
@@ -682,6 +694,7 @@ final class VideoPlaybackInstance {
         adaptiveRestartOffsetMillis = decoderStartOffsetMillis;
         if (!preserveVisibleFrame) {
             lastUploadedPtsNanos = -1L;
+            lastUploadedBaseOffsetMillis = -1L;
         }
         consecutiveBadUploads = 0;
         // Keep the session active while the old native worker drains so periodic sync
@@ -704,6 +717,7 @@ final class VideoPlaybackInstance {
                 return;
             }
             restartInProgress = false;
+            decoderGenerationStartedNanoTime = System.nanoTime();
             startDecodeThread(gen, preserveVisibleFrame
                     ? "bili-video-" + sessionId + "-resume"
                     : "bili-video-" + sessionId + "-adaptive");
@@ -1066,7 +1080,7 @@ final class VideoPlaybackInstance {
     }
 
     private void maybeRestartForVisibleResume(long offscreenDurationNs) {
-        if (!running || OFFSCREEN_RESUME_RESTART_LAG_NANOS <= 0L) {
+        if (!running || !restartAllowed() || OFFSCREEN_RESUME_RESTART_LAG_NANOS <= 0L) {
             return;
         }
         long masterMillis = anchor.timeline().mediaMillis();
@@ -1084,6 +1098,14 @@ final class VideoPlaybackInstance {
         LOGGER.debug("视频会话离屏恢复重定位: session={}, offscreen={}ms, master={}ms, video={}ms, offset={}ms",
                 sessionId, offscreenDurationNs / 1_000_000L, masterMillis, bestVideoMillis, restartOffsetMillis);
         restartDecoder(targetWidth, targetHeight, restartOffsetMillis, true);
+    }
+
+    private boolean restartAllowed() {
+        long generationStart = decoderGenerationStartedNanoTime;
+        long sinceStartMillis = generationStart > 0L
+            ? Math.max(0L, (System.nanoTime() - generationStart) / 1_000_000L) : 0L;
+        return VideoRestartSuppressionPolicy.allowsRestart(liveSource, restartInProgress,
+                sinceStartMillis, DECODER_STABILIZATION_MILLIS);
     }
 
     void renderYuvImmediate(RenderLevelStageEvent event, String route) {
@@ -1392,13 +1414,8 @@ final class VideoPlaybackInstance {
 
     long mediaMillis() {
         long uploadedPts = lastUploadedPtsNanos;
-        if (!hasFrame || uploadedPts < 0L) {
-            return -1L;
-        }
-        long clockMillis = Math.max(0L, uploadedPts / 1_000_000L);
-        long baseOffsetMillis = Math.max(startOffsetMillis, decoderStartOffsetMillis);
-        long value = Math.max(0L, baseOffsetMillis + clockMillis - AUDIO_OUTPUT_LATENCY_COMPENSATION_MILLIS);
-        return totalMillis > 0L ? Math.min(totalMillis, value) : value;
+        return hasFrame ? VideoMediaTimestampPolicy.absoluteMillis(lastUploadedBaseOffsetMillis, uploadedPts,
+                AUDIO_OUTPUT_LATENCY_COMPENSATION_MILLIS, totalMillis) : -1L;
     }
 
     long queuedMediaMillis() {

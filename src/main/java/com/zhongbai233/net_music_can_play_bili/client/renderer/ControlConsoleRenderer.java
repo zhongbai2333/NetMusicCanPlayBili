@@ -9,6 +9,7 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEnti
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.LiveStreamerVideoClient;
+import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
@@ -85,6 +86,10 @@ public final class ControlConsoleRenderer
         registerConsumer(console);
         reconcileConsumer(state.consolePos);
         state.consumerActive = isConsumerActive(state.consolePos);
+        state.hideVideoForPrivacy = com.zhongbai233.net_music_can_play_bili.client.renderer.video
+            .VideoSurfacePrivacyPolicy.hideVideo(HolographicGlassesClient.shouldHideProjectorVideos(),
+                com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoSurfacePrivacyPolicy
+                    .SurfaceKind.CONTROL_CONSOLE);
         state.irisCompatibilityMode = IrisShaderpackCompat.isShaderPackInUse();
         state.exitGain = state.irisCompatibilityMode ? 1.0F : consumerExitGain(state.consolePos);
         state.sourcePlaying = false;
@@ -143,13 +148,21 @@ public final class ControlConsoleRenderer
                     (float) Math.toRadians(element.roll())));
             Matrix4f pose = new Matrix4f(poseStack.last().pose());
             if (element.type() == ControlConsoleElement.Type.SCREEN) {
-                if (state.videoState == ControlConsoleVideoStatePolicy.State.ACTIVE && state.sessionId != null) {
+                if (!state.hideVideoForPrivacy
+                        && state.videoState == ControlConsoleVideoStatePolicy.State.ACTIVE
+                        && state.sessionId != null) {
                     VideoBillboardPreview.captureProjectorImmediatePose(state.sessionId, state.consolePos, pose,
                             halfHeight, state.exitGain);
                 }
-                VideoBillboardPreview.submitProjectorFrameOnPose(collector, poseStack, state.frame, halfWidth,
-                    halfHeight, VideoBillboardPreview.cameraRelativeBackOffset(pose,
-                        state.frame.rgbaDepthOffset()), state.exitGain);
+                if (state.hideVideoForPrivacy && state.frame.hasFrame()
+                        && state.frame.width() > 0 && state.frame.height() > 0) {
+                    VideoBillboardPreview.submitProjectorPrivacyOverlayOnPose(
+                            collector, poseStack, halfWidth, halfHeight);
+                } else if (!state.hideVideoForPrivacy) {
+                    VideoBillboardPreview.submitProjectorFrameOnPose(collector, poseStack, state.frame, halfWidth,
+                        halfHeight, VideoBillboardPreview.cameraRelativeBackOffset(pose,
+                            state.frame.rgbaDepthOffset()), state.exitGain);
+                }
             } else if (element.type() == ControlConsoleElement.Type.SUBTITLE) {
                 submitSubtitle(state, element, poseStack, collector);
             }
@@ -769,6 +782,7 @@ public final class ControlConsoleRenderer
         private int lyricTick = -1;
         private float lyricVisualTick = -1.0F;
         private boolean consumerActive;
+        private boolean hideVideoForPrivacy;
         private boolean irisCompatibilityMode;
         private float exitGain = 1.0F;
     }

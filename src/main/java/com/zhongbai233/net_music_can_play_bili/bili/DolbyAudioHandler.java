@@ -120,6 +120,12 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
 
     public void tick(float[] machinePos, float[] listenerPos, long targetRelativeTicks,
             boolean followLocalPlayerFront) {
+        tick(machinePos, listenerPos, targetRelativeTicks, followLocalPlayerFront, followLocalPlayerFront);
+        }
+
+        @Override
+        public void tick(float[] machinePos, float[] listenerPos, long targetRelativeTicks,
+            boolean followLocalPlayerFront, boolean muteWorldRelays) {
         if (closed)
             return;
         if (net.minecraft.client.Minecraft.getInstance().isPaused())
@@ -178,7 +184,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         }
         // 驱动所有音响 relay（relay 使用自身存储的音响位置，不传 machinePos）
         for (SpeakerAudioRelay relay : relays) {
-            relay.tick(listenerPos, followLocalPlayerFront);
+            relay.tick(listenerPos, muteWorldRelays);
         }
     }
 

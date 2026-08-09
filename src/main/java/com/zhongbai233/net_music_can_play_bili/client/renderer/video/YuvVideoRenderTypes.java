@@ -38,7 +38,7 @@ public final class YuvVideoRenderTypes {
             NetMusicCanPlayBili.MODID, "core/yuv420p_textured_probe_entity");
     private static final String YUV_SHADER_DEBUG = System.getProperty("ncpb.video.yuv.shader_debug", "")
             .trim().toUpperCase(Locale.ROOT);
-    private static final boolean YUV_NO_DEPTH_WRITE = Boolean.getBoolean("ncpb.video.yuv.no_depth_write");
+        private static final boolean YUV_NO_DEPTH_WRITE = VideoYuvRenderPolicy.disableDepthWrite();
 
     static final RenderPipeline YUV420P_ENTITY = buildYuv420pEntityPipeline();
     static final RenderPipeline NV12_ENTITY = buildYuvEntityPipeline(NV12_PIPELINE_ID, NV12_FRAGMENT_SHADER);
@@ -89,7 +89,6 @@ public final class YuvVideoRenderTypes {
                 .withLocation(pipelineId)
                 .withFragmentShader(fragmentShader)
                 .withShaderDefine("NO_OVERLAY")
-                .withShaderDefine("ALPHA_CUTOUT", 0.1F)
                                 // 视频面片按全亮表面处理，不声明 lightmap，减少光影/后处理 pass 误读遗留 lightmap。
                                 // 中控台淡化通过 vertexColor alpha 传递，必须启用 framebuffer 混合。
                 .withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
@@ -148,11 +147,13 @@ public final class YuvVideoRenderTypes {
                         .createRenderSetup());
     }
 
-        private static RenderType createYuvRenderType(String name, RenderSetup setup) {
-                if (IrisShaderpackCompat.shouldForceSolidYuvRenderType()) {
-                        return new SolidClassifiedVideoRenderType(name, setup);
-        }
-                return RenderType.create(name, setup);
+    private static RenderType createYuvRenderType(String name, RenderSetup setup) {
+        // 26.1 的 CustomFeatureRenderer 仅通过 hasBlending() 分桶。视频需要在实体阶段
+        // 写入深度以正确遮挡后绘制的云和粒子，但实际 pipeline 仍保留 TRANSLUCENT
+        // blend，故 opacity 顶点 alpha 仍能实现平滑淡入淡出。
+        return VideoYuvRenderPolicy.useSolidFeatureStage()
+                ? new SolidClassifiedVideoRenderType(name, setup)
+                : RenderType.create(name, setup);
         }
 
     static RenderType yOnlyTexturedProbeEntity(Identifier yTexture) {

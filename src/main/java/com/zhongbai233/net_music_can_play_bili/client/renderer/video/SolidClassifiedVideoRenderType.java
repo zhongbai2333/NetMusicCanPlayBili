@@ -4,8 +4,8 @@ import net.minecraft.client.renderer.rendertype.RenderSetup;
 import net.minecraft.client.renderer.rendertype.RenderType;
 
 /**
- * 保留视频自定义 pipeline 的实际颜色状态，但让 26.1 feature renderer 将几何归入
- * solid/cutout 阶段。用于验证 Iris shaderpack 下的透明阶段分类是否导致画面伪影或不可见。
+ * 保留视频自定义 pipeline 的透明混合状态，但让 26.1 feature renderer 将几何归入
+ * solid/cutout 阶段。这样 opacity 仍由 GPU 混合处理，同时视频会在云和粒子之前写入深度。
  */
 final class SolidClassifiedVideoRenderType extends RenderType {
     SolidClassifiedVideoRenderType(String name, RenderSetup setup) {

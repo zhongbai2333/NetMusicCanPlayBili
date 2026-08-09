@@ -180,7 +180,7 @@ public class ClientAudioOutputRegistry {
                 // to consume the queue so playback does not burst when the headphone route
                 // ends.
                 entry.output().setUserVolume(0.0F);
-                entry.output().tick(entry.machinePos(), currentListenerPos, Long.MAX_VALUE, false);
+                entry.output().tick(entry.machinePos(), currentListenerPos, Long.MAX_VALUE, false, true);
                 continue;
             }
             float[] pos = resolveMachinePos(entry);
@@ -189,7 +189,13 @@ public class ClientAudioOutputRegistry {
                             .handlesTurntable(entry.pos())) {
                 pos = currentListenerPos;
             }
-            entry.output().tick(pos, currentListenerPos, targetRelativeTicks(entry), followsLocalPlayerFront(entry));
+                boolean followLocalPlayerFront = followsLocalPlayerFront(entry);
+                entry.output().tick(pos, currentListenerPos, targetRelativeTicks(entry), followLocalPlayerFront,
+                    AudioRelayRoutingPolicy.muteWorldRelays(
+                        isRealWorldKey(entry.pos()) && com.zhongbai233.net_music_can_play_bili.client
+                            .HeadphoneClientState.handlesTurntable(entry.pos()),
+                        false,
+                        followLocalPlayerFront));
         }
     }
 

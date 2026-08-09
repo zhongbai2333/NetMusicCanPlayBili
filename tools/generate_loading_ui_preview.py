@@ -64,6 +64,7 @@ def glyph(ch: str) -> list[int]:
         "C": [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
         "D": [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
         "E": [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+        "F": [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
         "G": [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110],
         "H": [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
         "I": [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111],
@@ -280,6 +281,8 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=Path("build/generated-preview/loading-ui"))
     parser.add_argument("--resource-out", type=Path, default=None,
                         help="also write the idle placeholder directly to a resource directory")
+    parser.add_argument("--privacy-resource-out", type=Path, default=None,
+                        help="also write the holographic privacy overlay directly to a resource directory")
     parser.add_argument("--capacity", type=int, default=3)
     args = parser.parse_args()
 
@@ -303,6 +306,10 @@ def main() -> None:
     if args.resource_out is not None:
         args.resource_out.mkdir(parents=True, exist_ok=True)
         save_png(args.resource_out / "idle_base.png", draw_idle_base())
+    if args.privacy_resource_out is not None:
+        args.privacy_resource_out.mkdir(parents=True, exist_ok=True)
+        save_png(args.privacy_resource_out / "holographic_privacy_overlay.png",
+                 draw_holographic_privacy_overlay())
     print(f"Generated loading UI previews in {args.out.resolve()}")
 
 
