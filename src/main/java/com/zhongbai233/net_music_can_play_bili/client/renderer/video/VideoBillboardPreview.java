@@ -3090,30 +3090,6 @@ public final class VideoBillboardPreview {
             net.minecraft.client.renderer.SubmitNodeCollector collector,
             PoseStack poseStack,
             RenderType renderType,
-            float halfWidth,
-            float halfHeight,
-            float z,
-            float opacity) {
-        submitLocalTexturedQuad(collector, poseStack, renderType, -halfWidth, halfHeight, halfWidth, -halfHeight,
-            z, opacity);
-        }
-
-    private static void submitLocalTexturedQuad(
-            net.minecraft.client.renderer.SubmitNodeCollector collector,
-            PoseStack poseStack,
-            RenderType renderType,
-            float left,
-            float top,
-            float right,
-            float bottom,
-            float z) {
-        submitLocalTexturedQuad(collector, poseStack, renderType, left, top, right, bottom, z, 1.0F);
-    }
-
-    private static void submitLocalTexturedQuad(
-            net.minecraft.client.renderer.SubmitNodeCollector collector,
-            PoseStack poseStack,
-            RenderType renderType,
             float left,
             float top,
             float right,
