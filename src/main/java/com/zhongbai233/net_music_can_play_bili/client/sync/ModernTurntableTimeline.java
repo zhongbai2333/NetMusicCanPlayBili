@@ -95,13 +95,14 @@ public final class ModernTurntableTimeline {
                 : Math.max(0L, turntable.getDurationSeconds()) * 1000L;
         final long serverMillis = clamp(rawServerMillis, totalMillis);
         final long timelineTotalMillis = totalMillis;
+            final long observationGameTime = minecraft.level.getGameTime();
         String sessionId = sync.hasSession() ? sync.sessionId() : "";
         BlockPos key = turntablePos.immutable();
         MediaTimelineClock clock = CLOCKS.compute(key, (ignored, existing) -> {
             if (existing == null || !existing.isForSession(sessionId)) {
                 return MediaTimelineClock.start(sessionId, serverMillis, timelineTotalMillis);
             }
-            existing.observeServer(serverMillis, timelineTotalMillis);
+                existing.observeServerOnce(observationGameTime, serverMillis, timelineTotalMillis);
             return existing;
         });
         long pacingMillis = clock != null ? clock.pacingMillis() : serverMillis;

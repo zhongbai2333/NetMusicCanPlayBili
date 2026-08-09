@@ -137,7 +137,21 @@ public record ControlConsoleDocument(
     public static ControlConsoleDocument empty() {
         return new ControlConsoleDocument(CURRENT_SCHEMA_VERSION, UUID.randomUUID(), 0L, null, AccessMode.OWNER_ONLY, Set.of(),
             "中控台", null,
-            null, 0, 0, 0, DEFAULT_HARD_RANGE_X, DEFAULT_HARD_RANGE_Y, DEFAULT_HARD_RANGE_Z, List.of());
+            null, 0, 0, 0, DEFAULT_HARD_RANGE_X, DEFAULT_HARD_RANGE_Y, DEFAULT_HARD_RANGE_Z,
+            List.of(ControlConsoleElement.defaultScreen()));
+    }
+
+    /**
+     * 兼容早期版本中尚未保存任何元素的初始文档。只提升 revision 0，用户明确删除并保存后的
+     * 较新空文档保持为空。
+     */
+    public ControlConsoleDocument withInitialScreenIfPristine() {
+        if (revision != 0L || !elements.isEmpty()) {
+            return this;
+        }
+        return new ControlConsoleDocument(schemaVersion, consoleId, revision, ownerId, accessMode, trustedPlayerIds,
+                displayName, sourceDimension, sourceKind, sourceX, sourceY, sourceZ,
+                hardRangeX, hardRangeY, hardRangeZ, List.of(ControlConsoleElement.defaultScreen()));
     }
 
     public boolean hasSourceBinding() {

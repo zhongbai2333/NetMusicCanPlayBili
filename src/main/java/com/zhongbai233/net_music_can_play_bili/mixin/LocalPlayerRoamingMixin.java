@@ -8,7 +8,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(LocalPlayer.class)
-public abstract class MouseHandlerRoamingMixin {
+public abstract class LocalPlayerRoamingMixin {
     @Inject(method = "turn", at = @At("HEAD"), cancellable = true)
     private void net_music_can_play_bili$turnRoamingCamera(double yaw, double pitch, CallbackInfo callback) {
         if (ControlConsoleRoamingSession.turnCamera(yaw, pitch)) {

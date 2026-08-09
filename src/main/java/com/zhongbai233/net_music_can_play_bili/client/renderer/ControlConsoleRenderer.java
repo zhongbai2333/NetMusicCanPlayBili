@@ -422,7 +422,7 @@ public final class ControlConsoleRenderer
         if (runtime == null) {
             return;
         }
-        LOGGER.info("中控台消费租约响应: console={}, status={}, leasePresent={}, active={}, fadingOut={}",
+        LOGGER.trace("中控台消费租约响应: console={}, status={}, leasePresent={}, active={}, fadingOut={}",
             result.pos(), result.status(), result.leaseId() != null, runtime.active, runtime.fadingOut);
         if (result.status() == com.zhongbai233.net_music_can_play_bili.network
                 .ControlConsoleConsumerLeaseResultPacket.Status.GRANTED) {
@@ -619,7 +619,10 @@ public final class ControlConsoleRenderer
             return;
         }
         runtime.rangeDiagnosticStatus = status;
-        LOGGER.info("中控台 hardRange 识别: status={}, console={}, relative=({},{},{}), half=({},{},{}), gain={}",
+        if (!LOGGER.isDebugEnabled()) {
+            return;
+        }
+        LOGGER.debug("中控台 hardRange 识别: status={}, console={}, relative=({},{},{}), half=({},{},{}), gain={}",
                 status, consolePos,
                 formatRange(relativeX), formatRange(relativeY), formatRange(relativeZ),
                 formatRange(document.hardRangeX()), formatRange(document.hardRangeY()),

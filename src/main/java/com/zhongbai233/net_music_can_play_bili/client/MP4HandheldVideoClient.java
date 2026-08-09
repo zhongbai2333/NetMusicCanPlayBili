@@ -431,8 +431,26 @@ public final class MP4HandheldVideoClient {
                         state.sourceHeight = stream.sourceHeight();
                         logResolvedStreamIfPad(playback, stream);
                     }
-                    startDecoder(deviceId, state, playback, key, stream);
+                    HandheldMediaPlayback currentPlayback = profileFor(deviceId).playback(deviceId);
+                    if (!isCurrentPlayback(currentPlayback, key)) {
+                        synchronized (state.lifecycleLock) {
+                            if (key.equals(state.resolvingKey)) {
+                                state.resolvingKey = PlaybackKey.EMPTY;
+                            }
+                        }
+                        return;
+                    }
+                    startDecoder(deviceId, state, currentPlayback, key, stream);
                 });
+    }
+
+    private static boolean isCurrentPlayback(HandheldMediaPlayback playback, PlaybackKey key) {
+        return playback != null
+                && key != null
+                && key.sessionId().equals(playback.sessionId())
+                && key.rawUrl().equals(playback.rawUrl())
+                && playback.timeline() != null
+                && playback.timeline().mediaMillis() >= 0L;
     }
 
     private static void logResolvedStreamIfPad(HandheldMediaPlayback playback, ResolvedVideoStream stream) {

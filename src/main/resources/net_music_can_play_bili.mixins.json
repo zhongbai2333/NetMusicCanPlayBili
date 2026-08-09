@@ -20,12 +20,12 @@
     "GlDeviceYuvShaderSkipMixin",
     "GuiGraphicsExtractorAccessor",
     "GuiRoamingCrosshairMixin",
+    "EntityTurnRoamingMixin",
     "GuiRendererTargetMixin",
     "ItemInHandRendererMixin",
     "KeyboardHandlerRoamingMixin",
     "LibraryAccessor",
     "MusicToClientMessageClientMixin",
-    "MouseHandlerRoamingMixin",
     "ScreenAccessor",
     "SoundEngineAccessor",
     "SoundManagerAccessor"

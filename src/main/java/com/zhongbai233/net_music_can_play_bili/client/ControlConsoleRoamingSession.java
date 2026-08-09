@@ -87,8 +87,9 @@ public final class ControlConsoleRoamingSession {
         Entity previousCamera = minecraft.getCameraEntity();
         CameraType previousCameraType = minecraft.options.getCameraType();
         var document = console.document();
-        List<RoamingElement> snapshot = elements == null || elements.isEmpty()
-                ? List.of(RoamingElement.defaultScreen()) : List.copyOf(elements);
+        // An empty list can be a deliberately saved empty document. Only the convenience
+        // overload above supplies a default screen; never revive one here implicitly.
+        List<RoamingElement> snapshot = elements == null ? List.of() : List.copyOf(elements);
         active = new Session(consolePos.immutable(), minecraft.level, player, camera, previousCamera,
             previousCameraType, document.hardRangeX(), document.hardRangeY(), document.hardRangeZ(),
             new ArrayList<>(snapshot), -1, Vec3.ZERO, DEFAULT_FLYING_SPEED, 0.0D);
@@ -342,8 +343,10 @@ public final class ControlConsoleRoamingSession {
                 minecraft.setCameraEntity(restore);
             }
             minecraft.options.setCameraType(session.previousCameraType);
-            releaseMovementKeys(minecraft);
         }
+        // Input suppression can leave key mappings latched even if another mod replaced
+        // the camera entity before this session stopped.
+        releaseMovementKeys(minecraft);
         if (notifyPlayer && minecraft.player != null) {
             minecraft.player.sendSystemMessage(Component.literal("已退出灵魂漫游"));
         }

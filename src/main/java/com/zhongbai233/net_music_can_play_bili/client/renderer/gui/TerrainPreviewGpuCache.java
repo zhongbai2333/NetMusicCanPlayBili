@@ -448,7 +448,10 @@ final class TerrainPreviewGpuCache implements AutoCloseable {
         return cached;
     }
 
-        private void logCoverage(TerrainPreviewFrame frame, int visibleSections) {
+    private void logCoverage(TerrainPreviewFrame frame, int visibleSections) {
+        if (!LOGGER.isTraceEnabled()) {
+            return;
+        }
         long now = System.nanoTime();
         if (frame.generation() == lastCoverageGeneration
             && now - lastCoverageLogNanos < COVERAGE_LOG_INTERVAL_NANOS) {
@@ -461,7 +464,7 @@ final class TerrainPreviewGpuCache implements AutoCloseable {
                 .TerrainCellSample.RenderCategory.UNKNOWN)
             .count();
         long overview = frame.overviewCells().size() - unknown;
-        LOGGER.info("地形预览 hardRange 覆盖: generation={}, bounds={}, nearCpu={}, overviewCells={}, wireSegments={}, unknownSections={}, "
+        LOGGER.trace("地形预览 hardRange 覆盖: generation={}, bounds={}, nearCpu={}, overviewCells={}, wireSegments={}, unknownSections={}, "
                 + "capturePending={}, sampledSections={}, resident={}, visible={}, compilerActive={}",
             frame.generation(), frame.bounds(), frame.fullDetailSections().size(), overview,
             frame.wireframeSegments().size(), unknown,
@@ -597,7 +600,7 @@ final class TerrainPreviewGpuCache implements AutoCloseable {
     public void close() {
         closed = true;
         releaseSession();
-        LOGGER.info("地形预览稳态缓存: planBuilds={}, planHits={}, sessionReleases={}",
+        LOGGER.debug("地形预览稳态缓存: planBuilds={}, planHits={}, sessionReleases={}",
             renderPlanBuilds, renderPlanHits, sessionReleases);
         compilationExecutor.shutdownNow();
     }

@@ -117,7 +117,7 @@ public final class LiveStreamerVideoClient {
     private static void logDecision(String sessionId, String fingerprint, String message) {
         String previous = LAST_DECISION.put(sessionId, fingerprint);
         if (!fingerprint.equals(previous)) {
-            LOGGER.info("{}", message);
+            LOGGER.debug("{}", message);
         }
     }
 

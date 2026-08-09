@@ -99,7 +99,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
     private static final Vector3d PREVIEW_PLAYER_BOUNDS_MIN = new Vector3d(-0.345D, -0.03D, -0.345D);
     private static final Vector3d PREVIEW_PLAYER_BOUNDS_MAX = new Vector3d(0.345D, 1.88D, 0.345D);
 
-    private final List<PreviewScreenSpec> screens = new ArrayList<>(List.of(PreviewScreenSpec.defaults()));
+    private final List<PreviewScreenSpec> screens = new ArrayList<>();
     private int selectedScreen;
     private int consoleElementScroll;
     private final boolean bindEquippedGlasses;
@@ -194,6 +194,9 @@ public class HolographicScreenConfigTestScreen extends Screen {
         Minecraft minecraft = Minecraft.getInstance();
         this.controlConsoleLevel = controlConsoleMode ? minecraft.level : null;
         this.controlConsolePlayer = controlConsoleMode ? minecraft.player : null;
+        if (!controlConsoleMode) {
+            screens.add(PreviewScreenSpec.defaults());
+        }
         if (bindEquippedGlasses) {
             loadEquippedGlassesConfig();
         }
@@ -992,12 +995,24 @@ public class HolographicScreenConfigTestScreen extends Screen {
     private ControlConsoleDocument currentConsoleDocument() {
         ControlConsoleDocument document = controlConsoleDocument();
         if (consoleDraft == null && document != null) {
-            consoleDraft = document;
+            consoleDraft = document.withInitialScreenIfPristine();
             if (!consoleElementsLoaded) {
-                loadConsoleElements(document);
+                loadConsoleElements(consoleDraft);
+            }
+            if (consoleDraft != document) {
+                // 旧 revision 0 空文档的正式主屏幕属于待保存变更，不能在自动保存初始化时
+                // 被误认为已经存在于服务端。
+                consoleSavedFingerprint = documentFingerprint(document);
+                consoleObservedFingerprint = consoleSavedFingerprint;
+                consoleAutosaveFingerprintInitialized = true;
             }
         }
         return consoleDraft != null ? consoleDraft : document;
+    }
+
+    private static int documentFingerprint(ControlConsoleDocument document) {
+        return java.util.Objects.hash(document.displayName(), document.hardRangeX(), document.hardRangeY(),
+                document.hardRangeZ(), document.elements());
     }
 
     private void ensureConsoleDocumentLoaded() {
@@ -1138,6 +1153,10 @@ public class HolographicScreenConfigTestScreen extends Screen {
         PreviewScreenSpec selectedForCopy = selectedScreenOrNull();
         copy.active = selectedForCopy != null && !selectedForCopy.locked && canAddConsoleElement();
         addRenderableWidget(copy);
+        BlackGoldButton delete = new BlackGoldButton(x + 68, actionTop + 24, 64, 20,
+            Component.literal("删除"), button -> removeSelectedConsoleElement(), 0xFFD04040);
+        delete.active = selectedForCopy != null && !selectedForCopy.locked;
+        addRenderableWidget(delete);
     }
 
     private void ensureSelectedConsoleElementVisible(int visibleRows) {
@@ -1156,6 +1175,19 @@ public class HolographicScreenConfigTestScreen extends Screen {
         }
         screens.add(PreviewScreenSpec.defaultsWithName(type, nextElementName(type)));
         selectElement(screens.size() - 1);
+        init();
+    }
+
+    private void removeSelectedConsoleElement() {
+        PreviewScreenSpec selected = selectedScreenOrNull();
+        if (selected == null || selected.locked) {
+            return;
+        }
+        int removedIndex = selectedScreen;
+        screens.remove(removedIndex);
+        selectedScreen = screens.isEmpty() ? -1 : Math.min(removedIndex, screens.size() - 1);
+        consoleElementScroll = Math.min(consoleElementScroll, Math.max(0, screens.size() - 1));
+        clearFlyKeys();
         init();
     }
 
@@ -1541,7 +1573,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 playerHovered && !controlConsoleMode, selectedScreen, distances, offsetXs, offsetYs, heights, aspects,
                 yaws, pitches, rolls, elementTypes,
                 encodedGizmoTool, selectedHandle,
-                true, controlConsoleMode, controlConsoleMode && controlConsolePos != null,
+                activeTool != EditTool.MOVE, controlConsoleMode, controlConsoleMode && controlConsolePos != null,
                 controlConsolePos != null ? controlConsolePos.getX() : 0,
                 controlConsolePos != null ? controlConsolePos.getY() : 0,
                 controlConsolePos != null ? controlConsolePos.getZ() : 0,
@@ -1836,11 +1868,20 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 ? GizmoDragMath.signedAxisDelta(session.axis, session.startHit, currentHit) : 0.0D;
         switch (session.tool) {
             case MOVE -> {
-                screen.offsetX = finiteOrPrevious(session.start.offsetX + (float) worldDelta.x, screen.offsetX);
-                screen.offsetY = finiteOrPrevious(session.start.offsetY + (float) worldDelta.y, screen.offsetY);
-                if (session.handle == GizmoHandle.Z) {
-                    screen.distance = finiteOrPrevious(session.start.distance + (float) worldDelta.z,
-                        screen.distance);
+            switch (session.handle) {
+                case X -> screen.offsetX = finiteOrPrevious(
+                    session.start.offsetX + (float) axisDelta, screen.offsetX);
+                case Y -> screen.offsetY = finiteOrPrevious(
+                    session.start.offsetY + (float) axisDelta, screen.offsetY);
+                case Z -> screen.distance = finiteOrPrevious(
+                    session.start.distance + (float) axisDelta, screen.distance);
+                case CENTER -> {
+                screen.offsetX = finiteOrPrevious(
+                    session.start.offsetX + (float) worldDelta.x, screen.offsetX);
+                screen.offsetY = finiteOrPrevious(
+                    session.start.offsetY + (float) worldDelta.y, screen.offsetY);
+                }
+                default -> { }
                 }
             }
             case ROTATE -> {
@@ -1898,10 +1939,11 @@ public class HolographicScreenConfigTestScreen extends Screen {
         Vector3d localX = new Vector3d(rotation.transform(new Vector3f(1.0F, 0.0F, 0.0F)));
         Vector3d localY = new Vector3d(rotation.transform(new Vector3f(0.0F, 1.0F, 0.0F)));
         Vector3d localZ = new Vector3d(rotation.transform(new Vector3f(0.0F, 0.0F, 1.0F)));
+        boolean worldSpaceMove = activeTool == EditTool.MOVE;
         Vector3d axis = switch (handle) {
-            case X -> localX;
-            case Y -> localY;
-            case Z -> localZ;
+            case X -> worldSpaceMove ? new Vector3d(1.0D, 0.0D, 0.0D) : localX;
+            case Y -> worldSpaceMove ? new Vector3d(0.0D, 1.0D, 0.0D) : localY;
+            case Z -> worldSpaceMove ? new Vector3d(0.0D, 0.0D, 1.0D) : localZ;
             case RING_X -> localX;
             case RING_Y -> localY;
             case RING_Z -> localZ;
@@ -2040,9 +2082,13 @@ public class HolographicScreenConfigTestScreen extends Screen {
         double centerY = 1.55D + screen.offsetY;
         double centerZ = screen.distance;
         Quaternionf rotation = screenRotation(screen);
-        Vector3f xDirection = rotation.transform(new Vector3f(1.0F, 0.0F, 0.0F));
-        Vector3f yDirection = rotation.transform(new Vector3f(0.0F, 1.0F, 0.0F));
-        Vector3f zDirection = rotation.transform(new Vector3f(0.0F, 0.0F, 1.0F));
+        boolean worldSpaceMove = activeTool == EditTool.MOVE;
+        Vector3f xDirection = worldSpaceMove ? new Vector3f(1.0F, 0.0F, 0.0F)
+            : rotation.transform(new Vector3f(1.0F, 0.0F, 0.0F));
+        Vector3f yDirection = worldSpaceMove ? new Vector3f(0.0F, 1.0F, 0.0F)
+            : rotation.transform(new Vector3f(0.0F, 1.0F, 0.0F));
+        Vector3f zDirection = worldSpaceMove ? new Vector3f(0.0F, 0.0F, 1.0F)
+            : rotation.transform(new Vector3f(0.0F, 0.0F, 1.0F));
 
         GizmoPoint center = projectGizmoPoint(centerX, centerY, centerZ, cameraFrame);
         GizmoPoint xAxis = projectGizmoPoint(centerX + xDirection.x * GIZMO_AXIS_WORLD_LEN,
@@ -2542,11 +2588,11 @@ public class HolographicScreenConfigTestScreen extends Screen {
     }
 
     private PreviewScreenSpec screen() {
-        if (screens.isEmpty()) {
-            screens.add(PreviewScreenSpec.defaults());
+        PreviewScreenSpec selected = selectedScreenOrNull();
+        if (selected == null) {
+            throw new IllegalStateException("no control console element is selected");
         }
-        selectedScreen = Math.max(0, Math.min(screens.size() - 1, selectedScreen));
-        return screens.get(selectedScreen);
+        return selected;
     }
 
     private PreviewScreenSpec selectedScreenOrNull() {

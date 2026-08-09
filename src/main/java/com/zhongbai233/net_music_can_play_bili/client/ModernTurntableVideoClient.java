@@ -662,7 +662,7 @@ public final class ModernTurntableVideoClient {
         if (fingerprint.equals(previous)) {
             return;
         }
-        LOGGER.info(
+        LOGGER.debug(
                 "现代唱片机视频同步决策: action={} session={} request={} turntable={} elapsed={}ms qualityCeiling={} projectors={} reason={}",
                 action, sessionId, requestId, turntablePos, Math.max(0L, elapsedMillis), quality, projectorCount,
                 reason);

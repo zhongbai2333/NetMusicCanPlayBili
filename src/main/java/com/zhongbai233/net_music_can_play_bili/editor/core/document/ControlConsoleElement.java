@@ -17,6 +17,12 @@ public record ControlConsoleElement(UUID elementId, Type type, String name,
     public static final int DEFAULT_BACKGROUND_COLOR = 0x40000000;
     public static final float DEFAULT_MAX_WIDTH = 0.0F;
 
+    /** 新放置中控台的正式初始元素，不是编辑器预览占位。 */
+    public static ControlConsoleElement defaultScreen() {
+        return new ControlConsoleElement(Type.SCREEN, "主屏幕", 2.2F, 0.0F, 0.05F,
+                0.75F, 16.0F / 9.0F, 0.0F, 0.0F, 0.0F);
+    }
+
     public ControlConsoleElement {
         elementId = Objects.requireNonNull(elementId, "elementId");
         Objects.requireNonNull(type, "type");

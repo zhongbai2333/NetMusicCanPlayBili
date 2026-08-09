@@ -38,6 +38,7 @@ public final class MediaTimelineClock {
     private long lastLocalMillis;
     private long pauseStartedNanos;
     private long lastObservedServerMillis;
+        private long lastObservedGameTime = Long.MIN_VALUE;
 
     private MediaTimelineClock(String sessionId, long serverMillis, long totalMillis,
             long hardSyncThresholdMillis, long maxSmoothCorrectionMillis, double smoothCorrectionRatio) {
@@ -97,6 +98,28 @@ public final class MediaTimelineClock {
         }
     }
 
+        /**
+         * Absorb a server observation at most once for a client game-time/sample pair.
+         * Timeline reads are performed by multiple render and audio consumers in the same
+         * tick; repeated reads must not apply the smooth correction repeatedly.
+         */
+        public synchronized boolean observeServerOnce(long gameTime, long serverMillis, long newTotalMillis) {
+            long total = Math.max(0L, newTotalMillis);
+            long server = clamp(serverMillis, total);
+            if (!isNewObservation(gameTime, server, total, lastObservedGameTime, lastObservedServerMillis,
+                    totalMillis)) {
+                return false;
+            }
+            lastObservedGameTime = gameTime;
+            observeServer(server, total);
+            return true;
+        }
+
+        static boolean isNewObservation(long gameTime, long serverMillis, long totalMillis,
+                long lastGameTime, long lastServerMillis, long lastTotalMillis) {
+            return gameTime != lastGameTime || serverMillis != lastServerMillis || totalMillis != lastTotalMillis;
+        }
+
     public synchronized void reanchor(long mediaMillis, long newTotalMillis) {
         totalMillis = Math.max(0L, newTotalMillis);
         long media = clamp(mediaMillis, totalMillis);
@@ -105,6 +128,7 @@ public final class MediaTimelineClock {
         lastLocalMillis = media;
         pauseStartedNanos = 0L;
         lastObservedServerMillis = media;
+            lastObservedGameTime = Long.MIN_VALUE;
     }
 
     public synchronized long mediaMillis() {

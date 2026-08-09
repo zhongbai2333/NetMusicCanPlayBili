@@ -29,7 +29,21 @@ class ControlConsoleDocumentTest {
         assertEquals(ControlConsoleDocument.DEFAULT_HARD_RANGE_X, document.hardRangeX());
         assertEquals(ControlConsoleDocument.DEFAULT_HARD_RANGE_Y, document.hardRangeY());
         assertEquals(ControlConsoleDocument.DEFAULT_HARD_RANGE_Z, document.hardRangeZ());
+                assertEquals(1, document.elements().size());
+                assertEquals("主屏幕", document.elements().getFirst().name());
     }
+
+        @Test
+        void onlyPristineLegacyEmptyDocumentReceivesInitialScreen() {
+                ControlConsoleDocument pristine = new ControlConsoleDocument(
+                                ControlConsoleDocument.CURRENT_SCHEMA_VERSION, 0L, "中控台", null,
+                                0, 0, 0, ControlConsoleDocument.DEFAULT_HARD_RANGE_X,
+                                ControlConsoleDocument.DEFAULT_HARD_RANGE_Y, ControlConsoleDocument.DEFAULT_HARD_RANGE_Z);
+                assertEquals(1, pristine.withInitialScreenIfPristine().elements().size());
+
+                ControlConsoleDocument intentionallyEmpty = pristine.withRevision(1L);
+                assertEquals(0, intentionallyEmpty.withInitialScreenIfPristine().elements().size());
+        }
 
         @Test
         void schemaV5MigratesOnlyThePersistedV4LegacyDefaultRange() {

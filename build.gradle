@@ -52,6 +52,13 @@ base {
     archivesName = mod_id
 }
 
+// Mouse input routing moved to LocalPlayerRoamingMixin. Incremental builds can retain the
+// old class file after the source rename, so never package that obsolete mixin in releases.
+tasks.withType(Jar).configureEach {
+    exclude 'com/zhongbai233/net_music_can_play_bili/mixin/MouseHandlerRoamingMixin.class'
+    exclude 'com/zhongbai233/net_music_can_play_bili/mixin/LocalPlayerRoamingMixin.class'
+}
+
 java.toolchain.languageVersion = JavaLanguageVersion.of(25)
 
 neoForge {

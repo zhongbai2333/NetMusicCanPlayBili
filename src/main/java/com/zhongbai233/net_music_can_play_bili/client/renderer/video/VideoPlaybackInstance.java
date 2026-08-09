@@ -46,6 +46,12 @@ final class VideoPlaybackInstance {
             "bili.video.pipeline.audio_latency_compensation_ms", 0L);
     private static final long CHASE_WINDOW_MILLIS = Long.getLong("ncpb.video.pipeline.chase_window_ms", 10_000L);
     private static final long SLOWDOWN_WINDOW_MILLIS = Long.getLong("ncpb.video.pipeline.slowdown_window_ms", 2_500L);
+        private static final long RUNTIME_LAG_RESTART_MILLIS = Long.getLong(
+            "ncpb.video.pipeline.runtime_lag_restart_ms", 1_500L);
+        private static final long RUNTIME_LAG_CONFIRM_MILLIS = Long.getLong(
+            "ncpb.video.pipeline.runtime_lag_confirm_ms", 1_500L);
+        private static final long RUNTIME_LAG_RESTART_COOLDOWN_MILLIS = Long.getLong(
+            "ncpb.video.pipeline.runtime_lag_restart_cooldown_ms", 5_000L);
     private static final long DECODER_RESTART_CLOSE_TIMEOUT_MILLIS = Long.getLong(
             "ncpb.video.pipeline.decoder_restart_close_timeout_ms", 3_000L);
     private static final boolean OFFSCREEN_PAUSE_DECODE = Boolean.parseBoolean(
@@ -127,6 +133,8 @@ final class VideoPlaybackInstance {
     private volatile long adaptiveRestartOffsetMillis = -1L;
     private volatile long lastVisibleNanoTime;
     private volatile long offscreenSinceNanoTime;
+    private volatile long runtimeLagSinceNanoTime;
+    private volatile long lastRuntimeLagRestartNanoTime;
     private volatile boolean prewarmVisible = true;
     private volatile boolean loggedOffscreenPause;
     private volatile boolean networkFailure;
@@ -490,6 +498,7 @@ final class VideoPlaybackInstance {
         if (!running && frameQueue.isEmpty()) {
             return;
         }
+        maybeRestartForRuntimeLag();
         if (!startupBufferReady && shouldWaitForStartupBuffer()) {
             return;
         }
@@ -527,6 +536,44 @@ final class VideoPlaybackInstance {
         if (uploaded) {
             recordAdaptiveUploadCost(uploadNs);
         }
+    }
+
+    private void maybeRestartForRuntimeLag() {
+        if (liveSource || !hasFrame || !hasVideoConsumer() || RUNTIME_LAG_RESTART_MILLIS <= 0L) {
+            runtimeLagSinceNanoTime = 0L;
+            return;
+        }
+        long masterMillis = anchor.timeline().mediaMillis();
+        if (masterMillis < 0L) {
+            return;
+        }
+        long displayedMillis = mediaMillis();
+        long queuedMillis = queuedMediaMillis();
+        long bestVideoMillis = Math.max(displayedMillis, queuedMillis);
+        long lagMillis = bestVideoMillis >= 0L ? masterMillis - bestVideoMillis : 0L;
+        long now = System.nanoTime();
+        if (lagMillis < RUNTIME_LAG_RESTART_MILLIS) {
+            runtimeLagSinceNanoTime = 0L;
+            return;
+        }
+        if (runtimeLagSinceNanoTime == 0L) {
+            runtimeLagSinceNanoTime = now;
+            return;
+        }
+        if (RUNTIME_LAG_CONFIRM_MILLIS > 0L
+                && now - runtimeLagSinceNanoTime < RUNTIME_LAG_CONFIRM_MILLIS * 1_000_000L) {
+            return;
+        }
+        if (lastRuntimeLagRestartNanoTime != 0L
+                && now - lastRuntimeLagRestartNanoTime < RUNTIME_LAG_RESTART_COOLDOWN_MILLIS * 1_000_000L) {
+            return;
+        }
+        long restartOffsetMillis = totalMillis > 0L ? Math.min(totalMillis, masterMillis) : masterMillis;
+        LOGGER.debug("视频运行期持续落后，主动重定位: session={}, lag={}ms, master={}ms, video={}ms, offset={}ms",
+                sessionId, lagMillis, masterMillis, bestVideoMillis, restartOffsetMillis);
+        lastRuntimeLagRestartNanoTime = now;
+        runtimeLagSinceNanoTime = 0L;
+        restartDecoder(targetWidth, targetHeight, restartOffsetMillis, true);
     }
 
     private void recordAdaptiveUploadCost(long uploadNs) {
@@ -1383,7 +1430,6 @@ final class VideoPlaybackInstance {
     private static final class VideoFrameQueue {
         private final int capacity;
         private final ArrayDeque<DecodedVideoFrame> frames = new ArrayDeque<>();
-        private long latestPtsNanos;
 
         VideoFrameQueue(int capacity) {
             this.capacity = Math.max(1, capacity);
@@ -1397,7 +1443,6 @@ final class VideoPlaybackInstance {
             if (!shouldContinue.getAsBoolean()) {
                 return false;
             }
-            latestPtsNanos = Math.max(latestPtsNanos, frame.ptsNanos());
             frames.addLast(frame);
             notifyAll();
             return true;
@@ -1428,7 +1473,6 @@ final class VideoPlaybackInstance {
                 frame.close();
             }
             frames.clear();
-            latestPtsNanos = -1L;
             notifyAll();
         }
 
@@ -1449,7 +1493,8 @@ final class VideoPlaybackInstance {
         }
 
         synchronized long latestPtsNanos() {
-            return latestPtsNanos;
+            DecodedVideoFrame latest = frames.peekLast();
+            return latest != null ? latest.ptsNanos() : -1L;
         }
     }
 }

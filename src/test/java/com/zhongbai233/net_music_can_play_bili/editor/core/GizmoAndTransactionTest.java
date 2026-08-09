@@ -34,6 +34,17 @@ class GizmoAndTransactionTest {
     }
 
     @Test
+    void worldTranslationAxisIgnoresElementLocalRotation() {
+        Vector3d worldX = new Vector3d(1.0D, 0.0D, 0.0D);
+        Vector3d rotatedLocalX = new Vector3d(0.0D, 0.0D, -1.0D);
+        Vector3d before = new Vector3d(2.0D, 3.0D, 4.0D);
+        Vector3d after = new Vector3d(5.0D, 3.0D, 4.0D);
+
+        assertEquals(3.0D, GizmoDragMath.signedAxisDelta(worldX, before, after), 1.0e-9D);
+        assertEquals(0.0D, GizmoDragMath.signedAxisDelta(rotatedLocalX, before, after), 1.0e-9D);
+    }
+
+    @Test
     void dragTransactionCollapsesUpdatesToOneUndoStep() {
         CommandStack<Integer> stack = new CommandStack<>(8);
         DragTransaction<Integer> drag = new DragTransaction<>(0, "移动 X");
