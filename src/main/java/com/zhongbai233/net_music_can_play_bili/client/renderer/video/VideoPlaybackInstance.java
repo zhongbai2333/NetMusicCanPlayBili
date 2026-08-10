@@ -1000,10 +1000,13 @@ final class VideoPlaybackInstance {
         boolean renderable = false;
         boolean prewarm = false;
         for (BlockPos pos : projectorPositions) {
-            if (VideoBillboardPreview.isProjectorRenderedByBer(pos)) {
+            boolean berManagedProjector = VideoBillboardPreview.isProjectorRenderedByBer(pos);
+            boolean submittedByBer = VideoBillboardPreview.wasProjectorRecentlySubmittedByBer(sessionId, pos);
+            if (VideoBerConsumerVisibilityPolicy.usesBerSubmission(berManagedProjector, submittedByBer)) {
                 // BER 管理归属是持久状态，不能等同于本帧通过视锥。否则投影仪
                 // 第一次出现后会永久保持 prewarm，离屏上传和解码永远不会暂停。
-                boolean submittedByBer = VideoBillboardPreview.wasProjectorRecentlySubmittedByBer(sessionId, pos);
+                // 中控台不是 VideoProjectorBlockEntity，也不会加入持久 projector 集合；
+                // 它同 session、同位置的近期 BER submission 本身就是有效可见性证据。
                 renderable |= submittedByBer;
                 prewarm |= submittedByBer;
                 continue;
