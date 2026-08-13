@@ -1,5 +1,5 @@
 diff --git a/.github/workflows/build.yml b/.github/workflows/build.yml
-index 438fadef1c..c0935108b0 100644
+index 438fadef1c..f8ddbc863a 100644
 --- a/.github/workflows/build.yml
 +++ b/.github/workflows/build.yml
 @@ -22,8 +22,9 @@ jobs:
@@ -317,7 +317,7 @@ index 438fadef1c..c0935108b0 100644
                    )
                    for library, symbol in required:
                        getattr(library, symbol)
-@@ -539,6 +659,11 @@ jobs:
+@@ -539,12 +659,29 @@ jobs:
                    require_needed libvideo_jni.so "$AVUTIL_SO"
                    require_needed libvideo_jni.so "$SWSCALE_SO"
  
@@ -329,7 +329,25 @@ index 438fadef1c..c0935108b0 100644
                    for lib in "$AVUTIL_SO" "$AVCODEC_SO" "$SWSCALE_SO" libeac3_jni.so libvideo_jni.so; do
                      echo "=== $lib dynamic section ==="
                      readelf -d "$libdir/$lib" | grep -E 'NEEDED|SONAME|RPATH|RUNPATH' || true
-@@ -679,6 +804,7 @@ jobs:
+                     echo "=== $lib key symbols ==="
+                     objdump -T "$libdir/$lib" | grep -E 'av_version_info|av_frame_alloc|av_frame_free|avcodec_send_packet|avcodec_receive_frame|avcodec_flush_buffers|sws_scale|Java_com_' || true
+                   done
++
++                  # UPX removes the section headers that readelf uses for
++                  # --version-info. Capture the verified ABI floor now and pass
++                  # it to the release job as immutable build metadata.
++                  glibc_floor="$(find "$libdir" -type f -exec readelf --version-info {} + 2>/dev/null \
++                    | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -n 1)"
++                  if ! [[ "$glibc_floor" =~ ^GLIBC_[0-9]+\.[0-9]+$ ]]; then
++                    echo "::error::Unable to determine GLIBC symbol-version floor before UPX: $glibc_floor"
++                    exit 1
++                  fi
++                  printf '%s\n' "$glibc_floor" > "glibc-floor-${{ matrix.target }}.txt"
++                  echo "Recorded ${{ matrix.target }} GLIBC floor: $glibc_floor"
+               shell: bash
+ 
+             # ── Bundle Windows runtime dependencies ──
+@@ -679,6 +816,7 @@ jobs:
                        for name in imported:
                            print(f"  {name}")
                        forbidden = sorted(name for name in imported if name.lower() in FORBIDDEN)
@@ -337,7 +355,7 @@ index 438fadef1c..c0935108b0 100644
                        if forbidden:
                            bad.append((dll, forbidden))
                        for name in imported:
-@@ -769,6 +895,7 @@ jobs:
+@@ -769,6 +907,7 @@ jobs:
                        (swscale, "sws_scale"),
                        (eac3_jni, "Java_com_zhongbai233_net_1music_1can_1play_1bili_media_codec_Eac3Jni_decoderOpen"),
                        (video_jni, "Java_com_zhongbai233_net_1music_1can_1play_1bili_media_codec_VideoJni_getNativeMemoryStats"),
@@ -345,7 +363,7 @@ index 438fadef1c..c0935108b0 100644
                    )
                    for library, symbol in required:
                        getattr(library, symbol)
-@@ -854,6 +981,7 @@ jobs:
+@@ -854,6 +993,7 @@ jobs:
                    # Keep the license next to every independently downloadable
                    # native bundle, not only in the consuming mod JAR.
                    cp COPYING.LGPLv2.1 dist/${{ matrix.target }}/FFmpeg-LGPL-2.1.txt
@@ -353,7 +371,22 @@ index 438fadef1c..c0935108b0 100644
  
                    tar czf ffmpeg-media-${{ matrix.target }}.tar.gz -C dist ${{ matrix.target }}
                shell: msys2 {0}
-@@ -871,10 +999,18 @@ jobs:
+@@ -865,21 +1005,45 @@ jobs:
+                   name: ffmpeg-media-${{ matrix.target }}
+                   path: ffmpeg-media-${{ matrix.target }}.tar.gz
+ 
++            - name: Upload Linux ABI metadata
++              if: runner.os == 'Linux'
++              uses: actions/upload-artifact@v4
++              with:
++                  name: ffmpeg-abi-${{ matrix.target }}
++                  path: glibc-floor-${{ matrix.target }}.txt
++                  if-no-files-found: error
++                  retention-days: 7
++
+     # ── Create release on tag ──
+     release:
+         needs: build
          runs-on: ubuntu-latest
          if: startsWith(github.ref, 'refs/tags/')
          steps:
@@ -373,7 +406,19 @@ index 438fadef1c..c0935108b0 100644
              - uses: actions/download-artifact@v4
                with:
                    pattern: ffmpeg-media-*
-@@ -895,13 +1031,40 @@ jobs:
+                   path: artifacts
+ 
++            - name: Download Linux ABI metadata
++              uses: actions/download-artifact@v4
++              with:
++                  pattern: ffmpeg-abi-linux-*
++                  path: abi-artifacts
++                  merge-multiple: true
++
+             - name: Prepare corresponding source materials
+               run: |
+                   set -euo pipefail
+@@ -895,13 +1059,41 @@ jobs:
                      --prefix="ffmpeg-media-source-${GITHUB_REF_NAME}/" \
                      --output="release-assets/ffmpeg-media-source-${GITHUB_REF_NAME}.tar.gz" \
                      HEAD
@@ -382,23 +427,24 @@ index 438fadef1c..c0935108b0 100644
 +                    --output="$PWD/release-assets/dav1d-1.5.4-source.tar.gz" \
 +                    54706fc6bc0cdecab7e9593974a4039cc038fca7
 +
-+                  glibc_floor() {
++                  read_glibc_floor() {
 +                    platform="$1"
-+                    audit_dir="$RUNNER_TEMP/glibc-audit-$platform"
-+                    mkdir -p "$audit_dir"
-+                    tar -xzf "release-assets/ffmpeg-media-$platform.tar.gz" -C "$audit_dir"
-+                    floor="$(find "$audit_dir/$platform" -type f -exec readelf --version-info {} + 2>/dev/null \
-+                      | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -n 1)"
-+                    if [ -z "$floor" ]; then
-+                      echo "No GLIBC symbol-version requirement found for $platform" >&2
++                    metadata="abi-artifacts/glibc-floor-$platform.txt"
++                    if [ ! -s "$metadata" ]; then
++                      echo "Missing GLIBC ABI metadata for $platform: $metadata" >&2
++                      exit 1
++                    fi
++                    floor="$(cat "$metadata")"
++                    if ! [[ "$floor" =~ ^GLIBC_[0-9]+\.[0-9]+$ ]]; then
++                      echo "Invalid GLIBC ABI metadata for $platform: $floor" >&2
 +                      exit 1
 +                    fi
 +                    printf '%s\n' "$floor"
 +                  }
 +
 +                  ffmpeg_runtime_version="$(sh ffbuild/version.sh .)"
-+                  linux_arm64_glibc_floor="$(glibc_floor linux-arm64)"
-+                  linux_x86_64_glibc_floor="$(glibc_floor linux-x86_64)"
++                  linux_arm64_glibc_floor="$(read_glibc_floor linux-arm64)"
++                  linux_x86_64_glibc_floor="$(read_glibc_floor linux-x86_64)"
  
                    {
                      echo "release_tag=${GITHUB_REF_NAME}"

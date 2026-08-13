@@ -19,7 +19,9 @@ four upstream-owned files as one release unit:
   depending on Chocolatey. Windows exports dav1d's pkg-config directory as a
   native mixed-style path, performs a real static `dav1d_version()` link check
   before FFmpeg configuration, and uploads `ffbuild/config.log` when
-  configuration fails;
+  configuration fails. Linux records its GLIBC symbol floor before UPX and
+  passes the validated value to the release job as build metadata instead of
+  trying to reconstruct ELF version sections after compression;
 - `.github/workflows/probe-native-size.yml`: keeps the native size probe on
   current Node 24-based official checkout infrastructure.
 
