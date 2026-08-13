@@ -108,7 +108,9 @@ base {
 tasks.withType(Jar).configureEach {
     exclude 'com/zhongbai233/net_music_can_play_bili/mixin/MouseHandlerRoamingMixin.class'
     exclude 'com/zhongbai233/net_music_can_play_bili/mixin/LocalPlayerRoamingMixin.class'
-    exclude { details -> details.file.name.endsWith('.class') && details.file.name.contains(' ') }
+    // File-provider conflict copies use names such as "foo 2.class", "bar 3.json" or
+    // "native 4.dylib". Exclude every such generated copy, not only Java classes.
+    exclude { details -> details.file.name ==~ /.* \d+\.[^.]+/ }
 }
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(25)
@@ -305,8 +307,8 @@ sourceSets.test.java.setSrcDirs(['src/test/java'])
 sourceSets.test.resources.setSrcDirs(['src/test/resources'])
 // 云同步可能在 generated source root 中恢复 "NativeBundleCapabilities 2.java" 之类冲突副本。
 // 这类文件不可能是合法编译单元，也不应被 Gradle/Buildship 当成第二份类型定义。
-sourceSets.main.java.exclude '**/* 2.java'
-sourceSets.test.java.exclude '**/* 2.java'
+sourceSets.main.java.exclude { details -> details.file.name ==~ /.* \d+\.java/ }
+sourceSets.test.java.exclude { details -> details.file.name ==~ /.* \d+\.java/ }
 
 tasks.register("runWithRenderDoc", Exec) {
     def javaExecTask = tasks.withType(JavaExec).named("runClient").get()
@@ -639,7 +641,7 @@ tasks.named('test') {
 def productionJarArchive = tasks.named('jar', Jar).flatMap { it.archiveFile }
 tasks.register('verifyProductionJarHasNoConflictCopies') {
     group = 'verification'
-    description = 'Verifies the production JAR contains no cloud-sync conflict-copy class files.'
+    description = 'Verifies the production JAR contains no cloud-sync conflict-copy files.'
     dependsOn tasks.named('jar')
     inputs.file(productionJarArchive)
     doLast {
@@ -647,11 +649,11 @@ tasks.register('verifyProductionJarHasNoConflictCopies') {
         def conflicts = []
         new java.util.zip.ZipFile(archive).withCloseable { zip ->
             conflicts.addAll(zip.entries().findAll { entry ->
-                !entry.directory && entry.name.endsWith('.class') && entry.name.tokenize('/').last().contains(' ')
+                !entry.directory && entry.name.tokenize('/').last() ==~ /.* \d+\.[^.]+/
             }.collect { entry -> entry.name })
         }
         if (!conflicts.isEmpty()) {
-            throw new GradleException("Production JAR contains conflict-copy classes: ${conflicts.sort()}")
+            throw new GradleException("Production JAR contains conflict-copy files: ${conflicts.sort()}")
         }
     }
 }
@@ -825,7 +827,7 @@ def generateNativeBundleCapabilities = tasks.register('generateNativeBundleCapab
         def generatedRoot = generatedNativeBundleSourceDirectory.get().asFile
         if (generatedRoot.isDirectory()) {
             try (def paths = java.nio.file.Files.walk(generatedRoot.toPath())) {
-                paths.filter { path -> path.fileName.toString().endsWith(' 2.java') }.forEach { duplicate ->
+                paths.filter { path -> path.fileName.toString() ==~ /.* \d+\.java/ }.forEach { duplicate ->
                     try {
                         java.nio.file.Files.deleteIfExists(duplicate)
                     } catch (IOException error) {
