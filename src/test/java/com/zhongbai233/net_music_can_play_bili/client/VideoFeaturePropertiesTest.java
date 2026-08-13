@@ -29,7 +29,7 @@ class VideoFeaturePropertiesTest {
         assertFalse(VideoFeatureProperties.realBenchEnabled());
         assertFalse(VideoFeatureProperties.realBenchManaged());
         assertEquals(new VideoFeatureProperties.RealMediaLifecycle(
-                false, 100, 600, "BV1qM4y1w716", 16), VideoFeatureProperties.realMediaLifecycle());
+                false, 100, 600, "BV1GJ411x7h7", 16), VideoFeatureProperties.realMediaLifecycle());
         assertEquals("auto", VideoFeatureProperties.nativeHwaccel());
         assertEquals("", VideoFeatureProperties.ffmpegDecoder());
     }
@@ -94,7 +94,7 @@ class VideoFeaturePropertiesTest {
         assertFalse(VideoFeatureProperties.realBenchEnabled());
         assertFalse(VideoFeatureProperties.realBenchManaged());
         assertEquals(new VideoFeatureProperties.RealMediaLifecycle(
-                false, 1, 72_000, "BV1qM4y1w716", 1), VideoFeatureProperties.realMediaLifecycle());
+                false, 1, 72_000, "BV1GJ411x7h7", 1), VideoFeatureProperties.realMediaLifecycle());
         assertTrue(VideoFeatureProperties.booleanValue(BOOLEAN_KEY, true));
         assertEquals(7, VideoFeatureProperties.intValue(INT_KEY, 7));
         assertEquals(11L, VideoFeatureProperties.longValue(LONG_KEY, 11L));

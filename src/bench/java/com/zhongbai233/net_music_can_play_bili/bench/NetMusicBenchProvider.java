@@ -21,14 +21,23 @@ import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import com.zhongbai233.net_music_can_play_bili.block.ModernTurntableBlock;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ControlConsoleBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.blockentity.LyricProjectorBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.blockentity.SpeakerBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliLiveRoomInput;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.BiliRealVideoPlaybackBench;
+import com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState;
+import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.client.ClientMediaLifecycleHandler;
 import com.zhongbai233.net_music_can_play_bili.client.DeterministicVideoUploadWorkload;
 import com.zhongbai233.net_music_can_play_bili.client.VideoFeatureFlags;
 import com.zhongbai233.net_music_can_play_bili.client.VideoFeatureProperties;
+import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldMediaProfile;
+import com.zhongbai233.net_music_can_play_bili.client.PadHandheldMediaProfile;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackCoordinator;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker;
@@ -45,6 +54,7 @@ import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundRegis
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncHandler;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPolicy;
+import com.zhongbai233.net_music_can_play_bili.client.sync.LiveRoomMetadataRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainHardRangeBounds;
 import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainPreviewFrame;
 import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainPreviewManager;
@@ -55,20 +65,48 @@ import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderp
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoCloseDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.gui.HolographicScreenConfigTestScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.ControlConsoleGuideScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.LiveStreamerScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.LyricProjectorScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.MP4FocusScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.MediaToolBindingScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.MediaToolReportScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.ModernTurntableScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.PadFocusScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.PadMapScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.SpeakerScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.VideoPlaceholderDebugScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.VideoProjectorScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.WhitelistReviewScreen;
+import com.zhongbai233.net_music_can_play_bili.gui.WhitelistPreviewScreen;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
+import com.zhongbai233.net_music_can_play_bili.init.ModItems;
+import com.zhongbai233.net_music_can_play_bili.item.HolographicGlassesItem;
+import com.zhongbai233.net_music_can_play_bili.link.AudioLinkData;
+import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
+import com.zhongbai233.net_music_can_play_bili.link.MediaBindingData.MediaSource;
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioNativeCloseDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.media.audio.OpenALSpatialAudio;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
 import com.zhongbai233.net_music_can_play_bili.media.codec.VideoNativeDecoder;
 import com.zhongbai233.net_music_can_play_bili.media.pipeline.OpenALTappedAudioInputStream;
 import com.zhongbai233.net_music_can_play_bili.media.stream.AudioStreamProperties;
+import com.zhongbai233.net_music_can_play_bili.media.stream.LiveReconnectPolicy;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackRequest;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRequestCloseDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
 import com.zhongbai233.net_music_can_play_bili.bili.StereoOpenALHandler;
 import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackSyncPacket;
+import com.zhongbai233.net_music_can_play_bili.network.PadPlaybackSessionIds;
+import com.zhongbai233.net_music_can_play_bili.network.WhitelistReviewPacket;
+import com.zhongbai233.net_music_can_play_bili.network.WhitelistPreviewPacket;
+import com.zhongbai233.net_music_can_play_bili.menu.MediaToolBindingMenu;
+import com.zhongbai233.net_music_can_play_bili.menu.MediaToolReportMenu;
+import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
 import com.zhongbai233.net_music_can_play_bili.server.ControlConsoleConsumerLeaseRegistry;
+import com.zhongbai233.net_music_can_play_bili.server.MediaBindingCleanupService;
+import com.zhongbai233.net_music_can_play_bili.server.MediaEquipmentBindingService;
 import com.zhongbai233.net_music_can_play_bili.mixin.GuiGraphicsExtractorAccessor;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
@@ -88,6 +126,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.client.gui.screens.LevelLoadingScreen;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -98,6 +137,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Relative;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -265,6 +305,34 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
                 Set.of("client", "server", "dimension", "packet", "gui", "media", "lifecycle"),
                 Duration.ofSeconds(60)),
                 ignored -> new CrossDimensionMediaCleanupScenario());
+        registrar.register(new ScenarioDescriptor(
+                "ncpb.device-link-config-matrix",
+                "Real block entities synchronize links and persisted settings for every fixed media device",
+                Set.of("client", "server", "device", "link", "config", "projector", "lyrics", "speaker",
+                        "console", "live"), Duration.ofSeconds(30)),
+                ignored -> new DeviceLinkConfigMatrixScenario());
+        registrar.register(new ScenarioDescriptor(
+                "ncpb.wearable-binding-topology",
+                "Headphones and holographic glasses bind, route, enforce slot limits and clean media links",
+                Set.of("client", "server", "wearable", "headphones", "glasses", "link", "turntable",
+                        "mp4", "pad", "projector", "cleanup"), Duration.ofSeconds(30)),
+                ignored -> new WearableBindingTopologyScenario());
+        registrar.register(new ScenarioDescriptor(
+                "ncpb.gui-screen-matrix",
+                "Every offline-safe production media Screen opens, renders, exposes widgets and closes cleanly",
+                Set.of("client", "gui", "device", "projector", "lyrics", "speaker", "console", "live",
+                        "mp4", "pad", "map"), Duration.ofSeconds(45)),
+                ignored -> new GuiScreenMatrixScenario());
+        registrar.register(new ScenarioDescriptor(
+                "ncpb.handheld-media-contracts",
+                "MP4 and Pad screen geometry, logical sessions and device-independent media contracts",
+                Set.of("client", "handheld", "mp4", "pad", "session", "video", "subtitle"),
+                Duration.ofSeconds(10)), ignored -> new HandheldMediaContractScenario());
+        registrar.register(new ScenarioDescriptor(
+                "ncpb.live-stream-contracts",
+                "Bilibili live input, metadata ownership, reconnect backoff and consumer rebind contracts",
+                Set.of("client", "live", "bilibili", "metadata", "reconnect", "consumer", "session"),
+                Duration.ofSeconds(10)), ignored -> new LiveStreamContractScenario());
         if (AudioStreamProperties.realMp3Bench().enabled()) {
             registrar.register(new ScenarioDescriptor(
                     "ncpb.real-mp3-seek",
@@ -293,8 +361,9 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
         if (VideoFeatureProperties.realBenchEnabled()) {
             registrar.register(new ScenarioDescriptor(
                     "ncpb.real-bv-playback",
-                    "Real Bilibili DASH resolve, native decode and resource convergence",
-                    Set.of("client", "media", "network", "native", "bilibili"), Duration.ofSeconds(180)),
+                    "Real Bilibili DASH video/audio resolve, native decode, OpenAL output and resource convergence",
+                    Set.of("client", "media", "network", "native", "bilibili", "video", "audio", "openal"),
+                    Duration.ofSeconds(180)),
                     ignored -> new RealBvPlaybackScenario());
             registrar.register(new ScenarioDescriptor(
                     "ncpb.real-av1-h264-fallback",
@@ -2930,7 +2999,7 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
     private static void requirePcmQuality(String phase, StereoOpenALHandler.PcmQuality pcm) {
         if (pcm.samples() < 1_024L || pcm.peak() < 0.001F || pcm.rms() < 0.0001D
                 || pcm.peak() > 1.001F || pcm.clippedRatio() >= 0.20D) {
-            throw new AssertionError("Decoded MP3 PCM quality is implausible during " + phase + ": " + pcm);
+            throw new AssertionError("Decoded PCM quality is implausible during " + phase + ": " + pcm);
         }
     }
 
@@ -4148,16 +4217,42 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
                 "ncpb.real_bv.decoded_stages", "count", MetricDirection.NEUTRAL);
         private static final BenchMetricDescriptor DECODED_FRAMES = new BenchMetricDescriptor(
                 "ncpb.real_bv.decoded_frames", "count", MetricDirection.HIGHER_IS_BETTER);
+        private static final BenchMetricDescriptor AUDIO_SAMPLES = new BenchMetricDescriptor(
+                "ncpb.real_bv.audio_samples", "count", MetricDirection.HIGHER_IS_BETTER);
+        private static final BenchMetricDescriptor AUDIO_INPUT_SAMPLES = new BenchMetricDescriptor(
+                "ncpb.real_bv.audio_input_samples", "count", MetricDirection.HIGHER_IS_BETTER);
+        private static final BenchMetricDescriptor AUDIO_PCM_RMS = new BenchMetricDescriptor(
+                "ncpb.real_bv.audio_pcm_rms", "ratio", MetricDirection.NEUTRAL);
         private static final BenchMetricDescriptor ACTIVE_CLOSES = new BenchMetricDescriptor(
                 "ncpb.real_bv.active_closes", "count", MetricDirection.LOWER_IS_BETTER);
+        private static final String AUDIO_SESSION_ID = "bench-real-bv-audio";
+
+        private final AtomicReference<Throwable> audioResolutionFailure = new AtomicReference<>();
+        private CompletableFuture<ResolvedAudio> audioResolution;
+        private ResolvedAudio resolvedAudio;
+        private RealMediaLifecycleScenario.RealAudioStage audio;
+        private PlaybackSessionId audioSession;
+        private UUID audioOwner;
         private BiliRealVideoPlaybackBench.RunSnapshot finalSnapshot;
+        private StereoOpenALHandler.PcmQuality decodedAudioPcm =
+                new StereoOpenALHandler.PcmQuality(0L, 0.0F, 0.0D, 0.0D);
+        private long decodedAudioInputSamples;
+        private boolean audioDecoded;
         private boolean cleanupRequested;
 
         @Override
         public void setup(BenchClientContext context) {
-            ModernTurntableVideoClient.clear();
-            VideoBillboardPreview.stop();
-            VideoBillboardPreview.releaseBenchUploadResources();
+            cleanupMedia();
+            audioOwner = context.player().getUUID();
+            audioSession = PlaybackSessionId.of(AUDIO_SESSION_ID);
+            ClientAudioOutputRegistry.setOwnerVolume(audioOwner, 1.0F);
+            audioResolution = CompletableFuture.supplyAsync(this::resolveAudio)
+                    .whenComplete((ignored, error) -> {
+                        if (error != null) {
+                            audioResolutionFailure.compareAndSet(null,
+                                    RealMediaLifecycleScenario.unwrapCompletion(error));
+                        }
+                    });
             if (!BiliRealVideoPlaybackBench.tryStart()) {
                 throw new AssertionError("Real BV bench flags are not enabled");
             }
@@ -4165,8 +4260,20 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
 
         @Override
         public BenchClientStepResult stabilize(BenchClientContext context) {
-            return context.environment().readiness().ready() && context.frames().sampleCount() >= 2
-                    ? BenchClientStepResult.COMPLETE : BenchClientStepResult.CONTINUE;
+            tickResourceClosures(context);
+            throwAudioResolutionFailure();
+            if (!context.environment().readiness().ready() || context.frames().sampleCount() < 2
+                    || audioResolution == null || !audioResolution.isDone()) {
+                return BenchClientStepResult.CONTINUE;
+            }
+            if (resolvedAudio == null) {
+                resolvedAudio = audioResolution.join();
+            }
+            if (audio == null) {
+                audio = RealMediaLifecycleScenario.RealAudioStage.start(
+                        resolvedAudio.audioUrl(), audioOwner, audioSession, resolvedAudio.durationMillis());
+            }
+            return BenchClientStepResult.COMPLETE;
         }
 
         @Override
@@ -4176,54 +4283,134 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
 
         @Override
         public BenchClientStepResult measure(BenchClientContext context) {
+            tickResourceClosures(context);
+            throwAudioResolutionFailure();
+            if (audio == null) {
+                throw new AssertionError("Real BV audio stage was not started");
+            }
+            audio.throwIfFailed();
+            StereoOpenALHandler.DiagnosticSnapshot audioOutput =
+                    ClientAudioOutputRegistry.getSessionStereoSnapshot(audioSession).orElse(null);
+            if (!audioDecoded && audioOutput != null && audioOutput.started()
+                    && audioOutput.firstAudiblePcm().samples() >= 1_024L
+                    && audioOutput.inputSamples() > 0L) {
+                requirePcmQuality("real Bilibili DASH audio", audioOutput.firstAudiblePcm());
+                decodedAudioPcm = audioOutput.firstAudiblePcm();
+                decodedAudioInputSamples = audioOutput.inputSamples();
+                audioDecoded = true;
+            }
+
             BiliRealVideoPlaybackBench.RunSnapshot snapshot = BiliRealVideoPlaybackBench.snapshot();
             context.metrics().record(DECODED_STAGES, snapshot.decodedStages());
             context.metrics().record(DECODED_FRAMES, snapshot.decodedFrames());
+            context.metrics().record(AUDIO_SAMPLES,
+                    audioOutput != null ? audioOutput.firstAudiblePcm().samples() : decodedAudioPcm.samples());
+            context.metrics().record(AUDIO_INPUT_SAMPLES,
+                    audioOutput != null ? audioOutput.inputSamples() : decodedAudioInputSamples);
+            context.metrics().record(AUDIO_PCM_RMS,
+                    audioOutput != null ? audioOutput.firstAudiblePcm().rms() : decodedAudioPcm.rms());
             var videoClose = VideoCloseDiagnostics.global().snapshot(System.nanoTime());
             context.metrics().record(ACTIVE_CLOSES, videoClose.activeOperations());
             if (snapshot.state() == BiliRealVideoPlaybackBench.RunState.FAILED) {
-                throw new AssertionError("Real BV bench failed: " + snapshot);
+                throw new AssertionError("Real BV video decode failed: " + snapshot);
             }
-            if (snapshot.state() != BiliRealVideoPlaybackBench.RunState.SUCCEEDED) {
+            if (snapshot.state() != BiliRealVideoPlaybackBench.RunState.SUCCEEDED || !audioDecoded) {
                 return BenchClientStepResult.CONTINUE;
             }
             finalSnapshot = snapshot;
             if (!cleanupRequested) {
                 cleanupRequested = true;
-                ModernTurntableVideoClient.clear();
-                VideoBillboardPreview.stop();
-                VideoBillboardPreview.releaseBenchUploadResources();
+                cleanupMedia();
                 return BenchClientStepResult.CONTINUE;
             }
-            return resourcesConverged() ? BenchClientStepResult.COMPLETE : BenchClientStepResult.CONTINUE;
+            return resourcesConverged(audio) ? BenchClientStepResult.COMPLETE : BenchClientStepResult.CONTINUE;
         }
 
         @Override
         public void verify(BenchClientContext context) {
             if (finalSnapshot == null || finalSnapshot.state() != BiliRealVideoPlaybackBench.RunState.SUCCEEDED
                     || finalSnapshot.decodedStages() <= 0 || finalSnapshot.decodedFrames() <= 0) {
-                throw new AssertionError("Real BV bench did not decode media: " + finalSnapshot);
+                throw new AssertionError("Real BV bench did not decode video: " + finalSnapshot);
             }
-            if (!resourcesConverged()) {
-                throw new AssertionError("Real BV resources did not converge: "
-                        + ModernTurntableVideoClient.videoLifecycleDiagnostics());
+            if (!audioDecoded || decodedAudioPcm.samples() < 1_024L || decodedAudioInputSamples <= 0L) {
+                throw new AssertionError("Real BV bench did not decode audible audio: pcm=" + decodedAudioPcm
+                        + " inputSamples=" + decodedAudioInputSamples);
+            }
+            if (!finalSnapshot.videoId().equals(VideoFeatureProperties.realMediaLifecycle().videoId())) {
+                throw new AssertionError("Real BV bench decoded an unexpected video: " + finalSnapshot);
+            }
+            if (!resourcesConverged(audio)) {
+                throw new AssertionError("Real BV audio/video resources did not converge: video="
+                        + ModernTurntableVideoClient.videoLifecycleDiagnostics() + " audio=" + audio
+                        + " audioClose=" + AudioNativeCloseDiagnostics.global().snapshot(System.nanoTime())
+                        + " openalPending=" + OpenALSpatialAudio.pendingNativeDeleteBatches());
             }
         }
 
         @Override
         public void teardown(BenchClientContext context) {
-            ModernTurntableVideoClient.clear();
-            VideoBillboardPreview.stop();
-            VideoBillboardPreview.releaseBenchUploadResources();
+            cleanupMedia();
         }
 
-        private static boolean resourcesConverged() {
+        private ResolvedAudio resolveAudio() {
+            VideoFeatureProperties.RealMediaLifecycle properties = VideoFeatureProperties.realMediaLifecycle();
+            try {
+                BiliApiClient.VideoId videoId = BiliApiClient.extractVideoId(properties.videoId());
+                if (videoId == null) {
+                    throw new IOException("invalid Bilibili video id: " + properties.videoId());
+                }
+                BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(videoId);
+                String audioUrl = BiliApiClient.getBestAudioUrl(videoId, info.cid(), false);
+                if (audioUrl == null || audioUrl.isBlank()) {
+                    throw new IOException("Bilibili playurl returned an empty DASH audio URL");
+                }
+                return new ResolvedAudio(Math.max(1L, info.duration() * 1_000L), audioUrl);
+            } catch (Exception error) {
+                throw new CompletionException(error);
+            }
+        }
+
+        private void tickResourceClosures(BenchClientContext context) {
+            ClientAudioOutputRegistry.updatePositions(new float[] {
+                    (float) context.player().getX(), (float) context.player().getEyeY(),
+                    (float) context.player().getZ()
+            });
+            OpenALSpatialAudio.tickNativeDeletes(System.nanoTime());
+            VideoCloseDiagnostics.tickGlobal();
+        }
+
+        private void throwAudioResolutionFailure() {
+            Throwable error = audioResolutionFailure.get();
+            if (error != null) {
+                throw new AssertionError("Real BV audio resolve failed before decode", error);
+            }
+        }
+
+        private void cleanupMedia() {
+            if (audio != null) {
+                audio.stop();
+            }
+            ModernTurntableVideoClient.clear();
+            VideoBillboardPreview.stop();
+            ClientAudioOutputRegistry.cleanup();
+            HttpAudioStreamHandler.closeModernStreams();
+            VideoBillboardPreview.releaseBenchUploadResources();
+            OpenALSpatialAudio.tickNativeDeletes(System.nanoTime());
+        }
+
+        private static boolean resourcesConverged(RealMediaLifecycleScenario.RealAudioStage audio) {
             var lifecycle = ModernTurntableVideoClient.videoLifecycleDiagnostics();
-            if (lifecycle.activeRequests() != 0 || lifecycle.pendingRequests() != 0
+            if (audio == null || !audio.finished() || !audio.streamClosed()
+                    || ClientAudioOutputRegistry.isActive()
+                    || lifecycle.activeRequests() != 0 || lifecycle.pendingRequests() != 0
                     || lifecycle.resources().instances() != 0
                     || lifecycle.resources().activeCloseZombies() != 0
                     || VideoCloseDiagnostics.global().snapshot(System.nanoTime()).activeOperations() != 0
+                    || AudioNativeCloseDiagnostics.global().snapshot(System.nanoTime()).activeOperations() != 0
                     || HttpRequestCloseDiagnostics.global().snapshot(System.nanoTime()).activeRequests() != 0) {
+                return false;
+            }
+            if (OpenALSpatialAudio.pendingNativeDeleteBatches() != 0) {
                 return false;
             }
             for (MemoryResourceTracker.Category category : MemoryResourceTracker.Category.values()) {
@@ -4232,6 +4419,9 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
                 }
             }
             return true;
+        }
+
+        private record ResolvedAudio(long durationMillis, String audioUrl) {
         }
     }
 
@@ -5041,6 +5231,801 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
         private static long percentile(long[] sorted, double quantile) {
             int index = Math.min(sorted.length - 1, (int) Math.ceil(sorted.length * quantile) - 1);
             return sorted[Math.max(0, index)];
+        }
+    }
+
+    private static final class DeviceLinkConfigMatrixScenario implements BenchClientScenario {
+        private static final BenchMetricDescriptor DEVICES = new BenchMetricDescriptor(
+                "ncpb.device_matrix.devices", "count", MetricDirection.NEUTRAL);
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
+        private final AtomicBoolean setupComplete = new AtomicBoolean();
+        private final List<BlockPos> fixturePositions = new ArrayList<>();
+        private BlockPos turntablePos;
+        private BlockPos replacementTurntablePos;
+        private BlockPos videoPos;
+        private BlockPos lyricPos;
+        private BlockPos speakerPos;
+        private BlockPos livePos;
+        private BlockPos consolePos;
+        private UUID playerId;
+        private final AtomicInteger linkPhase = new AtomicInteger();
+
+        @Override
+        public void setup(BenchClientContext context) {
+            playerId = context.player().getUUID();
+            BlockPos origin = context.player().blockPosition().offset(2, 0, 2);
+            turntablePos = fixture(origin, 0);
+            videoPos = fixture(origin, 1);
+            lyricPos = fixture(origin, 2);
+            speakerPos = fixture(origin, 3);
+            livePos = fixture(origin, 4);
+            consolePos = fixture(origin, 5);
+            replacementTurntablePos = fixture(origin, 6);
+            var server = context.minecraft().getSingleplayerServer();
+            if (server == null) {
+                throw new AssertionError("Integrated server is unavailable");
+            }
+            server.execute(() -> {
+                try {
+                    ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+                    if (player == null || !(player.level() instanceof ServerLevel level)) {
+                        throw new IllegalStateException("Integrated server player is unavailable");
+                    }
+                    level.setBlockAndUpdate(turntablePos, ModBlocks.MODERN_TURNTABLE.get().defaultBlockState());
+                    level.setBlockAndUpdate(videoPos, ModBlocks.VIDEO_PROJECTOR.get().defaultBlockState());
+                    level.setBlockAndUpdate(lyricPos, ModBlocks.LYRIC_PROJECTOR.get().defaultBlockState());
+                    level.setBlockAndUpdate(speakerPos, ModBlocks.SPEAKER.get().defaultBlockState());
+                    level.setBlockAndUpdate(livePos, ModBlocks.LIVE_STREAMER.get().defaultBlockState());
+                    level.setBlockAndUpdate(consolePos, ModBlocks.CONTROL_CONSOLE.get().defaultBlockState());
+                    level.setBlockAndUpdate(replacementTurntablePos,
+                            ModBlocks.MODERN_TURNTABLE.get().defaultBlockState());
+
+                    VideoProjectorBlockEntity video = require(level, videoPos, VideoProjectorBlockEntity.class);
+                    video.setProjectionYaw(123.0F);
+                    video.setProjectionPitch(-17.0F);
+                    video.setProjectionScale(1.5F);
+                    video.setProjectionHeight(2.25F);
+                    video.setProjectionDistanceX(0.75F);
+                    video.setProjectionDistanceZ(-0.5F);
+                    video.setPreferredQuality(80);
+                    video.linkTo(turntablePos);
+
+                    LyricProjectorBlockEntity lyric = require(level, lyricPos, LyricProjectorBlockEntity.class);
+                    lyric.setProjectionYaw(231.0F);
+                    lyric.setProjectionPitch(14.0F);
+                    lyric.setProjectionScale(0.75F);
+                    lyric.setProjectionMode(2);
+                    lyric.setAllowAi(true);
+                    lyric.linkTo(turntablePos);
+
+                    SpeakerBlockEntity speaker = require(level, speakerPos, SpeakerBlockEntity.class);
+                    speaker.setChannelIndex(SpeakerBlockEntity.CH_LTF);
+                    speaker.setVolume(1.25F);
+                    speaker.setAutoMixJoc(true);
+                    speaker.linkTo(turntablePos);
+
+                    ControlConsoleBlockEntity console = require(level, consolePos, ControlConsoleBlockEntity.class);
+                    console.linkTo(level.dimension().identifier().toString(), turntablePos);
+                    if (!AudioLinkIndex.hasSpeakerLinkedTo(level, turntablePos)) {
+                        throw new AssertionError("Speaker reverse link index was not registered");
+                    }
+                    if (!AudioLinkIndex.hasVideoProjectorLinkedTo(level, turntablePos)) {
+                        throw new AssertionError("Video-projector reverse link index was not registered");
+                    }
+                    setupComplete.set(true);
+                } catch (Throwable error) {
+                    failure.compareAndSet(null, error);
+                }
+            });
+        }
+
+        private BlockPos fixture(BlockPos origin, int offset) {
+            BlockPos pos = origin.offset(offset, 0, 0).immutable();
+            fixturePositions.add(pos);
+            return pos;
+        }
+
+        @Override
+        public BenchClientStepResult stabilize(BenchClientContext context) {
+            throwIfFailed();
+            if (!setupComplete.get()) {
+                return BenchClientStepResult.CONTINUE;
+            }
+            return clientDevicesReady(context) && context.frames().sampleCount() >= 2
+                    ? BenchClientStepResult.COMPLETE : BenchClientStepResult.CONTINUE;
+        }
+
+        @Override
+        public BenchClientStepResult warmup(BenchClientContext context) {
+            return BenchClientStepResult.COMPLETE;
+        }
+
+        @Override
+        public BenchClientStepResult measure(BenchClientContext context) {
+            throwIfFailed();
+            int currentPhase = linkPhase.get();
+            if (currentPhase < 0) {
+                return BenchClientStepResult.CONTINUE;
+            }
+            if (!clientDevicesReady(context)) {
+                return BenchClientStepResult.CONTINUE;
+            }
+            BlockPos expectedTurntable = currentPhase >= 1 ? replacementTurntablePos : turntablePos;
+            VideoProjectorBlockEntity video = require(context.level(), videoPos, VideoProjectorBlockEntity.class);
+            LyricProjectorBlockEntity lyric = require(context.level(), lyricPos, LyricProjectorBlockEntity.class);
+            SpeakerBlockEntity speaker = require(context.level(), speakerPos, SpeakerBlockEntity.class);
+            ControlConsoleBlockEntity console = require(context.level(), consolePos, ControlConsoleBlockEntity.class);
+            requireClose(video.getProjectionYaw(), 123.0F, "video yaw");
+            requireClose(video.getProjectionPitch(), -17.0F, "video pitch");
+            requireClose(video.getProjectionScale(), 1.5F, "video scale");
+            if (!expectedTurntable.equals(video.getLinkedTurntablePos()) || video.getPreferredQuality() != 80) {
+                throw new AssertionError("Video projector link/quality did not synchronize");
+            }
+            if (!expectedTurntable.equals(lyric.getLinkedTurntablePos()) || lyric.getProjectionMode() != 2
+                    || !lyric.getAllowAi()) {
+                throw new AssertionError("Lyric projector link/subtitle settings did not synchronize");
+            }
+            if (!expectedTurntable.equals(speaker.getLinkedTurntablePos())
+                    || speaker.getChannelIndex() != SpeakerBlockEntity.CH_LTF || !speaker.isAutoMixJoc()) {
+                throw new AssertionError("Speaker link/channel settings did not synchronize");
+            }
+            requireClose(speaker.getVolume(), 1.25F, "speaker volume");
+            if (!console.document().hasSourceBinding()
+                    || !expectedTurntable.equals(new BlockPos(console.document().sourceX(), console.document().sourceY(),
+                            console.document().sourceZ()))) {
+                throw new AssertionError("Control-console source binding did not synchronize");
+            }
+            if (!ClientLinkRegistry.getSources(expectedTurntable).contains(videoPos)) {
+                throw new AssertionError("Late client projector link was not registered for playback wakeup");
+            }
+            if (ClientAudioOutputRegistry.getAudioTimeline(expectedTurntable).relayRegisteredCount() < 1) {
+                throw new AssertionError("Speaker audio relay was not registered for its turntable");
+            }
+            if (!ControlConsoleRenderer.consumerLeaseDiagnostic(consolePos).registered()) {
+                throw new AssertionError("Control-console consumer was not registered from the block entity");
+            }
+            if (currentPhase == 0 && linkPhase.compareAndSet(0, -1)) {
+                var server = context.minecraft().getSingleplayerServer();
+                if (server == null) {
+                    throw new AssertionError("Integrated server disappeared before device rebind");
+                }
+                server.execute(() -> {
+                    try {
+                        ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+                        if (player == null || !(player.level() instanceof ServerLevel level)) {
+                            throw new IllegalStateException("Integrated server player is unavailable");
+                        }
+                        require(level, videoPos, VideoProjectorBlockEntity.class).linkTo(replacementTurntablePos);
+                        require(level, lyricPos, LyricProjectorBlockEntity.class).linkTo(replacementTurntablePos);
+                        require(level, speakerPos, SpeakerBlockEntity.class).linkTo(replacementTurntablePos);
+                        require(level, consolePos, ControlConsoleBlockEntity.class).linkTo(
+                                level.dimension().identifier().toString(), replacementTurntablePos);
+                        if (AudioLinkIndex.hasSpeakerLinkedTo(level, turntablePos)
+                                || AudioLinkIndex.hasVideoProjectorLinkedTo(level, turntablePos)
+                                || !AudioLinkIndex.hasSpeakerLinkedTo(level, replacementTurntablePos)
+                                || !AudioLinkIndex.hasVideoProjectorLinkedTo(level, replacementTurntablePos)) {
+                            throw new AssertionError("Server reverse indexes did not move atomically during rebind");
+                        }
+                        linkPhase.set(1);
+                    } catch (Throwable error) {
+                        failure.compareAndSet(null, error);
+                    }
+                });
+                return BenchClientStepResult.CONTINUE;
+            }
+            if (currentPhase == 1) {
+                if (ClientLinkRegistry.getSources(turntablePos).contains(videoPos)
+                        || ClientAudioOutputRegistry.getAudioTimeline(turntablePos).relayRegisteredCount() != 0) {
+                    return BenchClientStepResult.CONTINUE;
+                }
+                context.metrics().record(DEVICES, fixturePositions.size());
+                linkPhase.set(2);
+                return BenchClientStepResult.COMPLETE;
+            }
+            return BenchClientStepResult.CONTINUE;
+        }
+
+        @Override
+        public void verify(BenchClientContext context) {
+            throwIfFailed();
+            if (linkPhase.get() != 2 || !clientDevicesReady(context)) {
+                throw new AssertionError("Device matrix did not remain synchronized through verification");
+            }
+        }
+
+        @Override
+        public void teardown(BenchClientContext context) {
+            ClientLinkRegistry.clear();
+            var server = context.minecraft().getSingleplayerServer();
+            if (server != null && !fixturePositions.isEmpty()) {
+                List<BlockPos> positions = List.copyOf(fixturePositions);
+                server.execute(() -> {
+                    ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+                    if (player != null && player.level() instanceof ServerLevel level) {
+                        positions.forEach(pos -> level.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState()));
+                    }
+                });
+            }
+        }
+
+        private boolean clientDevicesReady(BenchClientContext context) {
+            BlockPos expectedTurntable = linkPhase.get() >= 1 ? replacementTurntablePos : turntablePos;
+            return context.level().getBlockEntity(turntablePos) instanceof ModernTurntableBlockEntity
+                    && context.level().getBlockEntity(replacementTurntablePos) instanceof ModernTurntableBlockEntity
+                    && context.level().getBlockEntity(videoPos) instanceof VideoProjectorBlockEntity video
+                    && expectedTurntable.equals(video.getLinkedTurntablePos())
+                    && context.level().getBlockEntity(lyricPos) instanceof LyricProjectorBlockEntity lyric
+                    && expectedTurntable.equals(lyric.getLinkedTurntablePos())
+                    && context.level().getBlockEntity(speakerPos) instanceof SpeakerBlockEntity speaker
+                    && expectedTurntable.equals(speaker.getLinkedTurntablePos())
+                    && context.level().getBlockEntity(livePos) instanceof LiveStreamerBlockEntity
+                    && context.level().getBlockEntity(consolePos) instanceof ControlConsoleBlockEntity console
+                    && console.document().hasSourceBinding()
+                    && ClientAudioOutputRegistry.getAudioTimeline(expectedTurntable).relayRegisteredCount() >= 1
+                    && ControlConsoleRenderer.consumerLeaseDiagnostic(consolePos).registered();
+        }
+
+        private void throwIfFailed() {
+            Throwable error = failure.get();
+            if (error != null) {
+                throw new AssertionError("Device link/config matrix failed", error);
+            }
+        }
+
+        private static void requireClose(float actual, float expected, String label) {
+            if (Math.abs(actual - expected) > 0.0001F) {
+                throw new AssertionError(label + " mismatch: expected=" + expected + " actual=" + actual);
+            }
+        }
+
+        private static <T> T require(Level level, BlockPos pos, Class<T> type) {
+            Object value = level.getBlockEntity(pos);
+            if (!type.isInstance(value)) {
+                throw new AssertionError(type.getSimpleName() + " is missing at " + pos + ": " + value);
+            }
+            return type.cast(value);
+        }
+    }
+
+    private static final class WearableBindingTopologyScenario implements BenchClientScenario {
+        private static final int HEADPHONE_SLOT = 35;
+        private static final int GLASSES_SLOT = 34;
+        private static final BenchMetricDescriptor BINDINGS = new BenchMetricDescriptor(
+                "ncpb.wearable_topology.bindings", "count", MetricDirection.NEUTRAL);
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
+        private final AtomicInteger phase = new AtomicInteger();
+        private UUID playerId;
+        private UUID mp4Id;
+        private UUID padId;
+        private BlockPos turntablePos;
+        private BlockPos projectorPos;
+        private ItemStack originalHead = ItemStack.EMPTY;
+        private ItemStack originalHeadphoneSlot = ItemStack.EMPTY;
+        private ItemStack originalGlassesSlot = ItemStack.EMPTY;
+
+        @Override
+        public void setup(BenchClientContext context) {
+            playerId = context.player().getUUID();
+            mp4Id = UUID.randomUUID();
+            padId = UUID.randomUUID();
+            turntablePos = context.player().blockPosition().offset(3, 0, 3).immutable();
+            projectorPos = turntablePos.offset(1, 0, 0).immutable();
+            var server = context.minecraft().getSingleplayerServer();
+            if (server == null) {
+                throw new AssertionError("Integrated server is unavailable");
+            }
+            server.execute(() -> setupBindings(server));
+        }
+
+        private void setupBindings(net.minecraft.server.MinecraftServer server) {
+            try {
+                ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+                if (player == null || !(player.level() instanceof ServerLevel level)) {
+                    throw new IllegalStateException("Integrated server player is unavailable");
+                }
+                originalHead = player.getItemBySlot(EquipmentSlot.HEAD).copy();
+                originalHeadphoneSlot = player.getInventory().getItem(HEADPHONE_SLOT).copy();
+                originalGlassesSlot = player.getInventory().getItem(GLASSES_SLOT).copy();
+                ItemStack headphones = new ItemStack(ModItems.INVISIBLE_HEADPHONES.get());
+                ItemStack glasses = new ItemStack(ModItems.HOLOGRAPHIC_GLASSES.get());
+                player.getInventory().setItem(HEADPHONE_SLOT, headphones);
+                player.getInventory().setItem(GLASSES_SLOT, glasses);
+
+                MediaSource turntable = MediaBindingCleanupService.turntableSource(level, turntablePos);
+                MediaSource mp4 = MediaBindingCleanupService.mp4Source(mp4Id);
+                MediaSource pad = MediaBindingCleanupService.padSource(padId);
+                MediaSource projector = MediaSource.projector(level.dimension(), projectorPos);
+                requireBound(MediaEquipmentBindingService.bind(player, headphones, turntable), "headphone/turntable");
+                requireBound(MediaEquipmentBindingService.bind(player, headphones, mp4), "headphone/MP4");
+                requireBound(MediaEquipmentBindingService.bind(player, glasses, turntable), "glasses/turntable");
+                requireBound(MediaEquipmentBindingService.bind(player, glasses, mp4), "glasses/MP4");
+                requireBound(MediaEquipmentBindingService.bind(player, glasses, pad), "glasses/Pad");
+                if (!HolographicGlassesItem.addOrUpdateBoundMedia(glasses, projector)) {
+                    throw new AssertionError("Fourth holographic projector binding was rejected");
+                }
+                if (!HolographicGlassesItem.addOrUpdateBoundMedia(glasses, mp4)
+                        || HolographicGlassesItem.readScreenBindings(glasses).size()
+                                != HolographicGlassesItem.MAX_BOUND_MEDIA) {
+                    throw new AssertionError("Duplicate holographic binding changed the four-slot topology");
+                }
+                if (HolographicGlassesItem.addOrUpdateBoundMedia(glasses, MediaSource.mp4(UUID.randomUUID()))) {
+                    throw new AssertionError("Holographic glasses accepted a fifth media binding");
+                }
+                var stats = MediaBindingCleanupService.countTargetBindings(player, mp4);
+                if (stats.headphoneCount() != 1 || stats.holographicCount() != 1
+                        || !AudioLinkIndex.hasHeadphoneLinkedToMp4(mp4Id)
+                        || !turntablePos.equals(AudioLinkData.readHeadphoneTurntable(headphones))) {
+                    throw new AssertionError("Wearable binding/index topology is incomplete: " + stats);
+                }
+                player.setItemSlot(EquipmentSlot.HEAD, headphones);
+                player.getInventory().setItem(HEADPHONE_SLOT, ItemStack.EMPTY);
+                syncInventory(player);
+                phase.set(1);
+            } catch (Throwable error) {
+                failure.compareAndSet(null, error);
+            }
+        }
+
+        @Override
+        public BenchClientStepResult stabilize(BenchClientContext context) {
+            throwIfFailed();
+            if (phase.get() < 1 || !HeadphoneClientState.equipped()
+                    || !HeadphoneClientState.handlesTurntable(turntablePos)
+                    || !HeadphoneClientState.handlesMediaDevice(mp4Id)) {
+                return BenchClientStepResult.CONTINUE;
+            }
+            return context.frames().sampleCount() >= 2
+                    ? BenchClientStepResult.COMPLETE : BenchClientStepResult.CONTINUE;
+        }
+
+        @Override
+        public BenchClientStepResult warmup(BenchClientContext context) {
+            return BenchClientStepResult.COMPLETE;
+        }
+
+        @Override
+        public BenchClientStepResult measure(BenchClientContext context) {
+            throwIfFailed();
+            int current = phase.get();
+            if (current == 1) {
+                runOnServer(context, player -> {
+                    ItemStack glasses = player.getInventory().getItem(GLASSES_SLOT);
+                    player.getInventory().setItem(HEADPHONE_SLOT, player.getItemBySlot(EquipmentSlot.HEAD));
+                    player.setItemSlot(EquipmentSlot.HEAD, glasses);
+                    player.getInventory().setItem(GLASSES_SLOT, ItemStack.EMPTY);
+                    syncInventory(player);
+                    phase.set(2);
+                });
+                return BenchClientStepResult.CONTINUE;
+            }
+            if (current == 2) {
+                if (!HolographicGlassesClient.active() || !HolographicGlassesClient.handlesTurntable(turntablePos)
+                        || HolographicGlassesClient.screenBindings().size()
+                                != HolographicGlassesItem.MAX_BOUND_MEDIA) {
+                    return BenchClientStepResult.CONTINUE;
+                }
+                runOnServer(context, player -> {
+                    MediaSource mp4 = MediaBindingCleanupService.mp4Source(mp4Id);
+                    var cleared = MediaBindingCleanupService.clearTargetBindings(player, mp4);
+                    if (cleared.headphoneCount() != 1 || cleared.holographicCount() != 1
+                            || AudioLinkIndex.hasHeadphoneLinkedToMp4(mp4Id)) {
+                        throw new AssertionError("Target unlink did not clear both wearable owners: " + cleared);
+                    }
+                    phase.set(3);
+                });
+                return BenchClientStepResult.CONTINUE;
+            }
+            if (current == 3) {
+                if (HolographicGlassesClient.screenBindings().size() != 3
+                        || HolographicGlassesClient.screenBindings().stream()
+                                .anyMatch(binding -> mp4Id.equals(binding.deviceId()))) {
+                    return BenchClientStepResult.CONTINUE;
+                }
+                runOnServer(context, player -> {
+                    var glassesClear = MediaBindingCleanupService.clearEquipmentBindings(
+                            player, player.getItemBySlot(EquipmentSlot.HEAD));
+                    var headphoneClear = MediaBindingCleanupService.clearEquipmentBindings(
+                            player, player.getInventory().getItem(HEADPHONE_SLOT));
+                    if (glassesClear.holographicCount() != 3 || headphoneClear.headphoneCount() != 1) {
+                        throw new AssertionError("Full wearable cleanup mismatch: glasses=" + glassesClear
+                                + " headphones=" + headphoneClear);
+                    }
+                    player.setItemSlot(EquipmentSlot.HEAD, originalHead.copy());
+                    player.getInventory().setItem(HEADPHONE_SLOT, originalHeadphoneSlot.copy());
+                    player.getInventory().setItem(GLASSES_SLOT, originalGlassesSlot.copy());
+                    syncInventory(player);
+                    phase.set(4);
+                });
+                return BenchClientStepResult.CONTINUE;
+            }
+            if (current == 4 && testBindingsAbsentOnClient()) {
+                context.metrics().record(BINDINGS, HolographicGlassesItem.MAX_BOUND_MEDIA + 2);
+                phase.set(5);
+                return BenchClientStepResult.COMPLETE;
+            }
+            return BenchClientStepResult.CONTINUE;
+        }
+
+        @Override
+        public void verify(BenchClientContext context) {
+            throwIfFailed();
+            if (phase.get() != 5 || !testBindingsAbsentOnClient()
+                    || AudioLinkIndex.hasHeadphoneLinkedToMp4(mp4Id)) {
+                throw new AssertionError("Wearable topology did not converge after cleanup");
+            }
+        }
+
+        @Override
+        public void teardown(BenchClientContext context) {
+            runOnServer(context, player -> {
+                MediaBindingCleanupService.clearEquipmentBindings(player, player.getItemBySlot(EquipmentSlot.HEAD));
+                MediaBindingCleanupService.clearEquipmentBindings(
+                        player, player.getInventory().getItem(HEADPHONE_SLOT));
+                player.setItemSlot(EquipmentSlot.HEAD, originalHead.copy());
+                player.getInventory().setItem(HEADPHONE_SLOT, originalHeadphoneSlot.copy());
+                player.getInventory().setItem(GLASSES_SLOT, originalGlassesSlot.copy());
+                AudioLinkIndex.updatePlayerHeadphones(player);
+                syncInventory(player);
+            });
+        }
+
+        private void runOnServer(BenchClientContext context, Consumer<ServerPlayer> action) {
+            var server = context.minecraft().getSingleplayerServer();
+            if (server == null) {
+                failure.compareAndSet(null, new AssertionError("Integrated server disappeared"));
+                return;
+            }
+            server.execute(() -> {
+                try {
+                    ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+                    if (player == null) {
+                        throw new IllegalStateException("Integrated server player is unavailable");
+                    }
+                    action.accept(player);
+                } catch (Throwable error) {
+                    failure.compareAndSet(null, error);
+                }
+            });
+        }
+
+        private void throwIfFailed() {
+            Throwable error = failure.get();
+            if (error != null) {
+                throw new AssertionError("Wearable binding topology failed: "
+                        + error.getClass().getSimpleName() + ": " + error.getMessage(), error);
+            }
+        }
+
+        private boolean testBindingsAbsentOnClient() {
+            if (HeadphoneClientState.handlesTurntable(turntablePos)
+                    || HeadphoneClientState.handlesMediaDevice(mp4Id)
+                    || HeadphoneClientState.handlesMediaDevice(padId)) {
+                return false;
+            }
+            var level = net.minecraft.client.Minecraft.getInstance().level;
+            if (level == null) {
+                return false;
+            }
+            MediaSource turntable = MediaSource.turntable(level.dimension(), turntablePos);
+            MediaSource projector = MediaSource.projector(level.dimension(), projectorPos);
+            MediaSource mp4 = MediaSource.mp4(mp4Id);
+            MediaSource pad = MediaSource.pad(padId);
+            return HolographicGlassesClient.screenBindings().stream().noneMatch(binding ->
+                    mp4.equals(binding.source()) || pad.equals(binding.source())
+                            || turntable.equals(binding.source()) || projector.equals(binding.source()));
+        }
+
+        private static void requireBound(MediaEquipmentBindingService.BindResult result, String label) {
+            if (!result.bound() || !result.handledAbility()) {
+                throw new AssertionError(label + " was not handled by the formal binding service: " + result);
+            }
+        }
+
+        private static void syncInventory(ServerPlayer player) {
+            player.getInventory().setChanged();
+            if (player.containerMenu != null) {
+                player.containerMenu.broadcastChanges();
+            }
+            player.inventoryMenu.broadcastChanges();
+        }
+    }
+
+    private static final class GuiScreenMatrixScenario implements BenchClientScenario {
+        private static final BenchMetricDescriptor SCREENS = new BenchMetricDescriptor(
+                "ncpb.gui_matrix.screens", "count", MetricDirection.NEUTRAL);
+        private final List<ScreenCase> screens = new ArrayList<>();
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
+        private final AtomicBoolean setupComplete = new AtomicBoolean();
+        private BenchGuiSession gui;
+        private BlockPos origin;
+        private UUID playerId;
+        private int index;
+        private long openedAtFrame;
+
+        @Override
+        public void setup(BenchClientContext context) {
+            playerId = context.player().getUUID();
+            origin = context.player().blockPosition().offset(2, 0, 2).immutable();
+            screens.add(new ScreenCase("turntable", ModernTurntableScreen.class,
+                    () -> new ModernTurntableScreen(origin)));
+            screens.add(new ScreenCase("video-projector", VideoProjectorScreen.class,
+                    () -> new VideoProjectorScreen(origin.offset(1, 0, 0))));
+            screens.add(new ScreenCase("lyric-projector", LyricProjectorScreen.class,
+                    () -> new LyricProjectorScreen(origin.offset(2, 0, 0))));
+            screens.add(new ScreenCase("speaker", SpeakerScreen.class,
+                    () -> new SpeakerScreen(origin.offset(3, 0, 0))));
+            screens.add(new ScreenCase("live-streamer", LiveStreamerScreen.class,
+                    () -> new LiveStreamerScreen(origin.offset(4, 0, 0))));
+            screens.add(new ScreenCase("control-console", ControlConsoleGuideScreen.class,
+                    () -> new ControlConsoleGuideScreen(origin.offset(5, 0, 0))));
+            screens.add(new ScreenCase("mp4-focus", MP4FocusScreen.class,
+                    () -> new MP4FocusScreen(InteractionHand.MAIN_HAND)));
+            screens.add(new ScreenCase("pad-focus", PadFocusScreen.class,
+                    () -> new PadFocusScreen(InteractionHand.MAIN_HAND)));
+            screens.add(new ScreenCase("pad-map", PadMapScreen.class,
+                    () -> new PadMapScreen(InteractionHand.MAIN_HAND)));
+            screens.add(new ScreenCase("holographic-editor", HolographicScreenConfigTestScreen.class,
+                    HolographicScreenConfigTestScreen::new));
+            screens.add(new ScreenCase("video-placeholder", VideoPlaceholderDebugScreen.class,
+                    VideoPlaceholderDebugScreen::new));
+            screens.add(new ScreenCase("whitelist-review", WhitelistReviewScreen.class,
+                    () -> new WhitelistReviewScreen(new WhitelistReviewPacket(List.of()))));
+            screens.add(new ScreenCase("whitelist-preview", WhitelistPreviewScreen.class,
+                    () -> new WhitelistPreviewScreen(new WhitelistPreviewPacket(UUID.randomUUID(),
+                            "Offline Bench Preview", "", "", "", 16, 9, 1, 7, 0, 0L, false))));
+            screens.add(new ScreenCase("media-tool-binding", MediaToolBindingScreen.class,
+                    () -> new MediaToolBindingScreen(new MediaToolBindingMenu(700, context.player().getInventory()),
+                            context.player().getInventory(), Component.literal("Media Binding Bench"))));
+            screens.add(new ScreenCase("media-tool-report", MediaToolReportScreen.class,
+                    () -> new MediaToolReportScreen(new MediaToolReportMenu(701, context.player().getInventory()),
+                            context.player().getInventory(), Component.literal("Media Report Bench"))));
+            var server = context.minecraft().getSingleplayerServer();
+            if (server == null) {
+                throw new AssertionError("Integrated server is unavailable");
+            }
+            server.execute(() -> {
+                try {
+                    ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+                    if (player == null || !(player.level() instanceof ServerLevel level)) {
+                        throw new IllegalStateException("Integrated server player is unavailable");
+                    }
+                    level.setBlockAndUpdate(origin, ModBlocks.MODERN_TURNTABLE.get().defaultBlockState());
+                    level.setBlockAndUpdate(origin.offset(1, 0, 0),
+                            ModBlocks.VIDEO_PROJECTOR.get().defaultBlockState());
+                    level.setBlockAndUpdate(origin.offset(2, 0, 0),
+                            ModBlocks.LYRIC_PROJECTOR.get().defaultBlockState());
+                    level.setBlockAndUpdate(origin.offset(3, 0, 0), ModBlocks.SPEAKER.get().defaultBlockState());
+                    level.setBlockAndUpdate(origin.offset(4, 0, 0),
+                            ModBlocks.LIVE_STREAMER.get().defaultBlockState());
+                    level.setBlockAndUpdate(origin.offset(5, 0, 0),
+                            ModBlocks.CONTROL_CONSOLE.get().defaultBlockState());
+                    setupComplete.set(true);
+                } catch (Throwable error) {
+                    failure.compareAndSet(null, error);
+                }
+            });
+        }
+
+        @Override
+        public BenchClientStepResult stabilize(BenchClientContext context) {
+            throwIfFailed();
+            if (!setupComplete.get() || !fixturesReady(context)) {
+                return BenchClientStepResult.CONTINUE;
+            }
+            if (context.minecraft().screen == null) {
+                openCurrent(context);
+            }
+            return context.frames().sampleCount() > openedAtFrame
+                    ? BenchClientStepResult.COMPLETE : BenchClientStepResult.CONTINUE;
+        }
+
+        @Override
+        public BenchClientStepResult warmup(BenchClientContext context) {
+            return BenchClientStepResult.COMPLETE;
+        }
+
+        @Override
+        public BenchClientStepResult measure(BenchClientContext context) {
+            throwIfFailed();
+            ScreenCase current = screens.get(index);
+            if (!current.type().isInstance(context.minecraft().screen)) {
+                throw new AssertionError("GUI matrix expected " + current.name() + " but found "
+                        + context.minecraft().screen);
+            }
+            if (context.frames().sampleCount() <= openedAtFrame) {
+                return BenchClientStepResult.CONTINUE;
+            }
+            if (gui == null || !gui.active()) {
+                throw new AssertionError("GUI automation session was not active for " + current.name());
+            }
+            gui.snapshot();
+            gui.close();
+            gui = null;
+            context.minecraft().setScreen(null);
+            index++;
+            context.metrics().record(SCREENS, index);
+            if (index >= screens.size()) {
+                return BenchClientStepResult.COMPLETE;
+            }
+            openCurrent(context);
+            return BenchClientStepResult.CONTINUE;
+        }
+
+        @Override
+        public void verify(BenchClientContext context) {
+            throwIfFailed();
+            if (index != screens.size() || context.minecraft().screen != null) {
+                throw new AssertionError("GUI matrix did not close every Screen: " + index + "/" + screens.size());
+            }
+        }
+
+        @Override
+        public void teardown(BenchClientContext context) {
+            context.minecraft().setScreen(null);
+            if (gui != null) {
+                gui.close();
+                gui = null;
+            }
+            var server = context.minecraft().getSingleplayerServer();
+            if (server != null && origin != null) {
+                server.execute(() -> {
+                    ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+                    if (player != null && player.level() instanceof ServerLevel level) {
+                        for (int offset = 0; offset < 6; offset++) {
+                            level.setBlockAndUpdate(origin.offset(offset, 0, 0), Blocks.AIR.defaultBlockState());
+                        }
+                    }
+                });
+            }
+        }
+
+        private boolean fixturesReady(BenchClientContext context) {
+            return context.level().getBlockEntity(origin) instanceof ModernTurntableBlockEntity
+                    && context.level().getBlockEntity(origin.offset(1, 0, 0)) instanceof VideoProjectorBlockEntity
+                    && context.level().getBlockEntity(origin.offset(2, 0, 0)) instanceof LyricProjectorBlockEntity
+                    && context.level().getBlockEntity(origin.offset(3, 0, 0)) instanceof SpeakerBlockEntity
+                    && context.level().getBlockEntity(origin.offset(4, 0, 0)) instanceof LiveStreamerBlockEntity
+                    && context.level().getBlockEntity(origin.offset(5, 0, 0)) instanceof ControlConsoleBlockEntity;
+        }
+
+        private void openCurrent(BenchClientContext context) {
+            ScreenCase current = screens.get(index);
+            context.minecraft().setScreen(current.factory().get());
+            gui = context.automation().beginGuiSession(current.type());
+            openedAtFrame = context.frames().sampleCount();
+        }
+
+        private void throwIfFailed() {
+            Throwable error = failure.get();
+            if (error != null) {
+                throw new AssertionError("GUI Screen matrix fixture failed", error);
+            }
+        }
+
+        private record ScreenCase(String name, Class<? extends Screen> type,
+                java.util.function.Supplier<? extends Screen> factory) {
+        }
+    }
+
+    private static final class HandheldMediaContractScenario implements BenchClientScenario {
+        private static final BenchMetricDescriptor CONTRACTS = new BenchMetricDescriptor(
+                "ncpb.handheld.contracts", "count", MetricDirection.NEUTRAL);
+
+        @Override
+        public void setup(BenchClientContext context) {
+        }
+
+        @Override
+        public BenchClientStepResult stabilize(BenchClientContext context) {
+            return BenchClientStepResult.COMPLETE;
+        }
+
+        @Override
+        public BenchClientStepResult warmup(BenchClientContext context) {
+            return BenchClientStepResult.COMPLETE;
+        }
+
+        @Override
+        public BenchClientStepResult measure(BenchClientContext context) {
+            var mp4 = MP4HandheldMediaProfile.INSTANCE.screenSpec();
+            var pad = PadHandheldMediaProfile.INSTANCE.screenSpec();
+            if (mp4.portraitWidth() != 256 || mp4.portraitHeight() != 448
+                    || mp4.landscapeWidth() != 448 || mp4.targetWidth() <= 0 || mp4.targetHeight() <= 0) {
+                throw new AssertionError("MP4 media surface geometry contract changed: " + mp4);
+            }
+            if (pad.portraitWidth() != 448 || pad.portraitHeight() != 256
+                    || pad.landscapeWidth() != 256 || pad.targetWidth() <= 0 || pad.targetHeight() <= 0) {
+                throw new AssertionError("Pad media surface geometry contract changed: " + pad);
+            }
+            UUID deviceId = UUID.randomUUID();
+            UUID pointId = UUID.randomUUID();
+            String sessionId = PadPlaybackSessionIds.create(deviceId, pointId, 7L).value();
+            if (!PadPlaybackSessionIds.isPadSession(sessionId)
+                    || !PadPlaybackSessionIds.matches(sessionId, deviceId, pointId)
+                    || !pointId.equals(PadPlaybackSessionIds.pointId(sessionId))
+                    || PadPlaybackSessionIds.isPadSession(deviceId + "-broken")) {
+                throw new AssertionError("Pad session identity contract failed for " + sessionId);
+            }
+            context.metrics().record(CONTRACTS, 3);
+            return BenchClientStepResult.COMPLETE;
+        }
+    }
+
+    private static final class LiveStreamContractScenario implements BenchClientScenario {
+        private static final BenchMetricDescriptor CONTRACTS = new BenchMetricDescriptor(
+                "ncpb.live.contracts", "count", MetricDirection.NEUTRAL);
+
+        @Override
+        public void setup(BenchClientContext context) {
+            LiveRoomMetadataRegistry.clear();
+        }
+
+        @Override
+        public BenchClientStepResult stabilize(BenchClientContext context) {
+            return BenchClientStepResult.COMPLETE;
+        }
+
+        @Override
+        public BenchClientStepResult warmup(BenchClientContext context) {
+            return BenchClientStepResult.COMPLETE;
+        }
+
+        @Override
+        public BenchClientStepResult measure(BenchClientContext context) {
+            String roomId = "67373";
+            String placeholder = BiliLiveRoomInput.placeholderUrl(roomId);
+            if (!roomId.equals(BiliLiveRoomInput.parseRoomId("live:" + roomId))
+                    || !roomId.equals(BiliLiveRoomInput.parseExplicitRoomId(
+                            "https://live.bilibili.com/" + roomId + "?live_from=bench"))
+                    || !roomId.equals(BiliLiveRoomInput.roomIdFromPlaceholder(placeholder))
+                    || !BiliLiveRoomInput.parseExplicitRoomId(roomId).isEmpty()) {
+                throw new AssertionError("Bilibili live-room input contract failed");
+            }
+
+            LiveReconnectPolicy reconnect = new LiveReconnectPolicy(3, 100L, 400L, 1_000L);
+            long[] expected = { 100L, 200L, 400L, LiveReconnectPolicy.GIVE_UP };
+            for (long delay : expected) {
+                long actual = reconnect.onStreamEnded(50L);
+                if (actual != delay) {
+                    throw new AssertionError("Live reconnect backoff mismatch: expected=" + delay
+                            + " actual=" + actual);
+                }
+            }
+            if (reconnect.onStreamEnded(2_000L) != 100L || reconnect.consecutiveFailures() != 0) {
+                throw new AssertionError("Healthy live stream did not reset reconnect backoff");
+            }
+
+            PlaybackSessionId session = PlaybackSessionId.of("bench-live-" + UUID.randomUUID());
+            LiveRoomMetadataRegistry.SourceKey source = new LiveRoomMetadataRegistry.SourceKey(3, 70, 5);
+            LiveRoomMetadataRegistry.publish(source, session, roomId, " Bench title ", "Music", "MV", 1);
+            var snapshot = LiveRoomMetadataRegistry.snapshot(source, roomId).orElseThrow(
+                    () -> new AssertionError("Live metadata was not published"));
+            if (!"Bench title".equals(snapshot.title())
+                    || LiveRoomMetadataRegistry.snapshot(source, "999").isPresent()
+                    || !LiveRoomMetadataRegistry.remove(source, session)
+                    || LiveRoomMetadataRegistry.size() != 0) {
+                throw new AssertionError("Live metadata ownership contract failed");
+            }
+
+            com.zhongbai233.net_music_can_play_bili.client.MediaConsumerRegistry<BlockPos> consumers =
+                    new com.zhongbai233.net_music_can_play_bili.client.MediaConsumerRegistry<>();
+            BlockPos sourceA = new BlockPos(1, 2, 3);
+            BlockPos sourceB = new BlockPos(4, 5, 6);
+            BlockPos consumer = new BlockPos(7, 8, 9);
+            consumers.register(sourceA, consumer);
+            consumers.register(sourceB, consumer);
+            if (!consumers.consumersFor(sourceA).isEmpty()
+                    || !consumers.consumersFor(sourceB).equals(List.of(consumer))) {
+                throw new AssertionError("Live consumer rebind contract failed");
+            }
+            consumers.clear();
+            context.metrics().record(CONTRACTS, 4);
+            return BenchClientStepResult.COMPLETE;
+        }
+
+        @Override
+        public void teardown(BenchClientContext context) {
+            LiveRoomMetadataRegistry.clear();
         }
     }
 

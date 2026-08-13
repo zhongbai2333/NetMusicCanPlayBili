@@ -183,10 +183,10 @@ neoForge {
             jvmProp 'ncpb.playback.bench', prop('ncpbPlaybackLatencyBench', 'false')
             jvmProp 'ncpb.playback.bench.interval_ms', prop('ncpbPlaybackLatencyIntervalMs', '3000')
 
-            // B站真实压力 Bench：按画质阶梯获取真实 DASH，测解码 + 上传 + 可选预览。
+            // B站真实压力 Bench：真实 DASH 视频解码/上传与 AAC/OpenAL 音频联合门槛。
             jvmProp 'ncpb.video.real_bench', prop('ncpbRealBench', 'false')
             jvmProp 'ncpb.video.real_bench.managed', prop('ncpbRealBenchManaged', modBenchEnabled ? 'true' : 'false')
-            jvmProp 'ncpb.video.real_bench.bv', prop('ncpbBenchVideo', 'BV1qM4y1w716')
+            jvmProp 'ncpb.video.real_bench.bv', prop('ncpbBenchVideo', 'BV1GJ411x7h7')
             jvmProp 'ncpb.video.real_bench.frames', prop('ncpbRealBenchFrames', '12')
             jvmProp 'ncpb.video.real_bench.warmup_frames', prop('ncpbRealBenchWarmupFrames', '2')
             jvmProp 'ncpb.video.real_bench.output_format', prop('ncpbRealBenchOutputFormat', 'nv12')
@@ -451,7 +451,7 @@ if (modBenchEnabled) {
                 systemProperty 'ncpb.video.enable_bench_features', benchProp('ncpbVideoBenchFeatures', 'false')
                 systemProperty 'ncpb.video.real_bench', benchProp('ncpbRealBench', 'false')
                 systemProperty 'ncpb.video.real_bench.managed', benchProp('ncpbRealBenchManaged', 'true')
-                systemProperty 'ncpb.video.real_bench.bv', benchProp('ncpbBenchVideo', 'BV1qM4y1w716')
+                systemProperty 'ncpb.video.real_bench.bv', benchProp('ncpbBenchVideo', 'BV1GJ411x7h7')
                 systemProperty 'ncpb.video.real_bench.frames', benchProp('ncpbRealBenchFrames', '12')
                 systemProperty 'ncpb.video.real_bench.warmup_frames', benchProp('ncpbRealBenchWarmupFrames', '2')
                 systemProperty 'ncpb.video.real_bench.qualities', benchProp('ncpbRealBenchQualities', '16')
@@ -948,6 +948,27 @@ tasks.named('check') {
 }
 
 tasks.withType(JavaCompile).configureEach {
+    def conflictCopies = fileTree(layout.buildDirectory) {
+        include '**/* *.*'
+    }
+    doFirst {
+        conflictCopies.files.findAll { it.name ==~ /.* \d+\.[^.]+/ }.each { conflictCopy ->
+            if (conflictCopy.exists() && !conflictCopy.delete()) {
+                throw new GradleException("Unable to remove conflict copy before compilation: ${conflictCopy}")
+            }
+        }
+    }
+    doLast {
+        conflictCopies.files.findAll { it.name ==~ /.* \d+\.[^.]+/ }.each { conflictCopy ->
+            if (conflictCopy.exists() && !conflictCopy.delete()) {
+                throw new GradleException("Unable to remove conflict copy after compilation: ${conflictCopy}")
+            }
+        }
+    }
+    // A cloud provider can copy conflict files into a task output and Gradle would then preserve
+    // them in the local build cache. Java compilation remains incremental/up-to-date locally, but
+    // deliberately does not load or store polluted output snapshots in the shared build cache.
+    outputs.cacheIf { false }
     options.compilerArgs.add('-Xlint:-classfile')
 }
 

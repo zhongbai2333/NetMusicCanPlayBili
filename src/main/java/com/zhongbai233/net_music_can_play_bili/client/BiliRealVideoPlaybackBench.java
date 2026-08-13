@@ -37,7 +37,7 @@ public final class BiliRealVideoPlaybackBench {
     private static final boolean BENCH_FEATURES_ENABLED = VideoFeatureFlags.benchFeaturesEnabled();
     private static final boolean ENABLED = VideoFeatureFlags.advancedBoolean("ncpb.video.real_bench", false);
     private static final String VIDEO_ID = VideoFeatureFlags.advancedString("ncpb.video.real_bench.bv",
-            "BV1qM4y1w716");
+            "BV1GJ411x7h7");
     private static final int MAX_OUTPUT_FPS = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.max_fps", 30);
     private static final int MIN_1080P_FPS = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.min_1080p_fps", 8);
     private static final int CAP_1080P_FPS = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.cap_1080p_fps", 10);

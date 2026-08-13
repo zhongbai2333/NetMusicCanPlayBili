@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import struct
+import tempfile
 import zlib
 from pathlib import Path
 
@@ -12,7 +14,7 @@ PANEL = 0xFF151923
 GOLD = 0xFFFFD166
 GOLD_DIM = 0xFF7A6230
 TEXT = 0xFFE8E8E8
-SHADOW = 0xAA000000
+SHADOW = 0xFF000000
 TRANSPARENT = 0x00000000
 
 
@@ -273,7 +275,14 @@ def save_png(path: Path, rgba: bytearray, width: int = WIDTH, height: int = HEIG
     data += png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
     data += png_chunk(b"IDAT", zlib.compress(bytes(rows), level=9))
     data += png_chunk(b"IEND", b"")
-    path.write_bytes(data)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", delete=False) as temp:
+        temp.write(data)
+        temp_path = Path(temp.name)
+    try:
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def main() -> None:
@@ -281,8 +290,12 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=Path("build/generated-preview/loading-ui"))
     parser.add_argument("--resource-out", type=Path, default=None,
                         help="also write the idle placeholder directly to a resource directory")
+    parser.add_argument("--loading-resource-out", type=Path, default=None,
+                        help="also write the complete loading/error/progress asset set")
     parser.add_argument("--privacy-resource-out", type=Path, default=None,
                         help="also write the holographic privacy overlay directly to a resource directory")
+    parser.add_argument("--control-console-resource-out", type=Path, default=None,
+                        help="also write the three control-console video state cards")
     parser.add_argument("--capacity", type=int, default=3)
     args = parser.parse_args()
 
@@ -306,10 +319,28 @@ def main() -> None:
     if args.resource_out is not None:
         args.resource_out.mkdir(parents=True, exist_ok=True)
         save_png(args.resource_out / "idle_base.png", draw_idle_base())
+    if args.loading_resource_out is not None:
+        args.loading_resource_out.mkdir(parents=True, exist_ok=True)
+        for index in range(4):
+            save_png(args.loading_resource_out / f"loading_base_phase{index}.png",
+                     draw_loading_base(index, False))
+        save_png(args.loading_resource_out / "iris_translucent_warning_base.png",
+                 draw_loading_base(0, True))
+        save_png(args.loading_resource_out / "network_error_base.png", draw_network_error_base())
+        save_png(args.loading_resource_out / "idle_base.png", draw_idle_base())
+        save_png(args.loading_resource_out / "progress_frame_204x10.png",
+                 draw_progress_frame(204, 10), 204, 10)
+        save_png(args.loading_resource_out / "progress_segment_42x6.png",
+                 draw_progress_segment(42, 6), 42, 6)
     if args.privacy_resource_out is not None:
         args.privacy_resource_out.mkdir(parents=True, exist_ok=True)
         save_png(args.privacy_resource_out / "holographic_privacy_overlay.png",
                  draw_holographic_privacy_overlay())
+    if args.control_console_resource_out is not None:
+        args.control_console_resource_out.mkdir(parents=True, exist_ok=True)
+        save_png(args.control_console_resource_out / "idle.png", draw_idle_base())
+        save_png(args.control_console_resource_out / "buffering.png", draw_loading_base(3, False))
+        save_png(args.control_console_resource_out / "error.png", draw_network_error_base())
     print(f"Generated loading UI previews in {args.out.resolve()}")
 
 

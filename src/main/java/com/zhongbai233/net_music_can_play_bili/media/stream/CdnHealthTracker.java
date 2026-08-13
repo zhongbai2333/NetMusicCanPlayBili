@@ -37,6 +37,7 @@ public final class CdnHealthTracker {
     private static final double MAX_PENALTY = Math.max(1.0D,
             NcpbSystemProperties.doubleValue("ncpb.bili.cdn_health.max_penalty",
                     "bili.cdn_health.max_penalty", 64.0D));
+    private static final double UNKNOWN_HOST_SCORE = 2.5D;
 
     private static final ConcurrentHashMap<String, HostHealth> HEALTH_BY_HOST = new ConcurrentHashMap<>();
 
@@ -119,12 +120,24 @@ public final class CdnHealthTracker {
         }
         HostHealth health = HEALTH_BY_HOST.get(host);
         if (health == null) {
-            return 0.0D;
+            // 未观测 host 不能排在刚刚成功的低延迟 host 前面；否则 CDN race 的赢家会在下一段媒体
+            // Range 请求中立刻被原始未知 host 抢回首位。
+            return UNKNOWN_HOST_SCORE;
         }
         long age = Math.max(0L, System.currentTimeMillis() - health.updatedAtMillis());
-        double ageDiscount = age >= STALE_AFTER_MILLIS ? 0.0D : 1.0D - age / (double) STALE_AFTER_MILLIS;
-        double latencyPenalty = health.latencyMillis() > 0.0D ? Math.min(8.0D, health.latencyMillis() / 750.0D) : 0.0D;
-        return health.penalty() * ageDiscount + latencyPenalty * ageDiscount;
+        return ageAdjustedScore(health.penalty(), health.latencyMillis(), age, STALE_AFTER_MILLIS);
+    }
+
+    static double ageAdjustedScore(double penalty, double latencyMillis, long ageMillis, long staleAfterMillis) {
+        long safeStaleAfter = Math.max(1L, staleAfterMillis);
+        double freshness = ageMillis >= safeStaleAfter
+                ? 0.0D
+                : 1.0D - Math.max(0L, ageMillis) / (double) safeStaleAfter;
+        double latencyPenalty = latencyMillis > 0.0D ? Math.min(8.0D, latencyMillis / 750.0D) : 0.0D;
+        double observedScore = Math.max(0.0D, penalty) + latencyPenalty;
+        // Aged observations converge to the neutral unknown-host score. Converging to zero would
+        // make a stale failed host look better than both an unknown host and a recent winner.
+        return UNKNOWN_HOST_SCORE + (observedScore - UNKNOWN_HOST_SCORE) * freshness;
     }
 
     public static void clear() {

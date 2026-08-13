@@ -26,7 +26,7 @@ public final class ChunkPrefetchInputStream extends InputStream {
     private static final long STARTUP_PREBUFFER_BYTES = Math.max(0L, NcpbSystemProperties.longValue(
             "ncpb.media.prefetch.startup_bytes", "bili.media.prefetch.startup_bytes", 768L * 1024L));
     private static final long SEEK_STARTUP_PREBUFFER_BYTES = Math.max(0L, NcpbSystemProperties.longValue(
-            "ncpb.media.prefetch.seek_startup_bytes", "bili.media.prefetch.seek_startup_bytes", 384L * 1024L));
+            "ncpb.media.prefetch.seek_startup_bytes", "bili.media.prefetch.seek_startup_bytes", 64L * 1024L));
     private static final long STARTUP_PREBUFFER_MAX_WAIT_MILLIS = Math.max(0L, NcpbSystemProperties.longValue(
             "ncpb.media.prefetch.startup_max_wait_ms", "bili.media.prefetch.startup_max_wait_ms", 1_500L));
     private static final int PER_HOST_ATTEMPTS = Math.max(1, NcpbSystemProperties.intValue(

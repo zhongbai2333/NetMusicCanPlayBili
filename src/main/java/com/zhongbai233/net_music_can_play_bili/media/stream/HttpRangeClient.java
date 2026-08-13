@@ -6,7 +6,6 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliWbiSigner;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliCdnSelector;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
-import org.slf4j.Logger;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -16,6 +15,8 @@ import java.net.http.HttpRequest;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+
+import org.slf4j.Logger;
 
 public final class HttpRangeClient {
     private static final Logger LOGGER = LogUtils.getLogger();
@@ -40,9 +41,10 @@ public final class HttpRangeClient {
             throw new IllegalArgumentException("invalid range: " + start + "-" + endInclusive);
         }
         CdnResponse response = send(url, start, endInclusive, 0);
-        BiliRequestHeaders.recordBiliCdnResponse(url, response.statusCode());
+        URL responseUrl = response.sourceUrl();
+        BiliRequestHeaders.recordBiliCdnResponse(responseUrl, response.statusCode());
         if (isRetryableStatus(response.statusCode())) {
-            CdnHealthTracker.recordFailure(url, response.statusCode() == 403
+            CdnHealthTracker.recordFailure(responseUrl, response.statusCode() == 403
                     ? CdnHealthTracker.FailureKind.HTTP_FORBIDDEN
                     : CdnHealthTracker.FailureKind.HTTP_RETRYABLE);
         }
@@ -57,9 +59,10 @@ public final class HttpRangeClient {
             try {
                 long started = System.currentTimeMillis();
                 CdnResponse response = send(candidate, start, endInclusive, 0);
-                BiliRequestHeaders.recordBiliCdnResponse(candidate, response.statusCode());
+                URL responseUrl = response.sourceUrl();
+                BiliRequestHeaders.recordBiliCdnResponse(responseUrl, response.statusCode());
                 if (isRetryableStatus(response.statusCode())) {
-                    CdnHealthTracker.recordFailure(candidate, response.statusCode() == 403
+                    CdnHealthTracker.recordFailure(responseUrl, response.statusCode() == 403
                             ? CdnHealthTracker.FailureKind.HTTP_FORBIDDEN
                             : CdnHealthTracker.FailureKind.HTTP_RETRYABLE);
                     if (i + 1 < candidates.size()) {
@@ -74,9 +77,9 @@ public final class HttpRangeClient {
                     }
                 }
                 if (response.statusCode() == 200 || response.statusCode() == 206) {
-                    CdnHealthTracker.recordSuccess(candidate, System.currentTimeMillis() - started,
+                    CdnHealthTracker.recordSuccess(responseUrl, System.currentTimeMillis() - started,
                             Math.max(0L, response.contentLength()));
-                    BiliCdnSelector.recordSuccess(candidate.toString());
+                    BiliCdnSelector.recordSuccess(responseUrl.toString());
                 }
                 return response;
             } catch (IOException e) {
@@ -127,6 +130,7 @@ public final class HttpRangeClient {
         return new CdnResponse(
                 response.statusCode(),
                 response.body(),
+                requestUrl,
                 contentLength,
                 contentRange.start(),
                 contentRange.endInclusive(),
@@ -164,6 +168,7 @@ public final class HttpRangeClient {
     public record CdnResponse(
             int statusCode,
             InputStream body,
+            URL sourceUrl,
             long contentLength,
             long rangeStart,
             long rangeEndInclusive,

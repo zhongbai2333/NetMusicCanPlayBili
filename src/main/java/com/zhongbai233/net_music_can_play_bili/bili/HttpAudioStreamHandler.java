@@ -27,6 +27,7 @@ import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4RangeSeekSupport
 import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4StreamParser;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeHeaders;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeClient;
+import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4SeekRangeCache;
 import com.zhongbai233.net_music_can_play_bili.media.stream.BlockingAudioPipe;
 import com.zhongbai233.net_music_can_play_bili.media.stream.CdnUrlFallbacks;
 import com.zhongbai233.net_music_can_play_bili.media.stream.CdnHealthTracker;
@@ -729,14 +730,21 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     }
 
     private static RangeBytes readRange(URL url, long start, long end) throws IOException {
+        Fmp4SeekRangeCache.CachedRange cached = Fmp4SeekRangeCache.get(url, start, end);
+        if (cached != null) {
+            return new RangeBytes(cached.bytes(), cached.totalLength(), cached.sourceHost(), cached.sourceUrl());
+        }
         List<URL> candidates = CdnUrlFallbacks.candidates(url);
-        if (!BiliCdnSelector.hasPreferredHost(candidates) && candidates.size() > 1 && RANGE_RACE_MAX_CANDIDATES > 1) {
+        if (candidates.size() > 1 && RANGE_RACE_MAX_CANDIDATES > 1) {
             RangeBytes raced = readRangeRace(candidates, start, end);
             if (raced != null) {
+                Fmp4SeekRangeCache.put(url, start, end, raced.bytes(), raced.totalLength(), raced.host(), raced.url());
                 return raced;
             }
         }
-        return readRangeSingle(url, start, end);
+        RangeBytes result = readRangeSingle(url, start, end);
+        Fmp4SeekRangeCache.put(url, start, end, result.bytes(), result.totalLength(), result.host(), result.url());
+        return result;
     }
 
     private static RangeBytes readRangeRace(List<URL> candidates, long start, long end) throws IOException {
@@ -795,7 +803,9 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         HttpRangeClient client = new HttpRangeClient();
         long started = System.currentTimeMillis();
         boolean failureRecorded = false;
+        URL actualUrl = url;
         try (HttpRangeClient.CdnResponse response = client.getRangeDirect(url, start, end)) {
+            actualUrl = response.sourceUrl();
             int status = response.statusCode();
             if (status != 206 && (status != 200 || start != 0L)) {
                 failureRecorded = isRetryableCdnStatus(status);
@@ -823,28 +833,28 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             }
             byte[] bytes = out.toByteArray();
             if (bytes.length == 0) {
-                CdnHealthTracker.recordFailure(url, CdnHealthTracker.FailureKind.EMPTY);
+                CdnHealthTracker.recordFailure(actualUrl, CdnHealthTracker.FailureKind.EMPTY);
                 failureRecorded = true;
-                throw new IOException("empty fMP4 range response from " + url.getHost());
+                throw new IOException("empty fMP4 range response from " + actualUrl.getHost());
             }
             long declaredLength = response.rangeStart() >= 0L && response.rangeEndInclusive() >= response.rangeStart()
                     ? response.rangeEndInclusive() - response.rangeStart() + 1L
                     : Math.min(maxBytes, response.contentLength());
             if (declaredLength > 0L && bytes.length < declaredLength) {
-                CdnHealthTracker.recordFailure(url, CdnHealthTracker.FailureKind.SHORT_READ);
+                CdnHealthTracker.recordFailure(actualUrl, CdnHealthTracker.FailureKind.SHORT_READ);
                 failureRecorded = true;
-                throw new IOException("short fMP4 range response from " + url.getHost() + ": expected="
+                throw new IOException("short fMP4 range response from " + actualUrl.getHost() + ": expected="
                         + declaredLength + " actual=" + bytes.length);
             }
-            CdnHealthTracker.recordSuccess(url, System.currentTimeMillis() - started, bytes.length);
+            CdnHealthTracker.recordSuccess(actualUrl, System.currentTimeMillis() - started, bytes.length);
             if (persistCdnSuccess) {
-                BiliCdnSelector.recordSuccess(url.toString());
+                BiliCdnSelector.recordSuccess(actualUrl.toString());
             }
             long totalLength = response.totalLength() > 0L ? response.totalLength() : response.contentLength();
-            return new RangeBytes(bytes, totalLength, url.getHost(), url.toString());
+            return new RangeBytes(bytes, totalLength, actualUrl.getHost(), actualUrl.toString());
         } catch (IOException e) {
             if (!failureRecorded) {
-                CdnHealthTracker.recordFailure(url, CdnHealthTracker.FailureKind.IO);
+                CdnHealthTracker.recordFailure(actualUrl, CdnHealthTracker.FailureKind.IO);
             }
             throw e;
         }

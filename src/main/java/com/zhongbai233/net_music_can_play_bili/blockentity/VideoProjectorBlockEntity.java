@@ -175,6 +175,7 @@ public class VideoProjectorBlockEntity extends SyncedBlockEntity {
     @Override
     protected void loadAdditional(ValueInput input) {
         super.loadAdditional(input);
+        BlockPos oldLinkedTurntablePos = this.linkedTurntablePos;
         int oldPreferredQuality = this.preferredQuality;
         this.linkedTurntablePos = LinkHelper.loadLinkFromBE(input,
                 LINK_KEY + "_has", LINK_KEY + "_x", LINK_KEY + "_y", LINK_KEY + "_z");
@@ -189,7 +190,12 @@ public class VideoProjectorBlockEntity extends SyncedBlockEntity {
         if (level instanceof ServerLevel serverLevel && linkedTurntablePos != null) {
             AudioLinkIndex.registerVideoProjector(serverLevel, worldPosition, linkedTurntablePos);
         }
-        if (level != null && level.isClientSide() && oldPreferredQuality != preferredQuality) {
+        if (level != null && level.isClientSide()
+                && VideoProjectorClientRefreshPolicy.shouldRefresh(oldLinkedTurntablePos, linkedTurntablePos,
+                    oldPreferredQuality, preferredQuality)) {
+            // 播放开始时投影仪可能尚未放置/完成同步。客户端收到新的链接目标后必须主动唤醒
+            // 视频管线，不能依赖 BER 恰好进入视锥后再做恢复；否则初次同步会以
+            // “没有实时视频消费者”结束，之后整段会话都保持 video=n/a。
             com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient.refreshProjector(worldPosition);
         }
     }

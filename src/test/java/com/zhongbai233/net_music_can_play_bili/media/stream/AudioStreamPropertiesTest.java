@@ -18,7 +18,7 @@ class AudioStreamPropertiesTest {
 
     @Test
     void defaultsRemainCompatible() {
-        assertEquals(new AudioStreamProperties.Http(30, 1, 2_500L, 512), AudioStreamProperties.http());
+        assertEquals(new AudioStreamProperties.Http(30, 3, 1_500L, 512), AudioStreamProperties.http());
         assertEquals(new AudioStreamProperties.Dolby(8, 128, 64), AudioStreamProperties.dolby());
         assertEquals(256, AudioStreamProperties.liveVideoBusCapacity());
         assertEquals(new AudioStreamProperties.Recovery(3, 1_000L), AudioStreamProperties.recovery());
@@ -47,6 +47,14 @@ class AudioStreamPropertiesTest {
         assertEquals(new AudioStreamProperties.Recovery(5, 2_000L), AudioStreamProperties.recovery());
         assertEquals(new AudioStreamProperties.RealMp3Bench(true, "https://example.test/audio.mp3"),
                 AudioStreamProperties.realMp3Bench());
+    }
+
+    @Test
+    void legacyAudioRangeRaceKeysRemainCompatible() {
+        set(AudioStreamProperties.LEGACY_RANGE_RACE_MAX_CANDIDATES, "4");
+        set(AudioStreamProperties.LEGACY_RANGE_RACE_TIMEOUT_MILLIS, "1750");
+
+        assertEquals(new AudioStreamProperties.Http(30, 4, 1_750L, 512), AudioStreamProperties.http());
     }
 
     @Test
@@ -96,6 +104,9 @@ class AudioStreamPropertiesTest {
         assertEquals(new AudioStreamProperties.Dolby(0, 32, 1), AudioStreamProperties.dolby());
         assertEquals(32, AudioStreamProperties.liveVideoBusCapacity());
         assertEquals(new AudioStreamProperties.Recovery(0, 0L), AudioStreamProperties.recovery());
+
+        set(AudioStreamProperties.RANGE_RACE_MAX_CANDIDATES, "1000");
+        assertEquals(8, AudioStreamProperties.http().rangeRaceMaxCandidates());
     }
 
     private void set(String key, String value) {

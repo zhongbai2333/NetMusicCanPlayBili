@@ -38,7 +38,7 @@ public final class VideoFeatureProperties {
                 NcpbSystemProperties.booleanValue(REAL_MEDIA_LIFECYCLE, false),
                 NcpbSystemProperties.intValue(REAL_MEDIA_LIFECYCLE_ROUNDS, 100),
                 NcpbSystemProperties.intValue(REAL_MEDIA_LIFECYCLE_CYCLE_TIMEOUT_TICKS, 600),
-                NcpbSystemProperties.stringValue(REAL_BENCH_VIDEO_ID, "BV1qM4y1w716"),
+                NcpbSystemProperties.stringValue(REAL_BENCH_VIDEO_ID, "BV1GJ411x7h7"),
                 NcpbSystemProperties.intValue(REAL_MEDIA_LIFECYCLE_QUALITY, 16));
     }
 
@@ -75,7 +75,7 @@ public final class VideoFeatureProperties {
         public RealMediaLifecycle {
             rounds = Math.clamp(rounds, 1, 10_000);
             cycleTimeoutTicks = Math.clamp(cycleTimeoutTicks, 100, 72_000);
-            videoId = videoId != null && !videoId.isBlank() ? videoId.trim() : "BV1qM4y1w716";
+            videoId = videoId != null && !videoId.isBlank() ? videoId.trim() : "BV1GJ411x7h7";
             quality = Math.max(1, quality);
         }
     }

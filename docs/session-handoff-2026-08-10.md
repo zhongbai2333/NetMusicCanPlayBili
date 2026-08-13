@@ -1926,15 +1926,16 @@ Java 826/826、0 failure/error/skipped；生产 JAR、embedded native、法律�
 
 ## 第 50 阶段：中控台专属视频状态美术
 
-中控台屏幕不再复用普通投影仪的 `video_loading` 占位纹理。新增三张项目内 320×180、完全不透明且内容互异的
-像素风静态资源：`control_console_video/idle.png`、`buffering.png` 和 `error.png`。三者采用共同的暗色电路面板
-语言，但分别表达“无视频源”、“正在连接媒体”和“媒体终态错误”；生成源通过内置 image generation 完成，最终资源
-经过居中 16:9 裁切、精确缩放和人工审图后写入仓库。
+中控台为 IDLE/BUFFERING/ERROR 保留三张独立资源路径：`control_console_video/idle.png`、
+`buffering.png` 和 `error.png`。本阶段最初引入的青色电路面板美术后来确认与项目公共提示图不一致；Phase 75
+已用 `tools/generate_loading_ui_preview.py` 重新生成三张 320×180、完全不透明的资源，并让它们分别与公共
+idle/loading phase3/network error 使用同一绘制函数和完全相同的输出字节。PNG 不再手工编辑，也不再依赖
+独立图像生成流程。
 
 `ControlConsoleVideoArtwork` 冻结状态到资源路径的纯 Java 映射。IDLE、BUFFERING、ERROR 固定使用各自专属静态
 纹理；ACTIVE 显式拒绝静态占位并继续显示真实共享视频帧，因此“四态呈现”没有用伪造图片覆盖活动媒体。普通投影仪、
 全息眼镜与 Iris 兼容占位纹理不受影响。自动回归校验三张 PNG 均可解码、尺寸精确为 320×180、完全不透明、有视觉
-内容且 SHA-256 互不相同，同时校验 ACTIVE 映射 fail-fast。
+内容且 SHA-256 互不相同，同时校验 ACTIVE 映射 fail-fast；公共图逐对字节一致性由 Phase 75 的生成与校验约束保证。
 
 阶段 50 隔离目录 `/private/tmp/ncpb-build-phase50-20260813` 以 `--rerun-tasks` 完整构建成功：214 suites、
 Java 828/828、0 failure/error/skipped；生产 JAR、embedded native、法律材料与 conflict-copy 门槛通过，
@@ -2793,6 +2794,104 @@ production JAR 的 `verifySceneEditorJiJ` 结构门槛。Scene Editor 库版本�
 历史 `native-patches` 工作目录也从当前树移除；v39 及此前补丁仍可由 Git 历史追溯，当前正式原生实现与构建来源为
 独立 FFmpeg 仓库及已冻结的 `media-min-v48` Release，不再依赖主项目内的旧 patch 文件。
 
+### 阶段 73：投影仪迟到链接唤醒与真实 BV 音视频联合 Bench
+
+`run/logs/debug.log` 的现场运行证明故障发生在解码器之前：播放命令先到时客户端没有任何视频消费者，视频同步按
+设计以 `stop-no-projector` 结束；投影仪稍后完成链接注册后，直到退出仍持续为 `video=n/a`，期间没有 playurl、
+候选选择、native decoder 或首帧记录。FFmpeg/JNI 已正常加载，CDN 403 也由音频链路成功换源，均不是该故障根因。
+
+`VideoProjectorBlockEntity.loadAdditional` 现在同时比较旧/新链接目标和清晰度。客户端链接从空变为有效、重新绑定、
+解绑或质量变化时，均主动调用 `ModernTurntableVideoClient.refreshProjector`；不再依赖投影仪 BER 恰好进入视锥且
+客户端唱片机 `isPlaying` 状态可见后才唤醒视频。纯 Java policy 回归覆盖无变化不重启、链接新增/替换/移除都刷新、
+质量变化仍刷新。
+
+真实 ModBench 场景 `ncpb.real-bv-playback` 从仅验证视频升级为 DASH 音视频联合门槛，默认视频统一为 Rick Astley
+《Never Gonna Give You Up》的 `BV1GJ411x7h7`。场景并行验证真实 Bilibili 视频 DASH → FFmpeg JNI → NV12/PBO
+上传，以及真实音频 DASH → AAC/fMP4 → PCM → Stereo OpenAL；音频必须累计至少 1,024 个非静音、有限且不过度
+削波的 PCM 质量样本。成功后还必须等待 HTTP、视频/音频 close diagnostics、OpenAL native delete、GPU/自有内存
+全部收敛。外部 Bilibili 信息/音频 URL 解析失败和视频/音频解码失败分别报告，避免把网络入口错误混成 codec 错误。
+
+2026-08-13 在 Apple M4 上真实运行通过：Bilibili 返回 640×360、25 fps AV1，actual backend 为
+`videotoolbox`，解码并上传 12 帧；音频选择 192K AAC，Stereo OpenAL 实际启动，质量窗口达到 4,096 samples、
+累计输入 156,672 samples。首选视频/音频 CDN 均出现 403 后自动切换备用 host 并完成播放。最终场景、workload
+correctness 与总报告均为 `PASSED`，active close 最大值为 0。权威报告位于
+`build/modBench/raw-results/default/client/summary.json`（构建产物，不提交 Git）。
+
+## Phase 74：Bench 用户功能矩阵（2026-08-13）
+
+- 新增 `ncpb.device-link-config-matrix`：在集成服务端真实放置六类媒体设备，验证 BE 同步、设备参数、
+  链接索引、音响客户端 relay、中控台消费者登记和播放中迟到的视频投影仪消费者登记；音响、视频/歌词投影仪、
+  中控台还会从唱片机 A 运行期重绑到 B，旧索引/relay 必须清除，新索引/relay 必须建立。
+- 新增 `ncpb.wearable-binding-topology`：使用正式服务端绑定 API 为耳机和全息眼镜绑定唱片机、MP4、Pad 与
+  视频投影仪，验证客户端耳机路由、眼镜四屏上限、重复绑定幂等、第五槽拒绝、按目标解绑、反向索引和完整清理。
+- 新增 `ncpb.gui-screen-matrix`：逐一打开并渲染 15 个离线安全生产 Screen，取得自动化快照后关闭，
+  覆盖唱片机、视频/歌词投影仪、音响、直播机、中控台、MP4、Pad、Pad 地图、全息编辑器、视频占位图、
+  媒体工具绑定/报告和白名单审核/预览；只有必须发起网络登录并由真人扫码的二维码页留作人工检查。
+- 新增 `ncpb.handheld-media-contracts`：锁定 MP4/Pad 屏幕尺寸、离屏缩放和 Pad 会话身份编解码。
+- 新增 `ncpb.live-stream-contracts`：锁定直播输入规范化、元数据 owner、健康重连/退避与消费者重绑。
+- GUI 矩阵发现 `VideoPlaceholderDebugScreen` 会在单人世界暂停游戏，现已统一改为非暂停，避免媒体时间线因调试页中断。
+- 五个新增场景已在真实集成客户端执行，均为 `PASSED`；覆盖边界与执行命令见
+  `docs/bench-feature-coverage.md`。
+
+## Phase 75：Range Seek 元数据复用与 UI 提示图单一生成源（2026-08-13）
+
+`run/logs/debug.log` 的现场证据显示 seek 慢点在远端 fMP4 元数据和 CDN 切换，不在 native 解码：视频 SIDX
+probe 曾耗时 5,878 ms，音频 SIDX 总耗时 6,524/6,593 ms；相同链路命中可用备用 CDN 时视频 probe 仅
+587 ms。视频此前即使 playurl 已提供 `SegmentBase.initialization`，仍固定请求 `0-4194303` 最多 4 MiB
+探测 init，坏 CDN 因而会在零 packet 时耗尽 AV1 的 2 秒首帧预算。
+
+视频现在优先按 SegmentBase 精确读取 init byte range，只有元数据缺失/不可解析才回退通用探测。音视频 init
+与 SIDX 小范围共享 `Fmp4SeekRangeCache`：10 分钟 TTL、最多 64 项、单项最多 1 MiB；缓存键包含剥离内部
+播放参数后的资源 path、原始 query 和精确 byte range，因此等价 CDN host 可复用，更新签名或不同 range 不会
+串数据。音视频小范围读取默认并发竞速最多 3 个 CDN、1,500 ms 后才回退串行读取，避免曾成功但当前 403/慢响应
+的节点阻塞备用节点。竞速赢家会直接承接本次后续媒体片段 Range，而不只是记录成下一次偏好；CDN 健康排序也给
+未观测 host 设置中性基线，修复“未知 host 的 0 分反而压过刚成功 host”的反向排序。seek 片段启动预缓冲由
+384 KiB 降为 64 KiB，仍保留后台持续预取，但不再为了首帧额外空等大缓冲。
+
+中控台旧 idle/buffering/error 使用青色电路边框、发光节点和独立字形，与公共 `video_loading` 的暗色面板、
+金/红 1px 边框及像素字体不一致。三张图现已纳入 `tools/generate_loading_ui_preview.py`，并与公共提示图由同一
+绘制函数生成；脚本同时可原子写出完整 loading/error/progress 资源集。普通提示卡的文字阴影改为不透明黑色，
+保持 320×180 全不透明契约；隐私遮罩仍保留其明确需要的透明层。生成后中控 idle/buffering/error 与公共
+idle/loading phase3/network error 分别具有完全相同的 SHA-256，确保不是仅凭肉眼近似风格。
+
+定向测试覆盖缓存的等价 CDN host 复用、签名/range 隔离、视频资源尺寸/不透明/互异及解码器生命周期；最终资源
+必须通过脚本重新生成后再提交，不再手工编辑 PNG。
+
+真实 `ncpb.real-av1-hardware-seek` 在 Apple M4/VideoToolbox 上最终为 `PASSED`：精确 init `0-1070` 与 SIDX
+`1135-1682` 均由竞速胜出的 `upos-sz-mirrorzos.bilivideo.com` 返回；5 秒初始定位的完整 SIDX probe 为
+1,007 ms，同会话向前跳到 28 秒时复用元数据并直接沿用赢家 CDN，媒体片段 probe 为 185 ms，首帧等待
+295 ms。场景同时通过 AV1 硬解、seek 前后 PTS 单调和 stop 后资源回基线断言。对比修复前现场的 5,878 ms
+视频 probe，本次已消除代码侧的 4 MiB init 探测、坏 CDN 串行等待和 seek 大预缓冲；公网 CDN 自身延迟仍是
+首次未缓存定位的外部变量。
+
+## Phase 76：发布前代码体检与 Range Seek 完整性收口（2026-08-14）
+
+本轮在不提升版本号、不创建分支的前提下复查全部生产/测试/Bench 源集和当前工作树。Range Seek 的小范围缓存
+现在只接收与请求 byte range 精确等长的数据；短读不会进入缓存，缓存的 `byte[]` 也不再向调用方暴露可修改的
+内部数组。视频元数据读取同样在返回前校验完整长度，并把短读计入 CDN 健康状态，避免一次残缺响应污染后续
+10 分钟内的所有 seek。
+
+`HttpRangeClient.CdnResponse` 现在携带经过参数剥离和 HTTP 重定向后的实际响应 URL。音视频 Range 调用方以该 URL
+记录成功/失败、保存赛马赢家并传递后续媒体片段请求；串行 fallback 或重定向命中备用 CDN 后，不会再误把最初的
+慢/失败节点标成赢家。CDN 历史评分的过期观测改为收敛到未知主机的中性分，而不是衰减到零后把陈旧失败节点排在
+新节点之前。音视频 Range race 的规范属性统一为 `ncpb.bili.media.range_race.*`，旧 audio 属性仍兼容，候选线程数
+强制限制在 1～8。
+
+UI 资源生成器改为同目录临时文件加原子替换，避免生成过程被中断时留下半张 PNG。缓存、短读、CDN 评分和属性
+兼容性均增加纯 Java 回归；公共 loading、中控台三态图和隐私遮罩的正式资源契约由完整测试继续覆盖。
+
+本机云同步软件会持续向被忽略的 `build/`/`bin/` 恢复形如 `Foo 2.class` 的冲突副本。构建脚本现在禁止 Java
+编译任务加载/保存这类被污染的 build-cache 输出，并在实际执行编译前后删除冲突副本；JAR 打包排除及生产 JAR
+零冲突副本门槛继续保留。因为同步软件也会在任务间隙污染资源目录，本机发布验证仍必须传
+`-PncpbBuildDirectory=/private/tmp/...`。已清除当时 `bin/` 中 1,186 个生成冲突副本；同步软件随后仍可能恢复，
+它们均为忽略文件且不会进入发布包。`run/saves` 中三个世界存档冲突副本未自动删除，避免损坏用户存档。
+
+隔离全量命令 `clean build -PenableModBench=true -PncpbBuildDirectory=/private/tmp/ncpb-full-review-20260814
+--no-daemon --no-build-cache` 通过：220 suites / 836 tests / 0 failures / 0 errors / 0 skipped；Bench 源集、生产
+JAR、embedded native、法律材料、Scene Editor JiJ 和冲突副本门槛全部成功。Python 工具测试 41/41 通过，
+全部工具脚本也通过语法编译。产物为单一六平台通用 JAR，大小 8.8 MiB，仍低于 10 MB；无改动重跑可复用
+Gradle configuration cache，并在约 2 秒完成。
+
 ## 推荐的新会话工作流
 
 1. 阅读本文档；
@@ -2811,4 +2910,4 @@ production JAR 的 `verifySceneEditorJiJ` 结构门槛。Scene Editor 库版本�
    软件 AV1 解码，以及 phase71 v48 硬件 AV1/H.264 回退与 10 MB 通用 JAR 闭环；后续按用户问题报告
    修复兼容性。物理设备矩阵仅在能够取得对应硬件时补做，不阻断当前发布；
 6. 每批继续运行 Java、Python、`git diff --check`；
-7. 涉及真实媒体链路时复用 `ncpb.real-bv-playback`。
+7. 涉及真实媒体链路时复用阶段 73 的 `ncpb.real-bv-playback` 音视频联合门槛。

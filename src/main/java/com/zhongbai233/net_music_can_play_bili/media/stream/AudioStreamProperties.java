@@ -5,8 +5,10 @@ import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
 /** JVM property boundary for HTTP audio, Dolby queues, live video samples, and stream recovery. */
 public final class AudioStreamProperties {
     static final String FORMAT_WAIT_SECONDS = "ncpb.bili.media.format_wait_seconds";
-    static final String RANGE_RACE_MAX_CANDIDATES = "ncpb.bili.audio.range_race.max_candidates";
-    static final String RANGE_RACE_TIMEOUT_MILLIS = "ncpb.bili.audio.range_race.timeout_ms";
+    static final String RANGE_RACE_MAX_CANDIDATES = "ncpb.bili.media.range_race.max_candidates";
+    static final String LEGACY_RANGE_RACE_MAX_CANDIDATES = "ncpb.bili.audio.range_race.max_candidates";
+    static final String RANGE_RACE_TIMEOUT_MILLIS = "ncpb.bili.media.range_race.timeout_ms";
+    static final String LEGACY_RANGE_RACE_TIMEOUT_MILLIS = "ncpb.bili.audio.range_race.timeout_ms";
     static final String SEGMENT_BASE_CACHE_MAX_ENTRIES =
             "ncpb.bili.audio.segment_base_cache.max_entries";
     static final String LEGACY_SEGMENT_BASE_CACHE_MAX_ENTRIES =
@@ -31,8 +33,10 @@ public final class AudioStreamProperties {
     public static Http http() {
         return new Http(
                 NcpbSystemProperties.intValue(FORMAT_WAIT_SECONDS, 30),
-                NcpbSystemProperties.intValue(RANGE_RACE_MAX_CANDIDATES, 1),
-                NcpbSystemProperties.longValue(RANGE_RACE_TIMEOUT_MILLIS, 2_500L),
+                NcpbSystemProperties.intValue(
+                        RANGE_RACE_MAX_CANDIDATES, LEGACY_RANGE_RACE_MAX_CANDIDATES, 3),
+                NcpbSystemProperties.longValue(
+                        RANGE_RACE_TIMEOUT_MILLIS, LEGACY_RANGE_RACE_TIMEOUT_MILLIS, 1_500L),
                 NcpbSystemProperties.intValue(
                         SEGMENT_BASE_CACHE_MAX_ENTRIES, LEGACY_SEGMENT_BASE_CACHE_MAX_ENTRIES, 512));
     }
@@ -65,7 +69,7 @@ public final class AudioStreamProperties {
             long rangeRaceTimeoutMillis, int segmentBaseCacheMaxEntries) {
         public Http {
             formatWaitSeconds = Math.max(15, formatWaitSeconds);
-            rangeRaceMaxCandidates = Math.max(1, rangeRaceMaxCandidates);
+            rangeRaceMaxCandidates = Math.clamp(rangeRaceMaxCandidates, 1, 8);
             rangeRaceTimeoutMillis = Math.max(250L, rangeRaceTimeoutMillis);
             segmentBaseCacheMaxEntries = Math.max(1, segmentBaseCacheMaxEntries);
         }

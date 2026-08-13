@@ -1,9 +1,14 @@
 package com.zhongbai233.net_music_can_play_bili.media.codec;
 
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliCdnSelector;
 import com.zhongbai233.net_music_can_play_bili.media.Fmp4ToMp4Converter;
+import com.zhongbai233.net_music_can_play_bili.media.stream.AudioStreamProperties;
 import com.zhongbai233.net_music_can_play_bili.media.stream.ChunkPrefetchInputStream;
+import com.zhongbai233.net_music_can_play_bili.media.stream.CdnHealthTracker;
+import com.zhongbai233.net_music_can_play_bili.media.stream.CdnUrlFallbacks;
 import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4RangeSeekSupport;
+import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4SeekRangeCache;
 import com.zhongbai233.net_music_can_play_bili.media.stream.Fmp4StreamParser;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeClient;
 import org.slf4j.Logger;
@@ -11,6 +16,7 @@ import org.lwjgl.system.MemoryUtil;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker.Category;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseExecutor;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 
 import javax.sound.sampled.UnsupportedAudioFileException;
 import java.io.ByteArrayOutputStream;
@@ -32,6 +38,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -47,6 +56,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private static final Fmp4NativeVideoProperties.Seek SEEK = Fmp4NativeVideoProperties.seek();
     private static final Fmp4NativeVideoProperties.FirstFrameProbe FIRST_FRAME_PROBE =
             Fmp4NativeVideoProperties.firstFrameProbe();
+    private static final AudioStreamProperties.Http HTTP_STREAM_PROPERTIES = AudioStreamProperties.http();
     private static final int MAX_PENDING_FRAMES = PROPERTIES.maxPendingFrames();
     private static final int FMP4_INIT_PROBE_BYTES = SEEK.initProbeBytes();
     private static final int FMP4_MOOF_SCAN_BYTES = SEEK.moofScanBytes();
@@ -61,6 +71,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private static final long FMP4_SAFE_NO_COPY_DROP_GUARD_NANOS = Math.max(0L,
             SEEK.noCopyDropGuardMillis() * 1_000_000L);
     private static final int FMP4_STREAM_RECOVERY_ATTEMPTS = PROPERTIES.streamRecoveryAttempts();
+    private static final int RANGE_RACE_MAX_CANDIDATES = HTTP_STREAM_PROPERTIES.rangeRaceMaxCandidates();
+    private static final long RANGE_RACE_TIMEOUT_MILLIS = HTTP_STREAM_PROPERTIES.rangeRaceTimeoutMillis();
     private static final int DECODER_CLOSE_MAX_ATTEMPTS = 3;
     private static final long DECODER_CLOSE_INITIAL_BACKOFF_MILLIS = 25L;
     private static final byte[] DECODE_ONLY_FRAME = new byte[0];
@@ -69,6 +81,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private static final long SEGMENT_BASE_TTL_MILLIS = TimeUnit.MINUTES.toMillis(30);
     private static final int MAX_SEGMENT_BASE_ENTRIES = PROPERTIES.segmentBaseCacheMaxEntries();
     private static final ConcurrentHashMap<String, SegmentBaseInfo> SEGMENT_BASE_BY_URL = new ConcurrentHashMap<>();
+    private static final ExecutorService RANGE_RACE_EXECUTOR = Executors.newFixedThreadPool(
+            RANGE_RACE_MAX_CANDIDATES, NetMusicThreadFactory.daemon("bili-video-range-race"));
 
     /** fMP4 模式下的媒体地址；直播总线模式为 null。 */
     private final URL videoUrl;
@@ -806,17 +820,10 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         if (info == null) {
             return null;
         }
-        InputStream indexStream = null;
         InputStream rangeStream = null;
         try {
-            HttpRangeClient.CdnResponse response = http.getRange(videoUrl, info.indexStart(), info.indexEnd());
-            indexStream = trackInput(response.body());
-            int status = response.statusCode();
-            if (status != 206 && status != 200) {
-                return null;
-            }
-            byte[] sidxBytes = readAllBytes(indexStream,
-                    Math.max(1L, info.indexEnd() - info.indexStart() + 1L));
+            SeekRangeBytes sidxRange = readSeekMetadataRange(info.indexStart(), info.indexEnd());
+            byte[] sidxBytes = sidxRange.bytes();
             Fmp4RangeSeekSupport.SidxIndex sidx = Fmp4RangeSeekSupport.parseSidx(sidxBytes, info.indexStart());
             if (sidx == null || sidx.entries().isEmpty()) {
                 return null;
@@ -825,7 +832,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             if (selected == null) {
                 selected = sidx.entries().get(0);
             }
-            ChunkRange range = openRange(selected.byteStart());
+            URL seekUrl = sourceUrlOrVideoUrl(sidxRange.sourceUrl());
+            ChunkRange range = openRange(seekUrl, selected.byteStart());
             rangeStream = range.stream();
             Fmp4RangeSeekSupport.MoofProbe probe = Fmp4RangeSeekSupport.readMoofProbe(rangeStream, targetSeconds,
                     init.timescale() > 0 ? init.timescale() : 16_000, FMP4_MOOF_SCAN_BYTES,
@@ -855,7 +863,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     "视频fMP4 SidxSeek: target={}s fragment={}s residual={}s timelineStart={}s byte={} totalBytes={} probe={}ms host={}",
                     playbackSeconds, fragmentSeconds, residualSeconds, startOffsetMillis / 1000.0D,
                     selected.byteStart(), init.contentLength(), (System.nanoTime() - seekStartNanos) / 1_000_000L,
-                    videoUrl.getHost());
+                    seekUrl.getHost());
             logger().debug("视频fMP4 SidxSeek 选择: target={}s selectedFragment={}s startsWithSap={} byte={}",
                     playbackSeconds, fragmentSeconds, selected.startsWithSap(), selected.byteStart());
             return new Fmp4StreamStart(combined, residualSeconds, fragmentSeconds);
@@ -864,7 +872,6 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             return null;
         } finally {
             closeQuietly(rangeStream);
-            closeQuietly(indexStream);
         }
     }
 
@@ -912,6 +919,20 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     }
 
     private Fmp4RangeSeekSupport.InitSegment readInitSegment() throws IOException {
+        SegmentBaseInfo info = segmentBaseInfo(videoUrl.toString());
+        if (info != null) {
+            SeekRangeBytes initRange = readSeekMetadataRange(info.initStart(), info.initEnd());
+            Fmp4RangeSeekSupport.InitSegment init = Fmp4RangeSeekSupport.extractInitSegment(initRange.bytes(),
+                    initRange.totalLength(), (moovPayload, moov) -> {
+                        int videoTimescale = Fmp4ToMp4Converter.parseVideoTimescale(moovPayload);
+                        return videoTimescale > 0 ? videoTimescale : moov.timescale;
+                    });
+            if (init != null) {
+                return init;
+            }
+            logger().debug("视频 fMP4 segment_base init 不可用，回退通用探测: range={}-{} host={}",
+                    info.initStart(), info.initEnd(), initRange.sourceHost());
+        }
         HttpRangeClient.CdnResponse response = http.getRange(videoUrl, 0L, FMP4_INIT_PROBE_BYTES - 1L);
         InputStream body = trackInput(response.body());
         TrackedInputLease lease = new TrackedInputLease(body);
@@ -947,8 +968,121 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
     }
 
+    private SeekRangeBytes readSeekMetadataRange(long start, long endInclusive) throws IOException {
+        Fmp4SeekRangeCache.CachedRange cached = Fmp4SeekRangeCache.get(videoUrl, start, endInclusive);
+        if (cached != null) {
+            return new SeekRangeBytes(cached.bytes(), cached.totalLength(), cached.sourceHost(), cached.sourceUrl());
+        }
+        List<URL> candidates = CdnUrlFallbacks.candidates(videoUrl);
+        if (candidates.size() > 1 && RANGE_RACE_MAX_CANDIDATES > 1) {
+            SeekRangeBytes raced = readSeekMetadataRangeRace(candidates, start, endInclusive);
+            if (raced != null) {
+                Fmp4SeekRangeCache.put(videoUrl, start, endInclusive, raced.bytes(), raced.totalLength(),
+                        raced.sourceHost(), raced.sourceUrl());
+                return raced;
+            }
+        }
+        SeekRangeBytes result = readSeekMetadataRangeSingle(videoUrl, start, endInclusive, true);
+        Fmp4SeekRangeCache.put(videoUrl, start, endInclusive, result.bytes(), result.totalLength(),
+                result.sourceHost(), result.sourceUrl());
+        return result;
+    }
+
+    private SeekRangeBytes readSeekMetadataRangeRace(List<URL> candidates, long start, long endInclusive)
+            throws IOException {
+        int count = Math.min(RANGE_RACE_MAX_CANDIDATES, candidates.size());
+        CompletableFuture<SeekRangeBytes> first = new CompletableFuture<>();
+        List<Future<?>> tasks = new ArrayList<>(count);
+        AtomicInteger failures = new AtomicInteger();
+        for (int i = 0; i < count; i++) {
+            URL candidate = candidates.get(i);
+            tasks.add(RANGE_RACE_EXECUTOR.submit(() -> {
+                if (first.isDone()) {
+                    return;
+                }
+                try {
+                    first.complete(readSeekMetadataRangeSingle(candidate, start, endInclusive, false));
+                } catch (IOException error) {
+                    if (failures.incrementAndGet() >= count) {
+                        first.completeExceptionally(error);
+                    }
+                }
+            }));
+        }
+        try {
+            SeekRangeBytes winner = first.get(RANGE_RACE_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+            BiliCdnSelector.recordSuccess(winner.sourceUrl());
+            logger().debug("视频小范围 CDN 赛马完成: range={}-{} bytes={} total={} host={}",
+                    start, endInclusive, winner.bytes().length, winner.totalLength(), winner.sourceHost());
+            return winner;
+        } catch (java.util.concurrent.TimeoutException timeout) {
+            logger().debug("视频小范围 CDN 赛马超时，回退串行读取: range={}-{} timeout={}ms candidates={}",
+                    start, endInclusive, RANGE_RACE_TIMEOUT_MILLIS, count);
+            return null;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IOException("interrupted while racing video seek metadata", interrupted);
+        } catch (java.util.concurrent.ExecutionException failed) {
+            Throwable cause = failed.getCause();
+            if (cause instanceof IOException io) {
+                throw io;
+            }
+            throw new IOException("video seek metadata race failed", cause);
+        } finally {
+            tasks.forEach(task -> task.cancel(true));
+        }
+    }
+
+    private SeekRangeBytes readSeekMetadataRangeSingle(URL source, long start, long endInclusive,
+            boolean allowCdnFallback) throws IOException {
+        HttpRangeClient.CdnResponse response = allowCdnFallback
+                ? http.getRange(source, start, endInclusive)
+                : http.getRangeDirect(source, start, endInclusive);
+        InputStream body = trackInput(response.body());
+        TrackedInputLease lease = new TrackedInputLease(body);
+        long started = System.currentTimeMillis();
+        try (lease) {
+            URL actualSource = response.sourceUrl();
+            int status = response.statusCode();
+            if (status != 206 && (status != 200 || start != 0L)) {
+                throw new IOException("HTTP " + status + " while reading fMP4 seek metadata");
+            }
+            long expected = Math.max(1L, endInclusive - start + 1L);
+            byte[] bytes = readAllBytes(body, expected);
+            if (bytes.length == 0) {
+                throw new IOException("empty fMP4 seek metadata range");
+            }
+            if (bytes.length < expected) {
+                CdnHealthTracker.recordFailure(actualSource, CdnHealthTracker.FailureKind.SHORT_READ);
+                throw new IOException("short fMP4 seek metadata range from " + actualSource.getHost()
+                        + ": expected=" + expected + " actual=" + bytes.length);
+            }
+            long totalLength = response.totalLength() > 0L ? response.totalLength() : response.contentLength();
+            CdnHealthTracker.recordSuccess(actualSource, System.currentTimeMillis() - started, bytes.length);
+            if (allowCdnFallback) {
+                BiliCdnSelector.recordSuccess(actualSource.toString());
+            }
+            return new SeekRangeBytes(bytes, totalLength, actualSource.getHost(), actualSource.toString());
+        }
+    }
+
     private ChunkRange openRange(long start) throws IOException {
-        return new ChunkRange(trackInput(new ChunkPrefetchInputStream(videoUrl, start)));
+        return openRange(videoUrl, start);
+    }
+
+    private ChunkRange openRange(URL source, long start) throws IOException {
+        return new ChunkRange(trackInput(new ChunkPrefetchInputStream(source, start)));
+    }
+
+    private URL sourceUrlOrVideoUrl(String sourceUrl) {
+        if (sourceUrl == null || sourceUrl.isBlank()) {
+            return videoUrl;
+        }
+        try {
+            return URI.create(sourceUrl).toURL();
+        } catch (Exception ignored) {
+            return videoUrl;
+        }
     }
 
     private static float seekTargetSeconds(float playbackSeconds, double durationSeconds) {
@@ -1040,6 +1174,9 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
 
     private record SegmentBaseInfo(long initStart, long initEnd, long indexStart, long indexEnd,
             long createdAtMillis) {
+    }
+
+    private record SeekRangeBytes(byte[] bytes, long totalLength, String sourceHost, String sourceUrl) {
     }
 
     private record ChunkRange(InputStream stream) {
