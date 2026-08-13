@@ -27,3 +27,21 @@ Linux x86_64 至少提供 `GLIBC_2.35`（通常为 glibc 2.35+）；更老的发
 
 AOMedia Patent License 包含互惠和防御性终止条件；随包提供该许可证不代表 AV1 在所有司法辖区绝对不存在
 第三方专利主张。
+
+## 发布策略与已知限制
+
+`media-min-v48` 的六个平台归档已通过 GitHub hosted runner 的构建、动态加载、runtime identity、JNI 导出、
+文件集、哈希和架构检查；主项目生产 JAR 仍是一份覆盖六个平台的离线通用包。hosted runner 结果只能证明
+bundle 可加载且身份正确，不能替代所有物理 GPU/驱动上的 AV1 解码认证。当前发布采用“固定组合验证通过后先发布，
+其余兼容性按问题报告补齐”的策略。
+
+需要注意：
+
+- B站正常会提供 H.264 兼容候选，AV1 硬解失败时可进入 H.264 硬解/软解；若特定响应没有可用 H.264，播放会明确失败，客户端不会下载或启用 AV1 软件 decoder；
+- Linux 的 glibc 与 libva/libdrm 依赖属于加载前置条件，缺失时 H.264 软件回退也可能无法启动；
+- 同一次发布必须原子更新六个平台 native、`native/README.md`、`native/SHA256SUMS`、许可证和对应源码材料，禁止只替换某个平台或单个动态库；
+- 用户报告视频问题时，应附操作系统/架构、GPU/驱动、Linux 发行版与 glibc/libva 信息、BV/画质、requested/actual codec/backend、fallback reason 和资源关闭诊断；
+- 出现旧 decoder 关闭超时或异常时应保持 fail-closed；不能为了自动恢复而允许新旧 native context 并存。
+
+字段级配置拒绝原因、更宽的 GPU/驱动/模组矩阵和 GitHub Actions 运行时告警清理属于发布后改进，不是当前
+v48 的功能阻断项。

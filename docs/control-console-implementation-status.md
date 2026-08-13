@@ -127,7 +127,7 @@ OpenAL source/buffer 的关闭也已按 native batch 分配纯标量 operationId
 
 ### 部分实现
 
-- 服务端配置权威：已有 `mayBuild`、owner/accessMode/trusted ACL、授权后打开、10 秒独占编辑租约、距离、区块、字段、按元素类型的 contentMode、64 KiB 包体、限流和 revision 校验，但没有字段级拒绝原因；
+- 服务端配置权威：已有 `mayBuild`、owner/accessMode/trusted ACL、授权后打开、10 秒独占编辑租约、距离、区块、字段、按元素类型的 contentMode、64 KiB 包体、限流和 revision 校验；目前只缺更细的字段级拒绝原因，属于发布后诊断/交互增强，不影响服务端拒绝非法配置；
 - 字幕：固定文本、歌词/翻译轨、AI CC、滚动窗口、主色、译文色、背景色、左/中/右对齐、最大宽度和 `Font.split` 换行已经贯通检查器、漫游、NBT、packet 与普通/滚动 renderer；AI CC 使用 source/session 共享请求、权威媒体时钟和人工歌词/固定文本安全降级；
 - 音源：唱片机路径和直播 source-position 主输出 relay 已接通；直播标题、房间信息和状态元数据字幕已共享 source/session 快照；
 - terrain：hardRange、UNKNOWN、chunk load/unload tombstone、NEAR 原版全材质、MID/FAR 代表材质简化、方块实体
@@ -147,8 +147,15 @@ OpenAL source/buffer 的关闭也已按 native batch 分配纯标量 operationId
 ### 尚未扩展的兼容范围
 
 当前系统级闭环来自 macOS/Apple M4/VideoToolbox 与固定 Iris/MakeUp、资源包和模组组合。尚未重复覆盖所有
-操作系统、GPU、驱动、模组和资源包；这属于设备/兼容矩阵宽度，不再是上述固定组合中的功能门槛。AV1 六平台
-v39 native bundle、硬解输出重排序和资源基线仍由 AV1 迁移计划单独跟踪，不能由 H.264 系统验收替代。
+操作系统、GPU、驱动、模组和资源包；这属于设备/兼容矩阵宽度，不再是上述固定组合中的功能门槛。当前
+`media-min-v48` 六平台 hosted 构建、加载、符号和架构审计已经通过；不同物理 GPU/驱动上的 AV1 输出重排和
+资源基线仍由 AV1 迁移计划作为发布后兼容验证跟踪，不能由 H.264 系统验收替代，也不能表述为全平台认证。
+
+### 当前发布决策
+
+在没有六设备物理矩阵的条件下，当前版本按“先发布、问题驱动修复”处理。既有固定组合的功能闭环、自动化、
+六平台 native 身份和生产 JAR 门槛仍是硬要求；扩大 GPU/驱动、模组和资源包覆盖不再阻断发布。发布问题单应优先
+携带系统/架构、GPU/驱动、媒体来源、请求与实际 codec/backend、fallback reason 和关闭诊断，以便定向复现。
 
 ### 当前不能宣称已满足的验收项
 

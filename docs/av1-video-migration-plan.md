@@ -7,7 +7,7 @@
 - 默认优先 AV1 硬件解码；
 - AV1 硬解不可用时，优先降低画质继续寻找可硬解的 AV1；
 - 再回退到不超过用户画质上限的 H.264；
-- 当前发布包不包含 AV1 软件解码；只有未来引入 dav1d/libaom 后，才按安全预算启用；
+- 当前发布包不包含、也不计划在本轮引入 AV1 软件解码；AV1 硬解失败时直接回退 H.264；
 - 构建、请求、选择和解码路径均不再包含 HEVC；
 - 保留 H.264 作为旧视频、旧硬件和 B站编码覆盖不足时的兼容后端。
 
@@ -67,7 +67,7 @@ $$
 - AV1 按 AOMedia Patent License 1.0 获得来自许可人的附条件免版税专利许可，但不能宣传为全球绝对零专利风险；
 - 二进制分发 AV1 实现时，在 JAR 的法律声明中附带 AOMedia Patent License 1.0；
 - 继续满足 FFmpeg LGPL v2.1+ 的动态链接、精确对应源码、修改补丁、构建说明和许可证随包要求；
-- 第一阶段使用 FFmpeg 内置 AV1 decoder 连接各平台硬件后端，不引入 `libaom` 或 `dav1d`。该内置 decoder 在没有 hwaccel 时会返回 `ENOSYS`，不提供原生软件解码；未来需要软件 AV1 时优先评估 dav1d，并补充其 BSD 许可证与跨平台构建审计。
+- 当前使用 FFmpeg 内置 AV1 decoder 连接各平台硬件后端，不引入 `libaom` 或 `dav1d`。该 decoder 在没有 hwaccel 时返回 `ENOSYS`，随后进入 H.264 候选；只有 B站不再提供足够的 H.264 兼容流或产品需求发生变化时，才重新评估软件 AV1、许可证与体积成本。
 
 ## 目标播放决策
 
@@ -96,7 +96,7 @@ flowchart TD
 1. 不超过用户画质上限的最高 AV1，硬件解码；
 2. 较低画质 AV1，硬件解码；
 3. 不超过用户画质上限的最高 H.264；
-4. 没有可用 H.264 时失败。未来引入 dav1d/libaom 后，才能追加受预算限制的 AV1 软件候选。
+4. 没有可用 H.264 时明确失败；当前不会追加 AV1 软件候选。
 
 为避免连续初始化多个相邻档位造成黑屏，单次播放最多进行三个 AV1 硬解探测：
 
@@ -110,8 +110,8 @@ flowchart TD
 
 | 模式 | 行为 |
 | --- | --- |
-| `auto` | 最多三条 AV1 硬解；失败后回退 H.264；有已验证软件 backend 时最后尝试安全上限内软件 AV1；默认值 |
-| `prefer-av1` | AV1 硬解优先；有已验证软件 backend 时在 H.264 前尝试安全上限内软件 AV1 |
+| `auto` | 最多三条 AV1 硬解；失败后回退 H.264；默认值 |
+| `prefer-av1` | AV1 硬解优先；失败后回退 H.264 |
 | `compatibility` | 只探测一条最高 AV1 硬解，失败后直接 H.264；禁止软件 AV1 |
 | `h264` | 只选 H.264，用于故障排查和老设备 |
 
@@ -155,7 +155,7 @@ VideoStreamPlan
 AV1 decoder open API 需要区分：
 
 - 要求硬解且失败，不允许在同一 handle 中静默回落 CPU；
-- 显式软件解码（仅在未来集成 dav1d/libaom 后有效）；
+- 显式软件解码请求在当前 bundle 中必须明确拒绝；
 - 普通 auto（仅供兼容或诊断，不用于候选决策）。
 
 否则上层无法知道“AV1 硬解失败”还是“AV1 已经偷偷开始软解”。建议 native open 结果返回强类型状态或至少提供可稳定查询的 backend/fallback reason。
@@ -218,23 +218,11 @@ $$
 
 若实际解码 FPS 持续低于目标的 80%，或时间差持续扩大，则当前会话回退一次。回退后锁定新后端，禁止 AV1/H.264 来回切换。阈值应集中在独立策略类中，不散落于 renderer、decoder 和 UI。
 
-### 软件 AV1 默认上限（未来能力）
+### 软件 AV1 发布决策
 
-`media-min-v38` 不包含 dav1d/libaom；FFmpeg 内置 `av1` decoder 在无
-hwaccel 时返回 `ENOSYS`。因此以下预算当前不得生成实际播放候选，只保留为
-未来引入软件 decoder 后的策略设计：
-
-第一版采用保守默认值：
-
-| 分辨率/帧率 | 默认策略 |
-| --- | --- |
-| ≤ 720p60 | 可尝试软件 AV1 |
-| ≤ 1080p30 | 可尝试软件 AV1 |
-| 1080p60 | `auto` 默认回退 H.264；`prefer-av1` 可探测 |
-| 1440p | 默认回退 H.264 |
-| 4K/8K | 禁止自动软件 AV1 |
-
-这些是安全策略，不是宣称所有硬件的固定性能。后续应以真实客户端基准调整，并允许高级用户覆盖；覆盖值必须有硬上限，防止无界 frame 分配。
+`media-min-v48` 不包含 dav1d/libaom；FFmpeg 内置 `av1` decoder 在无硬件后端时返回 `ENOSYS`。
+当前候选策略不会生成软件 AV1，所有画质在 AV1 硬解失败后均回退 H.264。历史版本中关于软件 AV1
+分辨率预算和 dav1d 构建的记录只保留在交接文档中作为决策历史，不再属于当前发布待办。
 
 ## fMP4 与 AV1 数据路径
 
@@ -356,7 +344,7 @@ AV1 优先复用现有 NV12/YUV shader 路径。不要为了快速接入只实�
 
 ## 分阶段实施
 
-> 实施状态（当前工作区）：Java 请求、冻结 playurl JSON 候选矩阵、首帧回退、四种 codec policy、软件 AV1 安全上限、五秒持续性能预算/一次性 H.264 锁定回退、请求与实际 codec/backend UI 和 AV1 fMP4 基础路径已实现；真实 B站 AV1 的 init/SIDX/首 fragment 与 35 秒 range fragment已按字节/SHA-256 冻结，生产 parser、SIDX range、sample boundary 和 packet PTS 测试通过。生产投影候选循环已用真实 AV1/H.264 playurl 计划和确定性 AV1 transport 启动失败完成集成验证：codec 13 native context 先收敛，同 session 再切到真实 codec 7，观测媒体时间约 6.92 秒，最终 native/upload/自有内存全部回到基线；同时候选未提交首帧前不再进入离屏暂停，避免把 provisional probe frame 卡在 packet-drain 事务中。macOS ARM64 上的生产 integrated-client 又用同一冻结真实字节完成了默认 `2000ms/256 packets` 预算下的 VideoToolbox AV1 首帧、0→35 秒 SIDX Range Seek、generation 换代、PTS 单调和全资源归零。当前嵌入的 `media-min-v38` 六平台产物仍只有 AV1 硬解。v39 补丁已固定 dav1d 1.5.4、区分 native-hardware 与 libdav1d-software decoder、加入 EOF JNI、许可证/对应源码和静态依赖门槛；macOS ARM64 与 x86_64 已分别完成真实 v39 构建和冻结片段 125 packet/125 frame 的 libdav1d 软件 AV1 smoke，ARM64 还用测试专用 delay overlay 验证 EOF 额外排出 7 个 pending frames，x86_64 另在 Rosetta JVM 中完成五库加载和 5/18 JNI 导出核验。Rosetta 对 VideoToolbox AV1 的拒绝只作为负向设备证据，不计作硬解成功。导入、Gradle、tag workflow 与 runtime smoke 已收敛为 v38/v39 双精确 schema：v39 必须有 dav1d 许可证、provenance 内的 runtime version/ELF GLIBC floor 和第 18 个 `sendEndOfStream` JNI 导出，混包会 fail closed。六平台 v39 尚未生成和整体替换，Java bundled capability 仍保持 false。后续仍需完成六平台动态加载、其余目标后端的硬解连续播放/seek与输出重排，以及设备矩阵验证。
+> 当前发布状态（2026-08-13）：生产包已切换到 `media-min-v48`，保留 H.264 软件/硬件解码，AV1 仅使用平台硬件后端，完全移除 dav1d/libaom/HEVC。Linux、macOS、Windows 的 ARM64/x86_64 六套归档已由 hosted runner 完成构建、动态加载、runtime identity、JNI 导出、文件集、哈希和架构审计；主项目生产 JAR 为单一六平台通用包，CI 实测 `9,342,446 bytes`。Java 候选、真实 fMP4/SIDX/PTS、首帧双预算、同 playurl H.264 回退、持续性能保护和资源关闭诊断已实现，Apple M4/VideoToolbox 固定组合已有实机证据。没有可用的六设备 GPU/驱动矩阵，因此其余物理硬件兼容性明确延期为发布后验证，不再阻断本轮发布，也不得表述为已经获得全平台硬解认证。
 
 ### 阶段 1：纯 Java 候选选择
 
@@ -376,12 +364,11 @@ AV1 优先复用现有 NV12/YUV shader 路径。不要为了快速接入只实�
 - [x] JNI 映射 13 → `AV_CODEC_ID_AV1`，拒绝 12/未知值；
 - [x] 六个平台 GitHub Actions 构建产物已发布且归档校验通过；
 - [x] Windows x86_64 DLL 依赖闭包可加载，关键视频 JNI 导出存在；
-- [ ] 六个平台动态加载与目标设备依赖审计通过；
-- [x] dav1d native smoke 已在 macOS ARM64 用冻结真实样本解出完整首 fragment（125/125 帧）；六平台 bundle
-  替换仍属于发布门槛而非本项单平台功能证明。主 Release workflow 已把首段和 35 秒 seek 段的真实 JNI decode
-  接入六平台 runtime matrix：v39 必须在各目标 runner 上返回 `cpu(libdav1d)`，两段均为 125 packet/125 frame，
-  PTS 精确覆盖 0→4.96 秒与 35→39.96 秒，EOF/flush 后无陈旧帧，close 后 FFmpeg/D3D11 当前资源回到打开前
-  基线，并归档结构化 JSON；当前远端尚无 v39 六平台产物，因此自动门槛已接线但不能代替待完成的实跑证据。
+- [x] 六个平台 hosted runner 动态加载、runtime identity、JNI 导出、文件集、哈希和架构审计通过；
+- [x] v48 的导入、构建与生产 JAR 门槛确认不包含 dav1d/libaom，并保持 AV1 software capability=false。
+
+目标 GPU/驱动上的真实 AV1 decode、seek、输出重排和资源基线属于发布后兼容验证，不与 hosted runner 的
+“库可以加载并具有正确身份”混为一谈。
 
 完成标准：发布二进制不含 HEVC decoder，H.264 软件解码和 AV1 平台硬解可验证。
 
@@ -395,12 +382,10 @@ AV1 优先复用现有 NV12/YUV shader 路径。不要为了快速接入只实�
 - [x] 真实 B站 AV1 m4s 已在 macOS ARM64 / VideoToolbox 生产路径上完成连续播放和
   0→35 秒 SIDX range seek；其余目标平台仍归六平台设备矩阵验收。
 - [x] fMP4 `trun` version 0/1 composition offset 与 packet PTS 语义正确；
-- [x] v39 JNI 的 EOF delayed-frame drain 正确：测试专用 libdav1d delay overlay 驱动冻结真实片段，EOF 前
-  118 帧、EOF drain 7 帧、最终 125 帧且 PTS 严格递增；默认 release patch 仍为 125+0，不受 overlay 影响。
-- [ ] 平台硬解的 native 输出重排序正确，并在六平台 v39 重建后重复 EOF/seek smoke。
-  手工触发的 `.github/workflows/native-av1-device-validation.yml` 已将六个平台映射到带物理 GPU/驱动的专用
-  self-hosted runner；脚本会按平台强制 `videotoolbox/d3d11va/vaapi` actual backend，并执行与软件门槛相同的
-  双片段、EOF、seek、PTS 和资源基线断言。该工作流必须取得实际 artifact 后才算设备证据，YAML 存在本身不勾选本项。
+- [x] EOF、flush、composition time、seek 与 PTS 的 parser/JNI 回归门槛通过。
+
+平台硬解的 native 输出重排序仍由 `.github/workflows/native-av1-device-validation.yml` 在有物理 GPU runner 时验证。
+该工作流和汇总器已经存在，但没有真实 artifact 时只代表验证能力已就绪，不代表六设备认证通过。
 
 完成标准：平台硬解路径可稳定播放真实 AV1 DASH 样本，且 H.264 回归测试无变化。
 
@@ -416,25 +401,19 @@ AV1 优先复用现有 NV12/YUV shader 路径。不要为了快速接入只实�
 
 ### 阶段 5：性能保护与发布合规
 
-- [x] 软件 AV1 默认上限策略及单测已实现；
-- [ ] 待六平台 v39 bundle 整体替换后由 README 身份自动生成 bundled capability=true（v38 当前自动为 false），并执行真实
-  `720p60/1080p30/prefer-av1 1080p60` 性能验收；
+- [x] 软件 AV1 明确禁用，v48 README 与生成能力均保持 bundled capability=false；
 - [x] 五秒持续性能窗口已记录 backend、平均/p95、实际 FPS、队列饥饿、丢帧率、音画差和 native 峰值；
 - [x] 低于目标 FPS 80% 或音画差持续增长时，每 session 只回退一次并锁定 H.264；无 H.264 时稳定提示且不振荡；
 - [x] 投影与手持 UI 显示请求/实际画质、codec、backend，并区分主要 fallback reason；
 - [x] NV12 低复制路径可供 AV1 复用；
-- [ ] 内存、surface、帧队列和回退清理诊断通过；
-  当前 macOS ARM64 的真实 codec 13 启动失败→同 session H.264 场景已重新通过：媒体时间最大 6,440 ms、
-  native bytes 从峰值 3,188,412 回到基线，HTTP/close、queue、纹理/staging/PBO 与全部自有内存均收敛；
-  Windows D3D11 texture/surface 和其余目标设备的物理计数仍缺，故本项保持未勾选。
-  native 设备工作流现会记录打开前、解码中、关闭后的 FFmpeg bytes、D3D11 texture/surface/logical bytes；它补强
-  decoder 物理资源证据，但不替代生产客户端 frame queue、纹理/PBO 与回退链路的设备矩阵。
+- [x] 内存、surface、帧队列和回退清理诊断已实现，并在 Apple M4 固定组合回到基线；
+  Windows D3D11、Linux VAAPI 和其他 GPU/驱动组合尚无物理计数证据，作为发布后兼容验证继续收集。
 - [x] 源资源附带 AOMedia Patent License 1.0 与第三方声明；
 - [x] 补齐 FFmpeg LGPL、精确源码、修改补丁、构建说明和发布校验和；
 - [x] 下载页面说明 H.264/AV1 能力和第三方许可证；GitHub Release notes 直接嵌入
   `docs/release-native-capabilities.md`，Gradle `check` 验证声明接线和 JAR 内法律材料。
 
-完成标准：自动化、六平台构建和目标设备矩阵通过后，才发布当前 native bundle。
+完成标准：自动化、六平台 hosted 构建/加载和固定实机组合通过即可发布；更宽的目标设备矩阵采用发布后兼容验证。
 
 ## 测试矩阵
 
@@ -500,7 +479,7 @@ python3 tools/verify_native_av1_device_matrix.py \
 汇总器要求平台集合精确等于六个平台，禁止重复/缺失/失败报告，并重新校验 runner 架构、v48 冻结身份、平台 exact
 actual backend、夹具 SHA-256、两段帧数/PTS 与资源基线；只靠 artifact 文件名不能通过。
 
-## 发布门槛
+## 当前发布门槛与延期验证
 
 以下条件全部满足后才能发布新 native bundle：
 
@@ -510,12 +489,22 @@ actual backend、夹具 SHA-256、两段帧数/PTS 与资源基线；只靠 arti
 - [x] AV1 硬解成功以 actual backend 为准；
 - [x] 8K/4K AV1 不会自动落入无界软件解码；
 - [x] AV1 失败可在同一次 playurl 响应内回退 H.264；
-- [ ] 回退不重置时间线、不串 session、不泄漏 native/GPU 资源；
-  当前 macOS ARM64 实机已证明同 session、非零时间线和最终资源基线；六平台/目标 GPU 重跑前不外推。
+- [x] 回退不重置时间线、不串 session，并在当前 Apple M4 固定组合收敛 native/GPU 资源；
+  该结论不外推为所有 GPU/驱动已通过。
 - [x] Java 干净全量测试通过，H.264 候选、seek、NV12/RGBA 与 CDN 代码路径完成编译回归；
-- [ ] 六个平台 native 构建、加载、符号和架构审计通过；
+- [x] 六个平台 native 构建、hosted runner 加载、符号和架构审计通过；
 - [x] AOMedia 与 FFmpeg 法律材料已随 JAR 和下载页面提供；生产 JAR 自动校验 AOMedia、第三方声明、
   native provenance 和六个平台 FFmpeg LGPL 文本均存在且非空。
+
+### 发布后非阻断兼容验证
+
+- 在获得对应设备或用户问题报告后，补跑 macOS/Windows/Linux 的实际 AV1 硬解、EOF、seek 和输出重排；
+- 收集 D3D11、VAAPI 与更多 VideoToolbox 设备的 native bytes、texture/surface、帧队列和纹理释放基线；
+- 复核 Linux 发行版的 glibc、libva、libva-drm、libdrm 和驱动组合；
+- 记录失败视频的 BV/画质、操作系统/架构、GPU/驱动、requested/actual backend 和 fallback reason；
+- 已超时或异常关闭的旧 decoder 必须保持 fail-closed，不能为了自动恢复而允许新 native context 与其重叠。
+
+这些项目决定兼容覆盖宽度，不再作为当前 v48 的发布阻断项；出现可复现问题后按设备和来源定向修复。
 
 ## 非目标
 
@@ -524,9 +513,9 @@ actual backend、夹具 SHA-256、两段帧数/PTS 与资源基线；只靠 arti
 - 所有设备均可硬解 AV1；
 - 所有 B站视频和画质均有 AV1；
 - 用户选择 8K 时必须输出 8K；
-- 软件 AV1 在 4K/8K 下可用；
+- 提供 AV1 软件解码；
 - AV1 完全不存在第三方专利主张；
-- 第一阶段引入 dav1d、libaom 或新的编码能力。
+- 本轮引入 dav1d、libaom 或新的编码能力。
 
 实现应优先保证确定性回退、资源安全和可观测性，再逐步扩大 AV1 硬件后端覆盖。除非 B站编码覆盖或产品需求发生
 变化，不再把 AV1 软件解码纳入发布包。

@@ -4,13 +4,15 @@
 > 主仓库：`/Users/zhongbai233/Documents/GitHub/NetMusicCanPlayBili`  
 > BenchMod：`/Users/zhongbai233/Documents/GitHub/BenchMod`  
 > 当前分支：`master`  
-> 状态：所有改动仍在工作区，尚未提交。
+> 状态：主项目已提交并推送到 `master`，当前发布基线为 `fb6c4f8`；对应 GitHub Actions
+> `31677258431` 已成功。
 
 ## 重启窗口后的第一条指令
 
 建议在新会话中直接说明：
 
-> 请先阅读 `docs/session-handoff-2026-08-10.md`，检查当前 `git status`，然后从“后续真实媒体集成验证”选择下一项继续优化。不要覆盖或回退现有未提交改动。
+> 请先阅读 `docs/session-handoff-2026-08-10.md`，检查当前 `git status`；以 `master/fb6c4f8` 为发布基线，
+> 优先处理用户实际报告的问题。没有可用物理设备矩阵时，不把扩展兼容认证作为发布阻断项。
 
 ## 当前结论
 
@@ -18,9 +20,13 @@
 
 当前基线：
 
-- 默认 Gradle 构建成功；
-- Java 测试：874/874 通过；
-- native importer/architecture/runtime/AV1 smoke Python 工具测试：28/28 通过；
+- `master` 提交 `fb6c4f8` 已推送，工作树与 `origin/master` 同步；
+- 本地 47-task `clean build` 成功，远端 Build & Release `31677258431` 成功；
+- CI 产出的六平台通用 JAR 为 `9,342,446 bytes`，低于 10 MB；
+- `media-min-v48` 的 Linux/macOS/Windows ARM64/x86_64 六个 hosted runner 均完成真实动态加载、
+  runtime identity 和 JNI exports 核验，包括 `macos-15-intel`；
+- Java 全量测试通过；
+- native importer/architecture/runtime/AV1 smoke Python 工具测试：36/36 通过；
 - `git diff --check` 通过；
 - ModBench 报告 Schema 验证通过；
 - 真实 BV `BV1GJ411x7h7` integrated-client 场景通过；
@@ -30,8 +36,11 @@
 - 真实现代唱片机插入公网 MP3 后的服务端 resolve、网络同步、客户端 SoundEngine/OpenAL 输出和弹出清理完整链通过；
 - 真实跨维度往返的两次 respawn/clone packet、加载 UI、ClientLevel unload 与 exact media cleanup 场景通过；
 - 最新默认 integrated-client 全量报告为 8/8 PASSED；
-- BenchMod 独立构建与三组 paired/一组 100 轮真实媒体报告通过；其工作区含本轮场景实现改动，尚未提交；
-- NetMusicCanPlayBili 改动尚未提交。
+- BenchMod 独立构建与三组 paired/一组 100 轮真实媒体报告通过；BenchMod 是独立仓库，不属于本次
+  NetMusicCanPlayBili `fb6c4f8` 推送范围。
+
+阶段记录按发生顺序保留，因此下文 v39/v46、dav1d 和“尚未生成”的表述描述的是当时状态；阶段 71 的 v48
+硬件 AV1 + H.264 回退决策覆盖这些历史方案。它们不再是当前待办，也不得据此重新把软件 AV1 带回发布包。
 
 上述基线已覆盖 `ResolveGeneration`、`PlaybackSessionId` 前二十七阶段切片、
 `PlaybackSourceId` 前四阶段切片、第 28 阶段真实 MP3 decoder/OpenAL 换代验证、第 29 阶段真实
@@ -2275,7 +2284,8 @@ sh ./gradlew runBenchClient \
 
 ## 当前工作区注意事项
 
-- NetMusicCanPlayBili 的改动全部未提交；不要执行 `git reset --hard`、`git clean -fd` 或 checkout 覆盖。
+- NetMusicCanPlayBili 当前发布基线已提交并推送为 `fb6c4f8`；开始新修改前仍应先检查 `git status`，不要覆盖
+  用户随后产生的本地改动。
 - `build/` 下的 ModBench 报告是构建产物，通常不纳入 Git。
 - 当前云同步会持续向仓库内 `build/classes` 恢复带空格的冲突副本；本机验证应显式传
   `-PncpbBuildDirectory=/tmp/ncpb-build-phase40`。该属性未提供时仍使用标准 `build/`，CI/其他工作区不受影响。
@@ -2383,10 +2393,10 @@ Bili API 身份/偏好/直播退避属性，以及 real bench/managed/decoder ov
 - 真实唱片机右键插入公网 MP3 后，服务端 resolve、权威 session、网络同步、客户端 coordinator、SoundEngine
   streaming channel 与 Stereo OpenAL 输出完整贯通；真实取出 packet 触发 exact-session stop，全部资源回到基线。
 
-至此原定音频/唱片机真实媒体交互矩阵已闭合。AV1 已冻结真实 fMP4 字节并完成离线顺序 demux、SIDX range
-重建和 packet PTS 验证；v39 dav1d/EOF 补丁及 macOS ARM64 软件解码实构建也已通过。仍需六平台 v39 一次性
-重建/替换、真实硬解连续播放/seek与输出重排、首帧失败资源归零、持续性能采样和目标 GPU/驱动矩阵。完成这些证据
-前不得把单平台软件解码或格式测试外推为 AV1 发布就绪。
+至此原定音频/唱片机真实媒体交互矩阵已闭合。AV1 已冻结真实 fMP4 字节并完成离线顺序 demux、SIDX range、
+packet PTS、首帧失败资源归零和持续性能保护；最终发布路径已由阶段 71 收敛为 v48 硬件 AV1 + H.264
+硬件/软件回退，六平台 hosted 构建/加载和通用 JAR 体积门槛已经通过。目标 GPU/驱动上的连续播放、seek、输出
+重排和物理资源计数改为发布后兼容验证；没有设备时不阻断发布，但不能宣称已完成全平台硬解认证。
 
 ### 阶段 59：真实 AV1 启动失败→H.264 同会话回退
 
@@ -2762,8 +2772,9 @@ Linux GLIBC floor、精确归档文件集与二进制架构，并将六个平台
 精确匹配以及 5 个 EAC3 / 18 个 Video JNI 导出核验。
 
 主项目 `clean build --no-daemon` 在 47 个任务上成功，包括全部 Java 测试、原生 SHA-256/文件集、法律材料、
-生产 JAR、Scene Editor JiJ 与冲突副本门槛。最终仍是一份覆盖六个平台的离线通用 JAR，大小为
-`9,343,176 bytes`（约 8.91 MiB / 9.34 MB），低于 10 MB；无需分平台发布，也无需申请放宽体积限制。
+生产 JAR、Scene Editor JiJ 与冲突副本门槛。最终仍是一份覆盖六个平台的离线通用 JAR；GitHub CI 实际上传
+artifact 大小为 `9,342,446 bytes`（约 8.91 MiB / 9.34 MB），低于 10 MB；无需分平台发布，也无需申请放宽
+体积限制。
 通用 hosted runner 只证明动态加载、runtime identity 和 JNI exports；真实 AV1 硬解、seek、资源归零仍由独立
 self-hosted 物理 GPU 矩阵签核，不能用 hosted runner 缺失 AV1 GPU 的失败冒充 bundle 故障。
 
@@ -2782,7 +2793,7 @@ self-hosted 物理 GPU 矩阵签核，不能用 hosted runner 缺失 AV1 GPU 的
    第三方资源包/模组/Iris shaderpack 固定矩阵、phase66 真实媒体 100 轮与物理双客户端系统门槛、phase67 六平台 v39
    真实软件 AV1 解码发布门槛、phase69 双片段 seek/resource 与自托管硬件设备证据，以及 phase62/63 macOS ARM64 真实 AV1
    VideoToolbox/默认首帧预算/Range Seek/关闭诊断闭环、phase64 macOS x86_64 v39 实构建和 Rosetta
-   软件 AV1 解码，以及 phase71 v48 硬件 AV1/H.264 回退与 10 MB 通用 JAR 闭环；下一步优先继续
-   其余目标后端硬解输出重排和物理设备矩阵；
+   软件 AV1 解码，以及 phase71 v48 硬件 AV1/H.264 回退与 10 MB 通用 JAR 闭环；后续按用户问题报告
+   修复兼容性。物理设备矩阵仅在能够取得对应硬件时补做，不阻断当前发布；
 6. 每批继续运行 Java、Python、`git diff --check`；
 7. 涉及真实媒体链路时复用 `ncpb.real-bv-playback`。
