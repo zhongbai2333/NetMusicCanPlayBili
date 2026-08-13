@@ -28,8 +28,8 @@ class TerrainFixedCorePolicyTest {
                 TerrainFixedCorePolicy.emitsBranch(42L, -4, 8, 12, 2));
         assertEquals(4, TerrainFixedCorePolicy.overviewCellSize(20.0D));
         assertEquals(8, TerrainFixedCorePolicy.overviewCellSize(50.0D));
-        assertEquals(16, TerrainFixedCorePolicy.overviewCellSize(80.0D));
-        assertEquals(16, TerrainFixedCorePolicy.overviewCellSize(Double.NaN));
+        assertEquals(8, TerrainFixedCorePolicy.overviewCellSize(80.0D));
+        assertEquals(8, TerrainFixedCorePolicy.overviewCellSize(Double.NaN));
         assertTrue(TerrainFixedCorePolicy.sectionMayContainDetail(0.5D, 0.5D, 0.5D, 0, 0, 0));
         assertTrue(TerrainFixedCorePolicy.sectionMayContainDetail(16.5D, 0.5D, 0.5D, 16, 0, 0));
         assertFalse(TerrainFixedCorePolicy.sectionMayContainDetail(0.5D, 0.5D, 0.5D, 32, 0, 0));

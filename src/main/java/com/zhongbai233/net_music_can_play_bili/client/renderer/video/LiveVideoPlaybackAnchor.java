@@ -1,11 +1,13 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.Collection;
+import java.util.Optional;
 
 /**
  * 直播机视频锚点：播放时钟取直播机方块处的 OpenAL 可听位置。
@@ -17,12 +19,14 @@ import java.util.Collection;
  */
 final class LiveVideoPlaybackAnchor implements VideoPlaybackAnchor {
     private final BlockPos livePos;
+    private final Optional<PlaybackSessionId> playbackSessionId;
     private final MediaVideoTimeline timeline;
 
     LiveVideoPlaybackAnchor(BlockPos livePos, String sessionId) {
         this.livePos = livePos != null ? livePos.immutable() : null;
+        this.playbackSessionId = PlaybackSessionId.parse(sessionId);
         this.timeline = this.livePos != null
-                ? new LiveAudioMediaTimeline(this.livePos, sessionId != null ? sessionId : "")
+                ? new LiveAudioMediaTimeline(this.livePos, playbackSessionId)
                 : MediaVideoTimeline.EMPTY;
     }
 
@@ -65,12 +69,28 @@ final class LiveVideoPlaybackAnchor implements VideoPlaybackAnchor {
         return false;
     }
 
-    private record LiveAudioMediaTimeline(BlockPos livePos, String sessionId) implements MediaVideoTimeline {
+    @Override
+    public Object replacementOwnerKey() {
+        return livePos != null
+                ? new VideoPlaybackAnchor.LiveOwnerKey(livePos)
+                : playbackSessionId.<Object>map(value -> value).orElse(this);
+    }
+
+    Optional<PlaybackSessionId> playbackSessionId() {
+        return playbackSessionId;
+    }
+
+    private record LiveAudioMediaTimeline(BlockPos livePos, Optional<PlaybackSessionId> playbackSessionId)
+            implements MediaVideoTimeline {
+        private LiveAudioMediaTimeline {
+            playbackSessionId = playbackSessionId != null ? playbackSessionId : Optional.empty();
+        }
+
         @Override
         public long mediaMillis() {
             ClientAudioOutputRegistry.AudioTimeline audio = ClientAudioOutputRegistry.getAudioTimeline(livePos);
-            String audioSession = audio.audioSessionId();
-            if (audioSession != null && !audioSession.isBlank() && !audioSession.equals(sessionId)) {
+            if (audio.playbackSessionId().isPresent()
+                    && !audio.playbackSessionId().equals(playbackSessionId)) {
                 return -1L;
             }
             return audio.audibleMillis();
@@ -96,5 +116,6 @@ final class LiveVideoPlaybackAnchor implements VideoPlaybackAnchor {
         public long totalMillis() {
             return 0L;
         }
+
     }
 }

@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -115,7 +116,7 @@ public record MP4StatePacket(boolean playing, boolean shuffle, boolean videoEnab
         if (deviceId == null) {
             return;
         }
-        SyncKey syncKey = new SyncKey(player.getUUID(), deviceId);
+        SyncKey syncKey = new SyncKey(player.getUUID(), PlaybackSourceId.of(deviceId));
         SyncVersion incoming = new SyncVersion(payload.clientUpdatedAtMillis(), payload.clientSequence());
         SyncVersion previous = LAST_CLIENT_SYNCS.get(syncKey);
         if (previous != null && incoming.compareTo(previous) < 0) {
@@ -147,7 +148,7 @@ public record MP4StatePacket(boolean playing, boolean shuffle, boolean videoEnab
         }
     }
 
-    private record SyncKey(UUID playerId, UUID deviceId) {
+    private record SyncKey(UUID playerId, PlaybackSourceId sourceId) {
     }
 
     private record SyncVersion(long updatedAtMillis, long sequence) implements Comparable<SyncVersion> {

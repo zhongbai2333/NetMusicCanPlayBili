@@ -8,10 +8,10 @@ import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.server.level.ServerPlayer;
 
-import com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleDocument;
-import com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleElement;
-import com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleGeometryValidator;
-import com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleRangeMigration;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElement;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleGeometryValidator;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleRangeMigration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -49,6 +49,14 @@ public final class ControlConsoleBlockEntity extends SyncedBlockEntity {
     private static final String ELEMENT_YAW_TAG = "Yaw";
     private static final String ELEMENT_PITCH_TAG = "Pitch";
     private static final String ELEMENT_ROLL_TAG = "Roll";
+    private static final String ELEMENT_SCALE_X_TAG = "ScaleX";
+    private static final String ELEMENT_SCALE_Y_TAG = "ScaleY";
+    private static final String ELEMENT_SCALE_Z_TAG = "ScaleZ";
+    private static final String ELEMENT_PIVOT_X_TAG = "PivotX";
+    private static final String ELEMENT_PIVOT_Y_TAG = "PivotY";
+    private static final String ELEMENT_PIVOT_Z_TAG = "PivotZ";
+    private static final String ELEMENT_SKEW_X_BY_Y_TAG = "SkewXByY";
+    private static final String ELEMENT_SKEW_Y_BY_X_TAG = "SkewYByX";
     private static final String ELEMENT_CONTENT_MODE_TAG = "ContentMode";
     private static final String ELEMENT_TEXT_TAG = "Text";
     private static final String ELEMENT_FOLLOW_LYRICS_TAG = "FollowLyrics";
@@ -171,7 +179,7 @@ public final class ControlConsoleBlockEntity extends SyncedBlockEntity {
         if (document.revision() != expectedRevision) {
             return false;
         }
-        if (!com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleElementLockPolicy
+        if (!com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElementLockPolicy
                 .permits(document.elements(), elements)) {
             return false;
         }
@@ -204,7 +212,11 @@ public final class ControlConsoleBlockEntity extends SyncedBlockEntity {
         if (document.revision() != expectedRevision) {
             return ReplaceResult.CONFLICT;
         }
-        replaceDocument(expectedRevision, displayName, hardRangeX, hardRangeY, hardRangeZ, elements);
+        if (!replaceDocument(expectedRevision, displayName, hardRangeX, hardRangeY, hardRangeZ, elements)) {
+            // revision/read-only were checked above; a false result here means the draft tried to
+            // mutate a locked element and must not be remembered or acknowledged as applied.
+            return ReplaceResult.REJECTED;
+        }
         rememberOperation(operationId);
         return ReplaceResult.APPLIED;
     }
@@ -294,6 +306,14 @@ public final class ControlConsoleBlockEntity extends SyncedBlockEntity {
             child.putFloat(ELEMENT_YAW_TAG, element.yaw());
             child.putFloat(ELEMENT_PITCH_TAG, element.pitch());
             child.putFloat(ELEMENT_ROLL_TAG, element.roll());
+            child.putFloat(ELEMENT_SCALE_X_TAG, element.scaleX());
+            child.putFloat(ELEMENT_SCALE_Y_TAG, element.scaleY());
+            child.putFloat(ELEMENT_SCALE_Z_TAG, element.scaleZ());
+            child.putFloat(ELEMENT_PIVOT_X_TAG, element.pivotX());
+            child.putFloat(ELEMENT_PIVOT_Y_TAG, element.pivotY());
+            child.putFloat(ELEMENT_PIVOT_Z_TAG, element.pivotZ());
+            child.putFloat(ELEMENT_SKEW_X_BY_Y_TAG, element.skewXByY());
+            child.putFloat(ELEMENT_SKEW_Y_BY_X_TAG, element.skewYByX());
             child.putString(ELEMENT_CONTENT_MODE_TAG, element.contentMode());
             child.putString(ELEMENT_TEXT_TAG, element.text());
             child.putBoolean(ELEMENT_FOLLOW_LYRICS_TAG, element.followLyrics());
@@ -416,7 +436,15 @@ public final class ControlConsoleBlockEntity extends SyncedBlockEntity {
                         child.getFloatOr(ELEMENT_MAX_WIDTH_TAG, ControlConsoleElement.DEFAULT_MAX_WIDTH),
                         child.getBooleanOr(ELEMENT_WRAP_TAG, false),
                         child.getBooleanOr(ELEMENT_ENABLED_TAG, legacy.enabled()),
-                        child.getBooleanOr(ELEMENT_LOCKED_TAG, false)));
+                        child.getBooleanOr(ELEMENT_LOCKED_TAG, false),
+                        child.getFloatOr(ELEMENT_SCALE_X_TAG, ControlConsoleElement.DEFAULT_SCALE),
+                        child.getFloatOr(ELEMENT_SCALE_Y_TAG, ControlConsoleElement.DEFAULT_SCALE),
+                        child.getFloatOr(ELEMENT_SCALE_Z_TAG, ControlConsoleElement.DEFAULT_SCALE),
+                        child.getFloatOr(ELEMENT_PIVOT_X_TAG, 0.0F),
+                        child.getFloatOr(ELEMENT_PIVOT_Y_TAG, 0.0F),
+                        child.getFloatOr(ELEMENT_PIVOT_Z_TAG, 0.0F),
+                        child.getFloatOr(ELEMENT_SKEW_X_BY_Y_TAG, 0.0F),
+                        child.getFloatOr(ELEMENT_SKEW_Y_BY_X_TAG, 0.0F)));
             } catch (IllegalArgumentException ignored) {
                 // 单个损坏元素不应使整个中控台文档丢失。
             }

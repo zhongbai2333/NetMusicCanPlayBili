@@ -90,7 +90,9 @@ public final class AacOpenALPipeline extends AbstractAudioPipeline {
     private void enqueuePcm(byte[] pcm, AudioFormat format) {
         byte[] audible = applySkip(pcm);
         if (audible.length > 0) {
-            stereo.enqueuePcm(PcmPlanarConverter.from16Bit(audible, format.getChannels()));
+            float[][] planar = PcmPlanarConverter.from16Bit(audible, format.getChannels());
+            stereo.observeFirstPcm(planar);
+            stereo.enqueuePcm(planar);
         }
     }
 

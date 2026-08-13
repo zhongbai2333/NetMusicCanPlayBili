@@ -10,8 +10,7 @@ import java.nio.ByteBuffer;
  * NV12 双平面纹理集：Y=RED8，UV=RG8（旧 GPU/驱动不可用时由 {@link Nv12UvTexture} 回退）。
  */
 public final class Nv12TextureSet implements VideoYuvTextureSet {
-    private static final boolean PBO_UPLOAD = Boolean.parseBoolean(
-            System.getProperty("ncpb.video.nv12.pbo", "true"));
+    private static final boolean PBO_UPLOAD = VideoPipelineProperties.upload().nv12PboEnabled();
     private final Identifier yId;
     private final Identifier uvId;
     private final Identifier placeholderId;

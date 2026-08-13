@@ -5,14 +5,17 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.logging.LogUtils;
 import com.mojang.math.Axis;
+import com.zhongbai233.net_music_can_play_bili.PadDiagnosticsProperties;
 import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.PadClient;
 import com.zhongbai233.net_music_can_play_bili.client.PadFocusState;
+import com.zhongbai233.net_music_can_play_bili.client.PadRenderProperties;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.RenderVertexUtils;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.YuvVideoRenderTypes;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
 import com.zhongbai233.net_music_can_play_bili.item.PadItem;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.renderer.SubmitNodeCollector;
@@ -35,14 +38,13 @@ import org.slf4j.Logger;
 public final class PadItemScreenRenderer {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int FULL_BRIGHT = 0x00F000F0;
-    private static final boolean VIDEO_DEBUG_LOG = Boolean.getBoolean("ncpb.pad.video.debug_log");
-    private static final boolean VIDEO_RENDERDOC_PROBE = Boolean.getBoolean("ncpb.pad.video.renderdoc_probe");
+    private static final boolean VIDEO_DEBUG_LOG = PadDiagnosticsProperties.videoDebugLogEnabled();
+    private static final boolean VIDEO_RENDERDOC_PROBE = PadRenderProperties.videoRenderdocProbeEnabled();
     private static final float HELD_SURFACE_X = 0.53F;
     private static final float HELD_SURFACE_Y = 0.08F;
     private static final float HELD_SURFACE_Z = -1.08F;
     private static final float HELD_SURFACE_SCALE = 1.56F;
-    private static final float HELD_SURFACE_LEFT_SHIFT = Float.parseFloat(
-            System.getProperty("ncpb.pad.handheld_left_shift", "0.05"));
+    private static final float HELD_SURFACE_LEFT_SHIFT = PadRenderProperties.handheldLeftShift();
     private static final float HOVER_TILT_DEGREES = 3.0F;
     private static final float DEVICE_BORDER = 0.040F;
     private static final float DEVICE_THICKNESS = 0.060F;
@@ -50,10 +52,9 @@ public final class PadItemScreenRenderer {
     private static final float SCREEN_TEXTURE_Z_OFFSET = 0.024F;
     private static final float VIDEO_UNDERLAY_Z_OFFSET = SCREEN_TEXTURE_Z_OFFSET - 0.001F;
     private static final float VIDEO_TEXTURE_Z_OFFSET = SCREEN_TEXTURE_Z_OFFSET + 0.002F;
-    private static final int MAP_LAYER_TICK_INTERVAL_TICKS = Math.max(1,
-            Integer.getInteger("ncpb.pad.map_layer_tick_interval_ticks", 5));
-    private static final UUID FALLBACK_DEVICE_ID = new UUID(0L, 0L);
-    private static final Map<UUID, PadGuiTexture> GUI_TEXTURES = new ConcurrentHashMap<>();
+    private static final int MAP_LAYER_TICK_INTERVAL_TICKS = PadRenderProperties.mapLayer().tickIntervalTicks();
+    private static final PlaybackSourceId FALLBACK_SOURCE_ID = PlaybackSourceId.of(new UUID(0L, 0L));
+    private static final Map<PlaybackSourceId, PadGuiTexture> GUI_TEXTURES = new ConcurrentHashMap<>();
     private static int mapLayerTickCountdown;
 
     private PadItemScreenRenderer() {
@@ -79,7 +80,7 @@ public final class PadItemScreenRenderer {
         if (deviceId == null) {
             return;
         }
-        PadGuiTexture guiTexture = GUI_TEXTURES.remove(deviceId);
+        PadGuiTexture guiTexture = GUI_TEXTURES.remove(PlaybackSourceId.of(deviceId));
         if (guiTexture != null) {
             guiTexture.close();
         }
@@ -449,7 +450,8 @@ public final class PadItemScreenRenderer {
     }
 
     private static PadGuiTexture textureFor(UUID deviceId) {
-        UUID key = deviceId != null ? deviceId : FALLBACK_DEVICE_ID;
-        return GUI_TEXTURES.computeIfAbsent(key, id -> new PadGuiTexture(id.toString().replace('-', '_')));
+        PlaybackSourceId key = deviceId != null ? PlaybackSourceId.of(deviceId) : FALLBACK_SOURCE_ID;
+        return GUI_TEXTURES.computeIfAbsent(key,
+                id -> new PadGuiTexture(id.toString().replace('-', '_')));
     }
 }

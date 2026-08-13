@@ -8,14 +8,16 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliLiveStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.block.LiveStreamerBlock;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.ResolveGeneration;
 import com.zhongbai233.net_music_can_play_bili.server.BiliWhitelistManager;
 import com.zhongbai233.net_music_can_play_bili.server.PlaybackAuditManager;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.CancellableTaskFuture;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.util.Util;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -28,7 +30,8 @@ import java.io.IOException;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 直播机：用法与现代化唱片机一致，但媒体来源是 B站直播间号而不是唱片。
@@ -50,6 +53,8 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
     private static final int SYNC_RANGE = 96;
     private static final int SYNC_INTERVAL_TICKS = 20;
     private static final int FULL_RESYNC_INTERVAL_TICKS = 60;
+    private static final ExecutorService LIVE_STATUS_EXECUTOR = Executors.newFixedThreadPool(2,
+            NetMusicThreadFactory.daemon("BiliLiveStatus"));
     /**
      * 客户端 Sound 的存活上限来自同步消息里的剩余秒数；直播没有时长，
      * 给一个足够长的滚动值，由每 3 秒的全量重同步不断续期。
@@ -64,8 +69,9 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
     private boolean checkingLiveStatus;
     private boolean needsLiveStatusConfirmation;
     private long nextLiveStatusCheckGameTime;
-    private long liveStatusRequestGeneration;
+    private ResolveGeneration liveStatusRequestGeneration = ResolveGeneration.initial();
     private long liveStatusProbeId;
+    private CancellableTaskFuture<Integer> liveStatusProbeTask;
     private long startedGameTime;
     private long lastFullSyncGameTime;
     private UUID playbackOwnerId;
@@ -92,6 +98,7 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
             }
         }
         if (streamer.checkingLiveStatus && gameTime >= streamer.nextLiveStatusCheckGameTime) {
+            streamer.cancelLiveStatusProbe();
             streamer.checkingLiveStatus = false;
             streamer.liveStatusProbeId++;
             LOGGER.warn("直播间状态检测超过 10 秒，作废旧结果并继续低频检测: pos={} room={}",
@@ -190,7 +197,7 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
 
         autoResumeRequested = true;
         playbackOwnerId = actor != null ? actor.getUUID() : playbackOwnerId;
-        liveStatusRequestGeneration++;
+        liveStatusRequestGeneration = liveStatusRequestGeneration.next();
         checkingLiveStatus = false;
         nextLiveStatusCheckGameTime = serverLevel.getGameTime();
         markDirty();
@@ -205,17 +212,24 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
         checkingLiveStatus = true;
         nextLiveStatusCheckGameTime = LiveStatusProbePolicy.nextProbeGameTime(serverLevel.getGameTime());
         String requestedRoomId = roomId;
-        long requestGeneration = liveStatusRequestGeneration;
+        ResolveGeneration requestGeneration = liveStatusRequestGeneration;
         long probeId = ++liveStatusProbeId;
-        CompletableFuture
-                .supplyAsync(() -> {
-                    try {
-                        return BiliLiveStreamResolver.queryLiveStatus(requestedRoomId);
-                    } catch (IOException e) {
-                        throw new java.util.concurrent.CompletionException(e);
+        CancellableTaskFuture<Integer> probeTask = CancellableTaskFuture.submit(LIVE_STATUS_EXECUTOR, () -> {
+            try {
+                return BiliLiveStreamResolver.queryLiveStatus(requestedRoomId);
+            } catch (IOException e) {
+                throw new java.util.concurrent.CompletionException(e);
+            }
+        });
+        CancellableTaskFuture<Integer> previous = liveStatusProbeTask;
+        liveStatusProbeTask = probeTask;
+        if (previous != null && previous != probeTask) {
+            previous.cancel(true);
+        }
+        probeTask.whenCompleteAsync((liveStatus, error) -> {
+                    if (liveStatusProbeTask == probeTask) {
+                        liveStatusProbeTask = null;
                     }
-                }, Util.backgroundExecutor())
-                .whenCompleteAsync((liveStatus, error) -> {
                     if (isRemoved() || !(level instanceof ServerLevel currentLevel)
                             || !LiveStatusProbePolicy.acceptsResult(autoResumeRequested,
                                     liveStatusRequestGeneration, requestGeneration,
@@ -279,7 +293,8 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
 
     public void stopLive() {
         autoResumeRequested = false;
-        liveStatusRequestGeneration++;
+        liveStatusRequestGeneration = liveStatusRequestGeneration.next();
+        cancelLiveStatusProbe();
         checkingLiveStatus = false;
         nextLiveStatusCheckGameTime = 0L;
         stopForegroundPlayback();
@@ -298,7 +313,8 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
 
     public void stopForBlockRemoval() {
         autoResumeRequested = false;
-        liveStatusRequestGeneration++;
+        liveStatusRequestGeneration = liveStatusRequestGeneration.next();
+        cancelLiveStatusProbe();
         checkingLiveStatus = false;
         playing = false;
         syncedPlayers.clear();
@@ -394,12 +410,21 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
         checkingLiveStatus = false;
         needsLiveStatusConfirmation = playing && autoResumeRequested;
         nextLiveStatusCheckGameTime = 0L;
-        liveStatusRequestGeneration++;
+        liveStatusRequestGeneration = liveStatusRequestGeneration.next();
+        cancelLiveStatusProbe();
         liveStatusProbeId++;
         startedGameTime = input.getLongOr(STARTED_TIME_TAG, 0L);
         volumePerMille = Math.max(0, Math.min(1000, input.getIntOr(VOLUME_PER_MILLE_TAG, 1000)));
         playbackOwnerId = parseUuid(input.getStringOr(OWNER_TAG, ""));
         syncedPlayers.clear();
+    }
+
+    private void cancelLiveStatusProbe() {
+        CancellableTaskFuture<Integer> task = liveStatusProbeTask;
+        liveStatusProbeTask = null;
+        if (task != null) {
+            task.cancel(true);
+        }
     }
 
     @Override

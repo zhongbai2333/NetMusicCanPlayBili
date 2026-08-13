@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "minecraftVersion": "26.1.2",
+  "neoForgeVersion": "26.1.2.76",
+  "assets": [
+    {
+      "id": "iris",
+      "kind": "mod",
+      "modId": "iris",
+      "version": "1.11.3+mc26.1.2",
+      "file": "iris-neoforge-1.11.3+mc26.1.2.jar",
+      "url": "https://cdn.modrinth.com/data/YL57xq9U/versions/YuBfnIgK/iris-neoforge-1.11.3%2Bmc26.1.2.jar",
+      "bytes": 2755518,
+      "sha512": "4c1f8e8001717d2078f226894dabd8068aee969c9b1093d14f071f9b7085861dd418d687446ebc23884b0d169f71fe4714d2c9c51a2f8cce799d6bbcf24305b7"
+    },
+    {
+      "id": "sodium",
+      "kind": "mod",
+      "modId": "sodium",
+      "version": "0.9.1+mc26.1.2",
+      "file": "sodium-neoforge-0.9.1+mc26.1.2.jar",
+      "url": "https://cdn.modrinth.com/data/AANobbMI/versions/UETw0GTI/sodium-neoforge-0.9.1%2Bmc26.1.2.jar",
+      "bytes": 1185970,
+      "sha512": "f7f39fc069d91873b952a95ee778032b5b9793fdc70bec732275919f1844a858fbba38e536cfc2132524b814e87f9fe000847c5bd251f1b9d7d655d818afb4a5"
+    },
+    {
+      "id": "biomesoplenty",
+      "kind": "mod",
+      "modId": "biomesoplenty",
+      "version": "26.1.2.0.22",
+      "file": "BiomesOPlenty-neoforge-26.1.2-26.1.2.0.22.jar",
+      "url": "https://cdn.modrinth.com/data/HXF82T3G/versions/mqkuMsI9/BiomesOPlenty-neoforge-26.1.2-26.1.2.0.22.jar",
+      "bytes": 22838154,
+      "sha512": "fc224b57b34e7441804401822041b5b31c3087db874a05da0c4fdfd27aa5e6a25984928e67dd49a409535f8d649f2e65c0ca9d96bfb47e898c37a464c1c78406"
+    },
+    {
+      "id": "glitchcore",
+      "kind": "mod",
+      "modId": "glitchcore",
+      "version": "26.1.2.0.2",
+      "file": "GlitchCore-neoforge-26.1.2-26.1.2.0.2.jar",
+      "url": "https://cdn.modrinth.com/data/s3dmwKy5/versions/mYUbCfgT/GlitchCore-neoforge-26.1.2-26.1.2.0.2.jar",
+      "bytes": 97820,
+      "sha512": "0fb4caffefabc4158d57f9d10f39e96062f96210a4ad994131a8013465fc2be3b9b5a5bc727a1197354357d726ee3e22d61da2c7500092b91de207f39581f383"
+    },
+    {
+      "id": "terrablender",
+      "kind": "mod",
+      "modId": "terrablender",
+      "version": "26.1.2.0.3",
+      "file": "TerraBlender-neoforge-26.1.2-26.1.2.0.3.jar",
+      "url": "https://cdn.modrinth.com/data/kkmrDlKT/versions/cWLGFrxw/TerraBlender-neoforge-26.1.2-26.1.2.0.3.jar",
+      "bytes": 139774,
+      "sha512": "7c40342322c46db0506f1874a490877e99544e8fd1e7601c3598173420e4dd43c9772cec3e6d1d755f2046ebd226694e321f0e1e70753a2517e5bb54e5e43c57"
+    },
+    {
+      "id": "colossalchests",
+      "kind": "mod",
+      "modId": "colossalchests",
+      "version": "1.8.16-267",
+      "file": "colossalchests-26.1.2-neoforge-1.8.16-267.jar",
+      "url": "https://cdn.modrinth.com/data/V8HM9qmm/versions/DnYraYqm/colossalchests-26.1.2-neoforge-1.8.16-267.jar",
+      "bytes": 282304,
+      "sha512": "01ee2b6d0ddb866e1f7b6bd6b51d0f2222b71c9a728d9ef74d3e5eb33c5e333095cb28b7e93b9de93b7f0ca77e9cc671a3dfc8b78df6e2a41b50b0c77d0c1ddb"
+    },
+    {
+      "id": "cyclopscore",
+      "kind": "mod",
+      "modId": "cyclopscore",
+      "version": "1.30.2",
+      "file": "cyclopscore-26.1.2-neoforge-1.30.2.jar",
+      "url": "https://cdn.modrinth.com/data/Z9DM0LJ4/versions/Lmk9ygKe/cyclopscore-26.1.2-neoforge-1.30.2.jar",
+      "bytes": 1068203,
+      "sha512": "910683dede11b4da5e2e2c8bdc644fb44b16229d5e1329d70eee0a0de97f02f97c64b2b1e9636042412e9de758cac25f34200d156f0da6d17af031bd27e85d53"
+    },
+    {
+      "id": "accurate-textures-32x",
+      "kind": "resource_pack",
+      "version": "26.1.2",
+      "file": "Accurate_textures_26.1.2.zip",
+      "url": "https://cdn.modrinth.com/data/v4edv1dx/versions/AniXCFax/Accurate_textures_26.1.2.zip",
+      "bytes": 1683605,
+      "sha512": "d169845e5073ae9c339f9a60343be39e431130f6764bb3148078c01bec69542a085073260ad621630cfdfeaaf19008e5ab5ce0b10284d455b76eb9f5ff2439f0"
+    },
+    {
+      "id": "makeup-ultra-fast",
+      "kind": "shader_pack",
+      "version": "9.5c",
+      "file": "MakeUp-UltraFast-9.5c.zip",
+      "url": "https://cdn.modrinth.com/data/izsIPI7a/versions/zt4eHisU/MakeUp-UltraFast-9.5c.zip",
+      "bytes": 398840,
+      "sha512": "67d3938a1ad27ee0951b63703cd638b9db36bcf92c66dfe7ffff4c01ac365e952bbf630af1bb5bbddde8a723e7fb287e88bf80fe0301c70f12b4ebe8546c7947"
+    }
+  ]
+}

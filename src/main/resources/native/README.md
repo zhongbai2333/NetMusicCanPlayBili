@@ -1,54 +1,36 @@
-﻿# Embedded FFmpeg native libraries
+# Embedded FFmpeg native libraries
 
-> **AV1 migration completed:** all six platform directories were replaced as
-> one bundle from `media-min-v38`. This build contains complete H.264 software
-> decoding plus platform hardware acceleration, and AV1 hardware acceleration.
-> FFmpeg's built-in `av1` decoder does not provide native software decoding;
-> this bundle does not include dav1d or libaom. HEVC decoder, parser, bitstream
-> filter, and hardware acceleration paths remain explicitly excluded.
+> **Hardware-only AV1 bundle:** all six platform directories come from `media-min-v48` as one indivisible bundle.
+> AV1 requires the platform hardware backend; an unavailable or failed AV1 backend falls back to H.264 hardware
+> or software decoding. No AV1 software decoder and no HEVC decoder are bundled.
 
-The native libraries in this directory are sourced from:
-
-- Release: `media-min-v38`
+- Release: `media-min-v48`
 - Repository: <https://github.com/zhongbai2333/FFmpeg>
-- Release URL: <https://github.com/zhongbai2333/FFmpeg/releases/tag/media-min-v38>
-- Source commit: `3dbd6699c0eb649cc7eb53f2b57324db01779480`
-- Upstream base: `1f276a42dbd693ef58222e2c1499d45691b49089`
-
-Release asset SHA-256 checksums:
+- Release URL: <https://github.com/zhongbai2333/FFmpeg/releases/tag/media-min-v48>
+- Source commit: `3b3d6f46bbd34049fcac013d743d75e953452431`
+- Upstream base: `b397eba2f0d3d86daf1098d0f27daffccc74fea5`
+- FFmpeg runtime version (linux-arm64): `git-2026-08-13-3b3d6f4`
+- FFmpeg runtime version (linux-x86_64): `git-2026-08-13-3b3d6f4`
+- FFmpeg runtime version (macos-arm64): `git-2026-08-13-3b3d6f4`
+- FFmpeg runtime version (macos-x86_64): `git-2026-08-13-3b3d6f4`
+- FFmpeg runtime version (windows-arm64): `8.0.git`
+- FFmpeg runtime version (windows-x86_64): `8.0.git`
 
 | Platform | Asset | SHA-256 |
 | --- | --- | --- |
-| Linux ARM64 | `ffmpeg-media-linux-arm64.tar.gz` | `15694f2e6e531162ba39fe8805357bd056c9ed1dcb18db0c771b6586dbabba6a` |
-| Linux x86_64 | `ffmpeg-media-linux-x86_64.tar.gz` | `524965accaa0f15d3ff3fbc100144351ab0002fca553807497a9c7e2579ad74d` |
-| macOS ARM64 | `ffmpeg-media-macos-arm64.tar.gz` | `ae2a65aa5a86e98a849dac39ddf4f2bbd7000f67cf34177740bb4bdf8fb0d8a1` |
-| macOS x86_64 | `ffmpeg-media-macos-x86_64.tar.gz` | `2d07ff02d1d5ac0afddc50256182d1daa9c49a0b500fc65f9845aedd11dd45fa` |
-| Windows ARM64 | `ffmpeg-media-windows-arm64.tar.gz` | `297ab142d6ccfc02269f750986362334097ae6d06b8e6daead2beb2e269629b6` |
-| Windows x86_64 | `ffmpeg-media-windows-x86_64.tar.gz` | `69d71e563d7a9ecd6f623a287f8ac5016b0d46155dc91e6e2073c5a383324283` |
+| Linux ARM64 | `ffmpeg-media-linux-arm64.tar.gz` | `0f5ed96d494a9d3c0e7c1b88df932a744a107d37bbb2cbf1d117aff0ff837c2b` |
+| Linux x86_64 | `ffmpeg-media-linux-x86_64.tar.gz` | `a1713e8f85459262447c35b3d64667a37aa5c95f64bc23a727d6f0f09d00da82` |
+| macOS ARM64 | `ffmpeg-media-macos-arm64.tar.gz` | `f7bd26b96bd7285b60f589a7ab9b4da2d54fdcada8a0bfc5362ddac56cee9c9c` |
+| macOS x86_64 | `ffmpeg-media-macos-x86_64.tar.gz` | `b612d32f24c045d0cbaed5f2f82e63b7ea583e752f539f190cf8479391d146e6` |
+| Windows ARM64 | `ffmpeg-media-windows-arm64.tar.gz` | `0362bf74e14e06936557497bed13e6402ef3cb518b6e4d9a1399bae8458d8a18` |
+| Windows x86_64 | `ffmpeg-media-windows-x86_64.tar.gz` | `e612d28a651ab0798ab356abb05526174092cb0e4df7850c8d02a971067dba8d` |
 
-The archives were verified before extraction. Each platform directory is copied as a complete set; FFmpeg and JNI libraries must not be mixed between releases.
+`native/SHA256SUMS` is the authoritative exact extracted-file manifest. Every platform contains the unmodified
+`FFmpeg-LGPL-2.1.txt`. The release also carries the FFmpeg corresponding-source archive,
+`changes.diff`, `BUILD-PROVENANCE.txt`, and its release-level `SHA256SUMS.txt`.
 
-Every replacement platform directory must include the unmodified
-`FFmpeg-LGPL-2.1.txt` shipped by the FFmpeg Actions artifact. This keeps the
-license available both in each standalone native archive and under
-`native/<platform>/` in the final mod JAR.
-
-The corresponding FFmpeg source archive and `changes.diff` must be attached to
-the same release/download location as the binary bundle. The source archive
-must exactly match the source commit recorded above and include the build
-workflow/configuration used for all six targets.
-
-The macOS v38 libraries target macOS 11.0, use architecture-specific thin
-Mach-O files, contain only portable system or `@loader_path` dependencies, and
-are ad-hoc signed after install-name rewriting. Their embedded CodeDirectory
-page hashes were independently verified before bundling.
-
-The Linux v38 libraries enable VAAPI for both H.264 and AV1 on x86_64 and
-ARM64. They dynamically depend on the host's `libva.so.2`, `libva-drm.so.2`,
-and `libdrm.so.2`; these system/driver libraries are intentionally not bundled.
-
-`libswresample` is intentionally not bundled. The media JNI wrappers consume
-decoded planar-float audio directly and link only against `libavcodec`,
-`libavutil`, and (for video conversion) `libswscale`. Windows builds also
-include the required architecture-matched `libiconv-2.dll` and
-`libwinpthread-1.dll` runtime libraries.
+The libraries are architecture-specific and must not be mixed between releases. Linux dynamically requires the
+host libva/libva-drm/libdrm dependency closure recorded by the release audit. The extracted ELF symbol-version
+requirements require the host glibc to provide at least `GLIBC_2.38` on Linux ARM64
+and at least `GLIBC_2.35` on Linux x86_64. Windows includes the matching winpthread
+runtime; iconv is disabled. macOS uses thin Mach-O files with loader-relative dependencies.

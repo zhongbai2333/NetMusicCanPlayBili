@@ -8,9 +8,12 @@ import com.github.tartaricacid.netmusic.network.message.MusicToClientMessage;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSongInfoSanitizer;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.ResolveGeneration;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.compat.minecartrevolution.MinecartTurntableCompat;
 import com.zhongbai233.net_music_can_play_bili.block.ModernTurntableBlock;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.network.ModernTurntableStopPacket;
 import com.zhongbai233.net_music_can_play_bili.server.BiliWhitelistManager;
 import com.zhongbai233.net_music_can_play_bili.server.PlaybackAuditManager;
 import net.minecraft.core.BlockPos;
@@ -30,6 +33,7 @@ import net.neoforged.neoforge.transfer.ResourceHandler;
 import net.neoforged.neoforge.transfer.item.ItemResource;
 import net.neoforged.neoforge.transfer.item.ItemStackResourceHandler;
 import net.neoforged.neoforge.transfer.transaction.TransactionContext;
+import net.neoforged.neoforge.network.PacketDistributor;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.AABB;
@@ -77,10 +81,10 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
     private int savedElapsedSeconds;
     private long savedElapsedTicks;
     private int seekGeneration;
-    private long lastFullSyncGameTime;
     private boolean needsResolveOnLoad;
     private boolean pendingAutomaticStart;
     private boolean resolvingPlayback;
+    private ResolveGeneration playbackIntentGeneration = ResolveGeneration.initial();
     private boolean redstonePowered;
     private boolean redstoneStateInitialized;
     private boolean pulsePlaybackRequested;
@@ -109,6 +113,7 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
 
     @Override
     public void setRemoved() {
+        invalidatePlaybackIntent();
         super.setRemoved();
         LOADED_SERVER_TURNTABLES.remove(this);
         syncedPlayers.clear();
@@ -202,11 +207,6 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
             }
             return;
         }
-        // 每 3 秒全量重同步：覆盖关闭音量后进入范围、重进等边缘情况
-        if (serverLevel.getGameTime() - turntable.lastFullSyncGameTime > 60) {
-            turntable.syncedPlayers.clear();
-            turntable.lastFullSyncGameTime = serverLevel.getGameTime();
-        }
         if (serverLevel.getGameTime() % SYNC_INTERVAL_TICKS == 0) {
             turntable.syncNearbyPlayers(serverLevel, remaining);
         }
@@ -216,7 +216,6 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
 
     private void resolveAndResume(ServerLevel serverLevel) {
         if (!isPlaybackAllowed(serverLevel, rawUrl, null)) {
-            resolvingPlayback = false;
             stopPlayback();
             return;
         }
@@ -236,35 +235,36 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
             syncNearbyPlayers(serverLevel, remainingSeconds(serverLevel.getGameTime()));
             return;
         }
+        String requestedRawUrl = rawUrl;
+        ResolveGeneration capturedGeneration = beginPlaybackIntent();
         // B站 存储选集的 URL：重新解析 CDN 直链
         playing = false;
         syncedPlayers.clear();
         markDirty();
         @SuppressWarnings("null")
-        ItemMusicCD.SongInfo resumeInfo = new ItemMusicCD.SongInfo(rawUrl, songName, durationSeconds, false);
+        ItemMusicCD.SongInfo resumeInfo = new ItemMusicCD.SongInfo(requestedRawUrl, songName, durationSeconds, false);
         MusicPlayResolverManager.resolve(resumeInfo)
-                .thenAcceptAsync(resolved -> {
-                    resolvingPlayback = false;
-                    if (!playing || !Objects.equals(rawUrl, resolved.songUrl != null ? resolved.songUrl : rawUrl)) {
-                        String newUrl = playbackUrlForStorage(rawUrl,
-                                resolved.songUrl != null ? resolved.songUrl : playUrl);
-                        if (!newUrl.isBlank() && redstoneAllowsPlayback(serverLevel)) {
-                            playUrl = newUrl;
-                            playing = true;
-                            resolvingPlayback = false;
-                            startedGameTime = serverLevel.getGameTime() - elapsedTicks;
-                            durationSeconds = Math.max(1, resolved.songTime > 0 ? resolved.songTime : durationSeconds);
-                            syncedPlayers.clear();
-                            markDirty();
-                            syncNearbyPlayers(serverLevel, remainingSeconds(serverLevel.getGameTime()));
-                        }
+                .whenCompleteAsync((resolved, error) -> {
+                    if (!acceptsPlaybackResult(serverLevel, capturedGeneration, rawUrl, requestedRawUrl)) {
+                        return;
                     }
-                }, serverLevel.getServer())
-                .exceptionally(error -> {
                     resolvingPlayback = false;
-                    LOGGER.error("现代化唱片机恢复播放 B站 解析失败: {}", songName, error);
-                    return null;
-                });
+                    if (error != null) {
+                        LOGGER.error("现代化唱片机恢复播放 B站 解析失败: {}", songName, error);
+                        return;
+                    }
+                    String newUrl = playbackUrlForStorage(requestedRawUrl,
+                            resolved.songUrl != null ? resolved.songUrl : playUrl);
+                    if (!newUrl.isBlank() && redstoneAllowsPlayback(serverLevel)) {
+                        playUrl = newUrl;
+                        playing = true;
+                        startedGameTime = serverLevel.getGameTime() - elapsedTicks;
+                        durationSeconds = Math.max(1, resolved.songTime > 0 ? resolved.songTime : durationSeconds);
+                        syncedPlayers.clear();
+                        markDirty();
+                        syncNearbyPlayers(serverLevel, remainingSeconds(serverLevel.getGameTime()));
+                    }
+                }, serverLevel.getServer());
     }
 
     public boolean hasDisc() {
@@ -444,20 +444,23 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
 
         ItemMusicCD.SongInfo original = songInfo.clone();
         playbackOwnerId = triggerPlayer != null ? triggerPlayer.getUUID() : null;
-        resolvingPlayback = true;
+        ResolveGeneration capturedGeneration = beginPlaybackIntent();
         MusicPlayResolverManager.resolve(original.clone())
-                .thenAcceptAsync(resolved -> applyResolvedPlayback(serverLevel, original, resolved),
-                        serverLevel.getServer())
-                .exceptionally(error -> {
+                .whenCompleteAsync((resolved, error) -> {
+                    if (!acceptsPlaybackResult(serverLevel, capturedGeneration, currentDiscUrl(), original.songUrl)) {
+                        return;
+                    }
                     resolvingPlayback = false;
-                    LOGGER.error("现代化唱片机解析播放失败: {}", original.songName, error);
-                    return null;
-                });
+                    if (error != null) {
+                        LOGGER.error("现代化唱片机解析播放失败: {}", original.songName, error);
+                        return;
+                    }
+                    applyResolvedPlayback(serverLevel, original, resolved);
+                }, serverLevel.getServer());
     }
 
     private void applyResolvedPlayback(ServerLevel serverLevel, ItemMusicCD.SongInfo original,
             ItemMusicCD.SongInfo resolved) {
-        resolvingPlayback = false;
         @SuppressWarnings("null")
         ItemMusicCD.SongInfo current = ItemMusicCD.getSongInfo(disc);
         if (current == null || !Objects.equals(current.songUrl, original.songUrl)) {
@@ -548,8 +551,23 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
     }
 
     public void setVolumePerMille(int value) {
-        volumePerMille = Math.max(0, Math.min(1000, value));
+        int nextVolume = ModernTurntableVolumePolicy.clamp(value);
+        ModernTurntableVolumePolicy.Action action = ModernTurntableVolumePolicy.decide(
+                volumePerMille, nextVolume, playing);
+        if (action == ModernTurntableVolumePolicy.Action.NONE) {
+            return;
+        }
+        if (action == ModernTurntableVolumePolicy.Action.STOP_MUTED) {
+            notifyPlaybackStopped();
+            syncedPlayers.clear();
+        }
+        volumePerMille = nextVolume;
         markDirty();
+        if (action == ModernTurntableVolumePolicy.Action.RESYNC_UNMUTED
+                && level instanceof ServerLevel serverLevel) {
+            syncedPlayers.clear();
+            syncNearbyPlayers(serverLevel, remainingSeconds(serverLevel.getGameTime()));
+        }
     }
 
     private boolean canAutomationExtract() {
@@ -627,14 +645,47 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
     }
 
     public void stopPlayback() {
+        notifyPlaybackStopped();
+        invalidatePlaybackIntent();
         if (!playing && playUrl.isBlank()) {
+            resolvingPlayback = false;
             return;
         }
-        stopPlaybackWithoutBlockUpdate();
+        clearPlaybackState();
         markDirty();
     }
 
     private void stopPlaybackWithoutBlockUpdate() {
+        notifyPlaybackStopped();
+        invalidatePlaybackIntent();
+        clearPlaybackState();
+    }
+
+    private void notifyPlaybackStopped() {
+        if (!(level instanceof ServerLevel serverLevel) || !playing || playUrl.isBlank()) {
+            return;
+        }
+        PlaybackSessionId stoppedSession = PlaybackSessionId.parse(playbackSessionId()).orElse(null);
+        if (stoppedSession == null) {
+            return;
+        }
+        ModernTurntableStopPacket packet = new ModernTurntableStopPacket(worldPosition, stoppedSession.value());
+        Set<UUID> recipients = new HashSet<>(syncedPlayers);
+        AABB range = new AABB(worldPosition).inflate(SYNC_RANGE);
+        for (ServerPlayer player : serverLevel.players()) {
+            if (range.contains(player.position())) {
+                recipients.add(player.getUUID());
+            }
+        }
+        for (UUID recipientId : recipients) {
+            ServerPlayer player = serverLevel.getServer().getPlayerList().getPlayer(recipientId);
+            if (player != null && player.level() == serverLevel) {
+                PacketDistributor.sendToPlayer(player, packet);
+            }
+        }
+    }
+
+    private void clearPlaybackState() {
         playing = false;
         resolvingPlayback = false;
         pulsePlaybackRequested = false;
@@ -650,10 +701,35 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
         playbackOwnerId = null;
     }
 
+    private ResolveGeneration beginPlaybackIntent() {
+        resolvingPlayback = true;
+        playbackIntentGeneration = playbackIntentGeneration.next();
+        return playbackIntentGeneration;
+    }
+
+    private void invalidatePlaybackIntent() {
+        playbackIntentGeneration = playbackIntentGeneration.next();
+        resolvingPlayback = false;
+    }
+
+    private boolean acceptsPlaybackResult(ServerLevel requestedLevel, ResolveGeneration capturedGeneration,
+            String currentSource, String requestedSource) {
+        return TurntableResolveAdmissionPolicy.decide(isRemoved(), level == requestedLevel,
+                playbackIntentGeneration, capturedGeneration, currentSource, requestedSource)
+                == TurntableResolveAdmissionPolicy.Decision.APPLY;
+    }
+
+    private String currentDiscUrl() {
+        @SuppressWarnings("null")
+        ItemMusicCD.SongInfo current = ItemMusicCD.getSongInfo(disc);
+        return current != null ? current.songUrl : null;
+    }
+
     public void replayFromBeginning(ServerPlayer player) {
         if (!(level instanceof ServerLevel) || disc.isEmpty()) {
             return;
         }
+        notifyPlaybackStopped();
         if (redstoneMode == TurntableRedstoneMode.PULSE_TOGGLE) {
             pulsePlaybackRequested = true;
         }
@@ -687,10 +763,14 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
     }
 
     public void pausePlayback(ServerLevel serverLevel) {
-        if (!playing) {
+        if (!playing && !resolvingPlayback) {
             return;
         }
-        snapshotElapsedTicks(serverLevel.getGameTime());
+        if (playing) {
+            notifyPlaybackStopped();
+            snapshotElapsedTicks(serverLevel.getGameTime());
+        }
+        invalidatePlaybackIntent();
         playing = false;
         startedGameTime = 0L;
         syncedPlayers.clear();
@@ -788,7 +868,7 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
     }
 
     private void syncNearbyPlayers(ServerLevel serverLevel, int remainingSeconds) {
-        if (playUrl.isBlank()) {
+        if (playUrl.isBlank() || volumePerMille <= 0) {
             return;
         }
         if (!isPlaybackAllowed(serverLevel, rawUrl.isBlank() ? playUrl : rawUrl, null)) {
@@ -812,9 +892,29 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
         for (ServerPlayer player : serverLevel.getEntitiesOfClass(ServerPlayer.class, range)) {
             UUID id = player.getUUID();
             nearby.add(id);
+            syncedPlayers.add(id);
             syncPlayer(player, remainingSeconds, syncedPlayUrl);
         }
+        stopPlayersLeavingRange(serverLevel, nearby);
         syncedPlayers.retainAll(nearby);
+    }
+
+    private void stopPlayersLeavingRange(ServerLevel serverLevel, Set<UUID> nearby) {
+        Set<UUID> departed = ModernTurntableAudiencePolicy.departed(syncedPlayers, nearby);
+        if (departed.isEmpty()) {
+            return;
+        }
+        PlaybackSessionId sessionId = PlaybackSessionId.parse(playbackSessionId()).orElse(null);
+        if (sessionId == null) {
+            return;
+        }
+        ModernTurntableStopPacket packet = new ModernTurntableStopPacket(worldPosition, sessionId.value());
+        for (UUID playerId : departed) {
+            ServerPlayer player = serverLevel.getServer().getPlayerList().getPlayer(playerId);
+            if (player != null && player.level() == serverLevel) {
+                PacketDistributor.sendToPlayer(player, packet);
+            }
+        }
     }
 
     public static void syncLoadedTurntablesToSpectators(ServerLevel serverLevel) {
@@ -835,7 +935,7 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
     }
 
     private void syncNearbySpectators(ServerLevel serverLevel) {
-        if (!playing || playUrl.isBlank()) {
+        if (!playing || playUrl.isBlank() || volumePerMille <= 0) {
             return;
         }
         int remaining = remainingSeconds(serverLevel.getGameTime());
@@ -850,9 +950,20 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
                 syncPlayer(serverLevel, player, remaining);
             }
         }
+        PlaybackSessionId sessionId = PlaybackSessionId.parse(playbackSessionId()).orElse(null);
+        ModernTurntableStopPacket stopPacket = sessionId != null
+                ? new ModernTurntableStopPacket(worldPosition, sessionId.value())
+                : null;
         syncedPlayers.removeIf(id -> {
             ServerPlayer player = serverLevel.getServer().getPlayerList().getPlayer(id);
-            return player != null && player.isSpectator() && !nearbySpectators.contains(id);
+            if (player == null || player.level() != serverLevel) {
+                return true;
+            }
+            boolean departedSpectator = player.isSpectator() && !nearbySpectators.contains(id);
+            if (departedSpectator && stopPacket != null) {
+                PacketDistributor.sendToPlayer(player, stopPacket);
+            }
+            return departedSpectator;
         });
     }
 
@@ -967,6 +1078,7 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
     @Override
     protected void loadAdditional(ValueInput input) {
         super.loadAdditional(input);
+        invalidatePlaybackIntent();
         disc = BiliSongInfoSanitizer
                 .sanitizeDisc(input.read(DISC_TAG, ItemStack.OPTIONAL_CODEC).orElse(ItemStack.EMPTY));
         playing = input.getBooleanOr(PLAYING_TAG, false);

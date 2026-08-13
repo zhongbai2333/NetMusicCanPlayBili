@@ -1,14 +1,20 @@
 buildscript {
     if (providers.gradleProperty('enableModBench').map { it.toBoolean() }.orElse(false).get()) {
         repositories {
-            mavenLocal {
+            if (providers.gradleProperty('ncpbLocalModBench').map { it.toBoolean() }.orElse(false).get()) {
+                mavenLocal {
+                    content { includeGroup 'com.github.zhongbai2333.BenchMod' }
+                }
+            }
+            maven {
+                url = 'https://jitpack.io'
                 content {
-                    includeGroup 'com.zhongbai233.bench'
+                    includeGroup 'com.github.zhongbai2333.BenchMod'
                 }
             }
         }
         dependencies {
-            classpath "com.zhongbai233.bench:bench-gradle-plugin:${providers.gradleProperty('modbench_version').get()}"
+            classpath "com.github.zhongbai2333.BenchMod:bench-gradle-plugin:${providers.gradleProperty('modbench_version').get()}"
         }
     }
 }
@@ -24,18 +30,61 @@ plugins {
 version = mod_version
 group = mod_group_id
 
+// Opt in to a build directory outside cloud-synchronised workspaces. Providers may restore
+// conflict-copy class files while Gradle snapshots task outputs, which can otherwise keep a
+// build busy indefinitely. Normal local and CI builds retain Gradle's default build directory.
+def isolatedBuildDirectory = providers.gradleProperty('ncpbBuildDirectory')
+        .map { it.trim() }
+        .orElse('')
+        .get()
+if (!isolatedBuildDirectory.isEmpty()) {
+    layout.buildDirectory = file(isolatedBuildDirectory)
+}
+
 def modBenchEnabled = providers.gradleProperty('enableModBench')
         .map { it.toBoolean() }
         .orElse(false)
         .get()
+def terrainCompatMatrixRequested = providers.gradleProperty('enableTerrainCompatMatrix')
+        .map { it.toBoolean() }
+        .orElse(false)
+        .get()
+def realMediaLifecycleRequested = providers.gradleProperty('ncpbRealMediaLifecycle')
+        .map { it.toBoolean() }
+        .orElse(false)
+        .get()
+if (terrainCompatMatrixRequested && !modBenchEnabled) {
+    throw new GradleException('-PenableTerrainCompatMatrix=true requires -PenableModBench=true')
+}
+if (realMediaLifecycleRequested && !modBenchEnabled) {
+    throw new GradleException('-PncpbRealMediaLifecycle=true requires -PenableModBench=true')
+}
+def terrainCompatMatrixEnabled = modBenchEnabled && terrainCompatMatrixRequested
+def realMediaLifecycleEnabled = modBenchEnabled && realMediaLifecycleRequested
+def terrainCompatAssetManifestFile = layout.projectDirectory.file('tools/terrain_compat_matrix_assets.json')
+def terrainCompatNeoForgeVersion = neo_version.toString()
+def terrainCompatAssetDirectory = providers.gradleProperty('ncpbTerrainCompatAssetDirectory')
+        .map { file(it) }
+        .orElse(layout.buildDirectory.dir('terrainCompatAssets').map { it.asFile })
 if (modBenchEnabled) {
     apply plugin: 'com.zhongbai233.minecraft-bench'
+    tasks.named('processBenchResources', ProcessResources).configure {
+        from('src/test/resources') {
+            include 'bili/real-av1/**'
+        }
+    }
 }
 
 repositories {
-    mavenLocal {
+    if (providers.gradleProperty('ncpbLocalModBench').map { it.toBoolean() }.orElse(false).get()) {
+        mavenLocal {
+            content { includeGroup 'com.github.zhongbai2333.BenchMod' }
+        }
+    }
+    maven {
+        url = 'https://jitpack.io'
         content {
-            includeGroup 'com.zhongbai233.bench'
+            includeGroup 'com.github.zhongbai2333.BenchMod'
         }
     }
     mavenCentral()
@@ -54,9 +103,12 @@ base {
 
 // Mouse input routing moved to LocalPlayerRoamingMixin. Incremental builds can retain the
 // old class file after the source rename, so never package that obsolete mixin in releases.
+// Cloud file providers can also restore conflict copies such as "Handler 2.class" under
+// build/classes. A legal JVM binary name cannot contain a space, so keep those out of jars.
 tasks.withType(Jar).configureEach {
     exclude 'com/zhongbai233/net_music_can_play_bili/mixin/MouseHandlerRoamingMixin.class'
     exclude 'com/zhongbai233/net_music_can_play_bili/mixin/LocalPlayerRoamingMixin.class'
+    exclude { details -> details.file.name.endsWith('.class') && details.file.name.contains(' ') }
 }
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(25)
@@ -130,6 +182,7 @@ neoForge {
 
             // B站真实压力 Bench：按画质阶梯获取真实 DASH，测解码 + 上传 + 可选预览。
             jvmProp 'ncpb.video.real_bench', prop('ncpbRealBench', 'false')
+            jvmProp 'ncpb.video.real_bench.managed', prop('ncpbRealBenchManaged', modBenchEnabled ? 'true' : 'false')
             jvmProp 'ncpb.video.real_bench.bv', prop('ncpbBenchVideo', 'BV1qM4y1w716')
             jvmProp 'ncpb.video.real_bench.frames', prop('ncpbRealBenchFrames', '12')
             jvmProp 'ncpb.video.real_bench.warmup_frames', prop('ncpbRealBenchWarmupFrames', '2')
@@ -138,9 +191,18 @@ neoForge {
             jvmProp 'ncpb.video.real_bench.realtime', prop('ncpbRealBenchRealtime', 'false')
             jvmProp 'ncpb.video.real_bench.max_fps', prop('ncpbRealBenchMaxFps', '30')
             jvmProp 'ncpb.video.real_bench.qualities', prop('ncpbRealBenchQualities', '16')
+            jvmProp 'ncpb.video.real_media_lifecycle', prop('ncpbRealMediaLifecycle', 'false')
+            jvmProp 'ncpb.video.real_media_lifecycle.rounds', prop('ncpbRealMediaLifecycleRounds', '100')
+            jvmProp 'ncpb.video.real_media_lifecycle.cycle_timeout_ticks',
+                    prop('ncpbRealMediaLifecycleCycleTimeoutTicks', '600')
+            jvmProp 'ncpb.video.real_media_lifecycle.quality', prop('ncpbRealMediaLifecycleQuality', '16')
 
             // FFmpeg/native 解码默认参数；普通播放走平台 auto，必要时可用 -PncpbNativeHwaccel=d3d11va/vaapi/none 覆盖。
             jvmProp 'ncpb.video.native.hwaccel', prop('ncpbNativeHwaccel', 'auto')
+            jvmProp 'ncpb.video.native.av1_first_frame_probe_timeout_ms',
+                    prop('ncpbAv1FirstFrameProbeTimeoutMillis', '2000')
+            jvmProp 'ncpb.video.native.av1_first_frame_probe_max_packets',
+                    prop('ncpbAv1FirstFrameProbeMaxPackets', '256')
             // 需要排查“音频启动但视频未入场”时开启，输出 stop/wait/schedule 视频决策。
             jvmProp 'bili.video.turntable.log_sync_decisions', prop('ncpbVideoLogSyncDecisions', 'false')
             // 手持 MP4/Pad 视频默认保持原 native auto 行为；排查时可用 d3d11va/none 覆盖。
@@ -184,6 +246,22 @@ neoForge {
             programArgument '--nogui'
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
             systemProperty 'ncpb.pad.map.server_self_test', 'true'
+        }
+
+        sceneEditorDedicatedServerSelfTest {
+            server()
+            programArgument '--nogui'
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            systemProperty 'ncpb.scene_editor.server_self_test', 'true'
+        }
+
+        sceneEditorJiJDedupeServerSelfTest {
+            server()
+            gameDirectory = layout.buildDirectory.dir('phase8-jij-dedupe-run').get().asFile
+            programArgument '--nogui'
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            systemProperty 'ncpb.scene_editor.server_self_test', 'true'
+            systemProperty 'ncpb.scene_editor.jij_dedupe_self_test', 'true'
         }
 
         // 开发用 GameTest 服务端。
@@ -291,8 +369,19 @@ tasks.register("runWithRenderDoc", Exec) {
 dependencies {
     // 通用场景编辑器核心的公开 API 暴露 JOML 只读/值类型，不能依赖 Minecraft 的传递 classpath。
     api 'org.joml:joml:1.10.8'
+    // ModDevGradle 的官方 subproject JiJ 入口。两个 artifact 使用独立包和模块名，外层模组不再重复打包其 class。
+    // ModDevGradle 2.0.141 does not support rich-version closures on project JiJ dependencies. Supplying one here
+    // is interpreted as Project.version and corrupts the host artifact version; the generated descriptors are narrowed
+    // by the jarJar task below instead.
+    jarJar api(project(':scene-editor-core'))
+    jarJar implementation(project(':scene-editor-minecraft'))
 
     compileOnly "maven.modrinth:net-music:mCrjhdSq"
+    // neoforge.mods.toml declares NetMusic mandatory; every dev client/server run must therefore load it as well.
+    runtimeOnly "maven.modrinth:net-music:mCrjhdSq"
+    if (modBenchEnabled) {
+        benchCompileOnly "maven.modrinth:net-music:mCrjhdSq"
+    }
     compileOnly "maven.modrinth:iris:YEGDGnJM"
 
     testImplementation platform('org.junit:junit-bom:5.13.4')
@@ -301,6 +390,42 @@ dependencies {
     testCompileOnly "net.neoforged:neoforge:${neo_version}"
     // 测试直接构造 B站 API 的 JSON 响应，因此编译期也需要 gson。
     testImplementation 'com.google.code.gson:gson:2.13.1'
+
+    if (terrainCompatMatrixEnabled) {
+        def manifest = new groovy.json.JsonSlurper().parse(terrainCompatAssetManifestFile.asFile)
+        manifest.assets.findAll { it.kind == 'mod' }.each { asset ->
+            add('benchRuntimeMod', files(terrainCompatAssetDirectory.map { directory ->
+                new File(directory, asset.file.toString())
+            }))
+        }
+    }
+}
+
+// ModDevGradle 2.0.141 currently ignores rich-version closures for project JiJ dependencies and emits [version,).
+// Narrow only our two generated descriptors before the outer JAR consumes jarJar's output so a future 2.x cannot
+// be selected as binary-compatible. External dependencies continue to use the plugin's untouched metadata.
+tasks.named('jarJar') {
+    inputs.property('sceneEditorSupportedRange', '[1.0.0-beta.1,2.0.0)')
+    doLast {
+        def metadataFile = new File(outputs.files.singleFile, 'META-INF/jarjar/metadata.json')
+        if (!metadataFile.isFile()) {
+            throw new GradleException("ModDevGradle did not generate JiJ metadata at ${metadataFile}")
+        }
+        def metadata = new groovy.json.JsonSlurper().parse(metadataFile)
+        def updated = 0
+        metadata.jars.each { descriptor ->
+            if (descriptor.identifier.group == 'com.zhongbai233.sceneeditor'
+                    && descriptor.identifier.artifact in ['scene-editor-core', 'scene-editor-minecraft']) {
+                descriptor.version.range = '[1.0.0-beta.1,2.0.0)'
+                updated++
+            }
+        }
+        if (updated != 2) {
+            throw new GradleException("Expected two Scene Editor JiJ descriptors, updated ${updated}")
+        }
+        metadataFile.setText(groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(metadata)) + '\n',
+                'UTF-8')
+    }
 }
 
 if (modBenchEnabled) {
@@ -308,9 +433,192 @@ if (modBenchEnabled) {
         targetMod = 'net_music_can_play_bili'
         expectedProviderCount = 1
         seed = 233
-        phaseTimeoutTicks = 1200
+        phaseTimeoutTicks = realMediaLifecycleEnabled ? 72000 : terrainCompatMatrixEnabled ? 3600 : 1200
         clientWorldPreset = 'void'
         clientRequireWindowFocus = false
+        if (providers.gradleProperty('ncpbLocalModBench').map { it.toBoolean() }.orElse(false).get()) {
+            pairedClientCount = providers.gradleProperty('ncpbPairedClientCount')
+                    .map { Integer.parseInt(it) }.orElse(1).get()
+            pairedProjectProperties.put('enableModBench', 'true')
+            pairedProjectProperties.put('ncpbLocalModBench', 'true')
+            pairedProjectProperties.put('modbench_version', providers.gradleProperty('modbench_version').get())
+            pairedProjectProperties.put('ncpbPairedClientCount', String.valueOf(pairedClientCount.get()))
+            pairedProjectProperties.put('ncpbBuildDirectory', layout.buildDirectory.get().asFile.absolutePath)
+            [
+                    'ncpbVideoAdvancedFeatures', 'ncpbVideoBenchFeatures', 'ncpbRealBench',
+                    'ncpbRealBenchManaged', 'ncpbBenchVideo', 'ncpbRealBenchFrames',
+                    'ncpbRealBenchWarmupFrames', 'ncpbRealBenchQualities', 'ncpbRealBenchOutputFormat',
+                    'ncpbRealBenchPreview', 'ncpbRealBenchRealtime', 'ncpbRealMediaLifecycle',
+                    'ncpbRealMediaLifecycleRounds', 'ncpbRealMediaLifecycleCycleTimeoutTicks',
+                    'ncpbRealMediaLifecycleQuality', 'ncpbNativeHwaccel',
+                    'ncpbAv1FirstFrameProbeTimeoutMillis', 'ncpbAv1FirstFrameProbeMaxPackets',
+                    'ncpbVideoRenderBackend',
+                    'ncpbRealMp3Bench', 'ncpbRealMp3BenchUrl', 'enableTerrainCompatMatrix',
+                    'ncpbTerrainCompatAssetDirectory'
+            ].each { propertyName ->
+                def propertyValue = providers.gradleProperty(propertyName).orNull
+                if (propertyValue != null) {
+                    pairedProjectProperties.put(propertyName, propertyValue)
+                }
+            }
+        }
+    }
+    afterEvaluate {
+        def benchProp = { name, defaultValue -> providers.gradleProperty(name).orElse(defaultValue).get() }
+        ['benchClient', 'benchRemoteClient'].each { runName ->
+            neoForge.runs.named(runName) {
+                jvmArgument "--enable-native-access=${mod_id}"
+                systemProperty 'ncpb.video.advanced_features', benchProp('ncpbVideoAdvancedFeatures', 'false')
+                systemProperty 'ncpb.video.enable_bench_features', benchProp('ncpbVideoBenchFeatures', 'false')
+                systemProperty 'ncpb.video.real_bench', benchProp('ncpbRealBench', 'false')
+                systemProperty 'ncpb.video.real_bench.managed', benchProp('ncpbRealBenchManaged', 'true')
+                systemProperty 'ncpb.video.real_bench.bv', benchProp('ncpbBenchVideo', 'BV1qM4y1w716')
+                systemProperty 'ncpb.video.real_bench.frames', benchProp('ncpbRealBenchFrames', '12')
+                systemProperty 'ncpb.video.real_bench.warmup_frames', benchProp('ncpbRealBenchWarmupFrames', '2')
+                systemProperty 'ncpb.video.real_bench.qualities', benchProp('ncpbRealBenchQualities', '16')
+                systemProperty 'ncpb.video.real_bench.output_format', benchProp('ncpbRealBenchOutputFormat', 'nv12')
+                systemProperty 'ncpb.video.real_bench.preview', benchProp('ncpbRealBenchPreview', 'false')
+                systemProperty 'ncpb.video.real_bench.realtime', benchProp('ncpbRealBenchRealtime', 'false')
+                systemProperty 'ncpb.video.real_media_lifecycle', benchProp('ncpbRealMediaLifecycle', 'false')
+                systemProperty 'ncpb.video.real_media_lifecycle.rounds',
+                        benchProp('ncpbRealMediaLifecycleRounds', '100')
+                systemProperty 'ncpb.video.real_media_lifecycle.cycle_timeout_ticks',
+                        benchProp('ncpbRealMediaLifecycleCycleTimeoutTicks', '600')
+                systemProperty 'ncpb.video.real_media_lifecycle.quality',
+                        benchProp('ncpbRealMediaLifecycleQuality', '16')
+                systemProperty 'ncpb.video.native.hwaccel', benchProp('ncpbNativeHwaccel', 'auto')
+                systemProperty 'ncpb.video.native.av1_first_frame_probe_timeout_ms',
+                        benchProp('ncpbAv1FirstFrameProbeTimeoutMillis', '2000')
+                systemProperty 'ncpb.video.native.av1_first_frame_probe_max_packets',
+                        benchProp('ncpbAv1FirstFrameProbeMaxPackets', '256')
+                systemProperty 'ncpb.video.render.backend', benchProp('ncpbVideoRenderBackend', 'nv12')
+                systemProperty 'ncpb.bili.audio.real_mp3_bench', benchProp('ncpbRealMp3Bench', 'false')
+                systemProperty 'ncpb.bili.audio.real_mp3_bench.url', benchProp('ncpbRealMp3BenchUrl',
+                        'https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.mp3')
+                if (terrainCompatMatrixEnabled) {
+                    systemProperty 'ncpb.terrain.compat_matrix', 'true'
+                }
+            }
+        }
+    }
+
+    def verifyTerrainCompatMatrixAssets = tasks.register('verifyTerrainCompatMatrixAssets') {
+        group = 'verification'
+        description = 'Verifies every pinned third-party terrain compatibility asset by exact size and SHA-512.'
+        inputs.file(terrainCompatAssetManifestFile)
+        inputs.dir(terrainCompatAssetDirectory)
+        doLast {
+            def manifest = new groovy.json.JsonSlurper().parse(terrainCompatAssetManifestFile.asFile)
+            if (manifest.schemaVersion != 1 || manifest.minecraftVersion != '26.1.2'
+                    || manifest.neoForgeVersion != terrainCompatNeoForgeVersion) {
+                throw new GradleException("Unsupported terrain compatibility manifest header: ${manifest}")
+            }
+            def ids = new HashSet<String>()
+            def names = new HashSet<String>()
+            manifest.assets.each { asset ->
+                def id = asset.id.toString()
+                def name = asset.file.toString()
+                if (!ids.add(id) || !names.add(name) || new File(name).name != name) {
+                    throw new GradleException("Duplicate or unsafe terrain compatibility asset: ${asset}")
+                }
+                def assetFile = new File(terrainCompatAssetDirectory.get(), name)
+                if (!assetFile.isFile()) {
+                    throw new GradleException("Missing terrain compatibility asset ${id}: ${assetFile}. "
+                            + 'Run tools/fetch_terrain_compat_matrix_assets.py first.')
+                }
+                def digest = java.security.MessageDigest.getInstance('SHA-512')
+                assetFile.withInputStream { input ->
+                    byte[] buffer = new byte[1024 * 1024]
+                    int count
+                    while ((count = input.read(buffer)) != -1) {
+                        digest.update(buffer, 0, count)
+                    }
+                }
+                def actualHash = java.util.HexFormat.of().formatHex(digest.digest())
+                if (assetFile.length() != (asset.bytes as long)
+                        || !actualHash.equalsIgnoreCase(asset.sha512.toString())) {
+                    throw new GradleException("Terrain compatibility asset ${id} failed verification: "
+                            + "bytes=${assetFile.length()}, sha512=${actualHash}")
+                }
+            }
+            logger.lifecycle('Verified {} pinned terrain compatibility assets in {}',
+                    manifest.assets.size(), terrainCompatAssetDirectory.get())
+        }
+    }
+
+    if (terrainCompatMatrixEnabled) {
+        def stageTerrainCompatMatrixAssets = tasks.register('stageTerrainCompatMatrixAssets') {
+            group = 'verification'
+            description = 'Stages the pinned resource pack and Iris shaderpack for integrated and paired clients.'
+            def pairedClientIndex = providers.gradleProperty('modBench.internal.clientIndex')
+            dependsOn verifyTerrainCompatMatrixAssets, tasks.named(
+                    pairedClientIndex.isPresent() ? 'prepareBenchRemoteClientOptions' : 'prepareBenchClientOptions')
+            def selectedRunType = pairedClientIndex.zip(
+                    providers.gradleProperty('modBench.internal.clientCount').orElse('1')) { index, count ->
+                Integer.parseInt(count) == 1 ? 'remote-client' : "remote-client-${Integer.parseInt(index)}"
+            }.orElse('client')
+            def gameDirectory = layout.buildDirectory.dir(
+                    selectedRunType.map { "modBench/runs/default/${it}" })
+            inputs.file(terrainCompatAssetManifestFile)
+            inputs.dir(terrainCompatAssetDirectory)
+            outputs.dir(gameDirectory.map { it.dir('resourcepacks') })
+            outputs.dir(gameDirectory.map { it.dir('shaderpacks') })
+            // options.txt and Iris config are game-owned mutable files; always restore the pinned selection.
+            outputs.upToDateWhen { false }
+            doLast {
+                def manifest = new groovy.json.JsonSlurper().parse(terrainCompatAssetManifestFile.asFile)
+                def resourcePack = manifest.assets.find { it.kind == 'resource_pack' }
+                def shaderPack = manifest.assets.find { it.kind == 'shader_pack' }
+                if (resourcePack == null || shaderPack == null) {
+                    throw new GradleException('Terrain compatibility manifest must contain one resource and shader pack')
+                }
+                [gameDirectory.get().asFile].each { gameDir ->
+                    def resourcePackDirectory = new File(gameDir, 'resourcepacks')
+                    def shaderPackDirectory = new File(gameDir, 'shaderpacks')
+                    resourcePackDirectory.mkdirs()
+                    shaderPackDirectory.mkdirs()
+                    java.nio.file.Files.copy(
+                            new File(terrainCompatAssetDirectory.get(), resourcePack.file.toString()).toPath(),
+                            new File(resourcePackDirectory, resourcePack.file.toString()).toPath(),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    java.nio.file.Files.copy(
+                            new File(terrainCompatAssetDirectory.get(), shaderPack.file.toString()).toPath(),
+                            new File(shaderPackDirectory, shaderPack.file.toString()).toPath(),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+
+                    def optionsFile = new File(gameDir, 'options.txt')
+                    def lines = optionsFile.isFile() ? optionsFile.readLines('UTF-8') : []
+                    def resourcePacksValue = groovy.json.JsonOutput.toJson(["file/${resourcePack.file}"])
+                    // Iris 1.11.3 + Sodium 0.9.1 currently crashes its multi-player shadow pass on
+                    // macOS with "Missing sampler Sampler1". The compatibility gate covers
+                    // shader/world/media rendering, so pin both vanilla entity shadows and the
+                    // pack's shadow program off without disabling the shaderpack itself.
+                    def updated = lines.findAll {
+                        !it.startsWith('resourcePacks:') && !it.startsWith('entityShadows:')
+                    }
+                    updated.add("resourcePacks:${resourcePacksValue}")
+                    updated.add('entityShadows:false')
+                    optionsFile.setText(updated.join(System.lineSeparator()) + System.lineSeparator(), 'UTF-8')
+
+                    def shaderOptions = new File(shaderPackDirectory, "${shaderPack.file}.txt")
+                    shaderOptions.setText('SHADOW_CASTING=false' + System.lineSeparator(), 'UTF-8')
+
+                    def irisConfig = new File(gameDir, 'config/iris.properties')
+                    irisConfig.parentFile.mkdirs()
+                    irisConfig.setText("""shaderPack=${shaderPack.file}
+enableShaders=true
+allowUnknownShaders=false
+disableUpdateMessage=true
+maxShadowRenderDistance=16
+""", 'UTF-8')
+                    logger.lifecycle('Staged resource pack {} and shaderpack {} in {}',
+                            resourcePack.file, shaderPack.file, gameDir)
+                }
+            }
+        }
+        tasks.matching { it.name in ['runBenchClient', 'runBenchRemoteClient'] }.configureEach {
+            dependsOn stageTerrainCompatMatrixAssets
+        }
     }
 }
 
@@ -320,6 +628,402 @@ configurations {
 
 tasks.named('test') {
     useJUnitPlatform()
+    // Ignore cloud-sync conflict copies restored in the generated test output directory.
+    exclude '**/* *.class'
+}
+
+def productionJarArchive = tasks.named('jar', Jar).flatMap { it.archiveFile }
+tasks.register('verifyProductionJarHasNoConflictCopies') {
+    group = 'verification'
+    description = 'Verifies the production JAR contains no cloud-sync conflict-copy class files.'
+    dependsOn tasks.named('jar')
+    inputs.file(productionJarArchive)
+    doLast {
+        def archive = inputs.files.singleFile
+        def conflicts = []
+        new java.util.zip.ZipFile(archive).withCloseable { zip ->
+            conflicts.addAll(zip.entries().findAll { entry ->
+                !entry.directory && entry.name.endsWith('.class') && entry.name.tokenize('/').last().contains(' ')
+            }.collect { entry -> entry.name })
+        }
+        if (!conflicts.isEmpty()) {
+            throw new GradleException("Production JAR contains conflict-copy classes: ${conflicts.sort()}")
+        }
+    }
+}
+
+tasks.register('verifySceneEditorJiJ') {
+    group = 'verification'
+    description = 'Verifies scene-editor core/Minecraft artifacts are present exactly once as negotiable JiJ libraries.'
+    dependsOn tasks.named('jar')
+    inputs.file(productionJarArchive)
+    inputs.property('sceneEditorVersion', scene_editor_version)
+    doLast {
+        def archive = inputs.files.singleFile
+        def expectedVersion = inputs.properties['sceneEditorVersion'].toString()
+        def expected = [
+                'scene-editor-core'     : [module: 'com.zhongbai233.sceneeditor.core', type: 'LIBRARY'],
+                'scene-editor-minecraft': [module: 'com.zhongbai233.sceneeditor.minecraft', type: 'GAMELIBRARY']
+        ]
+        new java.util.zip.ZipFile(archive).withCloseable { zip ->
+            def outerClasses = zip.entries().findAll { entry ->
+                !entry.directory && entry.name.endsWith('.class')
+                        && entry.name.startsWith('com/zhongbai233/scene_editor/')
+            }.collect { it.name }
+            if (!outerClasses.isEmpty()) {
+                throw new GradleException("Scene Editor classes must only exist in nested JiJ artifacts: ${outerClasses}")
+            }
+
+            def metadataEntry = zip.getEntry('META-INF/jarjar/metadata.json')
+            if (metadataEntry == null) {
+                throw new GradleException('Production JAR is missing META-INF/jarjar/metadata.json')
+            }
+            def metadata = new groovy.json.JsonSlurper().parse(zip.getInputStream(metadataEntry))
+            def sceneEntries = metadata.jars.findAll { jar ->
+                jar.identifier.group == 'com.zhongbai233.sceneeditor'
+            }
+            if (sceneEntries.size() != expected.size()) {
+                throw new GradleException("Expected exactly ${expected.size()} Scene Editor JiJ entries, got ${sceneEntries}")
+            }
+            expected.each { artifact, contract ->
+                def matches = sceneEntries.findAll { jar -> jar.identifier.artifact == artifact }
+                if (matches.size() != 1) {
+                    throw new GradleException("Expected one JiJ entry for ${artifact}, got ${matches}")
+                }
+                def descriptor = matches[0]
+                if (descriptor.version.artifactVersion != expectedVersion
+                        || descriptor.version.range != '[1.0.0-beta.1,2.0.0)') {
+                    throw new GradleException("Unexpected ${artifact} JiJ version contract: ${descriptor.version}")
+                }
+                def nestedEntry = zip.getEntry(descriptor.path)
+                if (nestedEntry == null) {
+                    throw new GradleException("Missing nested JiJ artifact ${descriptor.path}")
+                }
+                zip.getInputStream(nestedEntry).withCloseable { nestedInput ->
+                    new java.util.jar.JarInputStream(nestedInput).withCloseable { nestedJar ->
+                        def attributes = nestedJar.manifest?.mainAttributes
+                        if (attributes?.getValue('FMLModType') != contract.type
+                                || attributes?.getValue('Automatic-Module-Name') != contract.module
+                                || attributes?.getValue('Implementation-Version') != expectedVersion) {
+                            throw new GradleException("Invalid ${artifact} library manifest: ${attributes}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+def sceneEditorJiJDedupeRunDirectory = layout.buildDirectory.dir('phase8-jij-dedupe-run')
+
+tasks.register('stageSceneEditorJiJHosts', Sync) {
+    group = 'verification'
+    description = 'Stages two independent fixture mods that embed the same scene-editor-core artifact.'
+    dependsOn ':scene-editor-jij-host-a:jar', ':scene-editor-jij-host-b:jar'
+    into sceneEditorJiJDedupeRunDirectory.map { it.dir('mods') }
+    from {
+        [project(':scene-editor-jij-host-a'), project(':scene-editor-jij-host-b')].collect { fixture ->
+            fixture.tasks.named('jar', Jar).get().archiveFile.get().asFile
+        }
+    }
+}
+
+tasks.named('runSceneEditorJiJDedupeServerSelfTest') {
+    dependsOn tasks.named('stageSceneEditorJiJHosts')
+}
+
+tasks.register('verifySceneEditorJiJDedupeFixtures') {
+    group = 'verification'
+    description = 'Verifies both fixture mods embed byte-identical, negotiable scene-editor-core artifacts.'
+    dependsOn ':scene-editor-jij-host-a:jar', ':scene-editor-jij-host-b:jar'
+    inputs.property('sceneEditorVersion', scene_editor_version)
+    inputs.files(provider {
+        [project(':scene-editor-jij-host-a'), project(':scene-editor-jij-host-b')].collect { fixture ->
+            fixture.tasks.named('jar', Jar).get().archiveFile.get().asFile
+        }
+    })
+    doLast {
+        def expectedVersion = inputs.properties['sceneEditorVersion'].toString()
+        def nestedHashes = []
+        inputs.files.files.sort { it.name }.each { fixtureJar ->
+            new java.util.zip.ZipFile(fixtureJar).withCloseable { zip ->
+                def outerCoreClasses = zip.entries().findAll { entry ->
+                    !entry.directory && entry.name.startsWith('com/zhongbai233/scene_editor/core/')
+                            && entry.name.endsWith('.class')
+                }.collect { it.name }
+                if (!outerCoreClasses.isEmpty()) {
+                    throw new GradleException("${fixtureJar.name} contains outer core classes: ${outerCoreClasses}")
+                }
+                def metadataEntry = zip.getEntry('META-INF/jarjar/metadata.json')
+                if (metadataEntry == null) {
+                    throw new GradleException("${fixtureJar.name} is missing JiJ metadata")
+                }
+                def metadata = new groovy.json.JsonSlurper().parse(zip.getInputStream(metadataEntry))
+                def descriptors = metadata.jars.findAll { descriptor ->
+                    descriptor.identifier.group == 'com.zhongbai233.sceneeditor'
+                            && descriptor.identifier.artifact == 'scene-editor-core'
+                }
+                if (descriptors.size() != 1) {
+                    throw new GradleException("${fixtureJar.name} has invalid core descriptors: ${descriptors}")
+                }
+                def descriptor = descriptors[0]
+                if (descriptor.version.artifactVersion != expectedVersion
+                        || descriptor.version.range != '[1.0.0-beta.1,2.0.0)') {
+                    throw new GradleException("${fixtureJar.name} has invalid core version: ${descriptor.version}")
+                }
+                def nestedEntry = zip.getEntry(descriptor.path)
+                if (nestedEntry == null) {
+                    throw new GradleException("${fixtureJar.name} is missing nested ${descriptor.path}")
+                }
+                def nestedBytes = zip.getInputStream(nestedEntry).readAllBytes()
+                nestedHashes << java.util.HexFormat.of().formatHex(
+                        java.security.MessageDigest.getInstance('SHA-256').digest(nestedBytes))
+            }
+        }
+        if (nestedHashes.size() != 2 || nestedHashes.toSet().size() != 1) {
+            throw new GradleException("Fixture mods do not embed byte-identical scene-editor-core jars: ${nestedHashes}")
+        }
+    }
+}
+
+def nativeCapabilityNotice = layout.projectDirectory.file('docs/release-native-capabilities.md')
+def releaseWorkflow = layout.projectDirectory.file('.github/workflows/build-release.yml')
+def embeddedNativeRoot = layout.projectDirectory.dir('src/main/resources/native')
+def embeddedNativeManifest = embeddedNativeRoot.file('SHA256SUMS')
+def embeddedNativeReadme = embeddedNativeRoot.file('README.md')
+def embeddedNativeReadmeText = embeddedNativeReadme.asFile.getText('UTF-8')
+def embeddedNativeReleaseMatcher = embeddedNativeReadmeText =~ /(?m)^- Release: `(media-min-v48)`$/
+if (embeddedNativeReleaseMatcher.count != 1) {
+    throw new GradleException('native/README.md must identify exactly one supported media-min-v48 release')
+}
+def embeddedNativeRelease = embeddedNativeReleaseMatcher[0][1]
+def linuxArm64GlibcMatcher = embeddedNativeReadmeText =~ /host glibc to provide at\s+least\s+`(GLIBC_[0-9]+\.[0-9]+)` on Linux ARM64/
+def linuxX8664GlibcMatcher = embeddedNativeReadmeText =~ /at\s+least\s+`(GLIBC_[0-9]+\.[0-9]+)` on Linux x86_64/
+if (linuxArm64GlibcMatcher.count != 1 || linuxX8664GlibcMatcher.count != 1) {
+    throw new GradleException('native/README.md must identify exactly one Linux ARM64 and x86_64 GLIBC symbol floor')
+}
+def linuxArm64GlibcFloor = linuxArm64GlibcMatcher[0][1]
+def linuxX8664GlibcFloor = linuxX8664GlibcMatcher[0][1]
+def embeddedNativeLicenses = ['FFmpeg-LGPL-2.1.txt']
+def generateNativeBundleCapabilities = tasks.register('generateNativeBundleCapabilities', Copy) {
+    inputs.property('embeddedNativeRelease', embeddedNativeRelease)
+    inputs.property('bundledSoftwareAv1Available', false)
+    from('src/nativeBundleTemplates') {
+        expand(
+                native_bundle_release: embeddedNativeRelease,
+                bundled_software_av1_available: false
+        )
+        rename { name -> name.endsWith('.template') ? name.substring(0, name.length() - '.template'.length()) : name }
+    }
+    into(layout.buildDirectory.dir('generated/sources/nativeBundle/java'))
+}
+sourceSets.main.java.srcDir(generateNativeBundleCapabilities)
+def embeddedNativeFiles = [
+        'linux-arm64': [
+                *embeddedNativeLicenses, 'libavcodec.so.63', 'libavutil.so.61',
+                'libeac3_jni.so', 'libswscale.so.10', 'libvideo_jni.so'
+        ],
+        'linux-x86_64': [
+                *embeddedNativeLicenses, 'libavcodec.so.63', 'libavutil.so.61',
+                'libeac3_jni.so', 'libswscale.so.10', 'libvideo_jni.so'
+        ],
+        'macos-arm64': [
+                *embeddedNativeLicenses, 'libavcodec.63.dylib', 'libavutil.61.dylib',
+                'libeac3_jni.dylib', 'libswscale.10.dylib', 'libvideo_jni.dylib'
+        ],
+        'macos-x86_64': [
+                *embeddedNativeLicenses, 'libavcodec.63.dylib', 'libavutil.61.dylib',
+                'libeac3_jni.dylib', 'libswscale.10.dylib', 'libvideo_jni.dylib'
+        ],
+        'windows-arm64': [
+                *embeddedNativeLicenses, 'avcodec-63.dll', 'avutil-61.dll', 'eac3_jni.dll',
+                'libwinpthread-1.dll', 'swscale-10.dll', 'video_jni.dll'
+        ],
+        'windows-x86_64': [
+                *embeddedNativeLicenses, 'avcodec-63.dll', 'avutil-61.dll', 'eac3_jni.dll',
+                'libwinpthread-1.dll', 'swscale-10.dll', 'video_jni.dll'
+        ]
+]
+tasks.register('verifyEmbeddedNativeBundle') {
+    group = 'verification'
+    description = 'Verifies the exact six-platform native file set and every extracted-file SHA-256 in source and JAR.'
+    dependsOn tasks.named('jar')
+    inputs.dir(embeddedNativeRoot)
+    inputs.file(productionJarArchive)
+    doLast {
+        def calculateSha256 = { InputStream input ->
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            byte[] buffer = new byte[64 * 1024]
+            int count
+            while ((count = input.read(buffer)) != -1) {
+                digest.update(buffer, 0, count)
+            }
+            digest.digest().collect { String.format('%02x', it & 0xff) }.join()
+        }
+        def root = embeddedNativeRoot.asFile
+        def manifestFile = embeddedNativeManifest.asFile
+        if (!manifestFile.isFile()) {
+            throw new GradleException("Missing embedded native manifest: ${manifestFile}")
+        }
+
+        def expectedPaths = embeddedNativeFiles.collectMany { platform, names ->
+            names.collect { name -> "${platform}/${name}" }
+        }.toSet()
+        def manifestHashes = [:]
+        manifestFile.readLines('UTF-8').eachWithIndex { rawLine, index ->
+            def line = rawLine.trim()
+            if (line.isEmpty()) {
+                return
+            }
+            def matcher = line =~ /^([0-9a-f]{64})  ([A-Za-z0-9._\/-]+)$/
+            if (!matcher.matches()) {
+                throw new GradleException("Invalid native SHA256SUMS line ${index + 1}: ${rawLine}")
+            }
+            def path = matcher.group(2)
+            if (path.startsWith('/') || path.contains('..') || manifestHashes.containsKey(path)) {
+                throw new GradleException("Unsafe or duplicate native manifest path: ${path}")
+            }
+            manifestHashes[path] = matcher.group(1)
+        }
+        if (manifestHashes.keySet() != expectedPaths) {
+            throw new GradleException("Native manifest file set mismatch: missing=${expectedPaths - manifestHashes.keySet()}, "
+                    + "unexpected=${manifestHashes.keySet() - expectedPaths}")
+        }
+
+        def sourcePaths = [] as Set
+        root.eachFileRecurse(groovy.io.FileType.FILES) { file ->
+            def relative = root.toPath().relativize(file.toPath()).toString().replace('\\', '/')
+            if (embeddedNativeFiles.keySet().any { platform -> relative.startsWith("${platform}/") }) {
+                sourcePaths.add(relative)
+            }
+        }
+        if (sourcePaths != expectedPaths) {
+            throw new GradleException("Embedded native source file set mismatch: missing=${expectedPaths - sourcePaths}, "
+                    + "unexpected=${sourcePaths - expectedPaths}")
+        }
+        manifestHashes.each { path, expectedHash ->
+            def file = new File(root, path)
+            if (java.nio.file.Files.isSymbolicLink(file.toPath())) {
+                throw new GradleException("Embedded native file must not be a symlink: ${path}")
+            }
+            def actualHash = file.newInputStream().withCloseable { input -> calculateSha256(input) }
+            if (actualHash != expectedHash) {
+                throw new GradleException("Embedded native SHA-256 mismatch: ${path}, expected=${expectedHash}, actual=${actualHash}")
+            }
+        }
+
+        new java.util.zip.ZipFile(productionJarArchive.get().asFile).withCloseable { zip ->
+            def packagedManifest = zip.getEntry('native/SHA256SUMS')
+            if (packagedManifest == null) {
+                throw new GradleException('Production JAR is missing native/SHA256SUMS')
+            }
+            def jarPaths = zip.entries().findAll { entry ->
+                !entry.directory && embeddedNativeFiles.keySet().any { platform ->
+                    entry.name.startsWith("native/${platform}/")
+                }
+            }.collect { entry -> entry.name.substring('native/'.length()) }.toSet()
+            if (jarPaths != expectedPaths) {
+                throw new GradleException("Packaged native file set mismatch: missing=${expectedPaths - jarPaths}, "
+                        + "unexpected=${jarPaths - expectedPaths}")
+            }
+            manifestHashes.each { path, expectedHash ->
+                def entry = zip.getEntry("native/${path}")
+                def actualHash = zip.getInputStream(entry).withCloseable { input -> calculateSha256(input) }
+                if (actualHash != expectedHash) {
+                    throw new GradleException("Packaged native SHA-256 mismatch: ${path}, expected=${expectedHash}, actual=${actualHash}")
+                }
+            }
+        }
+    }
+}
+
+tasks.register('verifyProductionJarLegalMaterials') {
+    group = 'verification'
+    description = 'Verifies native legal materials are packaged and included in generated release notes.'
+    dependsOn tasks.named('jar')
+    inputs.file(productionJarArchive)
+    inputs.file(nativeCapabilityNotice)
+    inputs.file(releaseWorkflow)
+    doLast {
+        def archive = productionJarArchive.get().asFile
+        def platforms = [
+                'linux-arm64', 'linux-x86_64',
+                'macos-arm64', 'macos-x86_64',
+                'windows-arm64', 'windows-x86_64'
+        ]
+        def requiredEntries = [
+                'META-INF/licenses/AOMedia-Patent-License-1.0.txt',
+                'META-INF/THIRD-PARTY-NOTICES.md',
+                'native/README.md',
+                'native/SHA256SUMS'
+        ] + platforms.collectMany { platform ->
+            embeddedNativeLicenses.collect { license -> "native/${platform}/${license}" }
+        }
+        def missing = []
+        def empty = []
+        new java.util.zip.ZipFile(archive).withCloseable { zip ->
+            requiredEntries.each { path ->
+                def entry = zip.getEntry(path)
+                if (entry == null) {
+                    missing.add(path)
+                } else {
+                    zip.getInputStream(entry).withCloseable { input ->
+                        if (input.readAllBytes().length == 0) {
+                            empty.add(path)
+                        }
+                    }
+                }
+            }
+        }
+        if (!missing.isEmpty() || !empty.isEmpty()) {
+            throw new GradleException("Production JAR legal materials invalid: missing=${missing}, empty=${empty}")
+        }
+
+        def noticeText = nativeCapabilityNotice.asFile.getText('UTF-8')
+        def requiredNoticeMarkers = [
+                'media-min-v48',
+                'AV1 仅支持平台硬件解码',
+                '不包含 dav1d 或 libaom',
+                'H.264 硬件或软件解码',
+                'HEVC/H.265',
+                "Linux ARM64 要求宿主 glibc 至少提供 `${linuxArm64GlibcFloor}`",
+                "Linux x86_64 至少提供 `${linuxX8664GlibcFloor}`",
+                'FFmpeg 使用 LGPL v2.1',
+                'AOMedia Patent License 1.0'
+        ]
+        def absentMarkers = requiredNoticeMarkers.findAll { marker -> !noticeText.contains(marker) }
+        if (!absentMarkers.isEmpty()) {
+            throw new GradleException("Native capability notice is incomplete: missing markers=${absentMarkers}")
+        }
+
+        new java.util.zip.ZipFile(productionJarArchive.get().asFile).withCloseable { zip ->
+            def nativeReadme = zip.getInputStream(zip.getEntry('native/README.md')).withCloseable { input ->
+                new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+            }
+            def requiredRuntimeMarkers = [
+                    "`${linuxArm64GlibcFloor}` on Linux ARM64",
+                    "`${linuxX8664GlibcFloor}` on Linux x86_64"
+            ]
+            def missingRuntimeMarkers = requiredRuntimeMarkers.findAll { marker -> !nativeReadme.contains(marker) }
+            if (!missingRuntimeMarkers.isEmpty()) {
+                throw new GradleException(
+                        "Packaged native README is missing Linux runtime floors: ${missingRuntimeMarkers}")
+            }
+        }
+
+        def workflowText = releaseWorkflow.asFile.getText('UTF-8')
+        if (!workflowText.contains("readFileSync('docs/release-native-capabilities.md'")) {
+            throw new GradleException('GitHub release notes do not include docs/release-native-capabilities.md')
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('verifyProductionJarHasNoConflictCopies')
+    dependsOn tasks.named('verifyProductionJarLegalMaterials')
+    dependsOn tasks.named('verifyEmbeddedNativeBundle')
+    dependsOn tasks.named('verifySceneEditorJiJ')
+    dependsOn tasks.named('verifySceneEditorJiJDedupeFixtures')
 }
 
 tasks.withType(JavaCompile).configureEach {

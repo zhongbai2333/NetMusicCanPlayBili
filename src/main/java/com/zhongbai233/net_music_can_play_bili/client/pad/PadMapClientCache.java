@@ -18,44 +18,33 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** 客户端 Pad 地图缓存：分帧采样，禁止在渲染帧里同步扫全图。 */
 public final class PadMapClientCache {
-    private static final int RESAMPLE_CHUNK_DISTANCE = Integer.getInteger("ncpb.pad.map_resample_chunks", 2);
-    private static final int CHUNKS_PER_TICK = Integer.getInteger("ncpb.pad.map_chunks_per_tick", 24);
-    private static final int FAST_CHUNKS_PER_TICK = Integer.getInteger("ncpb.pad.map_fast_chunks_per_tick", 64);
-    private static final int CELLS_PER_CHUNK_BUDGET = Integer.getInteger("ncpb.pad.map_cells_per_chunk_budget", 32);
-    private static final int INITIAL_VISIBLE_BURST_CELLS = Integer.getInteger("ncpb.pad.map_initial_burst_cells",
-            8192);
-    private static final int MAX_JOB_LAG_CHUNKS = Integer.getInteger("ncpb.pad.map_max_job_lag_chunks", 3);
-    private static final int DIRTY_CHUNKS_PER_TICK = Math.max(1,
-            Integer.getInteger("ncpb.pad.map_dirty_chunks_per_tick", 4));
-    private static final int MAP_UPDATE_INTERVAL_TICKS = Math.max(1,
-            Integer.getInteger("ncpb.pad.map_update_interval_ticks", 1));
-    private static final int UNKNOWN_RETRY_INTERVAL_TICKS = Math.max(20,
-            Integer.getInteger("ncpb.pad.map_unknown_retry_ticks", 40));
-    private static final int RECENTER_BLOCKS = Integer.getInteger("ncpb.pad.map_recenter_blocks", 16);
-    private static final int INDOOR_RECENTER_BLOCKS = Integer.getInteger("ncpb.pad.map_indoor_recenter_blocks", 8);
-    private static final int INDOOR_CEILING_SCAN_BLOCKS = Integer.getInteger("ncpb.pad.map_indoor_ceiling_scan_blocks",
-            96);
-    private static final int INDOOR_CEILING_MIN_HITS = Integer.getInteger("ncpb.pad.map_indoor_ceiling_min_hits", 5);
-    private static final int INDOOR_ARTIFICIAL_MIN_HITS = Integer.getInteger("ncpb.pad.map_indoor_artificial_min_hits",
-            5);
-    private static final int INDOOR_ENTER_CONFIRM_TICKS = Integer.getInteger("ncpb.pad.map_indoor_enter_confirm_ticks",
-            2);
-    private static final int INDOOR_EXIT_CONFIRM_TICKS = Integer.getInteger("ncpb.pad.map_indoor_exit_confirm_ticks",
-            40);
-    private static final int INDOOR_FLOOR_CHANGE_CONFIRM_TICKS = Integer
-            .getInteger("ncpb.pad.map_indoor_floor_confirm_ticks", 4);
-    private static final int INDOOR_JUMP_TOLERANCE_BLOCKS = Integer
-            .getInteger("ncpb.pad.map_indoor_jump_tolerance_blocks", 2);
-    private static final float OUTDOOR_ZOOM = Float.parseFloat(System.getProperty("ncpb.pad.map_outdoor_zoom", "1.25"));
-    private static final float INDOOR_ZOOM = Float.parseFloat(System.getProperty("ncpb.pad.map_indoor_zoom", "3.0"));
-    private static final float INDOOR_DISPLAY_SCALE = Float
-            .parseFloat(System.getProperty("ncpb.pad.map_indoor_display_scale", "2.0"));
-    private static final int PREVIEW_CHUNKS = Integer.getInteger("ncpb.pad.map_preview_chunks", 1);
-    private static final int CELL_CACHE_LIMIT = Integer.getInteger("ncpb.pad.map_cell_cache_limit", 524288);
-    private static final int DIRTY_CHUNK_LIMIT = Integer.getInteger("ncpb.pad.map_dirty_chunk_limit", 8192);
-    private static final int DISK_FLUSH_INTERVAL_TICKS = Integer.getInteger("ncpb.pad.map_disk_flush_ticks", 200);
-    private static final boolean DISK_CACHE_ENABLED = Boolean
-            .parseBoolean(System.getProperty("ncpb.pad.map_disk_cache", "true"));
+    private static final PadMapProperties.Cache PROPERTIES = PadMapProperties.cache();
+    private static final int RESAMPLE_CHUNK_DISTANCE = PROPERTIES.resampleChunkDistance();
+    private static final int CHUNKS_PER_TICK = PROPERTIES.chunksPerTick();
+    private static final int FAST_CHUNKS_PER_TICK = PROPERTIES.fastChunksPerTick();
+    private static final int CELLS_PER_CHUNK_BUDGET = PROPERTIES.cellsPerChunkBudget();
+    private static final int INITIAL_VISIBLE_BURST_CELLS = PROPERTIES.initialVisibleBurstCells();
+    private static final int MAX_JOB_LAG_CHUNKS = PROPERTIES.maxJobLagChunks();
+    private static final int DIRTY_CHUNKS_PER_TICK = PROPERTIES.dirtyChunksPerTick();
+    private static final int MAP_UPDATE_INTERVAL_TICKS = PROPERTIES.updateIntervalTicks();
+    private static final int UNKNOWN_RETRY_INTERVAL_TICKS = PROPERTIES.unknownRetryTicks();
+    private static final int RECENTER_BLOCKS = PROPERTIES.recenterBlocks();
+    private static final int INDOOR_RECENTER_BLOCKS = PROPERTIES.indoorRecenterBlocks();
+    private static final int INDOOR_CEILING_SCAN_BLOCKS = PROPERTIES.indoorCeilingScanBlocks();
+    private static final int INDOOR_CEILING_MIN_HITS = PROPERTIES.indoorCeilingMinHits();
+    private static final int INDOOR_ARTIFICIAL_MIN_HITS = PROPERTIES.indoorArtificialMinHits();
+    private static final int INDOOR_ENTER_CONFIRM_TICKS = PROPERTIES.indoorEnterConfirmTicks();
+    private static final int INDOOR_EXIT_CONFIRM_TICKS = PROPERTIES.indoorExitConfirmTicks();
+    private static final int INDOOR_FLOOR_CHANGE_CONFIRM_TICKS = PROPERTIES.indoorFloorConfirmTicks();
+    private static final int INDOOR_JUMP_TOLERANCE_BLOCKS = PROPERTIES.indoorJumpToleranceBlocks();
+    private static final float OUTDOOR_ZOOM = PROPERTIES.outdoorZoom();
+    private static final float INDOOR_ZOOM = PROPERTIES.indoorZoom();
+    private static final float INDOOR_DISPLAY_SCALE = PROPERTIES.indoorDisplayScale();
+    private static final int PREVIEW_CHUNKS = PROPERTIES.previewChunks();
+    private static final int CELL_CACHE_LIMIT = PROPERTIES.cellCacheLimit();
+    private static final int DIRTY_CHUNK_LIMIT = PROPERTIES.dirtyChunkLimit();
+    private static final int DISK_FLUSH_INTERVAL_TICKS = PROPERTIES.diskFlushTicks();
+    private static final boolean DISK_CACHE_ENABLED = PROPERTIES.diskCacheEnabled();
     private static final ExecutorService DISK_FLUSH_EXECUTOR = Executors.newSingleThreadExecutor(
             NetMusicThreadFactory.daemon("pad-map-disk-flush"));
     private static final AtomicBoolean DISK_FLUSH_IN_PROGRESS = new AtomicBoolean(false);

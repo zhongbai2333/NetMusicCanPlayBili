@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client;
 
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.PadDiagnosticsProperties;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaAudioRouting;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
@@ -18,7 +19,7 @@ import java.util.UUID;
 /** MP4/legacy policy for the shared client media sync handler. */
 final class Mp4ClientMediaSyncPolicy implements ClientMediaSyncPolicy {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final boolean PAD_VIDEO_DEBUG_LOG = Boolean.getBoolean("ncpb.pad.video.debug_log");
+    private static final boolean PAD_VIDEO_DEBUG_LOG = PadDiagnosticsProperties.videoDebugLogEnabled();
 
     @Override
     public boolean canHear(UUID sourceId, boolean headphoneRouted) {
@@ -48,7 +49,8 @@ final class Mp4ClientMediaSyncPolicy implements ClientMediaSyncPolicy {
     @Override
     public boolean shouldRebuildSound(UUID sourceId, ClientMediaSyncPayload payload) {
         ClientMediaSoundHandle sound = ClientMediaSoundRegistry.get(sourceId);
-        if (sound == null || payload.sessionId() == null || !payload.sessionId().equals(sound.sessionId())
+        if (sound == null || payload.playbackSessionId().isEmpty()
+                || !payload.playbackSessionId().equals(sound.playbackSession())
                 || sound.stopped()) {
             return true;
         }

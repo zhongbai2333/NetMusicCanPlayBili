@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.network;
 
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.resources.ResourceKey;
@@ -55,7 +56,7 @@ public final class MP4DeviceLocationIndex {
     private static final int FALLBACK_MAX_BLOCK_ENTITIES = 64;
     private static final int FALLBACK_MAX_SLOTS = 1024;
 
-    private static final Map<UUID, LocationRef> LOCATIONS = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, LocationRef> LOCATIONS = new ConcurrentHashMap<>();
     private static final Map<GraphKey, LogisticsGraph> GRAPHS = new ConcurrentHashMap<>();
 
     private MP4DeviceLocationIndex() {
@@ -70,7 +71,8 @@ public final class MP4DeviceLocationIndex {
         if (level == null || player == null || deviceId == null) {
             return;
         }
-        LOCATIONS.put(deviceId, LocationRef.player(level.dimension(), player.getUUID(), player.getId(),
+        LOCATIONS.put(PlaybackSourceId.of(deviceId),
+                LocationRef.player(level.dimension(), player.getUUID(), player.getId(),
                 player.blockPosition(), level.getGameTime()));
     }
 
@@ -78,7 +80,8 @@ public final class MP4DeviceLocationIndex {
         if (level == null || entity == null || deviceId == null) {
             return;
         }
-        LOCATIONS.put(deviceId, LocationRef.item(level.dimension(), entity.getId(), entity.blockPosition(),
+        LOCATIONS.put(PlaybackSourceId.of(deviceId),
+                LocationRef.item(level.dimension(), entity.getId(), entity.blockPosition(),
                 level.getGameTime()));
     }
 
@@ -86,7 +89,8 @@ public final class MP4DeviceLocationIndex {
         if (level == null || pos == null || deviceId == null) {
             return;
         }
-        LOCATIONS.put(deviceId, LocationRef.block(level.dimension(), pos.immutable(), slot, level.getGameTime()));
+        LOCATIONS.put(PlaybackSourceId.of(deviceId),
+                LocationRef.block(level.dimension(), pos.immutable(), slot, level.getGameTime()));
         ensureGraph(level, pos.immutable(), false);
     }
 
@@ -94,7 +98,8 @@ public final class MP4DeviceLocationIndex {
         if (level == null || entity == null || deviceId == null) {
             return;
         }
-        LOCATIONS.put(deviceId, LocationRef.containerEntity(level.dimension(), entity.getId(), entity.blockPosition(),
+        LOCATIONS.put(PlaybackSourceId.of(deviceId),
+                LocationRef.containerEntity(level.dimension(), entity.getId(), entity.blockPosition(),
                 slot, level.getGameTime()));
     }
 
@@ -102,7 +107,7 @@ public final class MP4DeviceLocationIndex {
         if (level == null || deviceId == null) {
             return Optional.empty();
         }
-        LocationRef ref = LOCATIONS.get(deviceId);
+        LocationRef ref = LOCATIONS.get(PlaybackSourceId.of(deviceId));
         if (ref == null || ref.dimension() != level.dimension()) {
             return Optional.empty();
         }

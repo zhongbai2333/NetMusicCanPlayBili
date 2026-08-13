@@ -3,10 +3,14 @@ package com.zhongbai233.net_music_can_play_bili.bili;
 import com.github.tartaricacid.netmusic.api.resolver.IAsyncSongUrlResolver;
 import com.mojang.logging.LogUtils;
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.CancellableTaskFuture;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import org.slf4j.Logger;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * NetMusic 附加解析器
@@ -14,6 +18,8 @@ import java.util.concurrent.CompletableFuture;
 public class BiliAudioResolver implements IAsyncSongUrlResolver {
 
     private static final Logger LOGGER = LogUtils.getLogger();
+    private static final ExecutorService RESOLVE_EXECUTOR = Executors.newFixedThreadPool(2,
+            NetMusicThreadFactory.daemon("BiliSongResolve"));
 
     public static ItemMusicCD.SongInfo resolveBiliSongInfo(String rawInput) throws Exception {
         return resolveBiliSongInfo(rawInput, 1);
@@ -96,7 +102,7 @@ public class BiliAudioResolver implements IAsyncSongUrlResolver {
 
     @Override
     public CompletableFuture<ItemMusicCD.SongInfo> resolve(ItemMusicCD.SongInfo songInfo) {
-        return CompletableFuture.supplyAsync(() -> {
+        return CancellableTaskFuture.submit(RESOLVE_EXECUTOR, () -> {
             try {
                 ItemMusicCD.SongInfo resolved = resolvePlayableSongInfo(songInfo);
                 return resolved;

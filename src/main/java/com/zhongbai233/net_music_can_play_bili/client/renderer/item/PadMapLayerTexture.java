@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.client.renderer.item;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
+import com.zhongbai233.net_music_can_play_bili.client.PadRenderProperties;
 import com.zhongbai233.net_music_can_play_bili.client.pad.PadPerfLogger;
 import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSnapshot;
 import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSampler;
@@ -19,16 +20,16 @@ import org.slf4j.Logger;
  * 地图数据变化时烘焙为动态纹理；渲染帧只提交缓存纹理，避免每帧重绘地图底图。
  */
 final class PadMapLayerTexture implements AutoCloseable {
-    static final int CELL_PIXELS = Integer.getInteger("ncpb.pad.map_cell_pixels", 1);
+    private static final PadRenderProperties.MapLayer PROPERTIES = PadRenderProperties.mapLayer();
+    static final int CELL_PIXELS = PROPERTIES.cellPixels();
     static final int WIDTH = PadMapSampler.DEFAULT_WIDTH * CELL_PIXELS;
     static final int HEIGHT = PadMapSampler.DEFAULT_HEIGHT * CELL_PIXELS;
     static final int VIEW_WIDTH = PadMapSampler.DEFAULT_VIEW_WIDTH * CELL_PIXELS;
     static final int VIEW_HEIGHT = PadMapSampler.DEFAULT_VIEW_HEIGHT * CELL_PIXELS;
-    private static final int SCALE = Integer.getInteger("ncpb.pad.map_layer_scale", 1);
+    private static final int SCALE = PROPERTIES.scale();
     private static final int TARGET_WIDTH = WIDTH * Math.max(1, SCALE);
     private static final int TARGET_HEIGHT = HEIGHT * Math.max(1, SCALE);
-    private static final long MIN_BAKE_INTERVAL_NANOS = Long.getLong("ncpb.pad.map_min_bake_interval_ms", 500L)
-            * 1_000_000L;
+    private static final long MIN_BAKE_INTERVAL_NANOS = PROPERTIES.minBakeIntervalMillis() * 1_000_000L;
     private static final Logger LOGGER = LogUtils.getLogger();
 
     private final Identifier textureId;

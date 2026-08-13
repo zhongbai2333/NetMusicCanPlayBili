@@ -33,7 +33,7 @@ public final class ClientMediaPlayback {
         if (active == null) {
             return HandheldMediaPlayback.EMPTY;
         }
-        return new HandheldMediaPlayback(active.sessionId(), active.rawUrl(), active.songName(),
+        return new HandheldMediaPlayback(active.playbackSessionId(), active.rawUrl(), active.songName(),
                 active.timelineSnapshot(), allowAiSubtitle);
     }
 

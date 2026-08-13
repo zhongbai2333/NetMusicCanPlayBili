@@ -1,8 +1,12 @@
 package com.zhongbai233.net_music_can_play_bili.client.audio;
 
-import com.mojang.logging.LogUtils;
-import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.stream.CancellableHttpTransport;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeHeaders;
+import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRequestCloseDiagnostics;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.CancellableTaskFuture;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseExecutor;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import org.slf4j.Logger;
 
 import java.io.IOException;
@@ -10,20 +14,25 @@ import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Objects;
 import java.util.OptionalLong;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** 客户端纯音频预览的轻量时长兜底探测器。 */
 public final class AudioDurationProbe {
-    private static final Logger LOGGER = LogUtils.getLogger();
     private static final int PROBE_BYTES = 128 * 1024;
     private static final int MAX_REDIRECTS = 5;
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NEVER)
             .connectTimeout(Duration.ofSeconds(8))
             .build();
+    private static final ExecutorService PROBE_EXECUTOR = Executors.newFixedThreadPool(2,
+            NetMusicThreadFactory.daemon("audio-duration-probe"));
     private static final int[] MP3_MPEG1_LAYER1_BITRATES = { 0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352,
             384, 416, 448, 0 };
     private static final int[] MP3_MPEG1_LAYER2_BITRATES = { 0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256,
@@ -38,17 +47,35 @@ public final class AudioDurationProbe {
     private AudioDurationProbe() {
     }
 
-    public static CompletableFuture<OptionalLong> probeMillisAsync(String rawUrl) {
-        return CompletableFuture.supplyAsync(() -> probeMillis(rawUrl));
+    public static CancellableTaskFuture<OptionalLong> probeMillisAsync(String rawUrl) {
+        return probeMillisAsync(rawUrl, HTTP_CLIENT, HttpRequestCloseDiagnostics.global(), PROBE_EXECUTOR, true);
     }
 
-    private static OptionalLong probeMillis(String rawUrl) {
+    static CancellableTaskFuture<OptionalLong> probeMillisAsync(String rawUrl, HttpClient client,
+            HttpRequestCloseDiagnostics diagnostics, ExecutorService executor) {
+        return probeMillisAsync(rawUrl, client, diagnostics, executor, false);
+    }
+
+    private static CancellableTaskFuture<OptionalLong> probeMillisAsync(String rawUrl, HttpClient client,
+            HttpRequestCloseDiagnostics diagnostics, ExecutorService executor, boolean logResult) {
+        ProbeResources resources = new ProbeResources();
+        return CancellableTaskFuture.submit(executor, () -> {
+            try {
+                return probeMillis(rawUrl, client, diagnostics, resources, logResult);
+            } finally {
+                resources.closeActiveBody();
+            }
+        }, resources::cancel);
+    }
+
+    private static OptionalLong probeMillis(String rawUrl, HttpClient client,
+            HttpRequestCloseDiagnostics diagnostics, ProbeResources resources, boolean logResult) {
         String url = PlaybackSync.strip(rawUrl);
         if (url == null || url.isBlank()) {
             return OptionalLong.empty();
         }
         try {
-            ProbeResponse response = probe(url, 0);
+            ProbeResponse response = probe(url, client, diagnostics, resources);
             long totalBytes = response.totalBytes();
             Mp3Frame frame = findMp3Frame(response.body());
             if (totalBytes <= 0L || frame == null || frame.bitrateKbps() <= 0) {
@@ -59,36 +86,69 @@ public final class AudioDurationProbe {
             if (millis <= 0L) {
                 return OptionalLong.empty();
             }
-            LOGGER.debug("纯音频预览本地估算时长: {}ms bitrate={}kbps bytes={} host={}", millis,
-                    frame.bitrateKbps(), totalBytes, response.uri().getHost());
+            if (logResult) {
+                logger().debug("纯音频预览本地估算时长: {}ms bitrate={}kbps bytes={} host={}", millis,
+                        frame.bitrateKbps(), totalBytes, response.uri().getHost());
+            }
             return OptionalLong.of(millis);
+        } catch (CancellationException cancelled) {
+            throw cancelled;
         } catch (Exception e) {
-            LOGGER.debug("纯音频预览本地时长探测失败: {} reason={}", url, e.toString());
+            if (resources.isCancelled() || Thread.currentThread().isInterrupted()) {
+                Thread.currentThread().interrupt();
+                throw new CancellationException("audio duration probe cancelled");
+            }
+            if (logResult) {
+                logger().debug("纯音频预览本地时长探测失败: {} reason={}", url, e.toString());
+            }
             return OptionalLong.empty();
         }
     }
 
-    private static ProbeResponse probe(String url, int redirects) throws IOException, InterruptedException {
-        HttpResponse<InputStream> response = HTTP_CLIENT.send(request(url), HttpResponse.BodyHandlers.ofInputStream());
-        try (InputStream body = response.body()) {
+    private static ProbeResponse probe(String url, HttpClient client, HttpRequestCloseDiagnostics diagnostics,
+            ProbeResources resources) throws IOException {
+        URI current = URI.create(url);
+        for (int redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
+            resources.throwIfCancelled();
+            HttpRequest request = request(current.toString());
+            long operationId = diagnostics.begin("audio-duration-probe", safeHost(current), 0L,
+                    PROBE_BYTES - 1L, System.nanoTime());
+            CancellableHttpTransport.Response response = CancellableHttpTransport.send(
+                    client, request, diagnostics, operationId);
+            InputStream body = response.body();
+            resources.attachBody(body);
             int status = response.statusCode();
-            if (HttpRangeHeaders.isRedirectStatus(status)) {
-                if (redirects >= MAX_REDIRECTS) {
-                    throw new IOException("too many redirects while probing audio duration");
+            URI next = null;
+            ProbeResponse result = null;
+            try {
+                resources.throwIfCancelled();
+                if (HttpRangeHeaders.isRedirectStatus(status)) {
+                    if (redirects >= MAX_REDIRECTS) {
+                        throw new IOException("too many redirects while probing audio duration");
+                    }
+                    String location = response.headers().firstValue("Location")
+                            .orElseThrow(() -> new IOException("HTTP " + status + " redirect without Location"));
+                    next = current.resolve(location);
+                } else {
+                    if (status != 200 && status != 206) {
+                        throw new IOException("HTTP " + status + " while probing audio duration");
+                    }
+                    long totalBytes = response.headers().firstValue("Content-Range")
+                            .flatMap(HttpRangeHeaders::parseContentRangeTotal)
+                            .orElseGet(() -> response.headers().firstValueAsLong("Content-Length").orElse(-1L));
+                    byte[] bytes = body == null ? new byte[0] : body.readNBytes(PROBE_BYTES);
+                    resources.throwIfCancelled();
+                    result = new ProbeResponse(current, bytes, totalBytes);
                 }
-                String location = response.headers().firstValue("Location")
-                        .orElseThrow(() -> new IOException("HTTP " + status + " redirect without Location"));
-                return probe(response.uri().resolve(location).toString(), redirects + 1);
+            } finally {
+                resources.releaseBody(body);
             }
-            if (status != 200 && status != 206) {
-                throw new IOException("HTTP " + status + " while probing audio duration");
+            if (result != null) {
+                return result;
             }
-            long totalBytes = response.headers().firstValue("Content-Range")
-                    .flatMap(HttpRangeHeaders::parseContentRangeTotal)
-                    .orElseGet(() -> response.headers().firstValueAsLong("Content-Length").orElse(-1L));
-            byte[] bytes = body == null ? new byte[0] : body.readNBytes(PROBE_BYTES);
-            return new ProbeResponse(response.uri(), bytes, totalBytes);
+            current = Objects.requireNonNull(next, "redirect target");
         }
+        throw new IOException("too many redirects while probing audio duration");
     }
 
     private static HttpRequest request(String url) {
@@ -156,5 +216,68 @@ public final class AudioDurationProbe {
     }
 
     private record Mp3Frame(int offset, int bitrateKbps) {
+    }
+
+    private static String safeHost(URI uri) {
+        String host = uri != null ? uri.getHost() : null;
+        return host == null || host.isBlank() ? "<unknown>" : host;
+    }
+
+    private static Logger logger() {
+        return LoggerHolder.INSTANCE;
+    }
+
+    private static final class LoggerHolder {
+        private static final Logger INSTANCE = com.mojang.logging.LogUtils.getLogger();
+
+        private LoggerHolder() {
+        }
+    }
+
+    private static final class ProbeResources {
+        private final AtomicBoolean cancelled = new AtomicBoolean();
+        private final AtomicReference<InputStream> activeBody = new AtomicReference<>();
+
+        private void attachBody(InputStream body) {
+            if (body == null) {
+                return;
+            }
+            if (!activeBody.compareAndSet(null, body)) {
+                MediaCloseExecutor.closeAsyncStrict(body, "unclaimed audio duration probe body");
+                throw new IllegalStateException("audio duration probe already owns a response body");
+            }
+            if (cancelled.get() && activeBody.compareAndSet(body, null)) {
+                MediaCloseExecutor.closeAsyncStrict(body, "cancelled audio duration probe body");
+                throw new CancellationException("audio duration probe cancelled");
+            }
+        }
+
+        private void releaseBody(InputStream body) throws IOException {
+            if (body != null && activeBody.compareAndSet(body, null)) {
+                body.close();
+            }
+        }
+
+        private void closeActiveBody() {
+            InputStream body = activeBody.getAndSet(null);
+            if (body != null) {
+                MediaCloseExecutor.closeAsyncStrict(body, "audio duration probe response body");
+            }
+        }
+
+        private void cancel() {
+            cancelled.set(true);
+            closeActiveBody();
+        }
+
+        private boolean isCancelled() {
+            return cancelled.get();
+        }
+
+        private void throwIfCancelled() {
+            if (cancelled.get() || Thread.currentThread().isInterrupted()) {
+                throw new CancellationException("audio duration probe cancelled");
+            }
+        }
     }
 }

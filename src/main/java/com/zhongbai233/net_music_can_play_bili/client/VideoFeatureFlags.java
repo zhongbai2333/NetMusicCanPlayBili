@@ -6,30 +6,29 @@ import java.util.Locale;
  * 视频播放功能开关与可选诊断参数入口
  */
 public final class VideoFeatureFlags {
-    public static final boolean ADVANCED_FEATURES = Boolean.getBoolean("ncpb.video.advanced_features");
+    public static final boolean ADVANCED_FEATURES = VideoFeatureProperties.advancedFeaturesEnabled();
 
     private VideoFeatureFlags() {
     }
 
     public static boolean benchFeaturesEnabled() {
-        return ADVANCED_FEATURES && Boolean.getBoolean("ncpb.video.enable_bench_features");
+        return ADVANCED_FEATURES && VideoFeatureProperties.benchFeaturesEnabled();
     }
 
     public static boolean advancedBoolean(String key, boolean defaultValue) {
-        return ADVANCED_FEATURES ? Boolean.parseBoolean(System.getProperty(key, Boolean.toString(defaultValue)))
-                : defaultValue;
+        return ADVANCED_FEATURES ? VideoFeatureProperties.booleanValue(key, defaultValue) : defaultValue;
     }
 
     public static int advancedInt(String key, int defaultValue) {
-        return ADVANCED_FEATURES ? Integer.getInteger(key, defaultValue) : defaultValue;
+        return ADVANCED_FEATURES ? VideoFeatureProperties.intValue(key, defaultValue) : defaultValue;
     }
 
     public static long advancedLong(String key, long defaultValue) {
-        return ADVANCED_FEATURES ? Long.getLong(key, defaultValue) : defaultValue;
+        return ADVANCED_FEATURES ? VideoFeatureProperties.longValue(key, defaultValue) : defaultValue;
     }
 
     public static String advancedString(String key, String defaultValue) {
-        return ADVANCED_FEATURES ? System.getProperty(key, defaultValue) : defaultValue;
+        return ADVANCED_FEATURES ? VideoFeatureProperties.stringValue(key, defaultValue) : defaultValue;
     }
 
     public static String[] autoHwaccelCandidates() {
@@ -47,7 +46,7 @@ public final class VideoFeatureFlags {
         if (!ADVANCED_FEATURES) {
             return autoHwaccelCandidates();
         }
-        String raw = System.getProperty("ncpb.video.native.hwaccel", "auto").trim();
+        String raw = VideoFeatureProperties.nativeHwaccel();
         if (raw.isBlank() || "auto".equalsIgnoreCase(raw)) {
             return autoHwaccelCandidates();
         }

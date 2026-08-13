@@ -5,6 +5,7 @@ import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldVideoFrame;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.Identifier;
@@ -16,8 +17,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /** MP4 手持视频层在 Iris shaderpack 下使用的 RGBA 回退纹理。 */
 final class MP4RgbaVideoLayer implements AutoCloseable {
-    private static final Map<UUID, MP4RgbaVideoLayer> LAYERS = new ConcurrentHashMap<>();
-    private static final Map<UUID, MP4RgbaVideoLayer> HANDHELD_LAYERS = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, MP4RgbaVideoLayer> LAYERS = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, MP4RgbaVideoLayer> HANDHELD_LAYERS = new ConcurrentHashMap<>();
 
     private final Identifier textureId;
     private DynamicTexture texture;
@@ -39,14 +40,16 @@ final class MP4RgbaVideoLayer implements AutoCloseable {
         if (deviceId == null) {
             throw new IllegalArgumentException("MP4 RGBA video layer requires a device id");
         }
-        return LAYERS.computeIfAbsent(deviceId, MP4RgbaVideoLayer::new);
+        return LAYERS.computeIfAbsent(PlaybackSourceId.of(deviceId),
+                sourceId -> new MP4RgbaVideoLayer(sourceId.value()));
     }
 
     static MP4RgbaVideoLayer forHandheldDevice(UUID deviceId) {
         if (deviceId == null) {
             throw new IllegalArgumentException("MP4 handheld RGBA video layer requires a device id");
         }
-        return HANDHELD_LAYERS.computeIfAbsent(deviceId, id -> new MP4RgbaVideoLayer(id, "pad_video"));
+        return HANDHELD_LAYERS.computeIfAbsent(PlaybackSourceId.of(deviceId),
+                sourceId -> new MP4RgbaVideoLayer(sourceId.value(), "pad_video"));
     }
 
     static void releaseAll() {
@@ -64,7 +67,7 @@ final class MP4RgbaVideoLayer implements AutoCloseable {
         if (deviceId == null) {
             return;
         }
-        MP4RgbaVideoLayer layer = LAYERS.remove(deviceId);
+        MP4RgbaVideoLayer layer = LAYERS.remove(PlaybackSourceId.of(deviceId));
         if (layer != null) {
             layer.close();
         }
@@ -74,7 +77,7 @@ final class MP4RgbaVideoLayer implements AutoCloseable {
         if (deviceId == null) {
             return;
         }
-        MP4RgbaVideoLayer layer = HANDHELD_LAYERS.remove(deviceId);
+        MP4RgbaVideoLayer layer = HANDHELD_LAYERS.remove(PlaybackSourceId.of(deviceId));
         if (layer != null) {
             layer.close();
         }

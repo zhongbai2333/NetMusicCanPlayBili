@@ -7,6 +7,7 @@ import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.SubmitNodeCollector;
@@ -21,6 +22,8 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 
+import java.util.Optional;
+
 import com.mojang.blaze3d.vertex.PoseStack;
 
 /**
@@ -33,10 +36,8 @@ import com.mojang.blaze3d.vertex.PoseStack;
  */
 public class VideoProjectorRenderer
         implements BlockEntityRenderer<VideoProjectorBlockEntity, VideoProjectorRenderer.State> {
-    private static final double PROJECTOR_RENDER_MARGIN = Double.parseDouble(
-            System.getProperty("ncpb.video.projector.render_margin", "0.5"));
-    private static final double PROJECTOR_RENDER_MAX_ASPECT = Double.parseDouble(
-            System.getProperty("ncpb.video.projector.render_max_aspect", "8.0"));
+    private static final ProjectorRenderProperties.VideoBounds RENDER_BOUNDS =
+            ProjectorRenderProperties.videoBounds();
 
     public VideoProjectorRenderer(BlockEntityRendererProvider.Context context) {
     }
@@ -59,7 +60,7 @@ public class VideoProjectorRenderer
         state.projectionDistanceX = projector.getProjectionDistanceX();
         state.projectionDistanceZ = projector.getProjectionDistanceZ();
         state.frame = VideoBillboardPreview.ProjectorFrameSnapshot.empty();
-        state.sessionId = null;
+        state.playbackSessionId = Optional.empty();
         state.hideVideoForPrivacy = com.zhongbai233.net_music_can_play_bili.client.renderer.video
             .VideoSurfacePrivacyPolicy.hideVideo(HolographicGlassesClient.shouldHideProjectorVideos(),
                 com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoSurfacePrivacyPolicy
@@ -86,7 +87,7 @@ public class VideoProjectorRenderer
                 VideoBillboardPreview.attachProjectorToTurntable(linkedPos, projector.getBlockPos());
                 String liveSessionId = com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker
                         .currentSessionId(linkedPos);
-                state.sessionId = liveSessionId.isBlank() ? null : liveSessionId;
+                state.playbackSessionId = PlaybackSessionId.parse(liveSessionId);
                 state.frame = VideoBillboardPreview.currentProjectorDisplayFrame(projector.getBlockPos());
             } else {
                 VideoBillboardPreview.stopIfProjector(projector.getBlockPos());
@@ -106,7 +107,7 @@ public class VideoProjectorRenderer
         if (state.visible) {
             VideoBillboardPreview.attachProjectorToTurntable(linkedPos, projector.getBlockPos());
             var sync = turntable.getPlaybackSyncMetadata(level.getGameTime());
-            state.sessionId = sync.hasSession() ? sync.sessionId() : null;
+            state.playbackSessionId = sync.playbackSessionId();
             if (!sync.hasSession() || !VideoBillboardPreview.hasSessionForTurntable(linkedPos, sync.sessionId())) {
                 ModernTurntableVideoClient.syncFromTurntableForProjectorIfPossible(turntable, projector);
             }
@@ -126,7 +127,8 @@ public class VideoProjectorRenderer
         }
         // submit 只会在 BER 通过引擎视锥/距离调度后执行；将这个逐帧事实与
         // extractRenderState 中登记的持久 BER 管理状态分开，供离屏暂停使用。
-        VideoBillboardPreview.markProjectorSubmittedByBer(state.sessionId, state.projectorPos);
+        state.playbackSessionId.ifPresent(sessionId ->
+                VideoBillboardPreview.markProjectorSubmittedByBer(sessionId, state.projectorPos));
         VideoBillboardPreview.ProjectorFrameSnapshot frame = state.frame;
         if (frame == null || !frame.hasFrame() || frame.width() <= 0 || frame.height() <= 0) {
             return;
@@ -144,9 +146,9 @@ public class VideoProjectorRenderer
         poseStack.mulPose(Axis.XP.rotationDegrees(-state.projectionPitch));
         Matrix4f screenPose = new Matrix4f(poseStack.last().pose());
 
-        if (state.sessionId != null && !state.hideVideoForPrivacy) {
-            VideoBillboardPreview.captureProjectorImmediatePose(state.sessionId, state.projectorPos,
-                    screenPose, halfHeight);
+        if (state.playbackSessionId.isPresent() && !state.hideVideoForPrivacy) {
+            VideoBillboardPreview.captureProjectorImmediatePose(state.playbackSessionId.orElseThrow(),
+                    state.projectorPos, screenPose, halfHeight);
         }
 
         if (state.hideVideoForPrivacy) {
@@ -164,7 +166,7 @@ public class VideoProjectorRenderer
                 blockEntity.getProjectionDistanceX(), blockEntity.getProjectionHeight(),
                 blockEntity.getProjectionDistanceZ(), blockEntity.getProjectionYaw(),
                 blockEntity.getProjectionPitch(), blockEntity.getProjectionScale(),
-                PROJECTOR_RENDER_MAX_ASPECT, PROJECTOR_RENDER_MARGIN);
+                RENDER_BOUNDS.maxAspect(), RENDER_BOUNDS.margin());
     }
 
     @Override
@@ -209,7 +211,15 @@ public class VideoProjectorRenderer
         public float projectionDistanceX;
         public float projectionDistanceZ;
         public boolean hideVideoForPrivacy;
-        public String sessionId;
+        private Optional<PlaybackSessionId> playbackSessionId = Optional.empty();
+
+        public Optional<PlaybackSessionId> playbackSessionId() {
+            return playbackSessionId;
+        }
+
+        public String sessionId() {
+            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+        }
         public VideoBillboardPreview.ProjectorFrameSnapshot frame = VideoBillboardPreview.ProjectorFrameSnapshot
                 .empty();
     }

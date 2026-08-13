@@ -1,16 +1,16 @@
 package com.zhongbai233.net_music_can_play_bili.client.pad;
 
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.client.PadRenderProperties;
 import org.slf4j.Logger;
 
 /** 低频 Pad 地图/GUI 性能汇总日志；生产环境默认不在 INFO 打印，DEBUG/TRACE 或显式属性开启时才统计。 */
 public final class PadPerfLogger {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final boolean EXPLICIT_ENABLED = Boolean
-            .parseBoolean(System.getProperty("ncpb.pad.perf_log", "false"));
-    private static final long SLOW_WARN_NS = Long.getLong("ncpb.pad.perf_slow_warn_ms", 12L) * 1_000_000L;
-    private static final long SLOW_WARN_COOLDOWN_NS = Long.getLong("ncpb.pad.perf_slow_warn_cooldown_ms", 5000L)
-            * 1_000_000L;
+    private static final PadRenderProperties.Performance PROPERTIES = PadRenderProperties.performance();
+    private static final boolean EXPLICIT_ENABLED = PROPERTIES.explicitEnabled();
+    private static final long SLOW_WARN_NS = PROPERTIES.slowWarnMillis() * 1_000_000L;
+    private static final long SLOW_WARN_COOLDOWN_NS = PROPERTIES.slowWarnCooldownMillis() * 1_000_000L;
     private static final long REPORT_INTERVAL_NS = 5_000_000_000L;
     private static long nextReportNs = System.nanoTime() + REPORT_INTERVAL_NS;
     private static long nextSlowWarnNs;

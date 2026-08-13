@@ -148,6 +148,8 @@ public final class NetMusicClientCommands {
         for (String line : ModernTurntableVideoClient.describeVideoLifecycle()) {
             feedback(Component.literal(line));
         }
+        feedback(Component.literal(com.zhongbai233.net_music_can_play_bili.client.sync
+                .ClientAiSubtitleRegistry.describe()));
         return 1;
     }
 

@@ -7,6 +7,8 @@ import com.google.gson.JsonParser;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
 import com.zhongbai233.net_music_can_play_bili.media.stream.CdnUrlFallbacks;
+import com.zhongbai233.net_music_can_play_bili.media.stream.CancellableHttpRequestScope;
+import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRequestCloseDiagnostics;
 import org.slf4j.Logger;
 
 import java.net.URI;
@@ -19,7 +21,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -55,9 +59,9 @@ public final class BiliApiClient {
             .followRedirects(HttpClient.Redirect.ALWAYS)
             .build();
     // B站 SESSDATA Cookie，扫码登录后自动获取
-    public static volatile String sessdata = System.getProperty("ncpb.bili.sessdata", "");
+    public static volatile String sessdata = BiliApiProperties.initialSessdata();
     // 扫码登录返回的完整 Web Cookie，可包含 buvid/bili_jct/DedeUserID 等降低风控概率的字段。
-    public static volatile String webCookie = System.getProperty("ncpb.bili.cookie", "");
+    public static volatile String webCookie = BiliApiProperties.initialWebCookie();
 
     private BiliApiClient() {
     }
@@ -184,7 +188,8 @@ public final class BiliApiClient {
                     .GET();
             BiliRequestHeaders.applyWebApiHeaders(builder);
             HttpRequest req = builder.build();
-            return SHORT_LINK_HTTP.send(req, HttpResponse.BodyHandlers.discarding()).uri().toString();
+            return sendApi(SHORT_LINK_HTTP, req, HttpResponse.BodyHandlers.discarding(),
+                    "bili-api-short-link").uri().toString();
         } catch (Exception e) {
             logger().debug("B站短链展开失败: {}", raw, e);
             return null;
@@ -284,39 +289,115 @@ public final class BiliApiClient {
         }
     }
 
+    public enum VideoCodecPolicy {
+        AUTO("auto"),
+        PREFER_AV1("prefer-av1"),
+        COMPATIBILITY("compatibility"),
+        H264("h264");
+
+        private final String serializedName;
+
+        VideoCodecPolicy(String serializedName) {
+            this.serializedName = serializedName;
+        }
+
+        public String serializedName() {
+            return serializedName;
+        }
+
+        static VideoCodecPolicy parse(String raw) {
+            String normalized = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
+            for (VideoCodecPolicy policy : values()) {
+                if (policy.serializedName.equals(normalized)) {
+                    return policy;
+                }
+            }
+            return AUTO;
+        }
+    }
+
+    public enum VideoDecodePreference {
+        HARDWARE_REQUIRED,
+        AUTO,
+        SOFTWARE_ONLY
+    }
+
+    public record PlannedVideoCandidate(VideoStream stream, VideoDecodePreference decodePreference) {
+        public PlannedVideoCandidate {
+            Objects.requireNonNull(stream, "stream");
+            Objects.requireNonNull(decodePreference, "decodePreference");
+        }
+    }
+
     /** 同一次 playurl 响应内可用于探测和回退的视频候选。 */
-    public record VideoStreamPlan(int requestedQualityCeiling, List<VideoStream> av1Candidates,
-            List<VideoStream> h264Candidates, List<VideoStream> softwareAv1Candidates, List<String> diagnostics) {
+    public record VideoStreamPlan(int requestedQualityCeiling, VideoCodecPolicy codecPolicy,
+            List<VideoStream> av1Candidates, List<VideoStream> h264Candidates,
+            List<VideoStream> softwareAv1Candidates, List<String> diagnostics) {
         public VideoStreamPlan {
+            Objects.requireNonNull(codecPolicy, "codecPolicy");
             av1Candidates = List.copyOf(av1Candidates);
             h264Candidates = List.copyOf(h264Candidates);
             softwareAv1Candidates = List.copyOf(softwareAv1Candidates);
             diagnostics = List.copyOf(diagnostics);
         }
 
+        public VideoStreamPlan(int requestedQualityCeiling, List<VideoStream> av1Candidates,
+                List<VideoStream> h264Candidates, List<VideoStream> softwareAv1Candidates,
+                List<String> diagnostics) {
+            this(requestedQualityCeiling, VideoCodecPolicy.AUTO, av1Candidates, h264Candidates,
+                    softwareAv1Candidates, diagnostics);
+        }
+
         public VideoStream preferred() {
-            if (!av1Candidates.isEmpty()) {
-                return av1Candidates.get(0);
-            }
-            if (!h264Candidates.isEmpty()) {
-                return h264Candidates.get(0);
+            List<PlannedVideoCandidate> ordered = candidateOrder();
+            if (!ordered.isEmpty()) {
+                return ordered.get(0).stream();
             }
             throw new IllegalStateException("该视频没有可用的 AV1/H.264 DASH 视频流");
         }
 
-        public List<VideoStream> fallbackOrder() {
-            List<VideoStream> result = new ArrayList<>(
+        public List<PlannedVideoCandidate> candidateOrder() {
+            List<PlannedVideoCandidate> result = new ArrayList<>(
                     av1Candidates.size() + h264Candidates.size() + softwareAv1Candidates.size());
-            result.addAll(av1Candidates);
-            result.addAll(h264Candidates);
-            result.addAll(softwareAv1Candidates);
+            switch (codecPolicy) {
+                case AUTO, COMPATIBILITY -> {
+                    addCandidates(result, av1Candidates, VideoDecodePreference.HARDWARE_REQUIRED);
+                    addCandidates(result, h264Candidates, VideoDecodePreference.AUTO);
+                    addCandidates(result, softwareAv1Candidates, VideoDecodePreference.SOFTWARE_ONLY);
+                }
+                case PREFER_AV1 -> {
+                    addCandidates(result, av1Candidates, VideoDecodePreference.HARDWARE_REQUIRED);
+                    addCandidates(result, softwareAv1Candidates, VideoDecodePreference.SOFTWARE_ONLY);
+                    addCandidates(result, h264Candidates, VideoDecodePreference.AUTO);
+                }
+                case H264 -> addCandidates(result, h264Candidates, VideoDecodePreference.AUTO);
+            }
             return List.copyOf(result);
+        }
+
+        public List<VideoStream> fallbackOrder() {
+            return candidateOrder().stream().map(PlannedVideoCandidate::stream).toList();
+        }
+
+        private static void addCandidates(List<PlannedVideoCandidate> target, List<VideoStream> streams,
+                VideoDecodePreference preference) {
+            streams.forEach(stream -> target.add(new PlannedVideoCandidate(stream, preference)));
         }
     }
 
-    public record SubtitleInfo(String lan, String url) {
+    public enum SubtitlePreference {
+        HUMAN_ONLY,
+        HUMAN_OR_AI,
+        AI_ONLY
+    }
+
+    public record SubtitleInfo(String lan, String url, boolean aiGenerated) {
+        public SubtitleInfo(String lan, String url) {
+            this(lan, url, isAiLanguage(lan));
+        }
+
         public boolean isAiGenerated() {
-            return lan != null && lan.toLowerCase().startsWith("ai-");
+            return aiGenerated || isAiLanguage(lan);
         }
 
         public boolean isJsonSubtitle() {
@@ -378,8 +459,8 @@ public final class BiliApiClient {
         BiliRequestHeaders.applyWebApiHeaders(builder);
         HttpRequest req = builder.build();
 
-        HttpResponse<String> resp = BiliWbiSigner.HTTP.send(req,
-                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        HttpResponse<String> resp = sendApi(BiliWbiSigner.HTTP, req,
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), "bili-api-view");
         JsonObject body = JsonParser.parseString(resp.body()).getAsJsonObject();
 
         int code = body.get("code").getAsInt();
@@ -461,8 +542,8 @@ public final class BiliApiClient {
         BiliRequestHeaders.applyWebApiHeaders(builder);
         HttpRequest req = builder.GET().build();
 
-        HttpResponse<String> resp = BiliWbiSigner.HTTP.send(req,
-                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        HttpResponse<String> resp = sendApi(BiliWbiSigner.HTTP, req,
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), "bili-api-audio-playurl");
         JsonObject body = JsonParser.parseString(resp.body()).getAsJsonObject();
 
         int code = body.get("code").getAsInt();
@@ -504,8 +585,7 @@ public final class BiliApiClient {
             }
         }
 
-        String configuredAudioPreference = System.getProperty("ncpb.bili.audio.preference", "auto")
-                .trim().toLowerCase(java.util.Locale.ROOT);
+        String configuredAudioPreference = BiliApiProperties.audioPreference();
         boolean allowFlac = configuredAudioPreference.equals("auto")
                 || configuredAudioPreference.equals("dolby")
                 || configuredAudioPreference.equals("atmos")
@@ -673,9 +753,27 @@ public final class BiliApiClient {
         BiliRequestHeaders.applyWebApiHeaders(builder);
         HttpRequest req = builder.GET().build();
 
-        HttpResponse<String> resp = BiliWbiSigner.HTTP.send(req,
-                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        JsonObject body = JsonParser.parseString(resp.body()).getAsJsonObject();
+        HttpResponse<String> resp = sendApi(BiliWbiSigner.HTTP, req,
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), "bili-api-video-playurl");
+        List<VideoStream> streams = parseVideoStreams(resp.body());
+
+        VideoStreamPlan plan = buildVideoStreamPlan(streams, preferredQuality);
+        VideoStream selected = plan.preferred();
+        logger().debug(
+                "B站视频流选择摘要: id={} cid={} policy={} qualityCeiling={} available={} selected={} codec={} size={}x{} fps={} av1Candidates={} h264Candidates={} softwareAv1Candidates={} rejected={} host={}",
+                id.asInputText(), cid, plan.codecPolicy().serializedName(), qualityLabel(preferredQuality),
+                streams.stream().map(stream -> qualityLabel(stream.quality())).distinct().toList(),
+                qualityLabel(selected.quality()),
+                selected.codecId(), selected.width(), selected.height(), selected.frameRate(),
+                plan.av1Candidates().size(), plan.h264Candidates().size(), plan.softwareAv1Candidates().size(),
+                plan.diagnostics(),
+                hostOf(selected.baseUrl()));
+        return registerVideoPlan(plan);
+    }
+
+    /** Parses one playurl response without network access or global stream registration. */
+    static List<VideoStream> parseVideoStreams(String responseBody) {
+        JsonObject body = JsonParser.parseString(responseBody).getAsJsonObject();
 
         int code = body.get("code").getAsInt();
         if (code != 0) {
@@ -714,18 +812,7 @@ public final class BiliApiClient {
             streams.add(new VideoStream(qid, codecId, width, height, frameRate, codecs, baseUrl,
                     initRange[0], initRange[1], indexRange[0], indexRange[1], cdnCandidates));
         }
-
-        VideoStreamPlan plan = buildVideoStreamPlan(streams, preferredQuality);
-        VideoStream selected = plan.preferred();
-        logger().debug(
-                "B站视频流选择摘要: id={} cid={} qualityCeiling={} available={} selected={} codec={} size={}x{} fps={} av1Candidates={} h264Candidates={} rejected={} host={}",
-                id.asInputText(), cid, qualityLabel(preferredQuality),
-                streams.stream().map(stream -> qualityLabel(stream.quality())).distinct().toList(),
-                qualityLabel(selected.quality()),
-                selected.codecId(), selected.width(), selected.height(), selected.frameRate(),
-                plan.av1Candidates().size(), plan.h264Candidates().size(), plan.diagnostics(),
-                hostOf(selected.baseUrl()));
-        return registerVideoPlan(plan);
+        return List.copyOf(streams);
     }
 
     static int videoFnval(int preferredQuality) {
@@ -740,6 +827,14 @@ public final class BiliApiClient {
     }
 
     static VideoStreamPlan buildVideoStreamPlan(List<VideoStream> streams, int preferredQuality) {
+        return buildVideoStreamPlan(streams, preferredQuality, BiliApiProperties.videoCodecPolicy());
+    }
+
+    /** Pure candidate policy boundary: AV1 is hardware-only and H.264 is the compatibility fallback. */
+    static VideoStreamPlan buildVideoStreamPlan(List<VideoStream> streams, int preferredQuality,
+            VideoCodecPolicy codecPolicy) {
+        Objects.requireNonNull(streams, "streams");
+        Objects.requireNonNull(codecPolicy, "codecPolicy");
         int ceilingRank = videoQualityRank(preferredQuality);
         boolean requestedSpecial = isSpecialVideoQuality(preferredQuality);
         List<String> diagnostics = new ArrayList<>();
@@ -762,18 +857,49 @@ public final class BiliApiClient {
         };
         List<VideoStream> sortedAv1 = accepted.stream().filter(stream -> stream.codecId() == CODEC_AV1)
                 .sorted(highestQualityFirst).toList();
-        List<VideoStream> av1 = selectAv1ProbeCandidates(sortedAv1);
-        List<VideoStream> h264 = accepted.stream().filter(stream -> stream.codecId() == CODEC_H264)
+        List<VideoStream> sortedH264 = accepted.stream().filter(stream -> stream.codecId() == CODEC_H264)
                 .sorted(highestQualityFirst).limit(1).toList();
-        // FFmpeg's built-in AV1 decoder requires a hardware backend. The
-        // bundled native libraries do not include dav1d/libaom, so exposing a
-        // software candidate would only fail with ENOSYS after packet input.
-        List<VideoStream> softwareAv1 = List.of();
-        if (av1.isEmpty() && h264.isEmpty()) {
-            throw new IllegalStateException("该视频没有画质上限内且编码标识有效的 AV1/H.264 DASH 视频流: "
-                    + diagnostics);
+
+        List<VideoStream> av1;
+        List<VideoStream> h264;
+        List<VideoStream> softwareAv1;
+        switch (codecPolicy) {
+            case AUTO -> {
+                av1 = selectAv1ProbeCandidates(sortedAv1);
+                h264 = sortedH264;
+                softwareAv1 = List.of();
+            }
+            case PREFER_AV1 -> {
+                av1 = selectAv1ProbeCandidates(sortedAv1);
+                h264 = sortedH264;
+                softwareAv1 = List.of();
+            }
+            case COMPATIBILITY -> {
+                av1 = sortedAv1.stream().limit(1L).toList();
+                h264 = sortedH264;
+                softwareAv1 = List.of();
+                if (sortedAv1.size() > av1.size()) {
+                    diagnostics.add("policy-compatibility:skipped-lower-av1-probes="
+                            + (sortedAv1.size() - av1.size()));
+                }
+            }
+            case H264 -> {
+                av1 = List.of();
+                h264 = sortedH264;
+                softwareAv1 = List.of();
+                if (!sortedAv1.isEmpty()) {
+                    diagnostics.add("policy-h264:excluded-av1=" + sortedAv1.size());
+                }
+            }
+            default -> throw new IllegalStateException("Unhandled video codec policy " + codecPolicy);
         }
-        return new VideoStreamPlan(preferredQuality, av1, h264, softwareAv1, diagnostics);
+        VideoStreamPlan plan = new VideoStreamPlan(preferredQuality, codecPolicy, av1, h264, softwareAv1,
+                diagnostics);
+        if (plan.candidateOrder().isEmpty()) {
+            throw new IllegalStateException("该视频在 codec policy=" + codecPolicy.serializedName()
+                    + " 下没有画质上限内且编码标识有效的 AV1/H.264 DASH 视频流: " + diagnostics);
+        }
+        return plan;
     }
 
     private static List<VideoStream> selectAv1ProbeCandidates(List<VideoStream> sortedAv1) {
@@ -916,21 +1042,22 @@ public final class BiliApiClient {
 
     // 获取字幕并转为 NetEase 歌词 JSON 格式
     public static String getBilingualSubtitleAsNetEaseLyric(VideoInfo info) throws Exception {
-        return getBilingualSubtitleAsNetEaseLyric(info, false);
+        return getBilingualSubtitleAsNetEaseLyric(info, SubtitlePreference.HUMAN_ONLY);
     }
 
     public static String getBilingualSubtitleAsNetEaseLyric(VideoInfo info, boolean allowAi) throws Exception {
+        return getBilingualSubtitleAsNetEaseLyric(info,
+                allowAi ? SubtitlePreference.HUMAN_OR_AI : SubtitlePreference.HUMAN_ONLY);
+    }
+
+    public static String getBilingualSubtitleAsNetEaseLyric(VideoInfo info, SubtitlePreference preference)
+            throws Exception {
         List<SubtitleInfo> all = getAllSubtitles(info);
         if (all.isEmpty()) {
             return null;
         }
 
-        List<SubtitleInfo> candidates = new ArrayList<>();
-        for (SubtitleInfo s : all) {
-            if (!s.normalizedUrl().isBlank() && (allowAi || !s.isAiGenerated())) {
-                candidates.add(s);
-            }
-        }
+        List<SubtitleInfo> candidates = selectSubtitleCandidates(all, preference);
         if (candidates.isEmpty()) {
             return null;
         }
@@ -967,6 +1094,32 @@ public final class BiliApiClient {
         String zhLrc = convertSubtitleJsonToLrc(getText(zhSub.normalizedUrl()));
         String transLrc = transSub != null ? convertSubtitleJsonToLrc(getText(transSub.normalizedUrl())) : null;
         return buildNetEaseLyricJson(zhLrc, transLrc);
+    }
+
+    static List<SubtitleInfo> selectSubtitleCandidates(List<SubtitleInfo> all, SubtitlePreference preference) {
+        Objects.requireNonNull(preference, "preference");
+        if (all == null || all.isEmpty()) {
+            return List.of();
+        }
+        List<SubtitleInfo> candidates = new ArrayList<>();
+        for (SubtitleInfo subtitle : all) {
+            if (subtitle == null || subtitle.normalizedUrl().isBlank()) {
+                continue;
+            }
+            boolean accept = switch (preference) {
+                case HUMAN_ONLY -> !subtitle.isAiGenerated();
+                case HUMAN_OR_AI -> true;
+                case AI_ONLY -> subtitle.isAiGenerated();
+            };
+            if (accept) {
+                candidates.add(subtitle);
+            }
+        }
+        if (preference == SubtitlePreference.HUMAN_OR_AI) {
+            // Enabling fallback to AI must not silently replace an uploader-authored subtitle when both exist.
+            candidates.sort(java.util.Comparator.comparing(SubtitleInfo::isAiGenerated));
+        }
+        return List.copyOf(candidates);
     }
 
     static List<SubtitleInfo> getAllSubtitles(VideoInfo info) throws Exception {
@@ -1009,7 +1162,7 @@ public final class BiliApiClient {
             String lan = item.has("lan") ? item.get("lan").getAsString() : "unknown";
             String subtitleUrl = item.has("subtitle_url") ? item.get("subtitle_url").getAsString() : "";
             if (!subtitleUrl.isBlank()) {
-                subtitles.add(new SubtitleInfo(lan, subtitleUrl));
+                subtitles.add(new SubtitleInfo(lan, subtitleUrl, subtitleIsAi(item, lan)));
             }
         }
         return subtitles;
@@ -1047,7 +1200,7 @@ public final class BiliApiClient {
             String lan = item.has("lan") ? item.get("lan").getAsString() : "unknown";
             String subtitleUrl = item.has("subtitle_url") ? item.get("subtitle_url").getAsString() : "";
             if (!subtitleUrl.isBlank()) {
-                subtitles.add(new SubtitleInfo(lan, subtitleUrl));
+                subtitles.add(new SubtitleInfo(lan, subtitleUrl, subtitleIsAi(item, lan)));
             }
         }
         return subtitles;
@@ -1058,8 +1211,8 @@ public final class BiliApiClient {
                 .timeout(Duration.ofSeconds(15))
                 .GET();
         BiliRequestHeaders.applyWebApiHeaders(builder);
-        HttpResponse<String> response = BiliWbiSigner.HTTP.send(builder.build(),
-                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        HttpResponse<String> response = sendApi(BiliWbiSigner.HTTP, builder.build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), "bili-api-json");
         return JsonParser.parseString(response.body()).getAsJsonObject();
     }
 
@@ -1068,9 +1221,15 @@ public final class BiliApiClient {
                 .timeout(Duration.ofSeconds(15))
                 .GET();
         BiliRequestHeaders.applyWebApiHeaders(builder);
-        HttpResponse<String> response = BiliWbiSigner.HTTP.send(builder.build(),
-                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        HttpResponse<String> response = sendApi(BiliWbiSigner.HTTP, builder.build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), "bili-api-text");
         return response.body();
+    }
+
+    private static <T> HttpResponse<T> sendApi(HttpClient client, HttpRequest request,
+            HttpResponse.BodyHandler<T> handler, String kind) throws Exception {
+        return CancellableHttpRequestScope.sendOneBlocking(client, request, handler,
+                HttpRequestCloseDiagnostics.global(), kind);
     }
 
     private static String convertSubtitleJsonToLrc(String subtitleJson) {
@@ -1151,11 +1310,36 @@ public final class BiliApiClient {
         return netEaseLyric.toString();
     }
 
+    private static boolean subtitleIsAi(JsonObject item, String lan) {
+        return isAiLanguage(lan) || jsonTruthy(item, "ai_status") || jsonTruthy(item, "ai_type");
+    }
+
+    private static boolean jsonTruthy(JsonObject object, String key) {
+        if (object == null || !object.has(key) || object.get(key).isJsonNull()
+                || !object.get(key).isJsonPrimitive()) {
+            return false;
+        }
+        var value = object.getAsJsonPrimitive(key);
+        if (value.isBoolean()) {
+            return value.getAsBoolean();
+        }
+        if (value.isNumber()) {
+            return value.getAsInt() != 0;
+        }
+        String normalized = value.getAsString().trim().toLowerCase(Locale.ROOT);
+        return !normalized.isEmpty() && !"0".equals(normalized) && !"false".equals(normalized)
+                && !"none".equals(normalized);
+    }
+
+    private static boolean isAiLanguage(String lan) {
+        return lan != null && lan.trim().toLowerCase(Locale.ROOT).startsWith("ai-");
+    }
+
     private static boolean isChineseSubtitle(String lan) {
         if (lan == null) {
             return false;
         }
-        String normalized = lan.toLowerCase();
+        String normalized = normalizeSubtitleLanguage(lan);
         return normalized.startsWith("zh")
                 || normalized.startsWith("yue")
                 || normalized.contains("hans")
@@ -1163,7 +1347,12 @@ public final class BiliApiClient {
     }
 
     private static boolean isEnglishSubtitle(String lan) {
-        return lan != null && lan.toLowerCase().startsWith("en");
+        return lan != null && normalizeSubtitleLanguage(lan).startsWith("en");
+    }
+
+    private static String normalizeSubtitleLanguage(String lan) {
+        String normalized = lan.trim().toLowerCase(Locale.ROOT);
+        return normalized.startsWith("ai-") ? normalized.substring(3) : normalized;
     }
 
     private static String formatLrcTime(double seconds) {

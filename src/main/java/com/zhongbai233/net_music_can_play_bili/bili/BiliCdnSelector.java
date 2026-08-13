@@ -4,8 +4,8 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.media.stream.CdnHealthTracker;
+import com.zhongbai233.net_music_can_play_bili.media.stream.CdnProperties;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeClient;
-import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import org.slf4j.Logger;
 
@@ -27,29 +27,20 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** B站 CDN 优选缓存与轻量首包竞速。 */
 public final class BiliCdnSelector {
-    private static final boolean ENABLED = Boolean
-            .parseBoolean(System.getProperty("ncpb.bili.cdn_selector.enabled", "true"));
-    private static final boolean RACE_ENABLED = Boolean
-            .parseBoolean(System.getProperty("ncpb.bili.cdn_selector.race", "false"));
-    private static final int RACE_BYTES = Math.max(1,
-            NcpbSystemProperties.intValue("ncpb.bili.cdn_selector.race_bytes",
-                    "ncpb.ncpb.bili.cdn_selector.race_bytes", 2048));
-    private static final long RACE_TIMEOUT_MILLIS = Math.max(250L,
-            NcpbSystemProperties.longValue("ncpb.bili.cdn_selector.race_timeout_ms",
-                    "ncpb.ncpb.bili.cdn_selector.race_timeout_ms", 2_500L));
-    private static final int MAX_RACE_CANDIDATES = Math.max(1,
-            Integer.getInteger("ncpb.bili.cdn_selector.max_race_candidates", 4));
-    private static final long MIN_PERSIST_INTERVAL_MILLIS = Math.max(0L,
-            Long.getLong("ncpb.bili.cdn_selector.min_persist_interval_ms", 5_000L));
-    private static final long BACKGROUND_RACE_INTERVAL_MILLIS = Math.max(1_000L,
-            Long.getLong("ncpb.bili.cdn_selector.background_race_interval_ms", 60_000L));
+    private static final CdnProperties.Selector PROPERTIES = CdnProperties.selector();
+    private static final boolean ENABLED = PROPERTIES.enabled();
+    private static final boolean RACE_ENABLED = PROPERTIES.raceEnabled();
+    private static final int RACE_BYTES = PROPERTIES.raceBytes();
+    private static final long RACE_TIMEOUT_MILLIS = PROPERTIES.raceTimeoutMillis();
+    private static final int MAX_RACE_CANDIDATES = PROPERTIES.maxRaceCandidates();
+    private static final long MIN_PERSIST_INTERVAL_MILLIS = PROPERTIES.minPersistIntervalMillis();
+    private static final long BACKGROUND_RACE_INTERVAL_MILLIS = PROPERTIES.backgroundRaceIntervalMillis();
     private static final Object PREFERENCE_LOCK = new Object();
     private static final AtomicLong LAST_BACKGROUND_RACE_AT = new AtomicLong();
     private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(MAX_RACE_CANDIDATES,
             NetMusicThreadFactory.daemon("bili-cdn-selector"));
 
-    private static volatile String preferredHost = System.getProperty("ncpb.bili.cdn.preferred_host", "")
-            .trim().toLowerCase(Locale.ROOT);
+    private static volatile String preferredHost = PROPERTIES.preferredHost();
     private static volatile long preferredUpdatedAtMillis;
 
     private BiliCdnSelector() {

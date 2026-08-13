@@ -4,7 +4,7 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaRetryPolicy;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
-import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackControlPacket;
+import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackRetryPacket;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.item.ItemStack;
 import org.slf4j.Logger;
@@ -37,16 +37,22 @@ final class Mp4ClientMediaRetryPolicy implements ClientMediaRetryPolicy {
     @Override
     public void scheduleRetry(UUID deviceId, String sessionId, ClientMediaPlaybackRegistry.ActivePlayback active,
             Throwable error) {
+        tryScheduleRetry(deviceId, sessionId, active, error);
+    }
+
+    @Override
+    public boolean tryScheduleRetry(UUID deviceId, String sessionId,
+            ClientMediaPlaybackRegistry.ActivePlayback active, Throwable error) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null || client.getConnection() == null) {
-            return;
+            return false;
         }
         ItemStack stack = MP4Item.findByDeviceId(client.player, deviceId);
         if (!(stack.getItem() instanceof MP4Item)) {
-            return;
+            return false;
         }
-        client.getConnection().send(new MP4PlaybackControlPacket(MP4PlaybackControlPacket.Action.SEEK,
-                active.queueIndex(), Math.round(active.volume() * 1000.0F), Math.max(0L, active.elapsedMillis()),
-                deviceId));
+        client.getConnection().send(new MP4PlaybackRetryPacket(deviceId, sessionId,
+                Math.max(0L, active.elapsedMillis())));
+        return true;
     }
 }

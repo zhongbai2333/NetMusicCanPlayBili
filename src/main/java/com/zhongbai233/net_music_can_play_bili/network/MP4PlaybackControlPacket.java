@@ -8,6 +8,7 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliSongInfoSanitizer;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.server.BiliWhitelistManager;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -22,15 +23,12 @@ import org.slf4j.Logger;
 import javax.annotation.Nonnull;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, int volumePerMille, long targetMillis,
         UUID deviceId)
         implements CustomPacketPayload {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final Set<UUID> PENDING_STARTS = ConcurrentHashMap.newKeySet();
 
     public static final Type<MP4PlaybackControlPacket> TYPE = new Type<>(
             NetworkPayloadIds.id("mp4_playback_control"));
@@ -117,21 +115,108 @@ public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, in
             case START -> {
                 long requestedMillis = selectedTrackChanged ? 0L : Math.max(0L, payload.targetMillis());
                 if (!MP4PlaybackSyncManager.resumeExisting(player, deviceId, index, volume, requestedMillis)) {
-                    if (!PENDING_STARTS.add(deviceId)) {
-                        return;
-                    }
-                    startPlayback(player, stack, queue, index, volume, requestedMillis, deviceId);
+                    startPlayback(player, stack, queue, index, volume, requestedMillis);
                 }
             }
-            case SEEK -> startPlayback(player, stack, queue, index, volume, Math.max(0L, payload.targetMillis()), null);
-            case RESTART -> startPlayback(player, stack, queue, index, volume, 0L, null);
+            case SEEK -> startPlayback(player, stack, queue, index, volume, Math.max(0L, payload.targetMillis()));
+            case RESTART -> startPlayback(player, stack, queue, index, volume, 0L);
         }
     }
 
+    static boolean retryPlayback(ServerPlayer player, ItemStack stack, UUID deviceId,
+            PlaybackSessionId expectedSessionId, long targetMillis) {
+        if (player == null || stack == null || deviceId == null || expectedSessionId == null
+                || !(stack.getItem() instanceof MP4Item)
+                || !deviceId.equals(MP4Item.readDeviceId(stack))
+                || !(player.level() instanceof ServerLevel level)) {
+            return false;
+        }
+        MP4PlaybackRetryAdmission.Attempt attempt = MP4PlaybackSyncManager.beginRetryResolve(deviceId,
+                expectedSessionId);
+        if (attempt == null) {
+            return false;
+        }
+        MP4DeviceStateStore.DeviceEntry entry = MP4DeviceStateStore.getOrCreate(level, deviceId, stack);
+        List<ItemStack> queue = queueForPlayback(entry, stack);
+        int index = attempt.queueIndex();
+        if (index < 0 || index >= queue.size()) {
+            MP4PlaybackSyncManager.completeRetryResolve(deviceId, attempt);
+            return false;
+        }
+        ItemMusicCD.SongInfo songInfo = ItemMusicCD.getSongInfo(queueStack(queue, index));
+        if (songInfo == null || !Objects.equals(attempt.sourceUrl(), songInfo.songUrl)
+                || songInfo.vip && !MusicPlayResolverManager.canResolve(songInfo)
+                || !isPlaybackAllowed(player, songInfo.songUrl)) {
+            MP4PlaybackSyncManager.completeRetryResolve(deviceId, attempt);
+            return false;
+        }
+        ItemMusicCD.SongInfo original = songInfo.clone();
+        MusicPlayResolverManager.resolve(original.clone()).whenCompleteAsync((resolved, error) -> {
+            if (!MP4PlaybackSyncManager.isCurrentRetryResolve(deviceId, attempt)) {
+                return;
+            }
+            if (error != null || resolved == null) {
+                MP4PlaybackSyncManager.completeRetryResolve(deviceId, attempt);
+                if (error != null) {
+                    LOGGER.error("MP4 重试刷新直链失败: {}", original.songName, error);
+                } else {
+                    LOGGER.warn("MP4 重试刷新直链返回空结果: {}", original.songName);
+                }
+                return;
+            }
+            applyResolvedRetry(player, stack, deviceId, attempt, targetMillis, original, resolved);
+        }, level.getServer());
+        return true;
+    }
+
+    private static void applyResolvedRetry(ServerPlayer player, ItemStack stack, UUID deviceId,
+            MP4PlaybackRetryAdmission.Attempt attempt, long targetMillis,
+            ItemMusicCD.SongInfo original, ItemMusicCD.SongInfo resolved) {
+        if (!MP4PlaybackSyncManager.isCurrentRetryResolve(deviceId, attempt)
+                || !(stack.getItem() instanceof MP4Item)
+                || !deviceId.equals(MP4Item.readDeviceId(stack))
+                || !(player.level() instanceof ServerLevel level)) {
+            MP4PlaybackSyncManager.completeRetryResolve(deviceId, attempt);
+            return;
+        }
+        MP4DeviceStateStore.DeviceEntry entry = MP4DeviceStateStore.getOrCreate(level, deviceId, stack);
+        List<ItemStack> queue = queueForPlayback(entry, stack);
+        int index = attempt.queueIndex();
+        if (index < 0 || index >= queue.size()) {
+            MP4PlaybackSyncManager.completeRetryResolve(deviceId, attempt);
+            return;
+        }
+        ItemMusicCD.SongInfo current = ItemMusicCD.getSongInfo(queueStack(queue, index));
+        if (current == null || !Objects.equals(attempt.sourceUrl(), current.songUrl)
+                || !Objects.equals(original.songUrl, current.songUrl)) {
+            MP4PlaybackSyncManager.completeRetryResolve(deviceId, attempt);
+            return;
+        }
+        if (!isPlaybackAllowed(player, original.songUrl)) {
+            MP4PlaybackSyncManager.completeRetryResolve(deviceId, attempt);
+            MP4PlaybackSyncManager.stop(player, deviceId);
+            broadcastStop(player, deviceId, index);
+            return;
+        }
+        String rawUrl = original.songUrl != null ? original.songUrl : "";
+        String playUrl = resolved.songUrl != null && !resolved.songUrl.isBlank() ? resolved.songUrl : rawUrl;
+        if (BiliApiClient.isStoredVideoSelection(rawUrl)) {
+            playUrl = rawUrl;
+        }
+        if (playUrl.isBlank()) {
+            MP4PlaybackSyncManager.completeRetryResolve(deviceId, attempt);
+            return;
+        }
+        String songName = resolved.songName != null && !resolved.songName.isBlank() ? resolved.songName
+                : original.songName;
+        int durationSeconds = Math.max(1, resolved.songTime > 0 ? resolved.songTime : original.songTime);
+        MP4PlaybackSyncManager.applyRetryResolved(player, deviceId, attempt, playUrl,
+                songName == null ? "" : songName, durationSeconds, Math.max(0L, targetMillis));
+    }
+
     private static void startPlayback(ServerPlayer player, ItemStack stack, List<ItemStack> queue, int index,
-            int volumePerMille, long targetMillis, UUID pendingStartDeviceId) {
+            int volumePerMille, long targetMillis) {
         if (queue.isEmpty() || index < 0 || index >= queue.size()) {
-            clearPendingStart(pendingStartDeviceId);
             UUID deviceId = MP4Item.readDeviceId(stack);
             if (player.level() instanceof ServerLevel level) {
                 MP4Item.State state = MP4DeviceStateStore.getOrCreate(level, deviceId, stack).state();
@@ -145,36 +230,44 @@ public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, in
 
         ItemMusicCD.SongInfo songInfo = ItemMusicCD.getSongInfo(queueStack(queue, index));
         if (songInfo == null) {
-            clearPendingStart(pendingStartDeviceId);
             UUID deviceId = MP4Item.readDeviceId(stack);
             MP4PlaybackSyncManager.stop(player, deviceId);
             broadcastStop(player, deviceId, index);
             return;
         }
         if (songInfo.vip && !MusicPlayResolverManager.canResolve(songInfo)) {
-            clearPendingStart(pendingStartDeviceId);
             UUID deviceId = MP4Item.readDeviceId(stack);
             MP4PlaybackSyncManager.stop(player, deviceId);
             broadcastStop(player, deviceId, index);
             return;
         }
         if (!isPlaybackAllowed(player, songInfo.songUrl)) {
-            clearPendingStart(pendingStartDeviceId);
             UUID deviceId = MP4Item.readDeviceId(stack);
             MP4PlaybackSyncManager.stop(player, deviceId);
             broadcastStop(player, deviceId, index);
             return;
         }
 
+        UUID deviceId = MP4Item.readDeviceId(stack);
+        if (deviceId == null) {
+            return;
+        }
         ItemMusicCD.SongInfo original = songInfo.clone();
+        MP4ResolveIntentRegistry.Intent intent = MP4PlaybackSyncManager.beginCommandResolve(deviceId, index,
+                original.songUrl);
         MusicPlayResolverManager.resolve(original.clone())
-                .thenAcceptAsync(resolved -> applyResolvedPlayback(player, stack, index, volumePerMille, targetMillis,
-                        original, resolved, pendingStartDeviceId), player.level().getServer())
-                .exceptionally(error -> {
-                    clearPendingStart(pendingStartDeviceId);
-                    LOGGER.error("MP4 解析播放失败: {}", original.songName, error);
-                    return null;
-                });
+                .whenCompleteAsync((resolved, error) -> {
+                    if (!MP4PlaybackSyncManager.isCurrentResolve(deviceId, intent)) {
+                        return;
+                    }
+                    if (error != null) {
+                        MP4PlaybackSyncManager.completeResolve(deviceId, intent);
+                        LOGGER.error("MP4 解析播放失败: {}", original.songName, error);
+                        return;
+                    }
+                    applyResolvedPlayback(player, stack, deviceId, index, volumePerMille, targetMillis,
+                            original, resolved, intent);
+                }, player.level().getServer());
     }
 
     public static void restartSelected(ServerPlayer player, ItemStack stack, UUID deviceId, int index,
@@ -188,34 +281,41 @@ public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, in
         int safeIndex = queue.isEmpty() ? 0 : clamp(index, 0, queue.size() - 1);
         MP4PlaybackSyncManager.stop(player, deviceId);
         broadcastStop(player, deviceId, safeIndex);
-        if (queue.isEmpty() || !PENDING_STARTS.add(deviceId)) {
+        if (queue.isEmpty()) {
             return;
         }
         MP4Item.State state = MP4DeviceStateStore.getOrCreate(level, deviceId, stack).state();
         MP4DeviceStateStore.update(level, deviceId, new MP4DeviceStateStore.DeviceEntry(
                 withPlayback(state, true, safeIndex, volumePerMille, 0), queue, 0L, 0, ""));
-        startPlayback(player, stack, queue, safeIndex, clamp(volumePerMille, 0, 1000), 0L, deviceId);
+        startPlayback(player, stack, queue, safeIndex, clamp(volumePerMille, 0, 1000), 0L);
     }
 
-    private static void applyResolvedPlayback(ServerPlayer player, ItemStack stack, int index, int volumePerMille,
+    private static void applyResolvedPlayback(ServerPlayer player, ItemStack stack, UUID requestedDeviceId,
+            int index, int volumePerMille,
             long targetMillis, ItemMusicCD.SongInfo original, ItemMusicCD.SongInfo resolved,
-            UUID pendingStartDeviceId) {
-        clearPendingStart(pendingStartDeviceId);
+            MP4ResolveIntentRegistry.Intent intent) {
+        if (!MP4PlaybackSyncManager.isCurrentResolve(requestedDeviceId, intent)) {
+            return;
+        }
         if (!(stack.getItem() instanceof MP4Item)) {
+            MP4PlaybackSyncManager.completeResolve(requestedDeviceId, intent);
             return;
         }
         ServerLevel level = (ServerLevel) player.level();
         UUID deviceId = MP4DeviceIdentity.getOrCreateUnique(level, player, stack);
-        if (deviceId == null) {
+        if (!requestedDeviceId.equals(deviceId)) {
+            MP4PlaybackSyncManager.completeResolve(requestedDeviceId, intent);
             return;
         }
         MP4DeviceStateStore.DeviceEntry entry = MP4DeviceStateStore.getOrCreate(level, deviceId, stack);
         List<ItemStack> queue = queueForPlayback(entry, stack);
         if (index < 0 || index >= queue.size()) {
+            MP4PlaybackSyncManager.completeResolve(deviceId, intent);
             return;
         }
         ItemMusicCD.SongInfo current = ItemMusicCD.getSongInfo(queueStack(queue, index));
         if (current == null || !Objects.equals(current.songUrl, original.songUrl)) {
+            MP4PlaybackSyncManager.completeResolve(deviceId, intent);
             return;
         }
         if (!isPlaybackAllowed(player, original.songUrl)) {
@@ -321,12 +421,6 @@ public record MP4PlaybackControlPacket(Action action, int selectedQueueIndex, in
 
     private static int clamp(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
-    }
-
-    private static void clearPendingStart(UUID deviceId) {
-        if (deviceId != null) {
-            PENDING_STARTS.remove(deviceId);
-        }
     }
 
     private static boolean isPlaybackAllowed(ServerPlayer player, String sourceUrl) {

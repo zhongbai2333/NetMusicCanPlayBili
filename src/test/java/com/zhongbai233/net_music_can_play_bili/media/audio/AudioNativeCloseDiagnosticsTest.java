@@ -53,4 +53,21 @@ class AudioNativeCloseDiagnosticsTest {
         assertEquals(1, snapshot.retainedCompleted());
         assertEquals(1L, snapshot.droppedOperations());
     }
+
+    @Test
+    void itemDeleteFailuresAreClampedCountedAndIdempotent() {
+        AudioNativeCloseDiagnostics diagnostics = new AudioNativeCloseDiagnostics(4, 4, 100L, 200L);
+        long failed = diagnostics.begin(2, 3, 1L);
+        long successful = diagnostics.begin(1, 1, 2L);
+
+        diagnostics.complete(failed, 3L, 9, 2);
+        diagnostics.complete(failed, 4L, 1, 1);
+        diagnostics.complete(successful, 5L);
+
+        AudioNativeCloseDiagnostics.Snapshot snapshot = diagnostics.snapshot(5L);
+        assertEquals(0, snapshot.activeOperations());
+        assertEquals(1L, snapshot.failedOperations());
+        assertEquals(2L, snapshot.sourceDeleteFailures());
+        assertEquals(2L, snapshot.bufferDeleteFailures());
+    }
 }

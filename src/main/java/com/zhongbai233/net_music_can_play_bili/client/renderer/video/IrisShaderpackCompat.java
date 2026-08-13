@@ -16,18 +16,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * YUV/NV12 路径需要使用本模组自己的 fragment shader 和多平面采样器。启用 Iris
  * shaderpack 后，仅靠公开的 pipeline 分类并不够：shaderpack 仍可能替换最终使用的程序。
  * 因此渲染器为本模组自己的 YUV pipeline 保留了一个作用域很窄的旁路，并把 NV12/YUV420P
- * 视为正常路径。仍可通过 {@code -Dbili.video.iris.disable_yuv_shader=true} 启用 CPU RGBA 回退。
+ * 视为正常路径。仍可通过 {@code -Dncpb.video.iris.disable_yuv_shader=true} 启用 CPU RGBA 回退。
  * </p>
  */
 public final class IrisShaderpackCompat {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final String FORCE_YUV_SHADER_WITH_IRIS = "ncpb.video.iris.force_yuv_shader";
-    private static final String DISABLE_CUSTOM_YUV_SHADER = "bili.video.iris.disable_yuv_shader";
-    private static final String ALLOW_THREE_PLANE_IRIS_YUV = "ncpb.video.iris.allow_three_plane";
-    private static final String ENABLE_YUV_SHADERPACK_BYPASS = "ncpb.video.iris.yuv_bypass";
-    private static final String IRIS_YUV_PROGRAM = "ncpb.video.iris.program";
-    private static final String IRIS_YUV_SHADER_KEY = "ncpb.video.iris.shader_key";
-    private static final String DEFAULT_IRIS_YUV_PROGRAM = "ENTITIES_TRANSLUCENT";
 
     private static volatile boolean initialized;
     private static volatile boolean available;
@@ -39,15 +32,15 @@ public final class IrisShaderpackCompat {
     }
 
     static boolean isForceYuvShaderEnabled() {
-        return Boolean.parseBoolean(System.getProperty(FORCE_YUV_SHADER_WITH_IRIS, "true"));
+        return IrisShaderpackProperties.forceYuvShaderEnabled();
     }
 
     static String configuredYuvProgramName() {
-        return System.getProperty(IRIS_YUV_PROGRAM, DEFAULT_IRIS_YUV_PROGRAM).trim().toUpperCase();
+        return IrisShaderpackProperties.yuvProgramName();
     }
 
     static String configuredYuvShaderKeyName() {
-        return System.getProperty(IRIS_YUV_SHADER_KEY, "").trim().toUpperCase();
+        return IrisShaderpackProperties.yuvShaderKeyName();
     }
 
     static boolean isTexturedProbeProgram() {
@@ -55,11 +48,11 @@ public final class IrisShaderpackCompat {
     }
 
     static boolean isThreePlaneIrisYuvAllowed() {
-        return Boolean.parseBoolean(System.getProperty(ALLOW_THREE_PLANE_IRIS_YUV, "true"));
+        return IrisShaderpackProperties.threePlaneYuvAllowed();
     }
 
     static boolean isYuvShaderpackBypassEnabled() {
-        return Boolean.parseBoolean(System.getProperty(ENABLE_YUV_SHADERPACK_BYPASS, "true"));
+        return IrisShaderpackProperties.yuvShaderpackBypassEnabled();
     }
 
     static boolean isSolidYuvRenderTypeExperimentEnabled() {
@@ -99,7 +92,7 @@ public final class IrisShaderpackCompat {
     }
 
     static boolean shouldDisableCustomYuvShader() {
-        if (Boolean.getBoolean(DISABLE_CUSTOM_YUV_SHADER)) {
+        if (IrisShaderpackProperties.customYuvShaderDisabled()) {
             return true;
         }
         if (isForceYuvShaderEnabled()) {
@@ -120,7 +113,8 @@ public final class IrisShaderpackCompat {
                 ASSIGNED_YUV_PIPELINES.clear();
                 ASSIGNED_TEXTURED_PROBE_PIPELINES.clear();
                 LOGGER.info("Iris shaderpack 状态变化: shaderpackInUse={}, customYuvShaderDisabled={}", inUse,
-                        Boolean.getBoolean(DISABLE_CUSTOM_YUV_SHADER) || (!isForceYuvShaderEnabled() && inUse));
+                        IrisShaderpackProperties.customYuvShaderDisabled()
+                                || (!isForceYuvShaderEnabled() && inUse));
             }
             return inUse;
         } catch (RuntimeException e) {
@@ -186,13 +180,14 @@ public final class IrisShaderpackCompat {
                         !configuredYuvShaderKeyName().isBlank() && !texturedProbe
                                 ? "ShaderKey." + configuredYuvShaderKeyName()
                                 : "IrisProgram." + programName,
-                        IRIS_YUV_PROGRAM, IRIS_YUV_SHADER_KEY, ALLOW_THREE_PLANE_IRIS_YUV);
+                        IrisShaderpackProperties.YUV_PROGRAM, IrisShaderpackProperties.YUV_SHADER_KEY,
+                        IrisShaderpackProperties.ALLOW_THREE_PLANE_YUV);
             } catch (IllegalArgumentException e) {
                 LOGGER.warn("未知 Iris 映射值。IrisProgram='{}', ShaderKey='{}'，将回退为 IrisProgram.{}。"
                         + "常用 ShaderKey 包括 BASIC、TEXTURED、ENTITIES_TRANSLUCENT、PARTICLES、PARTICLES_TRANS 等",
-                        System.getProperty(IRIS_YUV_PROGRAM), System.getProperty(IRIS_YUV_SHADER_KEY),
-                        DEFAULT_IRIS_YUV_PROGRAM, e);
-                IrisDirectCompat.assignYuvPipeline(pipeline, DEFAULT_IRIS_YUV_PROGRAM);
+                        configuredYuvProgramName(), configuredYuvShaderKeyName(),
+                        IrisShaderpackProperties.DEFAULT_YUV_PROGRAM, e);
+                IrisDirectCompat.assignYuvPipeline(pipeline, IrisShaderpackProperties.DEFAULT_YUV_PROGRAM);
                 assignedPipelines.add(pipelineId);
             } catch (RuntimeException e) {
                 LOGGER.warn("Iris assignPipeline(YUV, {}) 失败，将直接尝试原始 YUV pipeline",

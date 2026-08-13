@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.media.stream;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -8,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LiveVideoSampleBusTest {
@@ -114,6 +116,25 @@ class LiveVideoSampleBusTest {
         assertTrue(bus.isClosed());
         assertEquals(replacement, LiveVideoSampleBus.find("session-f"));
         replacement.close();
+    }
+
+    @Test
+    void typedSessionRegistryKeepsStringFacade() {
+        PlaybackSessionId sessionId = PlaybackSessionId.of("session-typed");
+
+        bus = LiveVideoSampleBus.register(sessionId);
+
+        assertEquals(sessionId, bus.playbackSessionId());
+        assertEquals(sessionId.value(), bus.key());
+        assertEquals(bus, LiveVideoSampleBus.find(sessionId));
+        assertEquals(bus, LiveVideoSampleBus.find(sessionId.value()));
+        assertEquals(LiveVideoSampleBus.busUrl(sessionId.value()), LiveVideoSampleBus.busUrl(sessionId));
+    }
+
+    @Test
+    void malformedSessionCannotEnterRegistry() {
+        assertThrows(IllegalArgumentException.class, () -> LiveVideoSampleBus.register("invalid session"));
+        assertNull(LiveVideoSampleBus.find("invalid session"));
     }
 
     @Test

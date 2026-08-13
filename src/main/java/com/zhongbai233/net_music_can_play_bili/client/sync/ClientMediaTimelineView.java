@@ -1,19 +1,21 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import com.zhongbai233.net_music_can_play_bili.media.sync.VisualTimelineSmoother;
 
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** 客户端媒体时间线只读视图，统一本地时钟、OpenAL 可听进度和包同步兜底。 */
 public final class ClientMediaTimelineView {
-    private static final long AUDIO_ANCHOR_MAX_LAG_MILLIS = Long.getLong(
-            "ncpb.media.timeline.audio_anchor_max_lag_ms", 2_000L);
-    private static final long AUDIO_ANCHOR_MAX_LEAD_MILLIS = Long.getLong(
-            "ncpb.media.timeline.audio_anchor_max_lead_ms", 500L);
-    private static final ConcurrentHashMap<UUID, VisualState> VISUAL_STATES = new ConcurrentHashMap<>();
-    private final String sessionId;
+    private static final TimelineProperties.Handheld PROPERTIES = TimelineProperties.handheld();
+    private static final long AUDIO_ANCHOR_MAX_LAG_MILLIS = PROPERTIES.audioAnchorMaxLagMillis();
+    private static final long AUDIO_ANCHOR_MAX_LEAD_MILLIS = PROPERTIES.audioAnchorMaxLeadMillis();
+    private static final ConcurrentHashMap<PlaybackSourceId, VisualState> VISUAL_STATES = new ConcurrentHashMap<>();
+    private final Optional<PlaybackSessionId> playbackSessionId;
     private final long mediaMillis;
     private final long visualMillis;
     private final long pacingMillis;
@@ -23,9 +25,10 @@ public final class ClientMediaTimelineView {
     private final boolean started;
     private final boolean audibleAnchored;
 
-    private ClientMediaTimelineView(String sessionId, long mediaMillis, long visualMillis, long pacingMillis,
+    private ClientMediaTimelineView(Optional<PlaybackSessionId> playbackSessionId, long mediaMillis,
+            long visualMillis, long pacingMillis,
             long serverMillis, long totalMillis, long mediaDriftMillis, boolean started, boolean audibleAnchored) {
-        this.sessionId = sessionId != null ? sessionId : "";
+        this.playbackSessionId = playbackSessionId != null ? playbackSessionId : Optional.empty();
         this.mediaMillis = mediaMillis;
         this.visualMillis = visualMillis;
         this.pacingMillis = pacingMillis;
@@ -37,24 +40,27 @@ public final class ClientMediaTimelineView {
     }
 
     public static ClientMediaTimelineView empty() {
-        return new ClientMediaTimelineView("", -1L, -1L, -1L, -1L, 0L, 0L, false, false);
+        return new ClientMediaTimelineView(Optional.empty(), -1L, -1L, -1L, -1L, 0L, 0L, false, false);
     }
 
     public static ClientMediaTimelineView forMediaOwner(UUID ownerId, String expectedSessionId, long fallbackMillis,
             long fallbackTotalMillis) {
-        String expected = expectedSessionId != null ? expectedSessionId : "";
+        Optional<PlaybackSessionId> expected = PlaybackSessionId.parse(expectedSessionId);
         ClientMediaPlaybackRegistry.ActivePlayback active = ClientMediaPlaybackRegistry.get(ownerId);
         MediaTimelineClock.TimelineSnapshot snapshot = active != null
                 ? active.timelineSnapshot()
                 : MediaTimelineClock.TimelineSnapshot.EMPTY;
         return forHandheldOwner(ownerId, expected, snapshot,
-                ClientMediaPlaybackRegistry.hasAudioStarted(ownerId, expected),
+                ClientMediaPlaybackRegistry.hasAudioStarted(ownerId,
+                        expected.map(PlaybackSessionId::value).orElse("")),
                 fallbackMillis, fallbackTotalMillis);
     }
 
     public static ClientMediaTimelineView forHandheldOwner(UUID ownerId, HandheldMediaPlayback playback,
             boolean started, long fallbackMillis, long fallbackTotalMillis) {
-        String expected = playback != null ? playback.sessionId() : "";
+        Optional<PlaybackSessionId> expected = playback != null
+                ? playback.playbackSessionId()
+                : Optional.empty();
         MediaTimelineClock.TimelineSnapshot snapshot = playback != null && playback.timeline() != null
                 ? playback.timeline()
                 : MediaTimelineClock.TimelineSnapshot.EMPTY;
@@ -67,17 +73,21 @@ public final class ClientMediaTimelineView {
             return empty();
         }
         HandheldMediaPlayback playback = profile.playback(ownerId);
-        String sessionId = playback != null ? playback.sessionId() : "";
+        String sessionId = playback != null
+                ? playback.playbackSessionId().map(PlaybackSessionId::value).orElse("")
+                : "";
         return forHandheldOwner(ownerId, playback, profile.hasStartedSound(ownerId, sessionId), fallbackMillis,
                 fallbackTotalMillis);
     }
 
-    private static ClientMediaTimelineView forHandheldOwner(UUID ownerId, String expected,
+    private static ClientMediaTimelineView forHandheldOwner(UUID ownerId, Optional<PlaybackSessionId> expected,
             MediaTimelineClock.TimelineSnapshot snapshot, boolean started, long fallbackMillis,
             long fallbackTotalMillis) {
         long fallback = Math.max(0L, fallbackMillis);
         long fallbackTotal = Math.max(0L, fallbackTotalMillis);
-        if (expected.isBlank() || !expected.equals(snapshot.sessionId()) || snapshot.mediaMillis() < 0L) {
+        PlaybackSessionId expectedSessionId = expected != null ? expected.orElse(null) : null;
+        if (expectedSessionId == null || !expected.equals(snapshot.playbackSessionId())
+                || snapshot.mediaMillis() < 0L) {
             return new ClientMediaTimelineView(expected, fallback, fallback, fallback, -1L, fallbackTotal, 0L,
                     false, false);
         }
@@ -89,12 +99,12 @@ public final class ClientMediaTimelineView {
         if (started) {
             ClientAudioOutputRegistry.AudioTimeline audioTimeline = ClientAudioOutputRegistry
                     .getOwnerAudioTimeline(ownerId);
-            long audibleMillis = matchingAudibleMillis(audioTimeline, expected, total);
+            long audibleMillis = matchingAudibleMillis(audioTimeline, expectedSessionId, total);
             if (isSafeAudioAnchor(audibleMillis, pacing)) {
                 media = audibleMillis;
                 anchored = true;
             }
-            visual = smoothVisual(ownerId, expected, media, total);
+            visual = smoothVisual(ownerId, expectedSessionId, media, total);
         } else if (ownerId != null) {
             VISUAL_STATES.remove(ownerId);
         }
@@ -106,7 +116,11 @@ public final class ClientMediaTimelineView {
     }
 
     public String sessionId() {
-        return sessionId;
+        return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+    }
+
+    public Optional<PlaybackSessionId> playbackSessionId() {
+        return playbackSessionId;
     }
 
     public long mediaMillis() {
@@ -159,8 +173,8 @@ public final class ClientMediaTimelineView {
         return Math.max(0L, mediaMillis - Math.max(0L, absoluteStartMillis)) * 1_000_000L;
     }
 
-    private static long matchingAudibleMillis(ClientAudioOutputRegistry.AudioTimeline audioTimeline, String sessionId,
-            long totalMillis) {
+    private static long matchingAudibleMillis(ClientAudioOutputRegistry.AudioTimeline audioTimeline,
+            PlaybackSessionId sessionId, long totalMillis) {
         if (audioTimeline == null) {
             return -1L;
         }
@@ -169,7 +183,8 @@ public final class ClientMediaTimelineView {
             return -1L;
         }
         String audioSessionId = audioTimeline.audioSessionId();
-        if (audioSessionId != null && !audioSessionId.isBlank() && !audioSessionId.equals(sessionId)) {
+        if (audioSessionId != null && !audioSessionId.isBlank()
+                && PlaybackSessionId.parse(audioSessionId).filter(sessionId::equals).isEmpty()) {
             return -1L;
         }
         return clamp(audibleMillis, totalMillis);
@@ -177,7 +192,7 @@ public final class ClientMediaTimelineView {
 
     public static void forget(UUID ownerId) {
         if (ownerId != null) {
-            VISUAL_STATES.remove(ownerId);
+            VISUAL_STATES.remove(PlaybackSourceId.of(ownerId));
         }
     }
 
@@ -194,12 +209,12 @@ public final class ClientMediaTimelineView {
                 && -lag <= Math.max(0L, AUDIO_ANCHOR_MAX_LEAD_MILLIS);
     }
 
-    private static long smoothVisual(UUID ownerId, String sessionId, long mediaMillis, long totalMillis) {
+    private static long smoothVisual(UUID ownerId, PlaybackSessionId sessionId, long mediaMillis, long totalMillis) {
         if (ownerId == null) {
             return clamp(mediaMillis, totalMillis);
         }
-        VisualState state = VISUAL_STATES.compute(ownerId, (ignored, existing) -> {
-            if (existing == null || !existing.sessionId().equals(sessionId)) {
+        VisualState state = VISUAL_STATES.compute(PlaybackSourceId.of(ownerId), (ignored, existing) -> {
+            if (existing == null || !existing.playbackSessionId().equals(sessionId)) {
                 return new VisualState(sessionId, new VisualTimelineSmoother(500L, 20L, 0.20D));
             }
             return existing;
@@ -207,9 +222,9 @@ public final class ClientMediaTimelineView {
         return state.smoother().sample(mediaMillis, totalMillis, System.nanoTime());
     }
 
-    private record VisualState(String sessionId, VisualTimelineSmoother smoother) {
+    private record VisualState(PlaybackSessionId playbackSessionId, VisualTimelineSmoother smoother) {
         private VisualState {
-            sessionId = sessionId != null ? sessionId : "";
+            playbackSessionId = java.util.Objects.requireNonNull(playbackSessionId, "playbackSessionId");
         }
     }
 

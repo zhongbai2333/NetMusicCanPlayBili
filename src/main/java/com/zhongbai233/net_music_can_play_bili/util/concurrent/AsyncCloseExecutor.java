@@ -9,8 +9,9 @@ import java.util.function.Consumer;
 
 /** Pure-Java bounded executor for potentially blocking resource closes. */
 final class AsyncCloseExecutor {
-    private static final int THREADS = Math.max(1, Integer.getInteger("ncpb.media.close.threads", 2));
-    private static final int QUEUE_CAPACITY = Math.max(1, Integer.getInteger("ncpb.media.close.queue", 32));
+    private static final MediaCloseProperties.ExecutorConfig PROPERTIES = MediaCloseProperties.executor();
+    private static final int THREADS = PROPERTIES.threads();
+    private static final int QUEUE_CAPACITY = PROPERTIES.queueCapacity();
     private static final ThreadPoolExecutor EXECUTOR = new ThreadPoolExecutor(
             THREADS, THREADS, 30L, TimeUnit.SECONDS,
             new ArrayBlockingQueue<>(QUEUE_CAPACITY),
@@ -24,6 +25,16 @@ final class AsyncCloseExecutor {
     }
 
     static CompletableFuture<Void> closeAsync(AutoCloseable resource, String description, Consumer<String> warning) {
+        return closeAsync(resource, description, warning, false);
+    }
+
+    static CompletableFuture<Void> closeAsyncStrict(AutoCloseable resource, String description,
+            Consumer<String> warning) {
+        return closeAsync(resource, description, warning, true);
+    }
+
+    private static CompletableFuture<Void> closeAsync(AutoCloseable resource, String description,
+            Consumer<String> warning, boolean preserveFailure) {
         if (resource == null) {
             return CompletableFuture.completedFuture(null);
         }
@@ -32,10 +43,26 @@ final class AsyncCloseExecutor {
         Runnable task = () -> {
             try {
                 resource.close();
-            } catch (Exception error) {
-                warning.accept("关闭 " + safeDescription + " 失败: " + error);
+            } catch (Throwable error) {
+                if (preserveFailure) {
+                    completion.completeExceptionally(error);
+                }
+                try {
+                    warning.accept("关闭 " + safeDescription + " 失败: " + error);
+                } catch (Throwable warningFailure) {
+                    error.addSuppressed(warningFailure);
+                }
+                if (preserveFailure) {
+                    return;
+                }
+                if (error instanceof Error fatal) {
+                    completion.completeExceptionally(fatal);
+                    throw fatal;
+                }
             } finally {
-                completion.complete(null);
+                if (!completion.isDone()) {
+                    completion.complete(null);
+                }
             }
         };
         try {

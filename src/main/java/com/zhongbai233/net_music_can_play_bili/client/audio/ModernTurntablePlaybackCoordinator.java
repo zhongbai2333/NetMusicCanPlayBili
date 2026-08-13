@@ -6,11 +6,13 @@ import com.github.tartaricacid.netmusic.client.audio.NetMusicSound;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPrepareProperties;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ModernTurntablePlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
 import com.zhongbai233.net_music_can_play_bili.media.sync.AudioStartupSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.MediaRequestToken;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
@@ -20,6 +22,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.CancellableTaskFuture;
 
 /**
  * 现代唱片机客户端播放命令的唯一编排入口。
@@ -30,10 +33,12 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class ModernTurntablePlaybackCoordinator {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final long AUDIO_PREPARE_TIMEOUT_SECONDS = Math.max(3L,
-            Long.getLong("ncpb.bili.audio.prepare_timeout_seconds", 20L));
+    private static final long AUDIO_PREPARE_TIMEOUT_SECONDS =
+            ClientMediaPrepareProperties.settings().modernPrepareTimeoutSeconds();
     private static final AtomicLong COMPAT_PREPARE_SEQUENCE = new AtomicLong();
     private static final ConcurrentHashMap<BlockPos, Long> LATEST_COMPAT_PREPARE = new ConcurrentHashMap<>();
+        private static final ConcurrentHashMap<BlockPos, CancellableTaskFuture<ClientMediaPreparer.PreparedMedia>> COMPAT_PREPARES =
+            new ConcurrentHashMap<>();
     private static final ScheduledExecutorService VIDEO_RESYNC_EXECUTOR = Executors.newSingleThreadScheduledExecutor(
             r -> {
                 Thread thread = new Thread(r, "ModernTurntableVideoResync");
@@ -42,6 +47,15 @@ public final class ModernTurntablePlaybackCoordinator {
             });
 
     private ModernTurntablePlaybackCoordinator() {
+    }
+
+    public static void clearPendingPrepares() {
+        COMPAT_PREPARES.forEach((sourcePos, prepare) -> {
+            if (COMPAT_PREPARES.remove(sourcePos, prepare)) {
+                prepare.cancel(true);
+            }
+        });
+        LATEST_COMPAT_PREPARE.clear();
     }
 
     /** 普通唱片机的 B站选曲兼容入口；Mixin 只负责把协议消息冻结成命令。 */
@@ -57,10 +71,22 @@ public final class ModernTurntablePlaybackCoordinator {
         BlockPos sourcePos = sourcePos(command);
         long generation = COMPAT_PREPARE_SEQUENCE.incrementAndGet();
         LATEST_COMPAT_PREPARE.put(sourcePos, generation);
-        ClientMediaPreparer.prepareAudioOnlyAsync(command.rawUrl(), command.playUrl(), command.songName(), false)
+        CancellableTaskFuture<ClientMediaPreparer.PreparedMedia> prepare = ClientMediaPreparer.prepareAudioOnlyAsync(
+            command.rawUrl(), command.playUrl(), command.songName(), false);
+        CancellableTaskFuture<ClientMediaPreparer.PreparedMedia> replaced = COMPAT_PREPARES.put(sourcePos, prepare);
+        if (replaced != null) {
+            replaced.cancel(true);
+        }
+        prepare
                 .completeOnTimeout(null, AUDIO_PREPARE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                .whenComplete((prepared, error) -> minecraft.execute(
-                        () -> finishCompatiblePrepare(command, sourcePos, generation, prepared, error)));
+            .whenComplete((prepared, error) -> {
+                if (prepared == null || error != null) {
+                prepare.cancelWorker();
+                }
+                COMPAT_PREPARES.remove(sourcePos, prepare);
+                minecraft.execute(
+                    () -> finishCompatiblePrepare(command, sourcePos, generation, prepared, error));
+            });
     }
 
     private static void finishCompatiblePrepare(ClientPlaybackCommand command, BlockPos sourcePos, long generation,
@@ -105,6 +131,9 @@ public final class ModernTurntablePlaybackCoordinator {
             ClientMinecartAudioAnchors.register(command.sessionId(), command.minecartAnchor().entityId(),
                     command.minecartAnchor().entityUuid());
         }
+        if (command.hasSession() && !admitsCommand(minecraft, command, sourcePos)) {
+            return;
+        }
         if (command.hasSession()
                 && !ModernTurntablePlaybackTracker.tryStart(sourcePos, command.sessionId(),
                         command.remainingSeconds())) {
@@ -116,16 +145,21 @@ public final class ModernTurntablePlaybackCoordinator {
         }
         syncVideo(command);
         long prepareStartedNanos = System.nanoTime();
-        var prepare = ClientMediaPreparer.prepareAudioOnlyAsync(command.rawUrl(), command.playUrl(),
-                command.songName(), true)
-                .completeOnTimeout(null, AUDIO_PREPARE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        CancellableTaskFuture<ClientMediaPreparer.PreparedMedia> prepare = ClientMediaPreparer.prepareAudioOnlyAsync(
+            command.rawUrl(), command.playUrl(), command.songName(), true);
+        var completion = prepare.completeOnTimeout(null, AUDIO_PREPARE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         if (command.hasSession() && !ModernTurntablePlaybackTracker.onCancel(sourcePos, command.sessionId(),
-                () -> prepare.cancel(false))) {
-            prepare.cancel(false);
+            () -> prepare.cancel(true))) {
+            prepare.cancel(true);
             return;
         }
-        prepare.whenComplete((prepared, error) -> minecraft.execute(
-                () -> finishModernPrepare(command, sourcePos, prepareStartedNanos, prepared, error)));
+        completion.whenComplete((prepared, error) -> {
+            if (prepared == null || error != null) {
+            prepare.cancelWorker();
+            }
+            minecraft.execute(
+                () -> finishModernPrepare(command, sourcePos, prepareStartedNanos, prepared, error));
+        });
     }
 
     private static void finishModernPrepare(ClientPlaybackCommand command, BlockPos sourcePos,
@@ -168,11 +202,13 @@ public final class ModernTurntablePlaybackCoordinator {
             ModernTurntablePlaybackTracker.finish(sourcePos, command.sessionId());
             return;
         }
-        if (command.hasSession() && !launch.requestToken().isBlank()
-                && !ModernTurntablePlaybackTracker.onCancel(sourcePos, command.sessionId(),
-                        () -> HttpAudioStreamHandler.cancelRequest(launch.requestToken()))) {
-            HttpAudioStreamHandler.cancelRequest(launch.requestToken());
-            return;
+        if (command.hasSession() && launch.requestToken().isPresent()) {
+            MediaRequestToken requestToken = launch.requestToken().orElseThrow();
+            if (!ModernTurntablePlaybackTracker.onCancel(sourcePos, command.sessionId(),
+                    () -> HttpAudioStreamHandler.cancelRequest(requestToken))) {
+                HttpAudioStreamHandler.cancelRequest(requestToken);
+                return;
+            }
         }
 
         LOGGER.debug(
@@ -225,11 +261,13 @@ public final class ModernTurntablePlaybackCoordinator {
             ModernTurntablePlaybackTracker.finish(sourcePos, command.sessionId());
             return;
         }
-        if (command.hasSession() && !launch.requestToken().isBlank()
-                && !ModernTurntablePlaybackTracker.onCancel(sourcePos, command.sessionId(),
-                        () -> HttpAudioStreamHandler.cancelRequest(launch.requestToken()))) {
-            HttpAudioStreamHandler.cancelRequest(launch.requestToken());
-            return;
+        if (command.hasSession() && launch.requestToken().isPresent()) {
+            MediaRequestToken requestToken = launch.requestToken().orElseThrow();
+            if (!ModernTurntablePlaybackTracker.onCancel(sourcePos, command.sessionId(),
+                    () -> HttpAudioStreamHandler.cancelRequest(requestToken))) {
+                HttpAudioStreamHandler.cancelRequest(requestToken);
+                return;
+            }
         }
         if (command.hasSession()) {
             ModernTurntablePlaybackTracker.onCancel(sourcePos, command.sessionId(),
@@ -259,6 +297,24 @@ public final class ModernTurntablePlaybackCoordinator {
                 GeneralConfig.ENABLE_PLAYER_LYRICS.get());
     }
 
+    private static boolean admitsCommand(Minecraft minecraft, ClientPlaybackCommand command, BlockPos sourcePos) {
+        String authoritativeSessionId = "";
+        var level = minecraft.level;
+        if (level != null && level.getBlockEntity(sourcePos) instanceof ModernTurntableBlockEntity turntable
+                && turntable.isPlaying()) {
+            authoritativeSessionId = turntable.getPlaybackSyncMetadata(level.getGameTime()).sessionId();
+        }
+        String trackedSessionId = ModernTurntablePlaybackTracker.currentSessionId(sourcePos, command.sessionId());
+        ModernTurntableCommandAdmissionPolicy.Decision decision = ModernTurntableCommandAdmissionPolicy.decide(
+                command.sessionId(), authoritativeSessionId, trackedSessionId);
+        if (!decision.accepted()) {
+            LOGGER.debug(
+                    "丢弃乱序现代唱片机播放命令: pos={} incomingSession={} authoritativeSession={} trackedSession={} decision={}",
+                    sourcePos, command.sessionId(), authoritativeSessionId, trackedSessionId, decision);
+        }
+        return decision.accepted();
+    }
+
     private static void syncVideo(ClientPlaybackCommand command) {
         ModernTurntableVideoClient.syncFromPlayback(command.rawUrl(), sourcePos(command), command.syncMetadata());
     }
@@ -281,7 +337,15 @@ public final class ModernTurntablePlaybackCoordinator {
     }
 
     private static void loadLyricsAsync(ClientPlaybackCommand command) {
-        ClientMediaPreparer.buildLyricAsync(command.rawUrl(), command.songName()).whenComplete((record, error) -> {
+        CancellableTaskFuture<com.github.tartaricacid.netmusic.api.lyric.LyricRecord> lyric =
+                ClientMediaPreparer.buildLyricAsync(command.rawUrl(), command.songName());
+        BlockPos sourcePos = sourcePos(command);
+        if (command.hasSession() && !ModernTurntablePlaybackTracker.onCancel(sourcePos, command.sessionId(),
+                () -> lyric.cancel(true))) {
+            lyric.cancel(true);
+            return;
+        }
+        lyric.whenComplete((record, error) -> {
             if (error != null || record == null) {
                 if (error != null) {
                     LOGGER.debug("现代唱片机歌词后台解析失败: song='{}' session={} reason={}", command.songName(),
@@ -291,7 +355,6 @@ public final class ModernTurntablePlaybackCoordinator {
             }
             Minecraft.getInstance().execute(() -> {
                 var level = Minecraft.getInstance().level;
-                BlockPos sourcePos = sourcePos(command);
                 if (level == null || !ModernTurntablePlaybackTracker.isActiveSession(sourcePos,
                         command.sessionId())) {
                     return;
@@ -309,9 +372,24 @@ public final class ModernTurntablePlaybackCoordinator {
         ModernTurntablePlaybackTracker.finish(sourcePos, sessionId);
     }
 
+    /** 服务端权威停止；exact session 匹配避免迟到的旧 stop 终止新唱片。 */
+    public static void stop(BlockPos sourcePos, String sessionId) {
+        if (sourcePos == null || sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        Minecraft minecraft = Minecraft.getInstance();
+        if (!minecraft.isSameThread()) {
+            minecraft.execute(() -> stop(sourcePos, sessionId));
+            return;
+        }
+        ModernTurntablePlaybackTracker.finish(sourcePos, sessionId);
+    }
+
     private static void bindSessionResources(BlockPos sourcePos, String sessionId) {
         ModernTurntablePlaybackTracker.onCancel(sourcePos, sessionId,
                 () -> ClientMinecartAudioAnchors.forget(sessionId));
+        ModernTurntablePlaybackTracker.onCancel(sourcePos, sessionId,
+            () -> ModernTurntableVideoClient.forgetSession(sessionId));
         ModernTurntablePlaybackTracker.onCancel(sourcePos, sessionId,
                 () -> VideoBillboardPreview.stopIfSession(sessionId));
         ModernTurntablePlaybackTracker.onCancel(sourcePos, sessionId,

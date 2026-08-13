@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.network;
 
 import com.zhongbai233.net_music_can_play_bili.item.PadItem;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadDocument;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 
@@ -11,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /** Runtime cache and SavedData bridge for Pad documents. */
 public final class PadDocumentStore {
-    private static final Map<UUID, PadDocument> RUNTIME = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, PadDocument> RUNTIME = new ConcurrentHashMap<>();
 
     private PadDocumentStore() {
     }
@@ -20,19 +21,20 @@ public final class PadDocumentStore {
         if (deviceId == null) {
             return PadDocument.DEFAULT;
         }
-        PadDocument runtime = RUNTIME.get(deviceId);
+        PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+        PadDocument runtime = RUNTIME.get(sourceId);
         if (runtime != null) {
             return syncStackCopy(level, deviceId, seedStack, runtime);
         }
         PadDocument saved = level != null ? PadDocumentSavedData.get(level).document(deviceId).orElse(null) : null;
         if (saved != null) {
             PadDocument restored = saved.copyWithLocked(false);
-            RUNTIME.put(deviceId, restored);
+            RUNTIME.put(sourceId, restored);
             return syncStackCopy(level, deviceId, seedStack, restored);
         }
         PadDocument legacy = PadItem.readLegacyDocument(seedStack);
         PadDocument created = (legacy != null ? legacy : PadDocument.DEFAULT).copyWithLocked(false);
-        RUNTIME.put(deviceId, created);
+        RUNTIME.put(sourceId, created);
         if (level != null) {
             PadDocumentSavedData.get(level).put(deviceId, created);
         }
@@ -40,15 +42,18 @@ public final class PadDocumentStore {
     }
 
     public static PadDocument get(UUID deviceId) {
-        return deviceId == null ? PadDocument.DEFAULT : RUNTIME.getOrDefault(deviceId, PadDocument.DEFAULT);
+        return deviceId == null
+                ? PadDocument.DEFAULT
+                : RUNTIME.getOrDefault(PlaybackSourceId.of(deviceId), PadDocument.DEFAULT);
     }
 
     public static void update(ServerLevel level, UUID deviceId, PadDocument document) {
         if (deviceId == null || document == null) {
             return;
         }
+        PadPlaybackControlPacket.invalidateResolve(deviceId);
         PadDocument normalized = document.copyWithLocked(false);
-        RUNTIME.put(deviceId, normalized);
+        RUNTIME.put(PlaybackSourceId.of(deviceId), normalized);
         if (level != null) {
             PadDocumentSavedData.get(level).put(deviceId, normalized);
         }
@@ -57,6 +62,7 @@ public final class PadDocumentStore {
 
     public static void clearRuntime() {
         RUNTIME.clear();
+        PadPlaybackControlPacket.clearResolveIntents();
     }
 
     private static PadDocument syncStackCopy(ServerLevel level, UUID deviceId, ItemStack stack, PadDocument current) {

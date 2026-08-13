@@ -1,0 +1,35 @@
+plugins {
+    id 'application'
+}
+
+group = 'com.zhongbai233.sceneeditor.examples'
+version = scene_editor_version
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(25)
+}
+
+repositories {
+    maven {
+        url = uri(providers.gradleProperty('sceneEditorRepository')
+                .orElse('../../build/phase8-maven-repository').get())
+    }
+    mavenCentral()
+}
+
+dependencies {
+    // Intentionally use Maven coordinates rather than a project dependency: this fixture proves the published POM/JAR.
+    implementation "com.zhongbai233.sceneeditor:scene-editor-core:${scene_editor_version}"
+
+    testImplementation platform('org.junit:junit-bom:5.13.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+application {
+    mainClass = 'com.zhongbai233.sceneeditor.example.MinimalSceneEditorHost'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}

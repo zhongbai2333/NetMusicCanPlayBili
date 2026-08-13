@@ -4,6 +4,7 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
@@ -16,38 +17,40 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class ModernTurntablePlaybackDiagnostics {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final long LOG_INTERVAL_MILLIS = 3_000L;
-    private static final long WARN_DRIFT_MILLIS = Long.getLong("ncpb.playback.diagnostics.warn_drift_ms", 2_000L);
-    private static final long DEBUG_AV_DRIFT_MILLIS = Long.getLong(
-            "bili.playback.diagnostics.debug_av_drift_ms", 250L);
-    private static final ConcurrentHashMap<String, Long> LAST_LOG_MILLIS_BY_SESSION = new ConcurrentHashMap<>();
+    private static final PlaybackRuntimeProperties.Diagnostics DIAGNOSTICS =
+            PlaybackRuntimeProperties.diagnostics();
+    private static final ConcurrentHashMap<PlaybackSessionId, Long> LAST_LOG_MILLIS_BY_SESSION =
+            new ConcurrentHashMap<>();
 
     private ModernTurntablePlaybackDiagnostics() {
     }
 
     public static void logEveryThreeSeconds(BlockPos turntablePos, String sessionId) {
-        if (turntablePos == null || sessionId == null || sessionId.isBlank()) {
+        PlaybackSessionId playbackSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (turntablePos == null || playbackSessionId == null) {
             return;
         }
+        String normalizedSessionId = playbackSessionId.value();
         long now = System.currentTimeMillis();
-        Long last = LAST_LOG_MILLIS_BY_SESSION.get(sessionId);
+        Long last = LAST_LOG_MILLIS_BY_SESSION.get(playbackSessionId);
         if (last != null && now - last < LOG_INTERVAL_MILLIS) {
             return;
         }
-        if (last != null && !LAST_LOG_MILLIS_BY_SESSION.replace(sessionId, last, now)) {
+        if (last != null && !LAST_LOG_MILLIS_BY_SESSION.replace(playbackSessionId, last, now)) {
             return;
         }
-        if (last == null && LAST_LOG_MILLIS_BY_SESSION.putIfAbsent(sessionId, now) != null) {
+        if (last == null && LAST_LOG_MILLIS_BY_SESSION.putIfAbsent(playbackSessionId, now) != null) {
             return;
         }
 
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level == null) {
-            finish(sessionId);
+            finish(playbackSessionId);
             return;
         }
         if (!(minecraft.level.getBlockEntity(turntablePos) instanceof ModernTurntableBlockEntity turntable)
                 || !turntable.isPlaying()) {
-            finish(sessionId);
+            finish(playbackSessionId);
             return;
         }
 
@@ -55,7 +58,7 @@ public final class ModernTurntablePlaybackDiagnostics {
         long localMillis = timeline.mediaMillis();
         long serverMillis = timeline.serverMillis();
 
-        VideoBillboardPreview.VideoSyncStatus video = VideoBillboardPreview.getSyncStatus(sessionId);
+        VideoBillboardPreview.VideoSyncStatus video = VideoBillboardPreview.getSyncStatus(normalizedSessionId);
         long videoMillis = video.mediaMillis();
         ClientAudioOutputRegistry.AudioTimeline audio = ClientAudioOutputRegistry.getAudioTimeline(turntablePos);
         long audioMillis = audio.combinedMillis();
@@ -72,18 +75,20 @@ public final class ModernTurntablePlaybackDiagnostics {
                 audio.relayStartedCount(), audio.relayRegisteredCount(), formatMillis(localMillis),
                 formatMillis(subtitleMillis), formatMillis(localMillis),
                 formatDelta(videoMillis, localMillis), formatDelta(audioMillis, localMillis),
-                formatDelta(audio.fedMillis(), localMillis), sessionId, audio.audioSessionId());
-        debugIfAudioSessionMoved(sessionId, audio.audioSessionId(), turntablePos, audioMillis, localMillis);
-        warnIfLargeDrift(sessionId, localMillis, serverMillis, videoMillis, video.queuedMediaMillis(), audioMillis,
-                audio.fedMillis(), timeline.pacingMillis());
-        debugIfPerceptibleAvDrift(sessionId, videoMillis, audioMillis, audio.fedMillis());
+                formatDelta(audio.fedMillis(), localMillis), normalizedSessionId, audio.audioSessionId());
+        debugIfAudioSessionMoved(normalizedSessionId, audio.audioSessionId(), turntablePos, audioMillis, localMillis);
+        warnIfLargeDrift(normalizedSessionId, localMillis, serverMillis, videoMillis, video.queuedMediaMillis(),
+                audioMillis, audio.fedMillis(), timeline.pacingMillis());
+        debugIfPerceptibleAvDrift(normalizedSessionId, videoMillis, audioMillis, audio.fedMillis());
     }
 
     public static void finish(String sessionId) {
-        if (sessionId != null && !sessionId.isBlank()) {
-            LAST_LOG_MILLIS_BY_SESSION.remove(sessionId);
-            ModernTurntableTimeline.forgetSession(sessionId);
-        }
+        PlaybackSessionId.parse(sessionId).ifPresent(ModernTurntablePlaybackDiagnostics::finish);
+    }
+
+    private static void finish(PlaybackSessionId sessionId) {
+        LAST_LOG_MILLIS_BY_SESSION.remove(sessionId);
+        ModernTurntableTimeline.forgetSession(sessionId.value());
     }
 
     private static long subtitleMillis(ModernTurntableBlockEntity turntable) {
@@ -105,7 +110,7 @@ public final class ModernTurntablePlaybackDiagnostics {
 
     private static void warnIfLargeDrift(String sessionId, long localMillis, long serverMillis, long videoMillis,
             long videoQueuedMillis, long audioMillis, long audioFedMillis, long pacingMillis) {
-        long threshold = Math.max(0L, WARN_DRIFT_MILLIS);
+        long threshold = DIAGNOSTICS.warnDriftMillis();
         if (threshold <= 0L) {
             return;
         }
@@ -128,7 +133,7 @@ public final class ModernTurntablePlaybackDiagnostics {
 
     private static void debugIfPerceptibleAvDrift(String sessionId, long videoMillis, long audioMillis,
             long audioFedMillis) {
-        long threshold = Math.max(0L, DEBUG_AV_DRIFT_MILLIS);
+        long threshold = DIAGNOSTICS.debugAvDriftMillis();
         if (threshold <= 0L || videoMillis < 0L || audioMillis < 0L) {
             return;
         }

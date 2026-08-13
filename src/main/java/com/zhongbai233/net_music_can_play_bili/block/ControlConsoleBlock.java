@@ -84,8 +84,8 @@ public final class ControlConsoleBlock extends Block implements EntityBlock {
             && level.getBlockEntity(pos) instanceof ControlConsoleBlockEntity console) {
             console.linkTo(currentDimension, sourcePos,
                 link.sourceKind() == com.zhongbai233.net_music_can_play_bili.link.LinkHelper.ControlConsoleSourceKind.LIVE_STREAMER
-                    ? com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleDocument.SourceKind.LIVE_STREAMER
-                    : com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleDocument.SourceKind.TURNTABLE);
+                    ? com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument.SourceKind.LIVE_STREAMER
+                    : com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument.SourceKind.TURNTABLE);
             if (!(placer instanceof Player player) || !player.isCreative()) {
                 com.zhongbai233.net_music_can_play_bili.link.LinkHelper.clearLinkFromItem(stack);
             }

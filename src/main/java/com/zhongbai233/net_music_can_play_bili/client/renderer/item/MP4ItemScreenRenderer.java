@@ -8,10 +8,12 @@ import com.zhongbai233.net_music_can_play_bili.client.MP4Client;
 import com.zhongbai233.net_music_can_play_bili.client.MP4BiliLoginOverlay;
 import com.zhongbai233.net_music_can_play_bili.client.MP4FocusState;
 import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.ClientDisplayProperties;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.RenderVertexUtils;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.YuvVideoRenderTypes;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.player.AbstractClientPlayer;
@@ -31,7 +33,6 @@ import org.joml.Vector4f;
 
 /** 通过 submitCustomGeometry 渲染的 MP4 贴图屏幕表面。 */
 public final class MP4ItemScreenRenderer {
-    private static final String PROJECTED_INPUT_PROPERTY = "ncpb.mp4.projected_input";
     private static final int FULL_BRIGHT = 0x00F000F0;
     private static final float HOVER_TILT_DEGREES = 4.0F;
     private static final float HOVER_HAND_FOLLOW_DEPTH = 0.055F;
@@ -48,8 +49,8 @@ public final class MP4ItemScreenRenderer {
     private static final float DEVICE_THICKNESS = 0.055F;
     private static final float SCREEN_FACE_Z_OFFSET = 0.020F;
     private static final float SCREEN_TEXTURE_Z_OFFSET = 0.022F;
-    private static final UUID FALLBACK_DEVICE_ID = new UUID(0L, 0L);
-    private static final Map<UUID, MP4GuiTexture> GUI_TEXTURES = new ConcurrentHashMap<>();
+    private static final PlaybackSourceId FALLBACK_SOURCE_ID = PlaybackSourceId.of(new UUID(0L, 0L));
+    private static final Map<PlaybackSourceId, MP4GuiTexture> GUI_TEXTURES = new ConcurrentHashMap<>();
 
     private MP4ItemScreenRenderer() {
     }
@@ -74,7 +75,7 @@ public final class MP4ItemScreenRenderer {
         if (deviceId == null) {
             return;
         }
-        MP4GuiTexture guiTexture = GUI_TEXTURES.remove(deviceId);
+        MP4GuiTexture guiTexture = GUI_TEXTURES.remove(PlaybackSourceId.of(deviceId));
         if (guiTexture != null) {
             guiTexture.close();
         }
@@ -357,7 +358,7 @@ public final class MP4ItemScreenRenderer {
     }
 
     private static boolean projectedInputEnabled() {
-        return Boolean.parseBoolean(System.getProperty(PROJECTED_INPUT_PROPERTY, "true"));
+        return ClientDisplayProperties.mp4ProjectedInputEnabled();
     }
 
     private static Matrix4f firstPersonProjection(int physicalWidth, int physicalHeight) {
@@ -452,8 +453,9 @@ public final class MP4ItemScreenRenderer {
     }
 
     private static MP4GuiTexture textureFor(UUID deviceId) {
-        UUID key = deviceId != null ? deviceId : FALLBACK_DEVICE_ID;
-        return GUI_TEXTURES.computeIfAbsent(key, id -> new MP4GuiTexture(id.toString().replace('-', '_')));
+        PlaybackSourceId key = deviceId != null ? PlaybackSourceId.of(deviceId) : FALLBACK_SOURCE_ID;
+        return GUI_TEXTURES.computeIfAbsent(key,
+                id -> new MP4GuiTexture(id.toString().replace('-', '_')));
     }
 
     private static void emitQuad(VertexConsumer buffer, PoseStack.Pose pose,

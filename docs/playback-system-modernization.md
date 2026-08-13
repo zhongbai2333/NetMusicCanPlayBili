@@ -99,6 +99,8 @@ flowchart LR
 - [x] request token 一次性消费，支持 TTL、显式取消，并绑定到 `ClientPlaybackSession` cancellation。
 - [x] 删除 `ALLOWED_URLS`、`allowUrl(...)` 和旧 `PlaybackContext`，统一使用显式 `PlaybackRequest`。
 - [x] MP3 从文件头建立解码状态，在 PCM 域按完整 frame 对齐丢弃起播偏移，避免 Layer III bit reservoir 导致中途起播白噪音。
+- [x] 真实公网 MP3 已在 5 秒和 12 秒 offset 通过生产 handler 从文件头解码、PCM seek 与启动延迟补偿；
+  两段首段 PCM 均非静音、有限且 clipping 为零。
 - [x] fMP4 decoder factory 返回强类型 `Supported` / `Unsupported` 结果，handler 不再直接按 codec 构造 pipeline。
 - [x] 将 MP3 从头解码、PCM seek 和启动延迟补偿抽取为独立 `PcmStartupSeekPolicy`。
 - [x] 容器探测层返回 `FMP4`、`RAW_EAC3`、`OTHER_AUDIO` 强类型结果；普通音频 fallback 不再解析异常消息，也不增加额外网络请求。
@@ -123,13 +125,23 @@ flowchart LR
 - [x] 每个 session 使用一个 cancellation token 和显式状态机：`PREPARING`、`BUFFERING`、`PLAYING`、`RECOVERING`、`STOPPING`、`STOPPED`、`FAILED`。
 - [x] 完整结束和恢复退役分别由 coordinator 的单一语义入口执行，声音对象不再串联多个 registry。
 - [x] anchor、video、diagnostics、lyric、request token、sound 和 recovery registration 在创建时绑定到 session cancellation token；完整结束只取消 session。
+- [x] 真实 MP3 两段直接 OpenAL pipeline 换代会关闭旧 stream/output；两个 Stereo handler 各 cleanup 恰好一次，
+  native delete/close、active output 与 staging memory 最终回到基线。
+- [x] 真实 MP3 经过 `SoundManager.play` 和 Minecraft SoundEngine streaming channel 完成两段 source 创建、挂载、
+  换代与销毁；tapped stream 和 Stereo handler 均 exact cleanup，资源最终回到基线。
 
 ## 后续可选深化
 
 - 引入 `PlaybackSessionId` 值对象，进一步消除 session、request token 和 transport generation 都使用裸字符串的误传风险。
 - 评估以 `DecodedAudioSource` 统一“返回 PCM stream”和“pipeline 直接驱动 OpenAL”两种输出模式；应复用现有 `AudioDecodePipeline`，避免重复抽象。
 - [x] 容器分类、同 URL request token 反序隔离、session 并发幂等取消、PCM seek frame 对齐和单一输出 store 的替换/容量/并发行为已有纯 Java 自动化测试。
-- 连续 seek、retry generation、真实 OpenAL source 换代和世界切换仍属于客户端集成验证，不应以 mock 单元测试代替。
+- start/连续 seek、pause/resume 与 retained-session retry 的客户端 session/sound owner 换代已由
+  `ncpb.playback-session-races` integrated-client 场景覆盖；5 秒到 12 秒的真实 MP3 decoder/直接 OpenAL
+  pipeline 换代、PCM 质量和 exact cleanup 已由 `ncpb.real-mp3-seek` 覆盖；两段 Minecraft SoundEngine
+  streaming channel 的创建、换代、销毁、pause/resume 和 exact cleanup 已由 `ncpb.real-mp3-sound-engine`
+  覆盖；retained-session 新直链 prepare/OpenAL 换代由 `ncpb.real-mp3-retained-retry` 覆盖；真实跨维度
+  respawn/UI/world-unload 往返由 `ncpb.cross-dimension-media-cleanup` 覆盖；真实唱片机方块、服务端 resolve、
+  网络 packet、公网 MP3、SoundEngine/OpenAL 输出与取出清理由 `ncpb.real-turntable-mp3-end-to-end` 覆盖。
 
 ## 验证门槛
 
@@ -143,8 +155,21 @@ flowchart LR
 
 ### 仍需客户端集成验证
 
-- [ ] start 后立即 seek 不会让旧输出读取新时间线。
-- [ ] 连续多次 seek 只保留最后一个 session 的 decoder 和 OpenAL source。
-- [ ] 从 MP3 任意时间点启动不产生白噪音，且启动延迟可观测。
-- [ ] retry 不改变媒体身份，只替换同一 session 的传输 generation。
-- [ ] 切世界、取出唱片、静音和超距停止均执行一次且仅一次 OpenAL/native 清理。
+- [x] start 后立即 seek/连续 seek 的客户端 active session、时间锚点、retry owner 与 sound handle 精确换代已由
+  integrated-client 场景覆盖。
+- [x] 真实 MP3 的 5 秒输出由 12 秒输出替换，只保留后者；旧 decoder stream/output 已关闭，两个直接 OpenAL
+  handler 各 cleanup 恰好一次。
+- [x] 真实 MP3 在 5 秒和 12 秒起播点的首段 PCM 非静音、有限且 clipping 为零，启动延迟可观测；这不外推为
+  所有任意时间点均已穷举验证。
+- [x] 真实 MP3 经过 Minecraft SoundEngine channel 创建、替换和销毁；两次 `PlayStreamingSourceEvent` 挂载、
+  小块读取下 4096-sample PCM 累积窗口、tapped stream/handler exact lifecycle 和资源收敛均已验证。
+- [x] retry full sync 保留逻辑 session、替换 stopped sound 并阻止已清 owner 的 delayed callback 重新发送；
+  真实新直链 prepare/OpenAL 输出换代已由 retained-retry 场景验证。
+- [x] pause 后快速 resume 的真实音频输出保持连续。
+- [x] retained-session retry 使用真实新直链完成 transport prepare 和 OpenAL 输出换代。
+- [x] 切世界、取出唱片、静音和超距停止均通过 exact-session stop 释放客户端会话；真实 MP3 场景验证
+  SoundEngine、tapped stream、OpenAL/native 与 staging memory 各执行一次清理并回到基线。
+- [x] 集成服务器真实跨维度往返触发两次 respawn/clone、加载 UI 与 ClientLevel unload；两轮 playback/sound
+  session 均 exact cleanup，最终回到原维度且报告环境保持有效。
+- [x] 从真实唱片机方块、服务端 resolve 和网络 packet 入口触发完整播放链；`ncpb.real-turntable-mp3-end-to-end`
+  已覆盖真实右键插入、公网 MP3、权威 session、客户端 streaming channel、PCM 质量与真实取出后的资源收敛。

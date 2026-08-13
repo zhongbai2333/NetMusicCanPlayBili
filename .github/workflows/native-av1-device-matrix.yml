@@ -1,0 +1,94 @@
+name: Native AV1 six-device hardware matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_matrix:
+        description: JSON include array mapping all six platforms to dedicated self-hosted GPU runner labels
+        required: true
+        type: string
+        default: >-
+          [{"platform":"linux-arm64","runner":"ncpb-av1-linux-arm64"},{"platform":"linux-x86_64","runner":"ncpb-av1-linux-x86_64"},{"platform":"macos-arm64","runner":"ncpb-av1-macos-arm64"},{"platform":"macos-x86_64","runner":"ncpb-av1-macos-x86_64"},{"platform":"windows-arm64","runner":"ncpb-av1-windows-arm64"},{"platform":"windows-x86_64","runner":"ncpb-av1-windows-x86_64"}]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-av1-six-device-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-device:
+    name: AV1 hardware (${{ matrix.platform }} / ${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.runner_matrix) }}
+    runs-on:
+      - self-hosted
+      - ${{ matrix.runner }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up native Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: microsoft
+          java-version: '21'
+
+      - name: Verify runner, bundle loadability, JNI exports and FFmpeg runtime
+        run: python tools/verify_native_runtime.py --platform "${{ matrix.platform }}"
+
+      - name: Run real AV1 hardware EOF, seek, PTS and resource-baseline gate
+        run: python tools/verify_native_av1_smoke.py --platform "${{ matrix.platform }}" --hwaccel auto --report "build/reports/native-av1-device/${{ matrix.platform }}.json"
+
+      - name: Archive device evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-av1-device-${{ matrix.platform }}
+          path: build/reports/native-av1-device/${{ matrix.platform }}.json
+          if-no-files-found: error
+          retention-days: 90
+
+  verify-matrix:
+    name: Verify exact six-device evidence set
+    if: always()
+    needs: validate-device
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Download all device evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-av1-device-*
+          path: build/reports/native-av1-device
+          merge-multiple: true
+
+      - name: Verify and summarize the six-platform matrix
+        run: python tools/verify_native_av1_device_matrix.py --reports-dir build/reports/native-av1-device --output build/reports/native-av1-device-matrix.json
+
+      - name: Archive matrix summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-av1-device-matrix
+          path: build/reports/native-av1-device-matrix.json
+          if-no-files-found: error
+          retention-days: 90

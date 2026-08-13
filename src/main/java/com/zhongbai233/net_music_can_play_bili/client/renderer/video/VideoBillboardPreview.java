@@ -16,10 +16,10 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.Vide
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.DecodeMode;
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.client.VideoFeatureFlags;
-import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.ProjectorScreenBounds;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.RenderVertexUtils;
-import com.zhongbai233.net_music_can_play_bili.editor.core.media.ControlConsoleVideoStatePolicy;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleVideoStatePolicy;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseExecutor;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
 import net.minecraft.client.Camera;
@@ -53,15 +53,16 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * B站视频投影的客户端渲染管线
@@ -98,7 +99,7 @@ public final class VideoBillboardPreview {
 
     public static ProjectorFrameSnapshot currentProjectorFrame(BlockPos projectorPos) {
         if (projectorPos != null) {
-            for (VideoPlaybackInstance instance : INSTANCES.values()) {
+            for (VideoPlaybackInstance instance : SESSION_INSTANCES.instances()) {
                 ProjectorFrameSnapshot snapshot = instance.frameSnapshot(projectorPos);
                 if (snapshot.hasFrame()) {
                     return snapshot;
@@ -106,36 +107,37 @@ public final class VideoBillboardPreview {
             }
         }
         if (activeNetworkFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED && width > 0 && height > 0
-                && (projectorPos == null || activeProjectorPositions.isEmpty()
-                        || activeProjectorPositions.contains(projectorPos))) {
+                && (projectorPos == null || LEGACY_PREVIEW.projectors().isEmpty()
+                        || LEGACY_PREVIEW.projectors().contains(projectorPos))) {
             return networkErrorSnapshot();
         }
         if (!hasFrame || width <= 0 || height <= 0) {
             return ProjectorFrameSnapshot.empty();
         }
-        if (projectorPos != null && !activeProjectorPositions.isEmpty()
-                && !activeProjectorPositions.contains(projectorPos)) {
+        if (projectorPos != null && !LEGACY_PREVIEW.projectors().isEmpty()
+                && !LEGACY_PREVIEW.projectors().contains(projectorPos)) {
             return ProjectorFrameSnapshot.empty();
         }
-        boolean yuv = shouldRenderYuvFrame() && yuvTextureSet != null;
-        return new ProjectorFrameSnapshot(true, yuv, TEXTURE_ID, yuv ? yuvTextureSet.yId() : null,
-                yuv ? yuvTextureSet.uId() : null, yuv ? yuvTextureSet.vId() : null,
-                yuv ? yuvTextureSet.format() : Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, width, height, false,
+        VideoYuvTextureSet yuvTextures = LEGACY_TEXTURES.yuv();
+        boolean yuv = shouldRenderYuvFrame() && yuvTextures != null;
+        return new ProjectorFrameSnapshot(true, yuv, TEXTURE_ID, yuv ? yuvTextures.yId() : null,
+                yuv ? yuvTextures.uId() : null, yuv ? yuvTextures.vId() : null,
+                yuv ? yuvTextures.format() : Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, width, height, false,
                 false, 0.0F);
     }
 
     public static ProjectorFrameSnapshot currentProjectorDisplayFrame(BlockPos projectorPos) {
         if (projectorPos != null) {
-            for (VideoPlaybackInstance instance : INSTANCES.values()) {
+            for (VideoPlaybackInstance instance : SESSION_INSTANCES.instances()) {
                 ProjectorFrameSnapshot snapshot = instance.displayFrameSnapshot(projectorPos);
                 if (snapshot.hasFrame()) {
                     return snapshot;
                 }
             }
-            for (PendingLoading pending : PENDING_LOADING.values()) {
-                if (pending.projectorPositions().contains(projectorPos)) {
-                    return VideoPlaybackInstance.loadingPlaceholderSnapshot(pending.startedNanoTime());
-                }
+            PendingVideoSessionRegistry.Snapshot<BlockPos> pending = PENDING_SESSIONS.findByProjector(
+                    PendingVideoSessionRegistry.State.LOADING, projectorPos);
+            if (pending != null) {
+                return VideoPlaybackInstance.loadingPlaceholderSnapshot(pending.startedNanoTime());
             }
         }
         return currentProjectorFrame(projectorPos);
@@ -143,7 +145,7 @@ public final class VideoBillboardPreview {
 
     public static ProjectorFrameSnapshot currentTurntableFrame(BlockPos turntablePos) {
         if (turntablePos != null) {
-            for (VideoPlaybackInstance instance : INSTANCES.values()) {
+            for (VideoPlaybackInstance instance : SESSION_INSTANCES.instances()) {
                 ProjectorFrameSnapshot snapshot = instance.turntableFrameSnapshot(turntablePos);
                 if (snapshot.hasFrame()) {
                     return snapshot;
@@ -170,8 +172,17 @@ public final class VideoBillboardPreview {
             NetMusicCanPlayBili.MODID, "textures/gui/video_loading/progress_segment_42x6.png");
     private static final Identifier NETWORK_ERROR_PLACEHOLDER_TEXTURE = Identifier.fromNamespaceAndPath(
             NetMusicCanPlayBili.MODID, "textures/gui/video_loading/network_error_base.png");
-    private static final boolean NETWORK_ERROR_PLACEHOLDER_ENABLED = Boolean.parseBoolean(
-            System.getProperty("ncpb.video.pipeline.network_error_placeholder", "true"));
+    private static final Identifier CONTROL_CONSOLE_IDLE_TEXTURE = Identifier.fromNamespaceAndPath(
+            NetMusicCanPlayBili.MODID,
+            ControlConsoleVideoArtwork.texturePath(ControlConsoleVideoStatePolicy.State.IDLE));
+    private static final Identifier CONTROL_CONSOLE_BUFFERING_TEXTURE = Identifier.fromNamespaceAndPath(
+            NetMusicCanPlayBili.MODID,
+            ControlConsoleVideoArtwork.texturePath(ControlConsoleVideoStatePolicy.State.BUFFERING));
+    private static final Identifier CONTROL_CONSOLE_ERROR_TEXTURE = Identifier.fromNamespaceAndPath(
+            NetMusicCanPlayBili.MODID,
+            ControlConsoleVideoArtwork.texturePath(ControlConsoleVideoStatePolicy.State.ERROR));
+        private static final boolean NETWORK_ERROR_PLACEHOLDER_ENABLED =
+            VideoPipelineProperties.networkErrorPlaceholderEnabled();
     private static final int LOADING_PLACEHOLDER_WIDTH = 320;
     private static final int LOADING_PLACEHOLDER_HEIGHT = 180;
     private static final int LOADING_PROGRESS_X = 58;
@@ -194,32 +205,25 @@ public final class VideoBillboardPreview {
     private static final double DISTANCE = 3.0D;
     private static final float HEIGHT = 1.35F;
     private static final boolean CPU_BARS = VideoFeatureFlags.advancedBoolean("ncpb.video.cpu_bars", false);
-    private static final boolean WORLD_ANCHORED = Boolean.parseBoolean(
-            System.getProperty("ncpb.video.world_anchor", "true"));
-    private static final String YUV_IMMEDIATE_STAGE = System.getProperty(
-            "ncpb.video.yuv.immediate_stage", "after_level").trim().toLowerCase(java.util.Locale.ROOT);
-    private static final String YUV_IMMEDIATE_COORDS = System.getProperty(
-            "ncpb.video.yuv.immediate_coords", "camera_relative").trim().toLowerCase(java.util.Locale.ROOT);
-    private static final String YUV_IMMEDIATE_POSE = System.getProperty(
-            "ncpb.video.yuv.immediate_pose", "identity").trim().toLowerCase(java.util.Locale.ROOT);
-    private static final boolean YUV_DEBUG_LOG = Boolean.getBoolean(
-            "ncpb.video.yuv.debug_log");
-    private static final double WORLD_ANCHOR_DISTANCE = Double.parseDouble(
-            System.getProperty("ncpb.video.world_anchor.distance", "6.0"));
-    static final double AUDIO_SYNC_RANGE_SQR = Math.pow(Double.parseDouble(
-            System.getProperty("ncpb.video.turntable.sync_range", "96.0")), 2.0);
-    private static final double VIEW_DOT_THRESHOLD = Double.parseDouble(
-            System.getProperty("ncpb.video.render.view_dot_threshold", "0.12"));
-    private static final boolean VIEW_OCCLUSION_CHECK = Boolean.parseBoolean(
-            System.getProperty("ncpb.video.render.occlusion_check", "true"));
-    private static final long VIEW_OCCLUSION_CACHE_NANOS = Long.getLong(
-            "bili.video.render.occlusion_cache_ms", 150L) * 1_000_000L;
-    private static final double VIEW_SAMPLE_EDGE_SCALE = Double.parseDouble(
-            System.getProperty("ncpb.video.render.visibility_sample_edge_scale", "0.86"));
-    private static final double MAX_RENDER_DISTANCE_SQR = Math.pow(Double.parseDouble(
-            System.getProperty("ncpb.video.max_render_distance", "64.0")), 2.0);
-    static final String RENDER_BACKEND = System.getProperty("ncpb.video.render.backend", "nv12")
-            .trim().toLowerCase(java.util.Locale.ROOT);
+    private static final VideoPipelineProperties.Billboard BILLBOARD_PROPERTIES =
+            VideoPipelineProperties.billboard();
+    private static final VideoPipelineProperties.YuvImmediate YUV_IMMEDIATE_PROPERTIES =
+            VideoPipelineProperties.yuvImmediate();
+    private static final VideoPipelineProperties.Visibility VISIBILITY_PROPERTIES =
+            VideoPipelineProperties.visibility();
+    private static final boolean WORLD_ANCHORED = BILLBOARD_PROPERTIES.worldAnchored();
+    private static final String YUV_IMMEDIATE_STAGE = YUV_IMMEDIATE_PROPERTIES.stage();
+    private static final String YUV_IMMEDIATE_COORDS = YUV_IMMEDIATE_PROPERTIES.coordinates();
+    private static final String YUV_IMMEDIATE_POSE = YUV_IMMEDIATE_PROPERTIES.pose();
+    private static final boolean YUV_DEBUG_LOG = YUV_IMMEDIATE_PROPERTIES.debugLog();
+    private static final double WORLD_ANCHOR_DISTANCE = BILLBOARD_PROPERTIES.worldAnchorDistance();
+    static final double AUDIO_SYNC_RANGE_SQR = BILLBOARD_PROPERTIES.audioSyncRangeSqr();
+    private static final double VIEW_DOT_THRESHOLD = VISIBILITY_PROPERTIES.viewDotThreshold();
+    private static final boolean VIEW_OCCLUSION_CHECK = VISIBILITY_PROPERTIES.occlusionCheck();
+    private static final long VIEW_OCCLUSION_CACHE_NANOS = VISIBILITY_PROPERTIES.occlusionCacheNanos();
+    private static final double VIEW_SAMPLE_EDGE_SCALE = VISIBILITY_PROPERTIES.sampleEdgeScale();
+    private static final double MAX_RENDER_DISTANCE_SQR = VISIBILITY_PROPERTIES.maxRenderDistanceSqr();
+    static final String RENDER_BACKEND = BILLBOARD_PROPERTIES.renderBackend();
     static final boolean NV12_DECODE_BACKEND = RENDER_BACKEND.equals("nv12")
             || RENDER_BACKEND.equals("nv12_shader")
             || RENDER_BACKEND.equals("yuv");
@@ -232,14 +236,32 @@ public final class VideoBillboardPreview {
             || RENDER_BACKEND.equals("yuv420_shader")
             || RENDER_BACKEND.equals("nv12")
             || RENDER_BACKEND.equals("nv12_shader");
-    private static final boolean YUV_UPLOAD_PLANES = Boolean.parseBoolean(
-            System.getProperty("ncpb.video.yuv.upload_planes", "true"));
+    private static final boolean YUV_UPLOAD_PLANES = BILLBOARD_PROPERTIES.yuvUploadPlanes();
 
-    private static final Map<String, VideoPlaybackInstance> INSTANCES = new ConcurrentHashMap<>();
-    private static final Map<String, PendingLoading> PENDING_LOADING = new ConcurrentHashMap<>();
-    private static final Map<String, PendingLoading> PENDING_FAILURE = new ConcurrentHashMap<>();
+    private static final ProjectionReplacementGate<Object> PROJECTION_REPLACEMENTS =
+            new ProjectionReplacementGate<>();
+    private static final Map<String, PendingProjectionStart> PENDING_PROJECTION_STARTS =
+            new ConcurrentHashMap<>();
+    private static final long PROJECTION_REPLACEMENT_TIMEOUT_MILLIS = Math.max(1L,
+            VideoPipelineProperties.timing().decoderRestartCloseTimeoutMillis());
+    private static final VideoSessionInstanceRegistry<VideoPlaybackInstance> SESSION_INSTANCES =
+            new VideoSessionInstanceRegistry<>(VideoBillboardPreview::disposeSessionInstance);
+    private static final PendingVideoSessionRegistry<BlockPos> PENDING_SESSIONS =
+            new PendingVideoSessionRegistry<>();
+    private static final VideoResourceDiagnosticsCollector<VideoPlaybackInstance> RESOURCE_DIAGNOSTICS =
+            new VideoResourceDiagnosticsCollector<>(VideoPlaybackInstance::isRunning,
+                    VideoPlaybackInstance::hasTerminalFailure, VideoPlaybackInstance::projectorCount,
+                    VideoPlaybackInstance::hasGuiConsumer);
+    private static final LegacyPreviewSessionState<BlockPos, PlaybackRequest> LEGACY_PREVIEW =
+            new LegacyPreviewSessionState<>();
+    private static final LegacyPreviewWorkerLifecycle<Thread, AutoCloseable> LEGACY_WORKER =
+            new LegacyPreviewWorkerLifecycle<>();
+    private static final LegacyPreviewTextureLifecycle<DynamicTexture, VideoYuvTextureSet, DynamicTexture>
+            LEGACY_TEXTURES = new LegacyPreviewTextureLifecycle<>(
+                    VideoBillboardPreview::disposeLegacyRgbaTexture,
+                    VideoBillboardPreview::disposeLegacyYuvTextures,
+                    VideoBillboardPreview::disposeLegacyPackedTexture);
 
-    private static final AtomicBoolean started = new AtomicBoolean(false);
     private static final AtomicBoolean loggedIrisYuvRenderType = new AtomicBoolean(false);
 
     public record ProjectorFrameSnapshot(boolean hasFrame, boolean yuv, Identifier rgbaTexture, Identifier yTexture,
@@ -251,12 +273,23 @@ public final class VideoBillboardPreview {
         }
     }
 
+    private record PendingProjectionStart(String sessionId, Object ownerKey,
+            VideoPlaybackInstance instance, ProjectionReplacementGate.Intent<Object> intent) {
+        private PendingProjectionStart {
+            sessionId = sessionId != null ? sessionId : "";
+            Objects.requireNonNull(ownerKey, "ownerKey");
+            Objects.requireNonNull(instance, "instance");
+            Objects.requireNonNull(intent, "intent");
+        }
+    }
+
         public record ControlConsoleVideoSnapshot(String sessionId, ControlConsoleVideoStatePolicy.State state,
             ProjectorFrameSnapshot frame) {
         }
 
         public record ResourceDiagnostics(int instances, int runningInstances, int failedInstances, int pendingLoading,
-            int pendingFailure, int projectorReferences, int berManagedProjectors, int guiConsumers) {
+            int pendingFailure, int projectorReferences, int berManagedProjectors, int guiConsumers,
+            int activeCloseZombies, long lateCloseConvergences) {
         }
 
         public enum BenchUploadFormat {
@@ -269,9 +302,14 @@ public final class VideoBillboardPreview {
             long gpuPboBytes) {
         }
 
+        public record BenchDecoderState(boolean present, long generation, long decoderStartOffsetMillis,
+                String restartState) {
+            static BenchDecoderState empty() {
+                return new BenchDecoderState(false, -1L, -1L, "ABSENT");
+            }
+        }
+
     private static final AtomicBoolean loggedYuvImmediateStage = new AtomicBoolean(false);
-    private static final AtomicLong decodeGeneration = new AtomicLong();
-    private static volatile boolean running;
     private static volatile int width;
     private static volatile int height;
     private static volatile int activeFps;
@@ -279,9 +317,6 @@ public final class VideoBillboardPreview {
     private static volatile long activeStartNanoTime;
     private static volatile boolean hasFrame;
     private static volatile boolean activeNetworkFailure;
-    private static DynamicTexture texture;
-    private static VideoYuvTextureSet yuvTextureSet;
-    private static DynamicTexture packedBenchTexture;
     private static volatile boolean anchorInitialized;
     private static volatile double anchorX;
     private static volatile double anchorY;
@@ -292,15 +327,10 @@ public final class VideoBillboardPreview {
     private static volatile double lastCameraY;
     private static volatile double lastCameraZ;
     private static volatile String lastCameraDimension;
-    private static final double CAMERA_TELEPORT_RESET_DISTANCE_SQR = Math.pow(Double.parseDouble(
-            System.getProperty("ncpb.video.projector.teleport_reset_distance", "16.0")), 2.0D);
+    private static final double CAMERA_TELEPORT_RESET_DISTANCE_SQR =
+            BILLBOARD_PROPERTIES.projectorTeleportResetDistanceSqr();
     private static volatile boolean firstImmediateQuadLogged;
     private static volatile boolean loggedProjectorYuvImmediate;
-    private static volatile Thread decodeThread;
-    private static final AtomicReference<AutoCloseable> ACTIVE_DECODER = new AtomicReference<>();
-    private static volatile String activeSessionId = "";
-    private static volatile BlockPos activeProjectorPos;
-    private static final Set<BlockPos> activeProjectorPositions = new CopyOnWriteArraySet<>();
     /** 由 BER 路径管理的投影仪；这是生命周期状态，不代表当前帧可见。 */
     private static final Set<BlockPos> berManagedProjectorPositions = new CopyOnWriteArraySet<>();
     /** BER 最近实际提交投影面的渲染帧，用于向解码/上传管线传播视锥可见性。 */
@@ -308,8 +338,6 @@ public final class VideoBillboardPreview {
             1L);
     private static final Map<ProjectorImmediateKey, ProjectorImmediatePose> PROJECTOR_IMMEDIATE_POSES = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<BlockPos, VisibilitySample> PROJECTOR_VISIBILITY_CACHE = new ConcurrentHashMap<>();
-    private static volatile boolean activeRequiresProjector;
-    private static volatile PlaybackRequest activeRequest;
     private static volatile boolean firstPreviewSubmitLogged;
 
     private VideoBillboardPreview() {
@@ -366,14 +394,19 @@ public final class VideoBillboardPreview {
                     normalized, Math.max(0L, startOffsetMillis), Math.max(0L, totalMillis), null, true, true);
             return;
         }
-        long offset = Math.max(0L, startOffsetMillis);
-        VideoPlaybackInstance existing = INSTANCES.get(normalized);
-        if (existing != null && existing.isRunningAtOffset(offset, 250L)) {
-            existing.setGuiConsumer(true);
+        PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(normalized).orElse(null);
+        if (parsedSessionId == null) {
             return;
         }
+        normalized = parsedSessionId.value();
+        long offset = Math.max(0L, startOffsetMillis);
+        VideoPlaybackInstance existing = SESSION_INSTANCES.get(normalized);
         if (existing != null) {
-            existing.stop();
+            existing.setGuiConsumer(true);
+            if (existing.isRunningAtOffset(offset, 250L)
+                    || existing.requestSyncedReseek(offset)) {
+                return;
+            }
         }
         VideoPlaybackInstance instance = new VideoPlaybackInstance(videoUrl, targetWidth, targetHeight, fps, codecId,
                 normalized, offset, Math.max(0L, totalMillis), List.of(),
@@ -383,12 +416,11 @@ public final class VideoBillboardPreview {
                 preferNative,
                 decoderOverride);
         instance.setGuiConsumer(true);
-        INSTANCES.put(normalized, instance);
-        instance.start();
+        startProjectionInstance(instance);
     }
 
     public static ProjectorFrameSnapshot currentPreviewFrame(String sessionId) {
-        VideoPlaybackInstance instance = INSTANCES.get(sessionId != null ? sessionId : "");
+        VideoPlaybackInstance instance = SESSION_INSTANCES.get(sessionId);
         return instance != null ? instance.previewFrameSnapshot() : ProjectorFrameSnapshot.empty();
     }
 
@@ -397,7 +429,7 @@ public final class VideoBillboardPreview {
         if (consolePos == null) {
             return null;
         }
-        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+        for (VideoPlaybackInstance instance : SESSION_INSTANCES.instances()) {
             if (!instance.containsProjector(consolePos)) {
                 continue;
             }
@@ -410,46 +442,52 @@ public final class VideoBillboardPreview {
                 // 因此 ACTIVE 状态也必须使用安全显示快照，避免控制台出现摩尔纹。
                 case ACTIVE -> IrisShaderpackCompat.shouldApplyIrisYuvCompatibility()
                         && realFrame.yuv() ? instance.displayFrameSnapshot(consolePos) : realFrame;
-                case ERROR -> instance.failurePlaceholderSnapshot();
-                case BUFFERING -> instance.displayFrameSnapshot(consolePos);
-                case IDLE -> VideoPlaybackInstance.idlePlaceholderSnapshot();
+                case ERROR, BUFFERING, IDLE -> controlConsolePlaceholder(state);
             };
             return new ControlConsoleVideoSnapshot(instance.sessionId(), state, displayFrame);
         }
-        for (Map.Entry<String, PendingLoading> entry : PENDING_FAILURE.entrySet()) {
-            if (entry.getValue().projectorPositions().contains(consolePos)) {
-                ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(
-                        sourcePlaying, videoExpected, true, false);
-                ProjectorFrameSnapshot frame = state == ControlConsoleVideoStatePolicy.State.IDLE
-                        ? VideoPlaybackInstance.idlePlaceholderSnapshot() : networkErrorSnapshot();
-                return new ControlConsoleVideoSnapshot(entry.getKey(), state, frame);
-            }
+        PendingVideoSessionRegistry.Snapshot<BlockPos> failure = PENDING_SESSIONS.findByProjector(
+                PendingVideoSessionRegistry.State.FAILURE, consolePos);
+        if (failure != null) {
+            ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(
+                    sourcePlaying, videoExpected, true, false);
+            ProjectorFrameSnapshot frame = controlConsolePlaceholder(state);
+            return new ControlConsoleVideoSnapshot(failure.sessionId(), state, frame);
         }
-        for (Map.Entry<String, PendingLoading> entry : PENDING_LOADING.entrySet()) {
-            if (entry.getValue().projectorPositions().contains(consolePos)) {
-                ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(
-                        sourcePlaying, videoExpected, false, false);
-                ProjectorFrameSnapshot frame = state == ControlConsoleVideoStatePolicy.State.IDLE
-                        ? VideoPlaybackInstance.idlePlaceholderSnapshot()
-                        : VideoPlaybackInstance.loadingPlaceholderSnapshot(entry.getValue().startedNanoTime());
-                return new ControlConsoleVideoSnapshot(entry.getKey(), state, frame);
-            }
+        PendingVideoSessionRegistry.Snapshot<BlockPos> loading = PENDING_SESSIONS.findByProjector(
+                PendingVideoSessionRegistry.State.LOADING, consolePos);
+        if (loading != null) {
+            ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(
+                    sourcePlaying, videoExpected, false, false);
+            ProjectorFrameSnapshot frame = controlConsolePlaceholder(state);
+            return new ControlConsoleVideoSnapshot(loading.sessionId(), state, frame);
         }
         ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(
                 sourcePlaying, videoExpected, false, false);
-        return new ControlConsoleVideoSnapshot(null, state,
-                state == ControlConsoleVideoStatePolicy.State.IDLE
-                        ? VideoPlaybackInstance.idlePlaceholderSnapshot() : ProjectorFrameSnapshot.empty());
+        return new ControlConsoleVideoSnapshot(null, state, controlConsolePlaceholder(state));
+    }
+
+    private static ProjectorFrameSnapshot controlConsolePlaceholder(ControlConsoleVideoStatePolicy.State state) {
+        Identifier texture = switch (state) {
+            case IDLE -> CONTROL_CONSOLE_IDLE_TEXTURE;
+            case BUFFERING -> CONTROL_CONSOLE_BUFFERING_TEXTURE;
+            case ERROR -> CONTROL_CONSOLE_ERROR_TEXTURE;
+            case ACTIVE -> throw new IllegalArgumentException("ACTIVE control-console video requires a real frame");
+        };
+        return new ProjectorFrameSnapshot(true, false, texture, null, null, null,
+                Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
+                LOADING_PLACEHOLDER_WIDTH, LOADING_PLACEHOLDER_HEIGHT,
+                true, false, 0.0F);
     }
 
     public static boolean hasTerminalFailure(String sessionId) {
         String normalized = sessionId != null ? sessionId : "";
-        VideoPlaybackInstance instance = INSTANCES.get(normalized);
-        return (instance != null && instance.hasTerminalFailure()) || PENDING_FAILURE.containsKey(normalized);
+        VideoPlaybackInstance instance = SESSION_INSTANCES.get(normalized);
+        return (instance != null && instance.hasTerminalFailure()) || PENDING_SESSIONS.hasFailure(normalized);
     }
 
     public static boolean hasGuiConsumer(String sessionId) {
-        VideoPlaybackInstance instance = INSTANCES.get(sessionId != null ? sessionId : "");
+        VideoPlaybackInstance instance = SESSION_INSTANCES.get(sessionId);
         return instance != null && instance.hasGuiConsumer();
     }
 
@@ -459,48 +497,44 @@ public final class VideoBillboardPreview {
         if (normalized.isBlank() || positions.isEmpty()) {
             return;
         }
-        PENDING_LOADING.remove(normalized);
-        PENDING_FAILURE.put(normalized, new PendingLoading(positions, System.nanoTime()));
+        PENDING_SESSIONS.markFailure(normalized, positions);
     }
 
     public static void detachControlConsoleConsumer(BlockPos consolePos) {
         if (consolePos == null) {
             return;
         }
-        PENDING_LOADING.replaceAll((sessionId, pending) -> pending.withoutProjector(consolePos));
-        PENDING_LOADING.entrySet().removeIf(entry -> entry.getValue().projectorPositions().isEmpty());
-        PENDING_FAILURE.replaceAll((sessionId, pending) -> pending.withoutProjector(consolePos));
-        PENDING_FAILURE.entrySet().removeIf(entry -> entry.getValue().projectorPositions().isEmpty());
-        INSTANCES.values().forEach(instance -> instance.removeProjector(consolePos));
-        INSTANCES.entrySet().removeIf(entry -> {
-            VideoPlaybackInstance instance = entry.getValue();
-            if (instance.hasVideoConsumer()) {
-                return false;
-            }
-            instance.stop();
-            return true;
-        });
+        PENDING_SESSIONS.detachProjector(consolePos);
+        detachPendingProjectionConsumer(consolePos);
+        SESSION_INSTANCES.forEach(instance -> instance.removeProjector(consolePos));
+        SESSION_INSTANCES.removeIf(instance -> !instance.hasVideoConsumer());
     }
 
     public static ResourceDiagnostics resourceDiagnostics() {
-        int runningInstances = 0;
-        int failedInstances = 0;
-        int projectorReferences = 0;
-        int guiConsumers = 0;
-        for (VideoPlaybackInstance instance : INSTANCES.values()) {
-            if (instance.isRunning()) runningInstances++;
-            if (instance.hasTerminalFailure()) failedInstances++;
-            projectorReferences += instance.projectorCount();
-            if (instance.hasGuiConsumer()) guiConsumers++;
-        }
-        return new ResourceDiagnostics(INSTANCES.size(), runningInstances, failedInstances, PENDING_LOADING.size(),
-                PENDING_FAILURE.size(), projectorReferences, berManagedProjectorPositions.size(), guiConsumers);
+        VideoZombieCloseSupervisor.Snapshot zombies = VideoZombieCloseSupervisor.global().snapshot();
+        VideoResourceDiagnosticsCollector.Snapshot snapshot = RESOURCE_DIAGNOSTICS.collect(
+                SESSION_INSTANCES.instances(),
+                PENDING_SESSIONS.count(PendingVideoSessionRegistry.State.LOADING),
+                PENDING_SESSIONS.count(PendingVideoSessionRegistry.State.FAILURE),
+                berManagedProjectorPositions.size(), zombies.activeZombies(),
+                zombies.lateConvergences());
+        return new ResourceDiagnostics(snapshot.instances(), snapshot.runningInstances(), snapshot.failedInstances(),
+                snapshot.pendingLoading(), snapshot.pendingFailure(), snapshot.projectorReferences(),
+                snapshot.berManagedProjectors(), snapshot.guiConsumers(), snapshot.activeCloseZombies(),
+                snapshot.lateCloseConvergences());
     }
 
     public static BenchUploadResources benchUploadResources() {
-        return new BenchUploadResources(texture != null || packedBenchTexture != null, yuvTextureSet != null,
+        return new BenchUploadResources(LEGACY_TEXTURES.hasRgbaOrPacked(), LEGACY_TEXTURES.hasYuv(),
                 MemoryResourceTracker.usage(MemoryResourceTracker.Category.TEXTURE_STAGING).currentBytes(),
                 MemoryResourceTracker.usage(MemoryResourceTracker.Category.GPU_PBO).currentBytes());
+    }
+
+    public static BenchDecoderState benchDecoderState(String sessionId) {
+        VideoPlaybackInstance instance = SESSION_INSTANCES.get(sessionId != null ? sessionId : "");
+        return instance != null ? new BenchDecoderState(true, instance.generationForBench(),
+                instance.decoderStartOffsetMillisForBench(), instance.restartStateForBench())
+                : BenchDecoderState.empty();
     }
 
     public static long uploadFrameOnClientThreadForBench(BenchUploadFormat format, byte[] frame,
@@ -538,7 +572,7 @@ public final class VideoBillboardPreview {
     }
 
     public static void pumpPreviewFrame(String sessionId) {
-        VideoPlaybackInstance instance = INSTANCES.get(sessionId != null ? sessionId : "");
+        VideoPlaybackInstance instance = SESSION_INSTANCES.get(sessionId);
         if (instance != null) {
             instance.setGuiConsumer(true);
             instance.pumpUploadOnRenderThread();
@@ -547,16 +581,16 @@ public final class VideoBillboardPreview {
 
     public static boolean hasNetworkFailure(String sessionId) {
         String normalized = sessionId != null ? sessionId : "";
-        VideoPlaybackInstance instance = INSTANCES.get(normalized);
+        VideoPlaybackInstance instance = SESSION_INSTANCES.get(normalized);
         if (instance != null) {
             return instance.hasNetworkFailure();
         }
-        return activeNetworkFailure && normalized.equals(activeSessionId);
+        return activeNetworkFailure && LEGACY_PREVIEW.matchesSession(normalized);
     }
 
     public static boolean retryNetworkFailure(String sessionId) {
         String normalized = sessionId != null ? sessionId : "";
-        VideoPlaybackInstance instance = INSTANCES.get(normalized);
+        VideoPlaybackInstance instance = SESSION_INSTANCES.get(normalized);
         if (instance != null) {
             return instance.retryNetworkFailure();
         }
@@ -565,21 +599,21 @@ public final class VideoBillboardPreview {
 
     public static int retryAllNetworkFailures() {
         int retried = 0;
-        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+        for (VideoPlaybackInstance instance : SESSION_INSTANCES.instances()) {
             if (instance.retryNetworkFailure()) {
                 retried++;
             }
         }
-        if (retryLegacyNetworkFailure(activeSessionId)) {
+        if (retryLegacyNetworkFailure(LEGACY_PREVIEW.sessionId())) {
             retried++;
         }
         return retried;
     }
 
     private static boolean retryLegacyNetworkFailure(String sessionId) {
-        PlaybackRequest request = activeRequest;
+        PlaybackRequest request = LEGACY_PREVIEW.request();
         if (!activeNetworkFailure || request == null
-                || (sessionId != null && !sessionId.isBlank() && !sessionId.equals(activeSessionId))) {
+                || (sessionId != null && !sessionId.isBlank() && !LEGACY_PREVIEW.matchesSession(sessionId))) {
             return false;
         }
         long retryOffsetMillis = activeStartOffsetMillis;
@@ -679,32 +713,215 @@ public final class VideoBillboardPreview {
     private static void startOrUpdateInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             String sessionId, long startOffsetMillis, long totalMillis, Collection<BlockPos> anchorPositions,
             VideoPlaybackAnchor anchor, boolean preferNative, String decoderOverride, List<VideoCandidate> candidates) {
+        PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (parsedSessionId == null) {
+            return;
+        }
+        String normalizedSessionId = parsedSessionId.value();
         if (!com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection.allowMediaStart()) {
-            stopIfSession(sessionId);
+            stopIfSession(normalizedSessionId);
             return;
         }
         List<BlockPos> projectors = immutablePositions(anchorPositions);
         boolean hasHolographicConsumer = hasHolographicTurntableConsumer(anchor);
         if (projectors.isEmpty() && !hasHolographicConsumer) {
-            stopIfSession(sessionId);
+            stopIfSession(normalizedSessionId);
             return;
         }
-        VideoPlaybackInstance existing = INSTANCES.get(sessionId);
+        VideoPlaybackInstance existing = SESSION_INSTANCES.get(normalizedSessionId);
         long normalizedOffset = Math.max(0L, startOffsetMillis);
-        if (existing != null && existing.canChaseToOffset(normalizedOffset)) {
-            existing.replaceProjectors(projectors);
-            return;
-        }
         if (existing != null) {
-            existing.stop();
+            existing.replaceProjectors(projectors);
+            if (existing.canChaseToOffset(normalizedOffset)
+                    || existing.requestSyncedReseek(normalizedOffset)) {
+                return;
+            }
         }
         VideoPlaybackInstance instance = new VideoPlaybackInstance(videoUrl, targetWidth, targetHeight, fps, codecId,
-                sessionId,
+                normalizedSessionId,
                 normalizedOffset, Math.max(0L, totalMillis), projectors, anchor, preferNative, decoderOverride,
                 candidates);
-        INSTANCES.put(sessionId, instance);
-        PENDING_LOADING.remove(sessionId);
-        instance.start();
+        startProjectionInstance(instance);
+    }
+
+    /**
+     * Serializes physical decoder ownership for one projection source. An
+     * instance may be constructed while the old owner drains, but it is never
+     * published or started until all four close handoff signals complete
+     * normally.
+     */
+    private static synchronized void startProjectionInstance(VideoPlaybackInstance instance) {
+        String sessionId = instance.sessionId();
+        Object ownerKey = instance.replacementOwnerKey();
+
+        PendingProjectionStart duplicate = PENDING_PROJECTION_STARTS.get(sessionId);
+        if (duplicate != null && Objects.equals(duplicate.ownerKey(), ownerKey)) {
+            List<BlockPos> positions = instance.projectorPositions();
+            if (!positions.isEmpty()) {
+                duplicate.instance().replaceProjectors(positions);
+            }
+            if (instance.hasGuiConsumer()) {
+                duplicate.instance().setGuiConsumer(true);
+            }
+            instance.abandonBeforeStart();
+            return;
+        }
+
+        for (PendingProjectionStart pending : List.copyOf(PENDING_PROJECTION_STARTS.values())) {
+            if (pending.sessionId().equals(sessionId) || Objects.equals(pending.ownerKey(), ownerKey)) {
+                cancelPendingProjectionStart(pending);
+            }
+        }
+        ProjectionReplacementGate.CloseHandoff replacementBarrier =
+                ProjectionReplacementGate.CloseHandoff.completed();
+        for (VideoPlaybackInstance current : SESSION_INSTANCES.instances()) {
+            if (current.sessionId().equals(sessionId)
+                    || Objects.equals(current.replacementOwnerKey(), ownerKey)) {
+                // The same session reuses deterministic texture identifiers even
+                // if its logical owner key changes, so carry the old render/native
+                // handoff into the desired owner's gate as well.
+                replacementBarrier = composeCloseHandoffs(replacementBarrier, current.closeHandoff());
+                SESSION_INSTANCES.remove(current.sessionId(), current);
+            }
+        }
+
+        ProjectionReplacementGate.Intent<Object> intent = PROJECTION_REPLACEMENTS.beginIntent(
+                ownerKey, sessionId, replacementBarrier);
+        PendingProjectionStart pending = new PendingProjectionStart(sessionId, ownerKey, instance, intent);
+        PENDING_PROJECTION_STARTS.put(sessionId, pending);
+        continueProjectionStart(pending, PROJECTION_REPLACEMENTS.evaluate(intent), null);
+    }
+
+    private static synchronized void continueProjectionStart(PendingProjectionStart pending,
+            ProjectionReplacementGate.Decision decision, Throwable failure) {
+        if (PENDING_PROJECTION_STARTS.get(pending.sessionId()) != pending
+                || !PROJECTION_REPLACEMENTS.isCurrent(pending.intent())) {
+            abandonPendingProjectionStart(pending, false, failure);
+            return;
+        }
+        if (failure != null || decision == ProjectionReplacementGate.Decision.FAIL_CLOSED) {
+            abandonPendingProjectionStart(pending, true, failure);
+            return;
+        }
+        if (decision == ProjectionReplacementGate.Decision.WAIT) {
+            PROJECTION_REPLACEMENTS.waitFor(pending.intent(), PROJECTION_REPLACEMENT_TIMEOUT_MILLIS,
+                    TimeUnit.MILLISECONDS).whenComplete((next, error) ->
+                            executeProjectionContinuation(() -> continueProjectionStart(
+                                    pending,
+                                    next != null ? next : ProjectionReplacementGate.Decision.FAIL_CLOSED,
+                                    error)));
+            return;
+        }
+
+        AtomicBoolean published = new AtomicBoolean(false);
+        boolean committed;
+        try {
+            committed = PROJECTION_REPLACEMENTS.commitIfOpen(pending.intent(), () -> {
+                if (PENDING_PROJECTION_STARTS.get(pending.sessionId()) != pending) {
+                    throw new IllegalStateException("projection replacement intent lost before publication");
+                }
+                // Install both the owner and session barriers before publication.
+                // Registry removal can now race only into a born-pending handoff,
+                // never into an unguarded decoder-start window.
+                PROJECTION_REPLACEMENTS.retainCommitted(
+                        pending.intent(), pending.instance().closeHandoff());
+                SESSION_INSTANCES.replace(pending.sessionId(), pending.instance());
+                pending.instance().start();
+                PENDING_PROJECTION_STARTS.remove(pending.sessionId(), pending);
+                PENDING_SESSIONS.clearLoading(pending.sessionId());
+                published.set(true);
+            });
+        } catch (RuntimeException | Error publicationFailure) {
+            // A thread-start or publication failure must not leave an orphaned
+            // registry owner whose born-pending handoff can never be sealed.
+            // Conditional removal retains the handoff before stop; the explicit
+            // abandon is idempotent and also covers failure before publication.
+            SESSION_INSTANCES.remove(pending.sessionId(), pending.instance());
+            PENDING_PROJECTION_STARTS.remove(pending.sessionId(), pending);
+            pending.instance().abandonBeforeStart();
+            PENDING_SESSIONS.markFailure(pending.sessionId(), pending.instance().projectorPositions());
+            LOGGER.error("投影视频替换实例发布或启动失败，已回滚并保持 fail-closed: session={} owner={}",
+                    pending.sessionId(), pending.ownerKey(), publicationFailure);
+            return;
+        }
+        if (!committed || !published.get()) {
+            abandonPendingProjectionStart(pending, false, null);
+        }
+    }
+
+    private static void executeProjectionContinuation(Runnable continuation) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.isSameThread()) {
+            continuation.run();
+        } else {
+            minecraft.execute(continuation);
+        }
+    }
+
+    private static void abandonPendingProjectionStart(PendingProjectionStart pending,
+            boolean markFailure, Throwable failure) {
+        PENDING_PROJECTION_STARTS.remove(pending.sessionId(), pending);
+        pending.instance().abandonBeforeStart();
+        if (markFailure) {
+            PENDING_SESSIONS.markFailure(pending.sessionId(), pending.instance().projectorPositions());
+            LOGGER.error("投影视频旧实例未正常物理收敛，禁止启动替换实例: session={} owner={}",
+                    pending.sessionId(), pending.ownerKey(), failure);
+        }
+    }
+
+    private static synchronized void cancelPendingProjectionStart(PendingProjectionStart pending) {
+        if (!PENDING_PROJECTION_STARTS.remove(pending.sessionId(), pending)) {
+            return;
+        }
+        // Supersede both domain epochs before sealing the never-started
+        // instance. Its born-pending handoff was never active ownership and
+        // therefore must not become a retained barrier.
+        PROJECTION_REPLACEMENTS.cancelIntent(pending.intent());
+        pending.instance().abandonBeforeStart();
+    }
+
+    private static synchronized void cancelPendingProjectionStart(String sessionId) {
+        PendingProjectionStart pending = PENDING_PROJECTION_STARTS.get(sessionId);
+        if (pending != null) {
+            cancelPendingProjectionStart(pending);
+        }
+    }
+
+    private static synchronized void cancelAllPendingProjectionStarts() {
+        for (PendingProjectionStart pending : List.copyOf(PENDING_PROJECTION_STARTS.values())) {
+            cancelPendingProjectionStart(pending);
+        }
+    }
+
+    private static synchronized void detachPendingProjectionConsumer(BlockPos projectorPos) {
+        for (PendingProjectionStart pending : List.copyOf(PENDING_PROJECTION_STARTS.values())) {
+            pending.instance().removeProjector(projectorPos);
+            if (!pending.instance().hasVideoConsumer()) {
+                cancelPendingProjectionStart(pending);
+            }
+        }
+    }
+
+    private static void disposeSessionInstance(VideoPlaybackInstance instance) {
+        Object ownerKey = instance.replacementOwnerKey();
+        ProjectionReplacementGate.CloseHandoff handoff = instance.closeHandoff();
+        // Retain first: logical registry detach must never create an admission
+        // gap, even if stop itself throws before it can signal close progress.
+        PROJECTION_REPLACEMENTS.retainCloseHandoff(ownerKey, instance.sessionId(), handoff);
+        instance.stop();
+    }
+
+    private static ProjectionReplacementGate.CloseHandoff composeCloseHandoffs(
+            ProjectionReplacementGate.CloseHandoff retained,
+            ProjectionReplacementGate.CloseHandoff proposed) {
+        if (retained == null || retained == proposed) {
+            return proposed;
+        }
+        return new ProjectionReplacementGate.CloseHandoff(
+                CompletableFuture.allOf(retained.closeReturned(), proposed.closeReturned()),
+                CompletableFuture.allOf(retained.nativeTermination(), proposed.nativeTermination()),
+                CompletableFuture.allOf(retained.decodeExit(), proposed.decodeExit()),
+                CompletableFuture.allOf(retained.renderRelease(), proposed.renderRelease()));
     }
 
     private static void startInternal(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
@@ -726,21 +943,22 @@ public final class VideoBillboardPreview {
         }
         String normalizedSession = sessionId != null ? sessionId : "";
         long normalizedOffset = Math.max(0L, startOffsetMillis);
-        if (!normalizedSession.isBlank() && running && normalizedSession.equals(activeSessionId)) {
+        if (!normalizedSession.isBlank() && LEGACY_WORKER.isRunning()
+                && LEGACY_PREVIEW.matchesSession(normalizedSession)) {
             replaceActiveProjectors(anchorPositions);
             if (isSessionRunningAtOffset(normalizedSession, normalizedOffset)) {
                 return;
             }
             stopForReplace();
         }
-        if (!normalizedSession.isBlank() && running) {
+        if (!normalizedSession.isBlank() && LEGACY_WORKER.isRunning()) {
             stopForReplace();
         }
-        if (!started.compareAndSet(false, true)) {
+        long generation = LEGACY_WORKER.tryBegin();
+        if (generation == LegacyPreviewWorkerLifecycle.REJECTED_GENERATION) {
             return;
         }
 
-        running = true;
         hasFrame = false;
         activeNetworkFailure = false;
         width = Math.max(1, targetWidth);
@@ -753,18 +971,16 @@ public final class VideoBillboardPreview {
         activeFps = protectedFps;
         activeStartOffsetMillis = normalizedOffset;
         activeStartNanoTime = System.nanoTime();
-        activeSessionId = normalizedSession;
-        replaceActiveProjectors(anchorPositions);
-        activeProjectorPos = activeProjectorPositions.stream().findFirst().orElse(null);
-        activeRequiresProjector = !normalizedSession.isBlank() && !activeProjectorPositions.isEmpty();
-        activeRequest = new PlaybackRequest(videoUrl, targetWidth, targetHeight, protectedFps, codecId, preferNative,
-                decoderOverride, normalizedSession, startOffsetMillis, totalMillis, activeProjectorPositions,
+        List<BlockPos> projectors = immutablePositions(anchorPositions);
+        PlaybackRequest request = new PlaybackRequest(videoUrl, targetWidth, targetHeight, protectedFps, codecId,
+                preferNative, decoderOverride, normalizedSession, startOffsetMillis, totalMillis, projectors,
                 forceRgbaOutput);
-        long generation = decodeGeneration.incrementAndGet();
-        if (activeProjectorPos != null) {
-            anchorX = activeProjectorPos.getX() + 0.5D;
-            anchorY = activeProjectorPos.getY() + 1.8D;
-            anchorZ = activeProjectorPos.getZ() + 0.5D;
+        LEGACY_PREVIEW.begin(normalizedSession, projectors, request);
+        BlockPos primaryProjector = LEGACY_PREVIEW.primaryProjector();
+        if (primaryProjector != null) {
+            anchorX = primaryProjector.getX() + 0.5D;
+            anchorY = primaryProjector.getY() + 1.8D;
+            anchorZ = primaryProjector.getZ() + 0.5D;
             anchorYawDeg = 0.0F;
             anchorInitialized = true;
         } else {
@@ -777,7 +993,9 @@ public final class VideoBillboardPreview {
                         forceRgbaOutput),
                 "bili-video-billboard-preview");
         thread.setDaemon(true);
-        decodeThread = thread;
+        if (!LEGACY_WORKER.bindWorker(generation, thread)) {
+            return;
+        }
         thread.start();
         LOGGER.info("视频 billboard 预览已启动: {}x{} @ {}fps, renderBackend={}, decodeFormat={}, catchUpDrops={}", width,
                 height,
@@ -804,11 +1022,11 @@ public final class VideoBillboardPreview {
     }
 
     public static void startTestPattern(int targetWidth, int targetHeight, int fps) {
-        if (!started.compareAndSet(false, true)) {
+        long generation = LEGACY_WORKER.tryBegin();
+        if (generation == LegacyPreviewWorkerLifecycle.REJECTED_GENERATION) {
             return;
         }
 
-        running = true;
         hasFrame = false;
         activeNetworkFailure = false;
         anchorInitialized = false;
@@ -818,42 +1036,35 @@ public final class VideoBillboardPreview {
         activeStartOffsetMillis = 0L;
         activeStartNanoTime = System.nanoTime();
 
-        Thread thread = new Thread(() -> decodeTestPatternLoop(targetWidth, targetHeight, fps),
+        Thread thread = new Thread(() -> decodeTestPatternLoop(targetWidth, targetHeight, fps, generation),
                 "bili-video-billboard-test-pattern");
         thread.setDaemon(true);
-        decodeThread = thread;
+        if (!LEGACY_WORKER.bindWorker(generation, thread)) {
+            return;
+        }
         thread.start();
         LOGGER.info("视频 billboard 本地测试图预览已启动: {}x{} @ {}fps, pixelMode={}", targetWidth,
                 targetHeight, fps, VideoFrameUploader.pixelMode());
     }
 
     public static void stop() {
-        for (VideoPlaybackInstance instance : INSTANCES.values()) {
-            instance.stop();
-        }
-        INSTANCES.clear();
-        PENDING_LOADING.clear();
-        PENDING_FAILURE.clear();
-        running = false;
-        started.set(false);
+        cancelAllPendingProjectionStarts();
+        SESSION_INSTANCES.clear();
+        PENDING_SESSIONS.clear();
+        LegacyPreviewWorkerLifecycle.Detached<Thread, AutoCloseable> detached = LEGACY_WORKER.stopAndDetach();
         hasFrame = false;
         activeNetworkFailure = false;
         anchorInitialized = false;
         activeFps = 0;
         activeStartOffsetMillis = 0L;
         activeStartNanoTime = 0L;
-        activeSessionId = "";
-        activeProjectorPos = null;
-        activeProjectorPositions.clear();
+        LEGACY_PREVIEW.clear();
         berManagedProjectorPositions.clear();
         BER_SUBMITTED_PROJECTORS.clear();
         PROJECTOR_VISIBILITY_CACHE.clear();
-        activeRequest = null;
-        activeRequiresProjector = false;
         resetLocalRenderAnchors();
-        decodeGeneration.incrementAndGet();
-        closeActiveDecoderAsync();
-        Thread thread = decodeThread;
+        closeActiveDecoderAsync(detached.decoder());
+        Thread thread = detached.worker();
         if (thread != null) {
             thread.interrupt();
         }
@@ -866,18 +1077,15 @@ public final class VideoBillboardPreview {
     }
 
     private static void stopForReplace() {
-        running = false;
-        started.set(false);
+        LegacyPreviewWorkerLifecycle.Detached<Thread, AutoCloseable> detached = LEGACY_WORKER.stopAndDetach();
         hasFrame = false;
         activeNetworkFailure = false;
-        activeRequiresProjector = false;
-        activeProjectorPositions.clear();
+        LEGACY_PREVIEW.clearForReplacement();
         activeFps = 0;
         activeStartOffsetMillis = 0L;
         activeStartNanoTime = 0L;
-        decodeGeneration.incrementAndGet();
-        closeActiveDecoderAsync();
-        Thread thread = decodeThread;
+        closeActiveDecoderAsync(detached.decoder());
+        Thread thread = detached.worker();
         if (thread != null) {
             thread.interrupt();
         }
@@ -891,16 +1099,14 @@ public final class VideoBillboardPreview {
 
     public static void stopIfSession(String sessionId) {
         String normalized = sessionId != null ? sessionId : "";
-        clearPendingLoading(normalized);
-        PENDING_FAILURE.remove(normalized);
-        ModernTurntableVideoClient.forgetSession(normalized);
+        cancelPendingProjectionStart(normalized);
+        PENDING_SESSIONS.clearSession(normalized);
         // YUV 立即渲染路径未激活时捕获的姿态不会被消费，会话结束必须显式清理。
-        PROJECTOR_IMMEDIATE_POSES.keySet().removeIf(key -> key.sessionId().equals(normalized));
-        VideoPlaybackInstance instance = INSTANCES.remove(normalized);
-        if (instance != null) {
-            instance.stop();
-        }
-        if (!normalized.isBlank() && normalized.equals(activeSessionId)) {
+        PlaybackSessionId.parse(normalized).ifPresent(playbackSessionId ->
+                PROJECTOR_IMMEDIATE_POSES.keySet().removeIf(
+                        key -> key.playbackSessionId().equals(playbackSessionId)));
+        SESSION_INSTANCES.remove(normalized);
+        if (!normalized.isBlank() && LEGACY_PREVIEW.matchesSession(normalized)) {
             stop();
         }
     }
@@ -913,26 +1119,13 @@ public final class VideoBillboardPreview {
         BER_SUBMITTED_PROJECTORS.removeIf(key -> key.projectorPos().equals(projectorPos));
         PROJECTOR_VISIBILITY_CACHE.remove(projectorPos);
         PROJECTOR_IMMEDIATE_POSES.keySet().removeIf(key -> key.projectorPos().equals(projectorPos));
-        PENDING_LOADING.replaceAll((sessionId, pending) -> pending.withoutProjector(projectorPos));
-        PENDING_LOADING.entrySet().removeIf(entry -> entry.getValue().projectorPositions().isEmpty());
-        PENDING_FAILURE.replaceAll((sessionId, pending) -> pending.withoutProjector(projectorPos));
-        PENDING_FAILURE.entrySet().removeIf(entry -> entry.getValue().projectorPositions().isEmpty());
-        INSTANCES.values().forEach(instance -> instance.removeProjector(projectorPos));
-        INSTANCES.entrySet().removeIf(entry -> {
-            if (entry.getValue().hasProjectors()) {
-                return false;
-            }
-            if (entry.getValue().hasVideoConsumer()) {
-                return false;
-            }
-            entry.getValue().stop();
-            return true;
-        });
-        activeProjectorPositions.remove(projectorPos);
-        if (projectorPos.equals(activeProjectorPos)) {
-            activeProjectorPos = activeProjectorPositions.stream().findFirst().orElse(null);
-        }
-        if (activeRequiresProjector && activeProjectorPositions.isEmpty()) {
+        PENDING_SESSIONS.detachProjector(projectorPos);
+        detachPendingProjectionConsumer(projectorPos);
+        SESSION_INSTANCES.forEach(instance -> instance.removeProjector(projectorPos));
+        SESSION_INSTANCES.removeIf(instance -> !instance.hasProjectors() && !instance.hasVideoConsumer());
+        boolean requiredProjector = LEGACY_PREVIEW.requiresProjector();
+        LEGACY_PREVIEW.detachProjector(projectorPos);
+        if (requiredProjector && LEGACY_PREVIEW.projectors().isEmpty()) {
             stop();
         }
     }
@@ -942,7 +1135,7 @@ public final class VideoBillboardPreview {
             return;
         }
         berManagedProjectorPositions.add(projectorPos.immutable());
-        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+        for (VideoPlaybackInstance instance : SESSION_INSTANCES.instances()) {
             if (instance.isForTurntable(turntablePos)) {
                 instance.addProjector(projectorPos);
             }
@@ -955,9 +1148,14 @@ public final class VideoBillboardPreview {
 
     /** 由 BER 在真正通过引擎裁剪并进入提交阶段时调用。 */
     public static void markProjectorSubmittedByBer(String sessionId, BlockPos projectorPos) {
-        if (sessionId != null && !sessionId.isBlank() && projectorPos != null) {
+        PlaybackSessionId.parse(sessionId).ifPresent(playbackSessionId ->
+                markProjectorSubmittedByBer(playbackSessionId, projectorPos));
+    }
+
+    public static void markProjectorSubmittedByBer(PlaybackSessionId playbackSessionId, BlockPos projectorPos) {
+        if (playbackSessionId != null && projectorPos != null) {
             BER_SUBMITTED_PROJECTORS.markSubmitted(
-                    new BerProjectorSubmission(sessionId, projectorPos.immutable()));
+                    new BerProjectorSubmission(playbackSessionId, projectorPos.immutable()));
         }
     }
 
@@ -965,25 +1163,26 @@ public final class VideoBillboardPreview {
      * 接受当前帧或上一帧的标记，以兼容 BER submit 与全局几何事件在不同渲染后端下的先后顺序。
      */
     static boolean wasProjectorRecentlySubmittedByBer(String sessionId, BlockPos projectorPos) {
-        if (sessionId == null || sessionId.isBlank() || projectorPos == null) {
+        PlaybackSessionId playbackSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (playbackSessionId == null || projectorPos == null) {
             return false;
         }
         return BER_SUBMITTED_PROJECTORS.wasRecentlySubmitted(
-                new BerProjectorSubmission(sessionId, projectorPos));
+                new BerProjectorSubmission(playbackSessionId, projectorPos));
     }
 
     static void beginBerVisibilityFrame() {
         BER_SUBMITTED_PROJECTORS.beginFrame();
     }
 
-    private record BerProjectorSubmission(String sessionId, BlockPos projectorPos) {
+    private record BerProjectorSubmission(PlaybackSessionId playbackSessionId, BlockPos projectorPos) {
     }
 
     public static boolean hasSessionForTurntable(BlockPos turntablePos) {
         if (turntablePos == null) {
             return false;
         }
-        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+        for (VideoPlaybackInstance instance : SESSION_INSTANCES.instances()) {
             if (instance.isForTurntable(turntablePos)) {
                 return true;
             }
@@ -995,47 +1194,48 @@ public final class VideoBillboardPreview {
         if (turntablePos == null || sessionId == null || sessionId.isBlank()) {
             return false;
         }
-        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+        for (VideoPlaybackInstance instance : SESSION_INSTANCES.instances()) {
             if (instance.isForTurntable(turntablePos) && instance.isSession(sessionId)) {
                 return true;
             }
         }
-        return running && started.get() && sessionId.equals(activeSessionId);
+        return LEGACY_WORKER.isRunning() && LEGACY_WORKER.isStarted()
+                && LEGACY_PREVIEW.matchesSession(sessionId);
     }
 
     public static boolean isSessionRunning(String sessionId) {
         String normalized = sessionId != null ? sessionId : "";
-        VideoPlaybackInstance instance = INSTANCES.get(normalized);
+        VideoPlaybackInstance instance = SESSION_INSTANCES.get(normalized);
         if (instance != null) {
             return instance.isRunning();
         }
-        return running && started.get() && !normalized.isBlank() && normalized.equals(activeSessionId);
+        return LEGACY_WORKER.isRunning() && LEGACY_WORKER.isStarted()
+                && !normalized.isBlank() && LEGACY_PREVIEW.matchesSession(normalized);
     }
 
-    public static void updateSessionProjectors(String sessionId, Collection<BlockPos> projectorPositions) {
+    public static synchronized void updateSessionProjectors(String sessionId,
+            Collection<BlockPos> projectorPositions) {
         String normalized = sessionId != null ? sessionId : "";
         if (normalized.isBlank()) {
             return;
         }
-        PendingLoading pending = PENDING_LOADING.get(normalized);
+        List<BlockPos> positions = immutablePositions(projectorPositions);
+        PENDING_SESSIONS.updateProjectors(normalized, positions);
+        PendingProjectionStart pending = PENDING_PROJECTION_STARTS.get(normalized);
         if (pending != null) {
-            PENDING_LOADING.put(normalized,
-                    new PendingLoading(immutablePositions(projectorPositions), pending.startedNanoTime()));
+            pending.instance().replaceProjectors(positions);
+            if (!pending.instance().hasVideoConsumer()) {
+                cancelPendingProjectionStart(pending);
+            }
+            return;
         }
-        PendingLoading failed = PENDING_FAILURE.get(normalized);
-        if (failed != null) {
-            PENDING_FAILURE.put(normalized,
-                new PendingLoading(immutablePositions(projectorPositions), failed.startedNanoTime()));
-        }
-        VideoPlaybackInstance instance = INSTANCES.get(normalized);
+        VideoPlaybackInstance instance = SESSION_INSTANCES.get(normalized);
         if (instance != null) {
             instance.replaceProjectors(projectorPositions);
             return;
         }
-        if (running && normalized.equals(activeSessionId)) {
+        if (LEGACY_WORKER.isRunning() && LEGACY_PREVIEW.matchesSession(normalized)) {
             replaceActiveProjectors(projectorPositions);
-            activeProjectorPos = activeProjectorPositions.stream().findFirst().orElse(null);
-            activeRequiresProjector = !activeProjectorPositions.isEmpty();
         }
     }
 
@@ -1045,23 +1245,13 @@ public final class VideoBillboardPreview {
         if (normalized.isBlank() || positions.isEmpty()) {
             return;
         }
-        PENDING_FAILURE.remove(normalized);
-        PENDING_LOADING.compute(normalized, (ignored, existing) -> new PendingLoading(positions,
-                existing != null ? existing.startedNanoTime() : System.nanoTime()));
+        PENDING_SESSIONS.beginLoading(normalized, positions);
     }
 
     public static void clearPendingLoading(String sessionId) {
         String normalized = sessionId != null ? sessionId : "";
         if (!normalized.isBlank()) {
-            PENDING_LOADING.remove(normalized);
-        }
-    }
-
-    private record PendingLoading(List<BlockPos> projectorPositions, long startedNanoTime) {
-        private PendingLoading withoutProjector(BlockPos projectorPos) {
-            return new PendingLoading(projectorPositions.stream()
-                    .filter(pos -> !pos.equals(projectorPos))
-                    .toList(), startedNanoTime);
+            PENDING_SESSIONS.clearLoading(normalized);
         }
     }
 
@@ -1092,7 +1282,7 @@ public final class VideoBillboardPreview {
         if (!isSessionRunning(sessionId)) {
             return false;
         }
-        VideoPlaybackInstance instance = INSTANCES.get(sessionId != null ? sessionId : "");
+        VideoPlaybackInstance instance = SESSION_INSTANCES.get(sessionId);
         if (instance != null) {
             return instance.isRunningAtOffset(Math.max(0L, requestedOffsetMillis), Math.max(0L, toleranceMillis));
         }
@@ -1105,12 +1295,12 @@ public final class VideoBillboardPreview {
         if (!isSessionRunning(sessionId)) {
             return false;
         }
-        VideoPlaybackInstance instance = INSTANCES.get(sessionId != null ? sessionId : "");
+        VideoPlaybackInstance instance = SESSION_INSTANCES.get(sessionId);
         if (instance != null) {
             return instance.canChaseToOffset(Math.max(0L, requestedOffsetMillis));
         }
         return isSessionRunningAtOffset(sessionId, requestedOffsetMillis,
-                Long.getLong("ncpb.video.pipeline.chase_window_ms", 10_000L));
+                VideoPipelineProperties.chaseWindowMillis());
     }
 
     public static boolean isSessionWaitingForFirstFrame(String sessionId) {
@@ -1118,38 +1308,40 @@ public final class VideoBillboardPreview {
         if (normalized.isBlank()) {
             return false;
         }
-        VideoPlaybackInstance instance = INSTANCES.get(normalized);
+        VideoPlaybackInstance instance = SESSION_INSTANCES.get(normalized);
         if (instance != null) {
             return instance.ensureFirstFrameProgress();
         }
-        return running && started.get() && normalized.equals(activeSessionId) && !hasFrame;
+        return LEGACY_WORKER.isRunning() && LEGACY_WORKER.isStarted()
+                && LEGACY_PREVIEW.matchesSession(normalized) && !hasFrame;
     }
 
     public static VideoStatus getStatusForProjector(BlockPos projectorPos) {
-        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+        for (VideoPlaybackInstance instance : SESSION_INSTANCES.instances()) {
             if (instance.containsProjector(projectorPos)) {
                 return instance.status();
             }
         }
-        if (!running || !started.get()) {
+        if (!LEGACY_WORKER.isRunning() || !LEGACY_WORKER.isStarted()) {
             return VideoStatus.empty();
         }
-        if (projectorPos != null && !activeProjectorPositions.isEmpty()
-                && !activeProjectorPositions.contains(projectorPos)) {
+        if (projectorPos != null && !LEGACY_PREVIEW.projectors().isEmpty()
+                && !LEGACY_PREVIEW.projectors().contains(projectorPos)) {
             return VideoStatus.empty();
         }
-        return new VideoStatus(width, height, activeFps, hasFrame, !activeSessionId.isBlank());
+        return new VideoStatus(width, height, activeFps, hasFrame, !LEGACY_PREVIEW.sessionId().isBlank());
     }
 
     public static VideoSyncStatus getSyncStatus(String sessionId) {
         String normalized = sessionId != null ? sessionId : "";
-        VideoPlaybackInstance instance = INSTANCES.get(normalized);
+        VideoPlaybackInstance instance = SESSION_INSTANCES.get(normalized);
         if (instance != null) {
             return new VideoSyncStatus(instance.isRunning(), instance.hasFrame(), instance.mediaMillis(),
                     instance.queuedMediaMillis(), instance.status().width(), instance.status().height(),
                     instance.status().fps());
         }
-        if (running && started.get() && !normalized.isBlank() && normalized.equals(activeSessionId)) {
+        if (LEGACY_WORKER.isRunning() && LEGACY_WORKER.isStarted()
+                && !normalized.isBlank() && LEGACY_PREVIEW.matchesSession(normalized)) {
             long mediaMillis = activeStartOffsetMillis
                     + Math.max(0L, (System.nanoTime() - activeStartNanoTime) / 1_000_000L);
             return new VideoSyncStatus(true, hasFrame, mediaMillis, -1L, width, height, activeFps);
@@ -1158,25 +1350,16 @@ public final class VideoBillboardPreview {
     }
 
     private static void replaceActiveProjectors(Collection<BlockPos> projectorPositions) {
-        activeProjectorPositions.clear();
-        activeProjectorPos = null;
         PROJECTOR_VISIBILITY_CACHE.clear();
         anchorInitialized = false;
-        if (projectorPositions == null) {
-            return;
-        }
-        for (BlockPos pos : projectorPositions) {
-            if (pos != null) {
-                activeProjectorPositions.add(pos.immutable());
-            }
-        }
+        LEGACY_PREVIEW.replaceProjectors(immutablePositions(projectorPositions));
     }
 
     private static void decodeLoop(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             boolean preferNative, String decoderOverride, long startOffsetMillis, long totalMillis, long generation,
             boolean catchUpDropsEnabled, boolean forceRgbaOutput) {
         if (CPU_BARS) {
-            decodeCpuBarsLoop(targetWidth, targetHeight, fps);
+            decodeCpuBarsLoop(targetWidth, targetHeight, fps, generation);
             return;
         }
         long frameIntervalNs = fps > 0 ? Math.max(1L, 1_000_000_000L / fps) : 50_000_000L;
@@ -1186,14 +1369,16 @@ public final class VideoBillboardPreview {
         try {
             decoder = openDecoder(videoUrl, targetWidth, targetHeight, fps, codecId, preferNative,
                     decoderOverride, startOffsetMillis, totalMillis, forceRgbaOutput);
-            ACTIVE_DECODER.set(decoder);
+            if (!LEGACY_WORKER.bindDecoder(generation, decoder)) {
+                return;
+            }
             warnNativeOffsetLimitation(decoder, startOffsetMillis);
-            while (running && generation == decodeGeneration.get()) {
+            while (LEGACY_WORKER.isActive(generation)) {
                 if (isGamePaused()) {
                     waitWhilePaused(generation);
                     continue;
                 }
-                if (activeRequiresProjector && !isActiveProjectorValid()) {
+                if (LEGACY_PREVIEW.requiresProjector() && !isActiveProjectorValid()) {
                     break;
                 }
                 DecodedFrame frame = nextDecodedFrame(decoder);
@@ -1204,7 +1389,7 @@ public final class VideoBillboardPreview {
 
                 int dropped = 0;
                 long nowNs = System.nanoTime();
-                while (catchUpDropsEnabled && running && generation == decodeGeneration.get()
+                while (catchUpDropsEnabled && LEGACY_WORKER.isActive(generation)
                         && nowNs - expectedFrameTimeNs(frameIndex, frameIntervalNs) > frameIntervalNs * 2L
                         && dropped < MAX_CATCH_UP_DROPS_PER_TICK) {
                     DecodedFrame catchUpDecoded = nextDecodedFrame(decoder);
@@ -1259,12 +1444,12 @@ public final class VideoBillboardPreview {
 
             }
         } catch (IOException e) {
-            if (generation == decodeGeneration.get()) {
+            if (LEGACY_WORKER.isCurrent(generation)) {
                 activeNetworkFailure = MediaNetworkFailureClassifier.isNetworkFailure(e);
             }
             LOGGER.error("视频 billboard 预览解码失败", e);
         } catch (Exception e) {
-            if (generation == decodeGeneration.get()) {
+            if (LEGACY_WORKER.isCurrent(generation)) {
                 activeNetworkFailure = MediaNetworkFailureClassifier.isNetworkFailure(e);
             }
             LOGGER.error("视频 billboard 预览 native 解码失败", e);
@@ -1276,12 +1461,7 @@ public final class VideoBillboardPreview {
                     LOGGER.warn("视频 billboard 解码器关闭失败", e);
                 }
             }
-            ACTIVE_DECODER.compareAndSet(decoder, null);
-            if (generation == decodeGeneration.get()) {
-                running = false;
-                started.set(false);
-                decodeThread = null;
-            }
+            LEGACY_WORKER.finish(generation, decoder);
         }
     }
 
@@ -1297,7 +1477,7 @@ public final class VideoBillboardPreview {
 
     private static void waitWhilePaused(long generation) {
         long pauseStartNs = System.nanoTime();
-        while (running && generation == decodeGeneration.get() && isGamePaused()) {
+        while (LEGACY_WORKER.isActive(generation) && isGamePaused()) {
             try {
                 Thread.sleep(25L);
             } catch (InterruptedException e) {
@@ -1310,8 +1490,8 @@ public final class VideoBillboardPreview {
 
     private static boolean isActiveProjectorValid() {
         Minecraft minecraft = Minecraft.getInstance();
-        BlockPos projectorPos = activeProjectorPos;
-        if (!activeRequiresProjector) {
+        BlockPos projectorPos = LEGACY_PREVIEW.primaryProjector();
+        if (!LEGACY_PREVIEW.requiresProjector()) {
             return true;
         }
         if (minecraft.level == null) {
@@ -1323,21 +1503,20 @@ public final class VideoBillboardPreview {
         if (isProjectorRenderedByBer(projectorPos)) {
             return true;
         }
-        for (BlockPos pos : activeProjectorPositions) {
+        for (BlockPos pos : LEGACY_PREVIEW.projectors()) {
             if (minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity) {
-                activeProjectorPos = pos;
+                LEGACY_PREVIEW.setPrimaryProjector(pos);
                 return true;
             }
             if (isProjectorRenderedByBer(pos)) {
-                activeProjectorPos = pos;
+                LEGACY_PREVIEW.setPrimaryProjector(pos);
                 return true;
             }
         }
         return false;
     }
 
-    private static void closeActiveDecoderAsync() {
-        AutoCloseable decoder = ACTIVE_DECODER.getAndSet(null);
+    private static void closeActiveDecoderAsync(AutoCloseable decoder) {
         if (decoder == null) {
             return;
         }
@@ -1372,9 +1551,11 @@ public final class VideoBillboardPreview {
                     continue;
                 }
                 try {
-                    return Fmp4NativeVideoDecoder.forLiveBus(busKey, targetWidth, targetHeight,
+                    Fmp4NativeVideoDecoder opened = Fmp4NativeVideoDecoder.forLiveBus(
+                            busKey, targetWidth, targetHeight,
                             forceRgbaOutput ? Fmp4NativeVideoDecoder.OutputFormat.RGBA : yuvDecodeFormat(), hwaccel,
                             fps);
+                    return requireHardwareIfRequested(opened, decodeMode, hwaccel);
                 } catch (IOException e) {
                     last = e;
                     LOGGER.warn("直播视频解码器启动失败 hwaccel={}，尝试下一个候选: {}", hwaccel, e.toString());
@@ -1392,10 +1573,12 @@ public final class VideoBillboardPreview {
                     continue;
                 }
                 try {
-                    return new Fmp4NativeVideoDecoder(videoUrl, codecId, targetWidth, targetHeight,
+                    Fmp4NativeVideoDecoder opened = new Fmp4NativeVideoDecoder(
+                            videoUrl, codecId, targetWidth, targetHeight,
                             Integer.MAX_VALUE, true,
                             forceRgbaOutput ? Fmp4NativeVideoDecoder.OutputFormat.RGBA : yuvDecodeFormat(), hwaccel,
                             startOffsetMillis, totalMillis, fps);
+                    return requireHardwareIfRequested(opened, decodeMode, hwaccel);
                 } catch (IOException e) {
                     last = e;
                     LOGGER.warn("Native 视频解码器启动失败 hwaccel={}，尝试下一个候选: {}", hwaccel, e.toString());
@@ -1406,9 +1589,65 @@ public final class VideoBillboardPreview {
         throw new IOException("视频投影仪不允许使用系统 ffmpeg；请启用/修复内置 native 解码器");
     }
 
+    private static Fmp4NativeVideoDecoder requireHardwareIfRequested(Fmp4NativeVideoDecoder decoder,
+            DecodeMode decodeMode, String requestedHwaccel) throws IOException {
+        if (decodeMode != DecodeMode.HARDWARE_REQUIRED) {
+            return decoder;
+        }
+        String actualHwaccel;
+        try {
+            if (decoder.isHardwareAccelerated()) {
+                return decoder;
+            }
+            actualHwaccel = decoder.actualHwaccel();
+        } catch (RuntimeException validationFailure) {
+            closeRejectedHardwareDecoder(decoder, "hardware backend validation failed", validationFailure);
+            throw validationFailure;
+        }
+        closeRejectedHardwareDecoder(decoder, "rejected hardware backend close failed", null);
+        throw new IOException("候选要求硬件解码但 native backend 未启用硬解: requested="
+                + requestedHwaccel + ", actual=" + actualHwaccel);
+    }
+
+    private static void closeRejectedHardwareDecoder(Fmp4NativeVideoDecoder decoder,
+            String reason, Throwable validationFailure) {
+        CompletableFuture<Void> nativeTermination = decoder.terminationFuture();
+        try {
+            decoder.close();
+        } catch (RuntimeException closeFailure) {
+            throw new CandidateResourceCloseException(nativeTermination, reason, closeFailure);
+        }
+        try {
+            nativeTermination.get(3_000L, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new CandidateResourceCloseException(nativeTermination,
+                    "rejected hardware backend close interrupted", error);
+        } catch (java.util.concurrent.ExecutionException error) {
+            throw new CandidateResourceCloseException(nativeTermination,
+                    "rejected hardware backend close failed", error.getCause());
+        } catch (TimeoutException error) {
+            throw new CandidateResourceCloseException(nativeTermination,
+                    "rejected hardware backend close timed out", error);
+        }
+        if (validationFailure != null) {
+            return;
+        }
+    }
+
+    static final class CandidateResourceCloseException extends RuntimeException {
+        final CompletableFuture<Void> nativeTermination;
+
+        private CandidateResourceCloseException(CompletableFuture<Void> nativeTermination,
+                String message, Throwable cause) {
+            super(message, cause);
+            this.nativeTermination = nativeTermination;
+        }
+    }
+
     private static boolean requestAdaptiveDownscale(int currentWidth, int currentHeight, long generation) {
-        PlaybackRequest req = activeRequest;
-        if (req == null || generation != decodeGeneration.get() || currentWidth <= MIN_ADAPTIVE_WIDTH) {
+        PlaybackRequest req = LEGACY_PREVIEW.request();
+        if (req == null || !LEGACY_WORKER.isCurrent(generation) || currentWidth <= MIN_ADAPTIVE_WIDTH) {
             return false;
         }
         int nextWidth = Math.max(MIN_ADAPTIVE_WIDTH, Math.round(currentWidth * 0.75F));
@@ -1446,6 +1685,33 @@ public final class VideoBillboardPreview {
     static DecodedFrame nextDecodedFrame(AutoCloseable decoder) throws Exception {
         if (decoder instanceof Fmp4NativeVideoDecoder nativeDecoder) {
             return DecodedFrame.wrap(nativeDecoder.getNextDecodedFrame());
+        }
+        throw new IOException("unsupported video decoder: " + decoder.getClass().getName());
+    }
+
+    static DecodedFrame nextDecodedFrameWithAv1FirstFrameProbe(AutoCloseable decoder) throws Exception {
+        if (decoder instanceof Fmp4NativeVideoDecoder nativeDecoder) {
+            return DecodedFrame.wrap(nativeDecoder.getNextDecodedFrameWithAv1FirstFrameProbe());
+        }
+        throw new IOException("unsupported video decoder: " + decoder.getClass().getName());
+    }
+
+    static void commitAv1FirstFrameProbe(AutoCloseable decoder, DecodedFrame frame) throws IOException {
+        if (decoder instanceof Fmp4NativeVideoDecoder nativeDecoder
+                && frame != null
+                && frame.delegate instanceof Fmp4NativeVideoDecoder.DecodedFrame nativeFrame) {
+            nativeDecoder.commitAv1FirstFrameProbe(nativeFrame);
+            return;
+        }
+        throw new IOException("unsupported video decoder: " + decoder.getClass().getName());
+    }
+
+    static void rejectAv1FirstFrameProbeFrame(AutoCloseable decoder, DecodedFrame frame) throws IOException {
+        if (decoder instanceof Fmp4NativeVideoDecoder nativeDecoder
+                && frame != null
+                && frame.delegate instanceof Fmp4NativeVideoDecoder.DecodedFrame nativeFrame) {
+            nativeDecoder.rejectAv1FirstFrameProbeFrame(nativeFrame);
+            return;
         }
         throw new IOException("unsupported video decoder: " + decoder.getClass().getName());
     }
@@ -1540,6 +1806,16 @@ public final class VideoBillboardPreview {
             return ptsNanos;
         }
 
+        long nativeGetNanos() {
+            return delegate instanceof Fmp4NativeVideoDecoder.DecodedFrame nativeFrame
+                    ? nativeFrame.nativeGetNanos() : -1L;
+        }
+
+        long queueWaitNanos() {
+            return delegate instanceof Fmp4NativeVideoDecoder.DecodedFrame nativeFrame
+                    ? nativeFrame.queueWaitNanos() : -1L;
+        }
+
         DecodedFrame retain() {
             if (delegate instanceof Fmp4NativeVideoDecoder.DecodedFrame nativeFrame) {
                 Fmp4NativeVideoDecoder.DecodedFrame retained = nativeFrame.retain();
@@ -1585,13 +1861,29 @@ public final class VideoBillboardPreview {
                 .toList();
     }
 
-    public record VideoStatus(int width, int height, int fps, boolean hasFrame, boolean synced) {
+    public record VideoStatus(int width, int height, int fps, boolean hasFrame, boolean synced,
+            int requestedQuality, int actualQuality, int codecId, String backend, String fallbackReason) {
+        public VideoStatus(int width, int height, int fps, boolean hasFrame, boolean synced) {
+            this(width, height, fps, hasFrame, synced, 0, 0, 0, "unknown", "");
+        }
+
+        public VideoStatus {
+            requestedQuality = Math.max(0, requestedQuality);
+            actualQuality = Math.max(0, actualQuality);
+            backend = backend == null || backend.isBlank() ? "unknown" : backend;
+            fallbackReason = fallbackReason == null ? "" : fallbackReason;
+        }
+
         static VideoStatus empty() {
             return new VideoStatus(0, 0, 0, false, false);
         }
 
         public boolean active() {
             return width > 0 && height > 0 && fps > 0;
+        }
+
+        public String codecLabel() {
+            return codecId == 13 ? "AV1" : codecId == 7 ? "H.264" : codecId > 0 ? "codec-" + codecId : "unknown";
         }
     }
 
@@ -1602,9 +1894,9 @@ public final class VideoBillboardPreview {
         }
     }
 
-    private static void decodeTestPatternLoop(int targetWidth, int targetHeight, int fps) {
+    private static void decodeTestPatternLoop(int targetWidth, int targetHeight, int fps, long generation) {
         if (CPU_BARS) {
-            decodeCpuBarsLoop(targetWidth, targetHeight, fps);
+            decodeCpuBarsLoop(targetWidth, targetHeight, fps, generation);
             return;
         }
         Process process = null;
@@ -1626,19 +1918,18 @@ public final class VideoBillboardPreview {
             stderrReader.setDaemon(true);
             stderrReader.start();
 
-            readRawVideoLoop(process.getInputStream(), targetWidth, targetHeight, fps);
+            readRawVideoLoop(process.getInputStream(), targetWidth, targetHeight, fps, generation);
         } catch (IOException e) {
             LOGGER.error("视频 billboard 本地测试图启动失败，请确认系统 ffmpeg 在 PATH 中", e);
         } finally {
             if (process != null) {
                 process.destroy();
             }
-            running = false;
-            started.set(false);
+            LEGACY_WORKER.finish(generation, null);
         }
     }
 
-    private static void decodeCpuBarsLoop(int targetWidth, int targetHeight, int fps) {
+    private static void decodeCpuBarsLoop(int targetWidth, int targetHeight, int fps, long generation) {
         int evenWidth = Math.max(2, targetWidth & ~1);
         int evenHeight = Math.max(2, targetHeight & ~1);
         int frameSize = CUSTOM_YUV_SHADER_BACKEND ? evenWidth * evenHeight * 3 / 2 : targetWidth * targetHeight * 4;
@@ -1649,16 +1940,23 @@ public final class VideoBillboardPreview {
                 CUSTOM_YUV_SHADER_BACKEND ? evenHeight : targetHeight,
                 fps, CUSTOM_YUV_SHADER_BACKEND);
         try {
-            while (running) {
+            while (LEGACY_WORKER.isActive(generation)) {
                 byte[] frame = new byte[frameSize];
                 long currentFrameIndex = frameIndex++;
                 if (CUSTOM_YUV_SHADER_BACKEND) {
                     fillCpuBarsYuv420p(frame, evenWidth, evenHeight, currentFrameIndex);
-                    Minecraft.getInstance()
-                            .execute(() -> uploadYuv420FrameOnRenderThreadForBench(frame, evenWidth, evenHeight));
+                    Minecraft.getInstance().execute(() -> {
+                        if (LEGACY_WORKER.isActive(generation)) {
+                            uploadYuv420FrameOnRenderThreadForBench(frame, evenWidth, evenHeight);
+                        }
+                    });
                 } else {
                     fillCpuBars(frame, targetWidth, targetHeight, currentFrameIndex);
-                    Minecraft.getInstance().execute(() -> uploadFrame(frame, targetWidth, targetHeight));
+                    Minecraft.getInstance().execute(() -> {
+                        if (LEGACY_WORKER.isActive(generation)) {
+                            uploadFrame(frame, targetWidth, targetHeight);
+                        }
+                    });
                 }
                 try {
                     Thread.sleep(frameDelayMs);
@@ -1668,8 +1966,7 @@ public final class VideoBillboardPreview {
                 }
             }
         } finally {
-            running = false;
-            started.set(false);
+            LEGACY_WORKER.finish(generation, null);
         }
     }
 
@@ -1778,11 +2075,12 @@ public final class VideoBillboardPreview {
         return value < 0 ? 0 : value > 255 ? 255 : value;
     }
 
-    private static void readRawVideoLoop(InputStream stdout, int targetWidth, int targetHeight, int fps)
+    private static void readRawVideoLoop(InputStream stdout, int targetWidth, int targetHeight, int fps,
+            long generation)
             throws IOException {
         int frameSize = targetWidth * targetHeight * 4;
         long frameDelayMs = fps > 0 ? Math.max(1L, 1000L / fps) : 50L;
-        while (running) {
+        while (LEGACY_WORKER.isActive(generation)) {
             long startNs = System.nanoTime();
             byte[] frame = new byte[frameSize];
             int totalRead = 0;
@@ -1793,7 +2091,11 @@ public final class VideoBillboardPreview {
                 }
                 totalRead += n;
             }
-            Minecraft.getInstance().execute(() -> uploadFrame(frame, targetWidth, targetHeight));
+            Minecraft.getInstance().execute(() -> {
+                if (LEGACY_WORKER.isActive(generation)) {
+                    uploadFrame(frame, targetWidth, targetHeight);
+                }
+            });
 
             long elapsedMs = (System.nanoTime() - startNs) / 1_000_000L;
             long sleepMs = frameDelayMs - elapsedMs;
@@ -1830,7 +2132,7 @@ public final class VideoBillboardPreview {
 
     private static long uploadFrameSync(DecodedFrame frame, int frameWidth, int frameHeight, long generation) {
         Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.level == null || generation != decodeGeneration.get() || !running || !isActiveProjectorValid()) {
+        if (minecraft.level == null || !LEGACY_WORKER.isActive(generation) || !isActiveProjectorValid()) {
             return -1L;
         }
         CompletableFuture<Long> future = new CompletableFuture<>();
@@ -1838,7 +2140,7 @@ public final class VideoBillboardPreview {
         try {
             minecraft.execute(() -> {
                 try (retained) {
-                    if (generation != decodeGeneration.get() || !running || !isActiveProjectorValid()) {
+                    if (!LEGACY_WORKER.isActive(generation) || !isActiveProjectorValid()) {
                         future.complete(-1L);
                         return;
                     }
@@ -2010,7 +2312,7 @@ public final class VideoBillboardPreview {
         // real_bench 是“真实播放链路压测”，不是纯上传微基准；复用 preview 的 YUV 纹理集，
         // 这样 SubmitCustomGeometry 能把正在压测的帧真正画到世界里。独立 bench 纹理仅保留给未来纯上传对照。
         ensureYuvTextureSet(Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P);
-        boolean ok = yuvTextureSet instanceof Yuv420pTextureSet yuv420pTextures
+        boolean ok = LEGACY_TEXTURES.yuv() instanceof Yuv420pTextureSet yuv420pTextures
                 && yuv420pTextures.upload(yuv420p, frameWidth, frameHeight);
         if (!ok) {
             LOGGER.warn("视频 YUV420P bench 帧大小不足: bytes={}, expected={}",
@@ -2033,7 +2335,7 @@ public final class VideoBillboardPreview {
                     frameHeight);
         }
         ensureYuvTextureSet(Fmp4NativeVideoDecoder.DecodedFrame.Format.NV12);
-        boolean ok = yuvTextureSet instanceof Nv12TextureSet nv12Textures
+        boolean ok = LEGACY_TEXTURES.yuv() instanceof Nv12TextureSet nv12Textures
                 && nv12Textures.upload(nv12, frameWidth, frameHeight);
         if (!ok) {
             LOGGER.warn("视频 NV12 bench 帧大小不足: bytes={}, expected={}",
@@ -2059,13 +2361,14 @@ public final class VideoBillboardPreview {
         }
 
         ensurePackedBenchTexture(textureWidth, textureHeight);
-        NativeImage image = packedBenchTexture.getPixels();
+        DynamicTexture packedTexture = LEGACY_TEXTURES.packed();
+        NativeImage image = packedTexture != null ? packedTexture.getPixels() : null;
         if (image == null || image.isClosed()) {
             return false;
         }
 
         VideoFrameUploader.uploadPackedRgbaBytes(image, packedRgbaBytes, textureWidth, textureHeight);
-        packedBenchTexture.upload();
+        packedTexture.upload();
         return true;
     }
 
@@ -2080,13 +2383,14 @@ public final class VideoBillboardPreview {
         }
 
         ensureTexture(frameWidth, frameHeight);
-        NativeImage image = texture.getPixels();
+        DynamicTexture rgbaTexture = LEGACY_TEXTURES.rgba();
+        NativeImage image = rgbaTexture != null ? rgbaTexture.getPixels() : null;
         if (image == null || image.isClosed()) {
             return false;
         }
 
         VideoFrameUploader.uploadRgba(image, rgba, frameWidth, frameHeight);
-        texture.upload();
+        rgbaTexture.upload();
         hasFrame = true;
         return true;
     }
@@ -2102,7 +2406,7 @@ public final class VideoBillboardPreview {
                     frameHeight);
         }
         ensureYuvTextureSet(frame.format());
-        if (!uploadYuvFrameData(yuvTextureSet, frame, frameWidth, frameHeight)) {
+        if (!uploadYuvFrameData(LEGACY_TEXTURES.yuv(), frame, frameWidth, frameHeight)) {
             LOGGER.warn("YUV 视频帧大小不足或格式错误: format={}, bytes={}", frame != null ? frame.format() : null,
                     frame != null ? frame.byteLength() : 0);
             return false;
@@ -2129,24 +2433,28 @@ public final class VideoBillboardPreview {
         Fmp4NativeVideoDecoder.DecodedFrame.Format normalized = format == Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P
                 ? Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P
                 : Fmp4NativeVideoDecoder.DecodedFrame.Format.NV12;
-        if (yuvTextureSet != null && yuvTextureSet.format() == normalized) {
+        VideoYuvTextureSet current = LEGACY_TEXTURES.yuv();
+        if (current != null && current.format() == normalized) {
             return;
         }
-        if (yuvTextureSet != null) {
-            yuvTextureSet.close();
-        }
+        // 三平面/双平面实现复用固定纹理 ID；先释放旧集合，再注册 replacement，
+        // 避免旧集合的 close 误释放刚注册的新纹理。
+        LEGACY_TEXTURES.replaceYuv(null);
+        VideoYuvTextureSet replacement;
         if (normalized == Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P) {
-            yuvTextureSet = new Yuv420pTextureSet(YUV_TEXTURE_Y_ID, YUV_TEXTURE_U_ID, YUV_TEXTURE_V_ID,
+            replacement = new Yuv420pTextureSet(YUV_TEXTURE_Y_ID, YUV_TEXTURE_U_ID, YUV_TEXTURE_V_ID,
                     "bili_video_billboard_preview_yuv420p");
         } else {
-            yuvTextureSet = new Nv12TextureSet(YUV_TEXTURE_Y_ID, YUV_TEXTURE_U_ID, YUV_TEXTURE_Y_ID,
+            replacement = new Nv12TextureSet(YUV_TEXTURE_Y_ID, YUV_TEXTURE_U_ID, YUV_TEXTURE_Y_ID,
                     "bili_video_billboard_preview_nv12");
         }
+        LEGACY_TEXTURES.replaceYuv(replacement);
     }
 
     private static void ensureTexture(int frameWidth, int frameHeight) {
-        if (texture != null) {
-            NativeImage image = texture.getPixels();
+        DynamicTexture current = LEGACY_TEXTURES.rgba();
+        if (current != null) {
+            NativeImage image = current.getPixels();
             if (image != null && !image.isClosed()
                     && image.getWidth() == frameWidth && image.getHeight() == frameHeight) {
                 width = frameWidth;
@@ -2157,45 +2465,51 @@ public final class VideoBillboardPreview {
         releaseTexture();
         width = frameWidth;
         height = frameHeight;
-        texture = new DynamicTexture("bili_video_billboard_preview", frameWidth, frameHeight, false);
-        Minecraft.getInstance().getTextureManager().register(TEXTURE_ID, texture);
+        DynamicTexture replacement = new DynamicTexture("bili_video_billboard_preview", frameWidth, frameHeight,
+                false);
+        LEGACY_TEXTURES.replaceRgba(replacement);
+        Minecraft.getInstance().getTextureManager().register(TEXTURE_ID, replacement);
     }
 
     private static void ensurePackedBenchTexture(int textureWidth, int textureHeight) {
-        if (packedBenchTexture != null) {
-            NativeImage image = packedBenchTexture.getPixels();
+        DynamicTexture current = LEGACY_TEXTURES.packed();
+        if (current != null) {
+            NativeImage image = current.getPixels();
             if (image != null && !image.isClosed()
                     && image.getWidth() == textureWidth && image.getHeight() == textureHeight) {
                 return;
             }
         }
         releasePackedBenchTexture();
-        packedBenchTexture = new DynamicTexture("bili_video_packed_bench", textureWidth, textureHeight, false);
-        Minecraft.getInstance().getTextureManager().register(PACKED_BENCH_TEXTURE_ID, packedBenchTexture);
+        DynamicTexture replacement = new DynamicTexture("bili_video_packed_bench", textureWidth, textureHeight,
+                false);
+        LEGACY_TEXTURES.replacePacked(replacement);
+        Minecraft.getInstance().getTextureManager().register(PACKED_BENCH_TEXTURE_ID, replacement);
         LOGGER.info("视频 packed bench 动态纹理已创建: {} ({}x{}), fastNativeUpload={}; 仅用于上传计时，不参与 billboard 渲染",
                 PACKED_BENCH_TEXTURE_ID, textureWidth, textureHeight,
                 VideoFrameUploader.fastNativeUploadAvailable());
     }
 
     private static void releaseTexture() {
-        if (texture != null) {
-            Minecraft.getInstance().getTextureManager().release(TEXTURE_ID);
-            texture.close();
-            texture = null;
-        }
-        if (yuvTextureSet != null) {
-            yuvTextureSet.close();
-            yuvTextureSet = null;
-        }
-        releasePackedBenchTexture();
+        LEGACY_TEXTURES.clear();
     }
 
     private static void releasePackedBenchTexture() {
-        if (packedBenchTexture != null) {
-            Minecraft.getInstance().getTextureManager().release(PACKED_BENCH_TEXTURE_ID);
-            packedBenchTexture.close();
-            packedBenchTexture = null;
-        }
+        LEGACY_TEXTURES.replacePacked(null);
+    }
+
+    private static void disposeLegacyRgbaTexture(DynamicTexture rgbaTexture) {
+        Minecraft.getInstance().getTextureManager().release(TEXTURE_ID);
+        rgbaTexture.close();
+    }
+
+    private static void disposeLegacyYuvTextures(VideoYuvTextureSet textures) {
+        textures.close();
+    }
+
+    private static void disposeLegacyPackedTexture(DynamicTexture packedTexture) {
+        Minecraft.getInstance().getTextureManager().release(PACKED_BENCH_TEXTURE_ID);
+        packedTexture.close();
     }
 
     @SubscribeEvent
@@ -2203,11 +2517,11 @@ public final class VideoBillboardPreview {
         beginBerVisibilityFrame();
         PROJECTOR_IMMEDIATE_POSES.clear();
         Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.level == null || minecraft.player == null || INSTANCES.isEmpty()) {
+        if (minecraft.level == null || minecraft.player == null || SESSION_INSTANCES.isEmpty()) {
             return;
         }
         observeCameraContinuity(minecraft);
-        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+        for (VideoPlaybackInstance instance : SESSION_INSTANCES.instances()) {
             instance.pumpUploadOnRenderThread();
         }
     }
@@ -2216,25 +2530,27 @@ public final class VideoBillboardPreview {
     public static void onSubmitCustomGeometry(SubmitCustomGeometryEvent event) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level == null || minecraft.player == null) {
-            for (VideoPlaybackInstance instance : INSTANCES.values()) {
-                instance.stop();
-            }
-            INSTANCES.clear();
-            PENDING_LOADING.clear();
-            running = false;
+            cancelAllPendingProjectionStarts();
+            SESSION_INSTANCES.clear();
+            PENDING_SESSIONS.clear(PendingVideoSessionRegistry.State.LOADING);
+            LEGACY_WORKER.requestStop();
             hasFrame = false;
             return;
         }
-        if (!INSTANCES.isEmpty()) {
+        if (!SESSION_INSTANCES.isEmpty()) {
             Camera camera = minecraft.gameRenderer.getMainCamera();
-            INSTANCES.entrySet().removeIf(entry -> {
-                VideoPlaybackInstance instance = entry.getValue();
+            SESSION_INSTANCES.removeIf(instance -> {
+                if (instance.hasTerminalFailure()) {
+                    // FAILED_CLOSE is an admission barrier, not an ordinary
+                    // stopped instance. Keep its owner in the registry until
+                    // an explicit lifecycle boundary can preserve a physical
+                    // close handoff.
+                    return false;
+                }
                 if (!instance.hasVideoConsumer()) {
-                    instance.stop();
                     return true;
                 }
                 if (!instance.hasGuiConsumer() && !instance.isWithinAudioRange(minecraft)) {
-                    instance.stop();
                     return true;
                 }
                 instance.submit(event, minecraft, camera);
@@ -2242,7 +2558,9 @@ public final class VideoBillboardPreview {
             });
         }
         boolean renderYuvFrame = shouldRenderYuvFrame();
-        if (!hasFrame || (!renderYuvFrame && texture == null) || width <= 0 || height <= 0) {
+        DynamicTexture rgbaTexture = LEGACY_TEXTURES.rgba();
+        VideoYuvTextureSet yuvTextures = LEGACY_TEXTURES.yuv();
+        if (!hasFrame || (!renderYuvFrame && rgbaTexture == null) || width <= 0 || height <= 0) {
             return;
         }
 
@@ -2253,7 +2571,7 @@ public final class VideoBillboardPreview {
         }
 
         Camera camera = minecraft.gameRenderer.getMainCamera();
-        if (activeRequiresProjector) {
+        if (LEGACY_PREVIEW.requiresProjector()) {
             List<VideoProjectorBlockEntity> projectors = activeVideoProjectors(minecraft);
             if (projectors.isEmpty()) {
                 stop();
@@ -2263,7 +2581,7 @@ public final class VideoBillboardPreview {
                 if (HolographicGlassesClient.shouldHideProjectorVideos()) {
                     submitProjectorPrivacyOverlay(event, minecraft, camera, projector);
                 } else if (renderYuvFrame) {
-                    submitProjectorYuvGeometry(event, minecraft, camera, projector, yuvTextureSet);
+                    submitProjectorYuvGeometry(event, minecraft, camera, projector, yuvTextures);
                 } else {
                     submitProjectorGeometry(event, minecraft, camera, projector);
                 }
@@ -2272,7 +2590,7 @@ public final class VideoBillboardPreview {
         }
 
         VideoProjectorBlockEntity projector = activeVideoProjector(minecraft);
-        if (activeRequiresProjector && projector == null) {
+        if (LEGACY_PREVIEW.requiresProjector() && projector == null) {
             stop();
             return;
         }
@@ -2295,7 +2613,7 @@ public final class VideoBillboardPreview {
         final float p3y;
         final float p3z;
 
-        if (WORLD_ANCHORED || activeRequiresProjector) {
+        if (WORLD_ANCHORED || LEGACY_PREVIEW.requiresProjector()) {
             if (!ensureWorldAnchor(minecraft, camera, projector)) {
                 return;
             }
@@ -2375,7 +2693,7 @@ public final class VideoBillboardPreview {
         event.getSubmitNodeCollector().submitCustomGeometry(
                 poseStack,
                 renderYuvFrame
-                        ? yuvRenderTypeForCurrentIrisProgram(yuvTextureSet)
+                        ? yuvRenderTypeForCurrentIrisProgram(yuvTextures)
                         : YuvVideoRenderTypes.videoRgbaEntity(TEXTURE_ID),
                 (pose, buffer) -> {
                     emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
@@ -2406,14 +2724,14 @@ public final class VideoBillboardPreview {
     }
 
     private static void renderInstanceProjectorYuvImmediate(RenderLevelStageEvent event, String route) {
-        if (!shouldDrawYuvImmediateWithIris() || INSTANCES.isEmpty()) {
+        if (!shouldDrawYuvImmediateWithIris() || SESSION_INSTANCES.isEmpty()) {
             return;
         }
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level == null || minecraft.player == null) {
             return;
         }
-        for (VideoPlaybackInstance instance : INSTANCES.values()) {
+        for (VideoPlaybackInstance instance : SESSION_INSTANCES.instances()) {
             instance.renderYuvImmediate(event, route);
         }
     }
@@ -2432,10 +2750,11 @@ public final class VideoBillboardPreview {
                     YUV_IMMEDIATE_STAGE, YUV_IMMEDIATE_COORDS, YUV_IMMEDIATE_POSE, route);
         }
         Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.level == null || minecraft.player == null || activeRequiresProjector) {
+        if (minecraft.level == null || minecraft.player == null || LEGACY_PREVIEW.requiresProjector()) {
             return;
         }
-        if (!hasFrame || !shouldRenderYuvFrame() || yuvTextureSet == null || width <= 0 || height <= 0) {
+        VideoYuvTextureSet yuvTextures = LEGACY_TEXTURES.yuv();
+        if (!hasFrame || !shouldRenderYuvFrame() || yuvTextures == null || width <= 0 || height <= 0) {
             return;
         }
 
@@ -2448,7 +2767,7 @@ public final class VideoBillboardPreview {
             return;
         }
 
-        RenderType renderType = yuvRenderTypeForCurrentIrisProgram(yuvTextureSet);
+        RenderType renderType = yuvRenderTypeForCurrentIrisProgram(yuvTextures);
         BufferBuilder builder = Tesselator.getInstance().begin(renderType.mode(), renderType.format());
         PoseStack poseStack = "identity".equals(YUV_IMMEDIATE_POSE) ? new PoseStack() : event.getPoseStack();
         PoseStack.Pose pose = poseStack.last();
@@ -2475,10 +2794,11 @@ public final class VideoBillboardPreview {
 
     private static void renderProjectorYuvImmediate(RenderLevelStageEvent event, String route) {
         Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.level == null || minecraft.player == null || !activeRequiresProjector) {
+        if (minecraft.level == null || minecraft.player == null || !LEGACY_PREVIEW.requiresProjector()) {
             return;
         }
-        if (!hasFrame || !shouldRenderYuvFrame() || yuvTextureSet == null || width <= 0 || height <= 0) {
+        VideoYuvTextureSet yuvTextures = LEGACY_TEXTURES.yuv();
+        if (!hasFrame || !shouldRenderYuvFrame() || yuvTextures == null || width <= 0 || height <= 0) {
             return;
         }
         if (!shouldDrawYuvImmediateWithIris()) {
@@ -2504,7 +2824,7 @@ public final class VideoBillboardPreview {
             if (HolographicGlassesClient.shouldHideProjectorVideos()) {
                 drawProjectorPrivacyOverlayImmediate(event, minecraft, camera, projector, route);
             } else {
-                drawProjectorYuvImmediate(event, minecraft, camera, projector, yuvTextureSet, route, cameraRelative);
+                drawProjectorYuvImmediate(event, minecraft, camera, projector, yuvTextures, route, cameraRelative);
             }
         }
     }
@@ -2519,11 +2839,17 @@ public final class VideoBillboardPreview {
 
     public static void captureProjectorImmediatePose(String sessionId, BlockPos projectorPos, Matrix4f pose,
             float halfHeight) {
-        if (sessionId == null || sessionId.isBlank() || projectorPos == null || pose == null
+        PlaybackSessionId.parse(sessionId).ifPresent(playbackSessionId ->
+                captureProjectorImmediatePose(playbackSessionId, projectorPos, pose, halfHeight));
+    }
+
+    public static void captureProjectorImmediatePose(PlaybackSessionId playbackSessionId, BlockPos projectorPos,
+            Matrix4f pose, float halfHeight) {
+        if (playbackSessionId == null || projectorPos == null || pose == null
                 || halfHeight <= 0.0F) {
             return;
         }
-        PROJECTOR_IMMEDIATE_POSES.put(new ProjectorImmediateKey(sessionId, projectorPos.immutable()),
+        PROJECTOR_IMMEDIATE_POSES.put(new ProjectorImmediateKey(playbackSessionId, projectorPos.immutable()),
                 new ProjectorImmediatePose(new Matrix4f(pose), halfHeight));
     }
 
@@ -2534,14 +2860,22 @@ public final class VideoBillboardPreview {
         }
     }
 
+    public static void captureProjectorImmediatePose(PlaybackSessionId playbackSessionId, BlockPos projectorPos,
+            Matrix4f pose, float halfHeight, float opacity) {
+        if (opacity > 0.0F) {
+            captureProjectorImmediatePose(playbackSessionId, projectorPos, pose, halfHeight);
+        }
+    }
+
     static boolean drawCapturedProjectorYuvImmediate(RenderLevelStageEvent event, String sessionId,
             BlockPos projectorPos, VideoYuvTextureSet textures, String route) {
-        if (event == null || sessionId == null || projectorPos == null || textures == null
+        PlaybackSessionId playbackSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (event == null || playbackSessionId == null || projectorPos == null || textures == null
                 || textures.width() <= 0 || textures.height() <= 0) {
             return false;
         }
         ProjectorImmediatePose captured = PROJECTOR_IMMEDIATE_POSES.remove(
-                new ProjectorImmediateKey(sessionId, projectorPos));
+                new ProjectorImmediateKey(playbackSessionId, projectorPos));
         if (captured == null) {
             return false;
         }
@@ -2576,7 +2910,7 @@ public final class VideoBillboardPreview {
                 p2.x, p2.y, p2.z, p3.x, p3.y, p3.z);
     }
 
-    private record ProjectorImmediateKey(String sessionId, BlockPos projectorPos) {
+    private record ProjectorImmediateKey(PlaybackSessionId playbackSessionId, BlockPos projectorPos) {
     }
 
     private record ProjectorImmediatePose(Matrix4f pose, float halfHeight) {
@@ -2668,7 +3002,7 @@ public final class VideoBillboardPreview {
         final float p3y;
         final float p3z;
 
-        if (forceWorldAnchored || WORLD_ANCHORED || activeRequiresProjector) {
+        if (forceWorldAnchored || WORLD_ANCHORED || LEGACY_PREVIEW.requiresProjector()) {
             if (!ensureWorldAnchor(minecraft, camera, projector)) {
                 return null;
             }
@@ -2752,7 +3086,8 @@ public final class VideoBillboardPreview {
     private static boolean shouldRenderYuvFrame() {
         // 正常播放由 render.backend 选择 shader；real_bench 的 yuv420 上传会直接写入 yuvTextureSet，
         // 此时即使全局 backend 仍是 rgba，也应该把压测帧提交出来，否则日志在跑但世界里没有画面。
-        return yuvTextureSet != null && isCustomYuvShaderAvailable() && (CUSTOM_YUV_SHADER_BACKEND || texture == null);
+        return LEGACY_TEXTURES.yuv() != null && isCustomYuvShaderAvailable()
+                && (CUSTOM_YUV_SHADER_BACKEND || LEGACY_TEXTURES.rgba() == null);
     }
 
     public static boolean isCustomYuvShaderAvailable() {
@@ -2788,7 +3123,7 @@ public final class VideoBillboardPreview {
     static void submitProjectorEmissiveGeometry(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera,
             VideoProjectorBlockEntity projector, Identifier renderTextureId, int textureWidth, int textureHeight) {
         submitProjectorGeometry(event, minecraft, camera, projector, renderTextureId, textureWidth, textureHeight,
-                0.0D, RenderTypes.itemCutout(renderTextureId), "projector-rgba-placeholder");
+                0.0D, shaderpackSafeEmissiveRgba(renderTextureId), "projector-rgba-placeholder");
     }
 
     static void submitProjectorPrivacyOverlay(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera,
@@ -2960,7 +3295,7 @@ public final class VideoBillboardPreview {
         }
         submitLocalTexturedQuad(collector, poseStack,
                 frame.emissiveRgba()
-                        ? RenderTypes.itemCutout(frame.rgbaTexture())
+                        ? shaderpackSafeEmissiveRgba(frame.rgbaTexture())
                         : YuvVideoRenderTypes.videoRgbaEntity(frame.rgbaTexture()),
                 -halfWidth, halfHeight, halfWidth, -halfHeight, rgbaDepthOffset, 1.0F);
         if (frame.loadingProgressOverlay()) {
@@ -3001,10 +3336,10 @@ public final class VideoBillboardPreview {
         submitLocalTexturedQuad(collector, poseStack,
                 frame.emissiveRgba()
                 ? (opacityRoute == VideoOpacityRoute.TRANSLUCENT
-                    ? RenderTypes.itemTranslucent(frame.rgbaTexture())
-                    : RenderTypes.itemCutout(frame.rgbaTexture()))
+                    ? shaderpackSafeTranslucentRgba(frame.rgbaTexture())
+                    : shaderpackSafeEmissiveRgba(frame.rgbaTexture()))
                 : (opacityRoute == VideoOpacityRoute.TRANSLUCENT
-                    ? RenderTypes.entityTranslucent(frame.rgbaTexture())
+                    ? shaderpackSafeTranslucentRgba(frame.rgbaTexture())
                     : YuvVideoRenderTypes.videoRgbaEntity(frame.rgbaTexture())),
                 -halfWidth, halfHeight, halfWidth, -halfHeight, rgbaDepthOffset, normalizedOpacity);
         if (frame.loadingProgressOverlay()) {
@@ -3036,11 +3371,11 @@ public final class VideoBillboardPreview {
         }
         float normalizedOpacity = VideoOpacityRoute.normalize(opacity);
         RenderType frameRenderType = route == VideoOpacityRoute.TRANSLUCENT
-                ? RenderTypes.itemTranslucent(LOADING_PROGRESS_FRAME_TEXTURE)
-                : RenderTypes.itemCutout(LOADING_PROGRESS_FRAME_TEXTURE);
+                ? shaderpackSafeTranslucentRgba(LOADING_PROGRESS_FRAME_TEXTURE)
+                : shaderpackSafeEmissiveRgba(LOADING_PROGRESS_FRAME_TEXTURE);
         RenderType segmentRenderType = route == VideoOpacityRoute.TRANSLUCENT
-                ? RenderTypes.itemTranslucent(LOADING_PROGRESS_SEGMENT_TEXTURE)
-                : RenderTypes.itemCutout(LOADING_PROGRESS_SEGMENT_TEXTURE);
+                ? shaderpackSafeTranslucentRgba(LOADING_PROGRESS_SEGMENT_TEXTURE)
+                : shaderpackSafeEmissiveRgba(LOADING_PROGRESS_SEGMENT_TEXTURE);
         submitLocalTexturedQuad(collector, poseStack, frameRenderType,
                 pixelLeft(LOADING_PROGRESS_X, halfWidth),
                 pixelTop(LOADING_PROGRESS_Y, halfHeight),
@@ -3068,6 +3403,18 @@ public final class VideoBillboardPreview {
                 pixelBottom(LOADING_PROGRESS_Y + 2 + LOADING_PROGRESS_SEGMENT_H, halfHeight),
                 -0.006F, normalizedOpacity);
         return true;
+    }
+
+    private static RenderType shaderpackSafeEmissiveRgba(Identifier texture) {
+        return IrisShaderpackCompat.isShaderPackInUse()
+                ? YuvVideoRenderTypes.videoRgbaEmissiveEntity(texture)
+                : RenderTypes.itemCutout(texture);
+    }
+
+    private static RenderType shaderpackSafeTranslucentRgba(Identifier texture) {
+        return IrisShaderpackCompat.isShaderPackInUse()
+                ? YuvVideoRenderTypes.videoRgbaTranslucentEntity(texture)
+                : RenderTypes.itemTranslucent(texture);
     }
 
     public static boolean submitProjectorPrivacyOverlayOnPose(
@@ -3273,7 +3620,7 @@ public final class VideoBillboardPreview {
                 String.format(java.util.Locale.ROOT, "%.2f", cameraPos.x),
                 String.format(java.util.Locale.ROOT, "%.2f", cameraPos.y),
                 String.format(java.util.Locale.ROOT, "%.2f", cameraPos.z),
-                isCustomYuvShaderAvailable(), yuvTextureSet != null);
+                isCustomYuvShaderAvailable(), LEGACY_TEXTURES.yuv() != null);
     }
 
     private static boolean ensureWorldAnchor(Minecraft minecraft, Camera camera, VideoProjectorBlockEntity projector) {
@@ -3286,7 +3633,7 @@ public final class VideoBillboardPreview {
             anchorInitialized = true;
             return true;
         }
-        if (activeRequiresProjector) {
+        if (LEGACY_PREVIEW.requiresProjector()) {
             // 正式投影仪会话在 TP/区块重载的一两帧里可能暂时拿不到 BE。
             // 这时绝不能退回到“玩家前方测试面”，否则只有本客户端会看到屏幕跟着玩家跑。
             anchorInitialized = false;
@@ -3359,7 +3706,7 @@ public final class VideoBillboardPreview {
     }
 
     private static VideoProjectorBlockEntity activeVideoProjector(Minecraft minecraft) {
-        BlockPos projectorPos = activeProjectorPos;
+        BlockPos projectorPos = LEGACY_PREVIEW.primaryProjector();
         if (projectorPos == null || minecraft.level == null) {
             return null;
         }
@@ -3373,15 +3720,16 @@ public final class VideoBillboardPreview {
             return List.of();
         }
         List<VideoProjectorBlockEntity> projectors = new ArrayList<>();
-        for (BlockPos pos : activeProjectorPositions) {
+        for (BlockPos pos : LEGACY_PREVIEW.projectors()) {
             if (minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector) {
                 projectors.add(projector);
             }
         }
-        activeProjectorPositions
-                .removeIf(pos -> !(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity)
+        LEGACY_PREVIEW.removeProjectorsIf(
+                pos -> !(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity)
                         && !isProjectorRenderedByBer(pos));
-        activeProjectorPos = projectors.isEmpty() ? null : projectors.get(0).getBlockPos().immutable();
+        LEGACY_PREVIEW.setPrimaryProjector(
+                projectors.isEmpty() ? null : projectors.get(0).getBlockPos().immutable());
         return projectors;
     }
 

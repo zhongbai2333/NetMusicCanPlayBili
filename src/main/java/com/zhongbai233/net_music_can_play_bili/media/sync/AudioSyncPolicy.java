@@ -4,17 +4,15 @@ package com.zhongbai233.net_music_can_play_bili.media.sync;
 public record AudioSyncPolicy(long catchUpStartTicks, long catchUpFullTicks, long outputLagFlushTicks,
         long fedNearTargetTicks, long flushAheadTicks) {
     public static AudioSyncPolicy fromSystemProperties() {
-        return new AudioSyncPolicy(
-                Long.getLong("bili.audio.sync.catch_up_start_ticks", 8L),
-                Long.getLong("bili.audio.sync.catch_up_full_ticks", 28L),
-                Long.getLong("bili.audio.timeline.flush_output_lag_ticks", 40L),
-                Long.getLong("bili.audio.timeline.output_lag_fed_near_target_ticks", 8L),
-                Long.getLong("ncpb.bili.audio.timeline.flush_ahead_ticks", 12L));
+        return AudioSyncProperties.policy();
     }
 
     public AudioSyncPolicy {
         catchUpStartTicks = Math.max(0L, catchUpStartTicks);
-        catchUpFullTicks = Math.max(catchUpStartTicks + 1L, catchUpFullTicks);
+        long minimumFullTicks = catchUpStartTicks == Long.MAX_VALUE
+                ? Long.MAX_VALUE
+                : catchUpStartTicks + 1L;
+        catchUpFullTicks = Math.max(minimumFullTicks, catchUpFullTicks);
         outputLagFlushTicks = Math.max(0L, outputLagFlushTicks);
         fedNearTargetTicks = Math.max(0L, fedNearTargetTicks);
         flushAheadTicks = Math.max(0L, flushAheadTicks);

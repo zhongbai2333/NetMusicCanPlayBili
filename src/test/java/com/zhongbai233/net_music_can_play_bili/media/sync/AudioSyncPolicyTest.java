@@ -36,4 +36,12 @@ class AudioSyncPolicyTest {
         assertEquals(legacyExpected, catchUp);
         assertTrue(catchUp <= 8);
     }
+
+    @Test
+    void keepsFullThresholdOrderedAtLongLimit() {
+        AudioSyncPolicy extreme = new AudioSyncPolicy(Long.MAX_VALUE, 0L, 0L, 0L, 0L);
+
+        assertEquals(Long.MAX_VALUE, extreme.catchUpStartTicks());
+        assertEquals(Long.MAX_VALUE, extreme.catchUpFullTicks());
+    }
 }

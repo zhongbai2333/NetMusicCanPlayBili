@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
 import com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.phys.Vec3;
 
@@ -10,13 +11,13 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /** Shared client-side audio routing rules for synchronized media devices. */
 public final class ClientMediaAudioRouting {
-    private static final Set<UUID> LOCAL_PRIVATE_SOURCES = ConcurrentHashMap.newKeySet();
+    private static final Set<PlaybackSourceId> LOCAL_PRIVATE_SOURCES = ConcurrentHashMap.newKeySet();
 
     private ClientMediaAudioRouting() {
     }
 
     public static boolean canHear(UUID deviceId, boolean headphoneRouted) {
-        if (deviceId != null && LOCAL_PRIVATE_SOURCES.contains(deviceId)) {
+        if (deviceId != null && LOCAL_PRIVATE_SOURCES.contains(PlaybackSourceId.of(deviceId))) {
             return true;
         }
         if (!HeadphoneClientState.equipped()) {
@@ -27,13 +28,13 @@ public final class ClientMediaAudioRouting {
 
     public static void registerLocalPrivateSource(UUID sourceId) {
         if (sourceId != null) {
-            LOCAL_PRIVATE_SOURCES.add(sourceId);
+            LOCAL_PRIVATE_SOURCES.add(PlaybackSourceId.of(sourceId));
         }
     }
 
     public static void unregisterLocalPrivateSource(UUID sourceId) {
         if (sourceId != null) {
-            LOCAL_PRIVATE_SOURCES.remove(sourceId);
+            LOCAL_PRIVATE_SOURCES.remove(PlaybackSourceId.of(sourceId));
         }
     }
 

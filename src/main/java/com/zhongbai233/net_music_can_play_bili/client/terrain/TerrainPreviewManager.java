@@ -8,6 +8,7 @@ import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainNeighborhoodI
 import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainFixedCorePolicy;
 import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainPackedLight;
 import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainTintColors;
+import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainMaterialAggregator;
 import com.zhongbai233.net_music_can_play_bili.terrain.core.WeightedLruCache;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -28,7 +29,7 @@ import java.util.Set;
 
 /**
  * 单活跃中控台地形会话。初始化中心周围使用固定直径 25 的球形实景核心，
- * 3 格边缘通过稳定空间抖动消隐；硬范围内其余地形仅发布聚合线框。
+ * 3 格边缘通过稳定空间抖动消隐；硬范围内其余已加载地形发布聚合材质网格，未知区块保留线框。
  * 相机移动不会改变表示层级，PIP 只消费渐进生成的不可变快照。
  */
 public final class TerrainPreviewManager {
@@ -165,6 +166,7 @@ public final class TerrainPreviewManager {
         private static final int COVERAGE_CANDIDATES_PER_TICK = 64;
         private static final int MAX_PENDING_SECTIONS = 512;
         private static final int MAX_UNKNOWN_SECTIONS = 256;
+        private static final int MAX_BLOCK_ENTITY_PREVIEWS = 128;
         private final ClientLevel level;
         private final BlockPos origin;
         private final TerrainBounds bounds;
@@ -180,6 +182,8 @@ public final class TerrainPreviewManager {
             new LinkedHashMap<>();
         private final LinkedHashMap<TerrainSectionKey, List<TerrainOverviewCell>> overviewBySection =
             new LinkedHashMap<>();
+        private final Set<BlockPos> blockEntityPositions = new HashSet<>();
+        private List<TerrainBlockEntityPreview> blockEntityPreviews = List.of();
         private final TerrainCoverageCursor coverageCursor;
         private final BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
         private TerrainPreviewFrame cachedFrame;
@@ -297,6 +301,7 @@ public final class TerrainPreviewManager {
                     break;
                 }
             }
+            refreshBlockEntityPreviews();
         }
 
         private void capture(TerrainSectionKey key) {
@@ -307,10 +312,12 @@ public final class TerrainPreviewManager {
             }
             if (!TerrainFixedCorePolicy.sectionMayContainDetail(coreCenterX, coreCenterY, coreCenterZ,
                     key.minBlockX(), key.minBlockY(), key.minBlockZ())) {
-                captureWireOnly(key);
+                captureMaterialLod(key);
                 return;
             }
             CapturedNeighborhood neighborhood = captureNeighborhood(key);
+            blockEntityPositions.removeIf(pos -> TerrainSectionKey.fromBlock(
+                    pos.getX(), pos.getY(), pos.getZ()).equals(key));
             List<TerrainBlockSectionSnapshot.VisibleBlock> detail = new ArrayList<>();
             List<TerrainBlockSectionSnapshot.VisibleBlock> wire = new ArrayList<>();
             for (int localY = 0; localY < TerrainSectionKey.SIZE; localY++) {
@@ -335,14 +342,19 @@ public final class TerrainPreviewManager {
                             continue;
                         }
                         cursor.set(worldX, worldY, worldZ);
-                        var block = new TerrainBlockSectionSnapshot.VisibleBlock(localX, localY, localZ, state,
+                        var block = new TerrainBlockSectionSnapshot.VisibleBlock(localX, localY, localZ, 1, state,
                             new TerrainTintColors(
                                 safeBlockTint(BiomeColors.GRASS_COLOR_RESOLVER),
                                 safeBlockTint(BiomeColors.FOLIAGE_COLOR_RESOLVER),
                                 safeBlockTint(BiomeColors.DRY_FOLIAGE_COLOR_RESOLVER),
-                                safeBlockTint(BiomeColors.WATER_COLOR_RESOLVER)));
+                                safeBlockTint(BiomeColors.WATER_COLOR_RESOLVER)),
+                            safeTintLayers(state), safePackedLightAtCursor());
                         if (rendersDetail(worldX, worldY, worldZ)) {
                             detail.add(block);
+                            if (state.hasBlockEntity()
+                                    && blockEntityPositions.size() < MAX_BLOCK_ENTITY_PREVIEWS) {
+                                blockEntityPositions.add(cursor.immutable());
+                            }
                         } else {
                             wire.add(block);
                         }
@@ -368,8 +380,8 @@ public final class TerrainPreviewManager {
             frameDirty = true;
         }
 
-        private void captureWireOnly(TerrainSectionKey key) {
-            List<TerrainBlockSectionSnapshot.VisibleBlock> wire = new ArrayList<>();
+        private void captureMaterialLod(TerrainSectionKey key) {
+            List<TerrainMaterialAggregator.Sample<BlockState>> visible = new ArrayList<>();
             for (int localY = 0; localY < TerrainSectionKey.SIZE; localY++) {
                 int worldY = key.minBlockY() + localY;
                 if (worldY < bounds.minY() || worldY > bounds.maxY()
@@ -388,17 +400,43 @@ public final class TerrainPreviewManager {
                         }
                         BlockState state = safeBlockState(worldX, worldY, worldZ);
                         if (state != null && isRenderableState(state)) {
-                            wire.add(new TerrainBlockSectionSnapshot.VisibleBlock(localX, localY, localZ, state));
+                            visible.add(new TerrainMaterialAggregator.Sample<>(localX, localY, localZ, state));
                         }
                     }
                 }
             }
-            sections.remove(key);
-            fullDetailSectionKeys.remove(key);
-            if (wire.isEmpty()) {
+            if (visible.isEmpty()) {
+                sections.remove(key);
+                fullDetailSectionKeys.remove(key);
                 overviewBySection.remove(key);
             } else {
-                overviewBySection.put(key, aggregateOverview(key, wire, overviewCellSize(key)));
+                int cellSize = overviewCellSize(key);
+                List<TerrainBlockSectionSnapshot.VisibleBlock> materialCells = new ArrayList<>();
+                long tintLayerCount = 0L;
+                for (TerrainMaterialAggregator.Cell<BlockState> cell
+                        : TerrainMaterialAggregator.aggregate(visible, cellSize)) {
+                    TerrainMaterialAggregator.Sample<BlockState> representative = cell.representative();
+                    int worldX = key.minBlockX() + representative.localX();
+                    int worldY = key.minBlockY() + representative.localY();
+                    int worldZ = key.minBlockZ() + representative.localZ();
+                    cursor.set(worldX, worldY, worldZ);
+                    List<Integer> tintLayers = safeTintLayers(representative.material());
+                    tintLayerCount += tintLayers.size();
+                    materialCells.add(new TerrainBlockSectionSnapshot.VisibleBlock(
+                            cell.localX(), cell.localY(), cell.localZ(), cell.size(),
+                            representative.material(), new TerrainTintColors(
+                                safeBlockTint(BiomeColors.GRASS_COLOR_RESOLVER),
+                                safeBlockTint(BiomeColors.FOLIAGE_COLOR_RESOLVER),
+                                safeBlockTint(BiomeColors.DRY_FOLIAGE_COLOR_RESOLVER),
+                                safeBlockTint(BiomeColors.WATER_COLOR_RESOLVER)),
+                            tintLayers, safePackedLightAtCursor()));
+                }
+                long estimatedBytes = ESTIMATED_SECTION_BASE_BYTES
+                        + materialCells.size() * ESTIMATED_VISIBLE_BLOCK_BYTES
+                        + tintLayerCount * Integer.BYTES;
+                sections.put(key, new TerrainBlockSectionSnapshot(key, materialCells, estimatedBytes));
+                fullDetailSectionKeys.add(key);
+                overviewBySection.remove(key);
             }
             frameDirty = true;
         }
@@ -555,6 +593,81 @@ public final class TerrainPreviewManager {
             }
         }
 
+        /** Freezes every registered vanilla/mod tint layer on the client thread. */
+        private List<Integer> safeTintLayers(BlockState state) {
+            try {
+                var sources = Minecraft.getInstance().getBlockColors().getTintSources(state);
+                if (sources.isEmpty()) {
+                    return List.of();
+                }
+                List<Integer> colors = new ArrayList<>(Math.min(sources.size(), 32));
+                for (int index = 0; index < sources.size() && index < 32; index++) {
+                    try {
+                        colors.add(sources.get(index).colorInWorld(state, level, cursor));
+                    } catch (Throwable incompatibleTintSource) {
+                        if (incompatibleTintSource instanceof VirtualMachineError fatal) {
+                            throw fatal;
+                        }
+                        colors.add(-1);
+                    }
+                }
+                return List.copyOf(colors);
+            } catch (Throwable incompatibleBlockColors) {
+                if (incompatibleBlockColors instanceof VirtualMachineError fatal) {
+                    throw fatal;
+                }
+                return List.of();
+            }
+        }
+
+        private void refreshBlockEntityPreviews() {
+            if (blockEntityPositions.isEmpty()) {
+                if (!blockEntityPreviews.isEmpty()) {
+                    blockEntityPreviews = List.of();
+                    frameDirty = true;
+                }
+                return;
+            }
+            List<TerrainBlockEntityPreview> refreshed = new ArrayList<>(blockEntityPositions.size());
+            for (BlockPos pos : blockEntityPositions) {
+                if (refreshed.size() >= MAX_BLOCK_ENTITY_PREVIEWS || !level.hasChunkAt(pos)) {
+                    continue;
+                }
+                try {
+                    var blockEntity = level.getBlockEntity(pos);
+                    if (blockEntity == null) {
+                        continue;
+                    }
+                    var preview = extractBlockEntityPreview(blockEntity);
+                    if (preview != null) {
+                        refreshed.add(preview);
+                    }
+                } catch (Throwable incompatibleBlockEntity) {
+                    if (incompatibleBlockEntity instanceof VirtualMachineError fatal) {
+                        throw fatal;
+                    }
+                }
+            }
+            blockEntityPreviews = List.copyOf(refreshed);
+            frameDirty = true;
+        }
+
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        private static TerrainBlockEntityPreview extractBlockEntityPreview(
+                net.minecraft.world.level.block.entity.BlockEntity blockEntity) {
+            var dispatcher = Minecraft.getInstance().getBlockEntityRenderDispatcher();
+            net.minecraft.client.renderer.blockentity.BlockEntityRenderer renderer =
+                    dispatcher.getRenderer(blockEntity);
+            if (renderer == null) {
+                return null;
+            }
+            net.minecraft.client.renderer.blockentity.state.BlockEntityRenderState state =
+                    (net.minecraft.client.renderer.blockentity.state.BlockEntityRenderState) renderer.createRenderState();
+            renderer.extractRenderState(blockEntity, state, 0.0F,
+                    net.minecraft.world.phys.Vec3.atCenterOf(blockEntity.getBlockPos()), null);
+            return new TerrainBlockEntityPreview(blockEntity.getBlockPos(), state);
+        }
+
         private record CapturedNeighborhood(List<BlockState> states, byte[] light) {
         }
 
@@ -586,6 +699,7 @@ public final class TerrainPreviewManager {
                 cachedFrame = new TerrainPreviewFrame(generation, origin.getX(), origin.getY(), origin.getZ(),
                     coreCenterX, coreCenterY, coreCenterZ, bounds,
                     overview, wireframe, List.of(), values, fullDetailSectionKeys, removedSections,
+                    blockEntityPreviews,
                     pending.size(), sections.size() + overviewBySection.size());
             frameDirty = false;
             return cachedFrame;
@@ -601,6 +715,8 @@ public final class TerrainPreviewManager {
             fullDetailSectionKeys.clear();
             unknownSections.clear();
             overviewBySection.clear();
+            blockEntityPositions.clear();
+            blockEntityPreviews = List.of();
         }
 
         private void markChunkUnloaded(int chunkX, int chunkZ) {
@@ -609,6 +725,8 @@ public final class TerrainPreviewManager {
                 sections.remove(key);
                 fullDetailSectionKeys.remove(key);
                 overviewBySection.remove(key);
+                blockEntityPositions.removeIf(pos -> TerrainSectionKey.fromBlock(
+                        pos.getX(), pos.getY(), pos.getZ()).equals(key));
                 pending.removeIf(key::equals);
                 queued.remove(key);
                 removedSections.add(key);

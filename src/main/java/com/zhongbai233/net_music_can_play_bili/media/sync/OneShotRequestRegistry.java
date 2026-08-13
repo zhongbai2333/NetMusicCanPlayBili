@@ -1,7 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.media.sync;
 
 import java.util.Objects;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -14,27 +13,28 @@ import java.util.function.Supplier;
  * </p>
  */
 public final class OneShotRequestRegistry<T> {
-    private final ConcurrentHashMap<String, Entry<T>> entries = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<MediaRequestToken, Entry<T>> entries = new ConcurrentHashMap<>();
     private final LongSupplier clock;
-    private final Supplier<String> tokenFactory;
+    private final Supplier<MediaRequestToken> tokenFactory;
 
     public OneShotRequestRegistry() {
-        this(System::currentTimeMillis, () -> UUID.randomUUID().toString());
+        this(System::currentTimeMillis, MediaRequestToken::random);
     }
 
-    OneShotRequestRegistry(LongSupplier clock, Supplier<String> tokenFactory) {
+    OneShotRequestRegistry(LongSupplier clock, Supplier<MediaRequestToken> tokenFactory) {
         this.clock = Objects.requireNonNull(clock, "clock");
         this.tokenFactory = Objects.requireNonNull(tokenFactory, "tokenFactory");
     }
 
     public String register(T value, long expiresAtMillis) {
+        return registerToken(value, expiresAtMillis).value();
+    }
+
+    public MediaRequestToken registerToken(T value, long expiresAtMillis) {
         Objects.requireNonNull(value, "value");
         cleanupExpired();
         while (true) {
-            String token = Objects.requireNonNull(tokenFactory.get(), "token");
-            if (token.isBlank()) {
-                throw new IllegalStateException("request token must not be blank");
-            }
+            MediaRequestToken token = Objects.requireNonNull(tokenFactory.get(), "token");
             if (entries.putIfAbsent(token, new Entry<>(value, expiresAtMillis)) == null) {
                 return token;
             }
@@ -42,7 +42,11 @@ public final class OneShotRequestRegistry<T> {
     }
 
     public T consume(String token) {
-        if (token == null || token.isBlank()) {
+        return MediaRequestToken.parse(token).map(this::consumeToken).orElse(null);
+    }
+
+    public T consumeToken(MediaRequestToken token) {
+        if (token == null) {
             return null;
         }
         Entry<T> entry = entries.remove(token);
@@ -50,7 +54,11 @@ public final class OneShotRequestRegistry<T> {
     }
 
     public boolean contains(String token) {
-        if (token == null || token.isBlank()) {
+        return MediaRequestToken.parse(token).map(this::containsToken).orElse(false);
+    }
+
+    public boolean containsToken(MediaRequestToken token) {
+        if (token == null) {
             return false;
         }
         Entry<T> entry = entries.get(token);
@@ -65,7 +73,11 @@ public final class OneShotRequestRegistry<T> {
     }
 
     public void cancel(String token) {
-        if (token != null && !token.isBlank()) {
+        MediaRequestToken.parse(token).ifPresent(this::cancelToken);
+    }
+
+    public void cancelToken(MediaRequestToken token) {
+        if (token != null) {
             entries.remove(token);
         }
     }

@@ -24,8 +24,7 @@ import java.nio.ByteBuffer;
  */
 final class Nv12UvTexture extends AbstractTexture {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final boolean RG8_ENABLED = Boolean.parseBoolean(
-            System.getProperty("ncpb.video.nv12.uv_rg8", "true"));
+    private static final boolean RG8_ENABLED = VideoPipelineProperties.upload().nv12UvRg8Enabled();
 
     private final String label;
     private int width;

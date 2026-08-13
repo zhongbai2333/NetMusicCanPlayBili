@@ -10,6 +10,15 @@ final class VideoRestartSuppressionPolicy {
         return pauseEnabled && !liveSource;
     }
 
+    static boolean shouldPauseDecodeOffscreen(boolean candidateCommitted,
+            boolean liveSource, boolean pauseEnabled) {
+        // A startup candidate may already own a provisional native frame whose
+        // exact probe ticket still needs a caller commit/reject. Pausing the
+        // consumer at that point strands the packet-drain transaction and
+        // prevents the first-frame budget or fallback from terminating.
+        return candidateCommitted && shouldPauseOffscreen(liveSource, pauseEnabled);
+    }
+
     static boolean allowsRestart(boolean liveSource, boolean restartInProgress,
             long sinceDecoderStartMillis, long stabilizationMillis) {
         if (liveSource || restartInProgress) {

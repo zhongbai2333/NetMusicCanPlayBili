@@ -49,6 +49,27 @@ class ControlConsoleConsumerLeaseRegistryTest {
         assertFalse(ControlConsoleConsumerLeaseRegistry.hasActive(key, 6_001L));
     }
 
+    @Test
+    void diagnosticSnapshotIsExactAndExcludesExpiredLeases() {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        UUID otherConsole = UUID.randomUUID();
+        UUID otherDimension = UUID.randomUUID();
+        ControlConsoleConsumerLeaseRegistry.acquireOrRenew(key(first), 1_000L);
+        ControlConsoleConsumerLeaseRegistry.acquireOrRenew(key(second), 2_000L);
+        ControlConsoleConsumerLeaseRegistry.acquireOrRenew(
+                new ControlConsoleConsumerLeaseRegistry.Key("minecraft:overworld", 99L, otherConsole), 2_000L);
+        ControlConsoleConsumerLeaseRegistry.acquireOrRenew(
+                new ControlConsoleConsumerLeaseRegistry.Key("minecraft:the_nether", 42L, otherDimension), 2_000L);
+
+        assertEquals(java.util.Set.of(first, second),
+                ControlConsoleConsumerLeaseRegistry.activePlayers("minecraft:overworld", 42L, 2_500L));
+        assertEquals(java.util.Set.of(second),
+                ControlConsoleConsumerLeaseRegistry.activePlayers("minecraft:overworld", 42L, 4_000L));
+        assertTrue(ControlConsoleConsumerLeaseRegistry.activePlayers(
+                "minecraft:overworld", 42L, 5_000L).isEmpty());
+    }
+
     private static ControlConsoleConsumerLeaseRegistry.Key key(UUID playerId) {
         return new ControlConsoleConsumerLeaseRegistry.Key("minecraft:overworld", 42L, playerId);
     }

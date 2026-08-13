@@ -10,10 +10,12 @@ import org.slf4j.Logger;
 import org.lwjgl.system.MemoryUtil;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker.Category;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseExecutor;
 
 import javax.sound.sampled.UnsupportedAudioFileException;
 import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.SequenceInputStream;
@@ -41,38 +43,31 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private static final int CODEC_H264 = 7;
     private static final int CODEC_AV1 = 13;
-    private static final int MAX_PENDING_FRAMES = Integer.getInteger("ncpb.video.native.max_pending_frames", 8);
-    private static final int FMP4_INIT_PROBE_BYTES = Integer.getInteger("ncpb.video.native.seek.init_probe_bytes",
-            4 * 1024 * 1024);
-    private static final int FMP4_MOOF_SCAN_BYTES = Integer.getInteger("ncpb.video.native.seek.moof_scan_bytes",
-            8 * 1024 * 1024);
-    private static final int FMP4_SEEK_MAX_ATTEMPTS = Integer.getInteger("ncpb.video.native.seek.max_attempts", 12);
-    private static final long FMP4_SEEK_PREROLL_BYTES = Long.getLong("ncpb.video.native.seek.preroll_bytes",
-            1L * 1024L * 1024L);
-    private static final double FMP4_CLOSE_FRAGMENT_SECONDS = Double.parseDouble(
-            System.getProperty("ncpb.video.native.seek.close_fragment_seconds", "3.0"));
-    private static final double FMP4_TARGET_EPSILON_SECONDS = Double.parseDouble(
-            System.getProperty("ncpb.video.native.seek.target_epsilon_seconds", "0.25"));
-    private static final double FMP4_SEEK_LEAD_SECONDS = Double.parseDouble(
-            System.getProperty("ncpb.video.native.seek.lead_seconds", "0.0"));
-    private static final boolean FMP4_RANGE_SEEK_ENABLED = Boolean.parseBoolean(
-            System.getProperty("ncpb.video.native.seek.enabled", "false"));
-    private static final long FMP4_RANGE_SEEK_AUTO_OFFSET_MILLIS = Long.getLong(
-            "bili.video.native.seek.auto_offset_ms", 5_000L);
-    private static final double FMP4_FALLBACK_MAX_RESIDUAL_SECONDS = Double.parseDouble(
-            System.getProperty("ncpb.video.native.seek.fallback_max_residual_seconds", "-1.0"));
+    private static final Fmp4NativeVideoProperties.Decoder PROPERTIES = Fmp4NativeVideoProperties.decoder();
+    private static final Fmp4NativeVideoProperties.Seek SEEK = Fmp4NativeVideoProperties.seek();
+    private static final Fmp4NativeVideoProperties.FirstFrameProbe FIRST_FRAME_PROBE =
+            Fmp4NativeVideoProperties.firstFrameProbe();
+    private static final int MAX_PENDING_FRAMES = PROPERTIES.maxPendingFrames();
+    private static final int FMP4_INIT_PROBE_BYTES = SEEK.initProbeBytes();
+    private static final int FMP4_MOOF_SCAN_BYTES = SEEK.moofScanBytes();
+    private static final int FMP4_SEEK_MAX_ATTEMPTS = SEEK.maxAttempts();
+    private static final long FMP4_SEEK_PREROLL_BYTES = SEEK.prerollBytes();
+    private static final double FMP4_CLOSE_FRAGMENT_SECONDS = SEEK.closeFragmentSeconds();
+    private static final double FMP4_TARGET_EPSILON_SECONDS = SEEK.targetEpsilonSeconds();
+    private static final double FMP4_SEEK_LEAD_SECONDS = SEEK.leadSeconds();
+    private static final boolean FMP4_RANGE_SEEK_ENABLED = SEEK.rangeEnabled();
+    private static final long FMP4_RANGE_SEEK_AUTO_OFFSET_MILLIS = SEEK.autoOffsetMillis();
+    private static final double FMP4_FALLBACK_MAX_RESIDUAL_SECONDS = SEEK.fallbackMaxResidualSeconds();
     private static final long FMP4_SAFE_NO_COPY_DROP_GUARD_NANOS = Math.max(0L,
-            Long.getLong("bili.video.native.seek.no_copy_drop_guard_ms", 1_000L) * 1_000_000L);
-    private static final int FMP4_STREAM_RECOVERY_ATTEMPTS = Integer.getInteger(
-            "bili.video.native.stream_recovery_attempts", 3);
+            SEEK.noCopyDropGuardMillis() * 1_000_000L);
+    private static final int FMP4_STREAM_RECOVERY_ATTEMPTS = PROPERTIES.streamRecoveryAttempts();
+    private static final int DECODER_CLOSE_MAX_ATTEMPTS = 3;
+    private static final long DECODER_CLOSE_INITIAL_BACKOFF_MILLIS = 25L;
     private static final byte[] DECODE_ONLY_FRAME = new byte[0];
-    private static final boolean REUSE_OUTPUT_BUFFERS = Boolean.parseBoolean(
-            System.getProperty("ncpb.video.native.reuse_output_buffers", "true"));
-    private static final boolean DIRECT_NV12_BUFFERS = Boolean.parseBoolean(
-            System.getProperty("ncpb.video.native.direct_nv12_buffers", "true"));
+    private static final boolean REUSE_OUTPUT_BUFFERS = PROPERTIES.reuseOutputBuffers();
+    private static final boolean DIRECT_NV12_BUFFERS = PROPERTIES.directNv12Buffers();
     private static final long SEGMENT_BASE_TTL_MILLIS = TimeUnit.MINUTES.toMillis(30);
-    private static final int MAX_SEGMENT_BASE_ENTRIES = Integer.getInteger(
-            "bili.video.segment_base_cache.max_entries", 512);
+    private static final int MAX_SEGMENT_BASE_ENTRIES = PROPERTIES.segmentBaseCacheMaxEntries();
     private static final ConcurrentHashMap<String, SegmentBaseInfo> SEGMENT_BASE_BY_URL = new ConcurrentHashMap<>();
 
     /** fMP4 模式下的媒体地址；直播总线模式为 null。 */
@@ -88,15 +83,18 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private final long startOffsetMillis;
     private final long totalMillis;
     private final int fps;
-    private final BlockingQueue<DecodedFrame> frames = new ArrayBlockingQueue<>(MAX_PENDING_FRAMES);
+    private final BlockingQueue<QueuedDecodedFrame> frames = new ArrayBlockingQueue<>(MAX_PENDING_FRAMES);
     private final BlockingQueue<byte[]> reusableBuffers = new ArrayBlockingQueue<>(MAX_PENDING_FRAMES);
     private final NativeNv12BufferPool nativeNv12Buffers = new NativeNv12BufferPool(MAX_PENDING_FRAMES);
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean finished = new AtomicBoolean(false);
-    private final AtomicBoolean decoderClosed = new AtomicBoolean(false);
+    private final AtomicBoolean physicalCloseScheduled = new AtomicBoolean(false);
+    private final AtomicReference<DecoderCloseState> decoderCloseState = new AtomicReference<>(
+            DecoderCloseState.OPEN);
+    private final CompletableFuture<Void> decoderCloseCompletion = new CompletableFuture<>();
     private final CompletableFuture<Void> termination = new CompletableFuture<>();
-    private final AtomicReference<InputStream> activeInput = new AtomicReference<>();
+    private final TrackedInputRegistry trackedInputs = new TrackedInputRegistry();
     private final VideoNativeDecoder decoder;
     private final HttpRangeClient http = new HttpRangeClient();
 
@@ -114,10 +112,12 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private int streamTimescale;
     private final java.util.ArrayDeque<Long> pendingDecodedPtsNanos = new java.util.ArrayDeque<>();
     private volatile IOException failure;
-    private Thread worker;
+    private volatile Thread worker;
     private int parsedMoofCount;
     private int parsedSampleCount;
-    private int sentPacketCount;
+    private volatile int sentPacketCount;
+    private volatile Av1FirstFrameProbe activeFirstFrameProbe;
+    private volatile Thread firstFrameProbeConsumer;
     private boolean decoderStageLogged;
     private int receivedFrameCount;
     private int droppedFrameCount;
@@ -251,21 +251,72 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     }
 
     public DecodedFrame getNextDecodedFrame() throws IOException {
+        Av1FirstFrameProbe probe = activeFirstFrameProbe;
+        if (probe != null) {
+            Av1FirstFrameProbe.Decision decision = probe.decision();
+            if (decision != Av1FirstFrameProbe.Decision.COMMITTED
+                    && decision != Av1FirstFrameProbe.Decision.CANCELLED) {
+                throw new IOException("AV1 首帧探测进行中不允许使用无界 getter");
+            }
+        }
+        return awaitNextDecodedFrame();
+    }
+
+    /**
+     * Starts the lazy worker with the bounded AV1 hardware-candidate probe. The
+     * regular getter remains unbounded for H.264, live video, and benchmark paths.
+     */
+    public DecodedFrame getNextDecodedFrameWithAv1FirstFrameProbe() throws IOException {
+        if (codecId != CODEC_AV1) {
+            throw new IOException("AV1 首帧预算只能用于 AV1 decoder: codecId=" + codecId);
+        }
+        synchronized (this) {
+            Thread currentConsumer = Thread.currentThread();
+            if (firstFrameProbeConsumer != null && firstFrameProbeConsumer != currentConsumer) {
+                throw new IOException("AV1 首帧探测只允许单消费者");
+            }
+            firstFrameProbeConsumer = currentConsumer;
+            if (activeFirstFrameProbe == null && started.get()) {
+                throw new IOException("AV1 首帧预算必须在 decoder worker 启动前设置");
+            }
+            if (activeFirstFrameProbe == null) {
+                activeFirstFrameProbe = new Av1FirstFrameProbe(System.nanoTime(),
+                        FIRST_FRAME_PROBE.timeoutMillis(), FIRST_FRAME_PROBE.maxPackets());
+            }
+            ensureStarted();
+        }
+        return awaitNextDecodedFrame();
+    }
+
+    /** Commits the hardware candidate only after the caller accepted a frame. */
+    public void commitAv1FirstFrameProbe(DecodedFrame frame) throws IOException {
+        Av1FirstFrameProbe probe = activeFirstFrameProbe;
+        long ticket = frame != null ? frame.probeTicket() : -1L;
+        if (probe == null || !probe.commit(ticket)) {
+            throw new IOException("AV1 首帧候选提交已失效: ticket=" + ticket);
+        }
+    }
+
+    /** Rejects a delivered probe frame while preserving the original budgets. */
+    public void rejectAv1FirstFrameProbeFrame(DecodedFrame frame) throws IOException {
+        Av1FirstFrameProbe probe = activeFirstFrameProbe;
+        long ticket = frame != null ? frame.probeTicket() : -1L;
+        if (probe == null) {
+            throw new IOException("AV1 首帧候选拒绝已失效: ticket=" + ticket);
+        }
+        if (probe.reject(ticket) || probe.decision() == Av1FirstFrameProbe.Decision.CANCELLED) {
+            return;
+        }
+        throw new IOException("AV1 首帧候选拒绝已失效: ticket=" + ticket);
+    }
+
+    private DecodedFrame awaitNextDecodedFrame() throws IOException {
         ensureStarted();
         long waitStartNs = System.nanoTime();
         while (true) {
-            DecodedFrame frame;
-            try {
-                frame = frames.poll(250L, TimeUnit.MILLISECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                if (closed.get() || finished.get()) {
-                    return null;
-                }
-                throw new IOException("等待 native 视频帧时被中断", e);
-            }
-            if (frame != null) {
-                return frame.withQueueWaitNanos(System.nanoTime() - waitStartNs);
+            QueuedDecodedFrame ready = frames.poll();
+            if (ready != null) {
+                return acceptQueuedFrame(ready, waitStartNs);
             }
             if (finished.get()) {
                 if (failure != null) {
@@ -276,7 +327,62 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             if (closed.get()) {
                 return null;
             }
+            IOException budgetFailure = firstFrameBudgetFailureIfIdle();
+            if (budgetFailure != null) {
+                signalCancel();
+                throw budgetFailure;
+            }
+            try {
+                ready = frames.poll(nextFramePollNanos(), TimeUnit.NANOSECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                if (closed.get() || finished.get()) {
+                    return null;
+                }
+                throw new IOException("等待 native 视频帧时被中断", e);
+            }
+            if (ready != null) {
+                return acceptQueuedFrame(ready, waitStartNs);
+            }
         }
+    }
+
+    private DecodedFrame acceptQueuedFrame(QueuedDecodedFrame queued, long waitStartNanos) throws IOException {
+        return queued.frame.withProbeTicket(queued.probeTicket)
+                .withQueueWaitNanos(System.nanoTime() - waitStartNanos);
+    }
+
+    private long nextFramePollNanos() {
+        Av1FirstFrameProbe probe = activeFirstFrameProbe;
+        Av1FirstFrameProbe.Decision decision = probe != null ? probe.decision() : null;
+        if (probe == null || decision == Av1FirstFrameProbe.Decision.COMMITTED) {
+            return TimeUnit.MILLISECONDS.toNanos(250L);
+        }
+        long timeoutNanos = TimeUnit.MILLISECONDS.toNanos(probe.timeoutMillis());
+        long remainingNanos = timeoutNanos - Math.max(0L, System.nanoTime() - probe.startedNanos());
+        if (remainingNanos <= 0L
+                && (decision == Av1FirstFrameProbe.Decision.DRAIN_IN_FLIGHT
+                        || decision == Av1FirstFrameProbe.Decision.FRAME_PENDING)) {
+            // The wall-clock deadline closes admission for another packet, but an
+            // already admitted native packet must still drain to EAGAIN (or wait
+            // for the exact provisional-frame decision). Avoid a 1ns busy poll
+            // while that bounded transaction owns the probe lease.
+            return TimeUnit.MILLISECONDS.toNanos(50L);
+        }
+        return Math.max(1L, Math.min(TimeUnit.MILLISECONDS.toNanos(50L), remainingNanos));
+    }
+
+    private IOException firstFrameBudgetFailureIfIdle() {
+        Av1FirstFrameProbe probe = activeFirstFrameProbe;
+        if (probe == null) {
+            return null;
+        }
+        // Packet exhaustion is authoritative only after the worker has drained
+        // the just-sent packet to EAGAIN. The consumer may enforce wall time,
+        // but must not cancel packet #max while it is still producing output.
+        Av1FirstFrameProbe.Decision decision = probe.evaluateConsumerTimeNow();
+        long elapsedNanos = Math.max(0L, System.nanoTime() - probe.startedNanos());
+        return isProbeFailure(decision) ? firstFrameProbeFailure(decision, probe, elapsedNanos) : null;
     }
 
     public int getTotalFrames() {
@@ -284,23 +390,33 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     }
 
     private void ensureStarted() {
-        if (!started.compareAndSet(false, true)) {
-            return;
-        }
-        worker = new Thread(() -> {
+        synchronized (this) {
+            if (started.get() || closed.get()) {
+                return;
+            }
+            started.set(true);
+            Thread created = new Thread(() -> {
+                try {
+                    parseAndDecode();
+                } catch (IOException e) {
+                    failure = e;
+                } finally {
+                    finished.set(true);
+                    closed.set(true);
+                    schedulePhysicalTermination(Thread.currentThread());
+                }
+            }, "bili-native-video-decoder");
+            created.setDaemon(true);
+            worker = created;
             try {
-                parseAndDecode();
-            } catch (IOException e) {
-                failure = e;
-            } finally {
+                created.start();
+            } catch (RuntimeException | Error startFailure) {
                 finished.set(true);
                 closed.set(true);
-                closeDecoderOnce();
-                termination.complete(null);
+                schedulePhysicalTermination(created);
+                throw startFailure;
             }
-        }, "bili-native-video-decoder");
-        worker.setDaemon(true);
-        worker.start();
+        }
     }
 
     private void parseAndDecode() throws IOException {
@@ -310,9 +426,10 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
         long streamStartOffsetMillis = startOffsetMillis;
         int recoveries = 0;
-        while (!closed.get() && totalFrames < maxFrames) {
+        while (!closed.get() && (totalFrames < maxFrames || hasActiveUncommittedProbe())) {
             try {
                 parseStreamOnce(streamStartOffsetMillis);
+                drainNaturalEndOfStream();
                 break;
             } catch (UnsupportedAudioFileException e) {
                 throw new IOException(e);
@@ -326,6 +443,43 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                 logger().warn("Native video stream interrupted ({}), recovery {}/{} from ~{}ms",
                         e.getMessage(), recoveries, FMP4_STREAM_RECOVERY_ATTEMPTS, streamStartOffsetMillis);
                 resetParserStateForRecovery();
+            }
+        }
+    }
+
+    private void drainNaturalEndOfStream() throws IOException {
+        if (closed.get() || totalFrames >= maxFrames) {
+            return;
+        }
+        Av1FirstFrameProbe probe = activeFirstFrameProbe;
+        Av1FirstFrameProbe.PacketPermit eofPermit = null;
+        if (probe != null && probe.decision() != Av1FirstFrameProbe.Decision.COMMITTED) {
+            Av1FirstFrameProbe.PacketAdmission admission = probe.beginEndOfStreamDrainNow();
+            if (!admission.admitted()) {
+                if (isProbeFailure(admission.decision())) {
+                    throw firstFrameProbeFailure(admission.decision(), probe,
+                            Math.max(0L, System.nanoTime() - probe.startedNanos()));
+                }
+                if (admission.decision() == Av1FirstFrameProbe.Decision.CANCELLED) {
+                    return;
+                }
+                throw new IOException("AV1 EOF drain 无法取得首帧探测 lease: decision="
+                        + admission.decision());
+            }
+            eofPermit = admission.permit();
+        }
+        if (!decoder.sendEndOfStream()) {
+            if (probe != null && eofPermit != null) {
+                probe.endPacket(eofPermit, Av1FirstFrameProbe.PacketEnd.ABORTED);
+            }
+            logger().debug("当前 native bundle 不支持视频 EOF drain；保持 v38 兼容行为");
+            return;
+        }
+        try {
+            drainFrames(eofPermit);
+        } finally {
+            if (probe != null && eofPermit != null) {
+                probe.endPacket(eofPermit, Av1FirstFrameProbe.PacketEnd.DRAINED);
             }
         }
     }
@@ -374,8 +528,9 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
 
     private void parseStreamOnce(long offsetMillis) throws IOException, UnsupportedAudioFileException {
         Fmp4StreamStart seekStart = openStreamStart(offsetMillis);
-        InputStream stream = activateInput(seekStart.stream());
-        try (stream) {
+        InputStream stream = trackInput(seekStart.stream());
+        Throwable streamFailure = null;
+        try {
             logger().debug("视频 fMP4 解码流开始: offset={}ms fragment={}s residual={}s output={} target={}x{} codecId={}",
                     offsetMillis, seekStart.fragmentSeconds(), seekStart.residualSeconds(), outputFormat,
                     targetWidth, targetHeight, codecId);
@@ -455,22 +610,34 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             if (containerKind == Fmp4StreamParser.ContainerKind.OTHER_AUDIO) {
                 throw new UnsupportedAudioFileException("video stream is not fMP4 video");
             }
+        } catch (IOException | UnsupportedAudioFileException | RuntimeException | Error error) {
+            streamFailure = error;
+            throw error;
         } finally {
-            activeInput.compareAndSet(stream, null);
+            CompletableFuture<Void> closeOutcome = closeInputTracked(stream);
+            try {
+                closeOutcome.join();
+            } catch (java.util.concurrent.CompletionException closeError) {
+                if (streamFailure != null) {
+                    streamFailure.addSuppressed(closeError.getCause());
+                } else {
+                    throw new IOException("native video input close failed", closeError.getCause());
+                }
+            }
         }
     }
 
-    private InputStream activateInput(InputStream stream) throws IOException {
-        activeInput.set(stream);
-        if (closed.get() && activeInput.compareAndSet(stream, null)) {
-            closeQuietly(stream);
+    private InputStream trackInput(InputStream stream) throws IOException {
+        InputStream tracked = trackedInputs.track(stream);
+        if (closed.get()) {
+            trackedInputs.beginClose();
             throw new IOException("native video decoder closed");
         }
-        return stream;
+        return tracked;
     }
 
-    private void closeActiveInput() {
-        closeQuietly(activeInput.getAndSet(null));
+    private CompletableFuture<Void> closeInputTracked(InputStream stream) {
+        return trackedInputs.closeAsync(stream);
     }
 
     private long estimateCurrentOffsetMillis() {
@@ -515,11 +682,11 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private Fmp4StreamStart openStreamStart(long offsetMillis) throws IOException {
         if (offsetMillis <= 1_000L) {
             HttpRangeClient.CdnResponse response = http.get(videoUrl);
+            InputStream body = trackInput(response.body());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                response.close();
-                throw new IOException("DASH video HTTP " + response.statusCode());
+                throw closeBeforeThrow(body, new IOException("DASH video HTTP " + response.statusCode()));
             }
-            return new Fmp4StreamStart(response.body(), 0.0F, 0.0D);
+            return new Fmp4StreamStart(body, 0.0F, 0.0D);
         }
 
         boolean shouldTryRangeSeek = FMP4_RANGE_SEEK_ENABLED
@@ -536,11 +703,11 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                         ? Math.min(requestedResidualSeconds, FMP4_FALLBACK_MAX_RESIDUAL_SECONDS)
                         : requestedResidualSeconds);
         HttpRangeClient.CdnResponse response = http.get(videoUrl);
+        InputStream body = trackInput(response.body());
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            response.close();
-            throw new IOException("DASH video HTTP " + response.statusCode());
+            throw closeBeforeThrow(body, new IOException("DASH video HTTP " + response.statusCode()));
         }
-        return new Fmp4StreamStart(response.body(), fallbackResidualSeconds, 0.0D);
+        return new Fmp4StreamStart(body, fallbackResidualSeconds, 0.0D);
     }
 
     private Fmp4StreamStart tryOpenRangeSeek(long offsetMillis) {
@@ -609,12 +776,13 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                 float residualSeconds = Fmp4RangeSeekSupport.residualSeconds(targetSeconds, candidate,
                         durationSeconds, contentLength, absoluteMoofOffset);
                 residualSeconds = Math.max(0.0F, residualSeconds - (targetSeconds - playbackSeconds));
-                InputStream tail = new SequenceInputStream(
-                        new ByteArrayInputStream(probe.bytes(), candidate.offset(),
-                                probe.bytes().length - candidate.offset()),
-                        range.stream());
+                InputStream probePrefix = trackInput(new ByteArrayInputStream(probe.bytes(), candidate.offset(),
+                        probe.bytes().length - candidate.offset()));
+                InputStream tail = trackInput(new SequenceInputStream(probePrefix, range.stream()));
+                InputStream initPrefix = trackInput(new ByteArrayInputStream(init.bytes()));
+                InputStream combined = trackInput(
+                        new SequenceInputStream(initPrefix, tail));
                 lastRange = null;
-                InputStream combined = new SequenceInputStream(new ByteArrayInputStream(init.bytes()), tail);
                 logger().debug(
                         "视频fMP4 RangeSeek: target={}s fragment={}s residual={}s timelineStart={}s byte={} totalBytes={} probe={}ms host={}",
                         playbackSeconds, candidate.fragmentSeconds(), residualSeconds, startOffsetMillis / 1000.0D,
@@ -638,12 +806,17 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         if (info == null) {
             return null;
         }
-        try (HttpRangeClient.CdnResponse response = http.getRange(videoUrl, info.indexStart(), info.indexEnd())) {
+        InputStream indexStream = null;
+        InputStream rangeStream = null;
+        try {
+            HttpRangeClient.CdnResponse response = http.getRange(videoUrl, info.indexStart(), info.indexEnd());
+            indexStream = trackInput(response.body());
             int status = response.statusCode();
             if (status != 206 && status != 200) {
                 return null;
             }
-            byte[] sidxBytes = readAllBytes(response.body(), Math.max(1L, info.indexEnd() - info.indexStart() + 1L));
+            byte[] sidxBytes = readAllBytes(indexStream,
+                    Math.max(1L, info.indexEnd() - info.indexStart() + 1L));
             Fmp4RangeSeekSupport.SidxIndex sidx = Fmp4RangeSeekSupport.parseSidx(sidxBytes, info.indexStart());
             if (sidx == null || sidx.entries().isEmpty()) {
                 return null;
@@ -653,12 +826,11 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                 selected = sidx.entries().get(0);
             }
             ChunkRange range = openRange(selected.byteStart());
-            InputStream stream = range.stream();
-            Fmp4RangeSeekSupport.MoofProbe probe = Fmp4RangeSeekSupport.readMoofProbe(stream, targetSeconds,
+            rangeStream = range.stream();
+            Fmp4RangeSeekSupport.MoofProbe probe = Fmp4RangeSeekSupport.readMoofProbe(rangeStream, targetSeconds,
                     init.timescale() > 0 ? init.timescale() : 16_000, FMP4_MOOF_SCAN_BYTES,
                     FMP4_TARGET_EPSILON_SECONDS, FMP4_CLOSE_FRAGMENT_SECONDS);
             if (probe == null) {
-                closeQuietly(stream);
                 return null;
             }
             Fmp4RangeSeekSupport.MoofCandidate candidate = probe.candidate();
@@ -666,18 +838,19 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     FMP4_TARGET_EPSILON_SECONDS)) {
                 logger().debug("视频fMP4 SidxSeek 命中目标之后 fragment，回退 Moof RangeSeek: target={}s fragment={}s byte={}",
                         targetSeconds, candidate.fragmentSeconds(), selected.byteStart());
-                closeQuietly(stream);
                 return null;
             }
             double fragmentSeconds = !Double.isNaN(candidate.fragmentSeconds()) ? candidate.fragmentSeconds()
                     : selected.timeSeconds();
             float residualSeconds = (float) Math.max(0.0D, targetSeconds - fragmentSeconds);
             residualSeconds = Math.max(0.0F, residualSeconds - (targetSeconds - playbackSeconds));
-            InputStream tail = new SequenceInputStream(
-                    new ByteArrayInputStream(probe.bytes(), candidate.offset(),
-                            probe.bytes().length - candidate.offset()),
-                    stream);
-            InputStream combined = new SequenceInputStream(new ByteArrayInputStream(init.bytes()), tail);
+            InputStream probePrefix = trackInput(new ByteArrayInputStream(probe.bytes(), candidate.offset(),
+                    probe.bytes().length - candidate.offset()));
+            InputStream tail = trackInput(new SequenceInputStream(probePrefix, rangeStream));
+            InputStream initPrefix = trackInput(new ByteArrayInputStream(init.bytes()));
+            InputStream combined = trackInput(
+                    new SequenceInputStream(initPrefix, tail));
+            rangeStream = null;
             logger().debug(
                     "视频fMP4 SidxSeek: target={}s fragment={}s residual={}s timelineStart={}s byte={} totalBytes={} probe={}ms host={}",
                     playbackSeconds, fragmentSeconds, residualSeconds, startOffsetMillis / 1000.0D,
@@ -689,6 +862,9 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         } catch (IOException | RuntimeException e) {
             logger().debug("Native video fMP4 sidx seek unavailable: {}", e.getMessage());
             return null;
+        } finally {
+            closeQuietly(rangeStream);
+            closeQuietly(indexStream);
         }
     }
 
@@ -736,7 +912,9 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     }
 
     private Fmp4RangeSeekSupport.InitSegment readInitSegment() throws IOException {
-        try (HttpRangeClient.CdnResponse response = http.getRange(videoUrl, 0L, FMP4_INIT_PROBE_BYTES - 1L)) {
+        HttpRangeClient.CdnResponse response = http.getRange(videoUrl, 0L, FMP4_INIT_PROBE_BYTES - 1L);
+        InputStream body = trackInput(response.body());
+        try (TrackedInputLease ignored = new TrackedInputLease(body)) {
             int status = response.statusCode();
             if (status != 206 && status != 200) {
                 throw new IOException("HTTP " + status + " while probing fMP4 init segment");
@@ -747,7 +925,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             Fmp4RangeSeekSupport.InitSegment init = null;
             while (prefix.size() < FMP4_INIT_PROBE_BYTES) {
                 int request = Math.min(buffer.length, FMP4_INIT_PROBE_BYTES - prefix.size());
-                int n = response.body().read(buffer, 0, request);
+                int n = body.read(buffer, 0, request);
                 if (n < 0) {
                     break;
                 }
@@ -769,7 +947,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     }
 
     private ChunkRange openRange(long start) throws IOException {
-        return new ChunkRange(new ChunkPrefetchInputStream(videoUrl, start));
+        return new ChunkRange(trackInput(new ChunkPrefetchInputStream(videoUrl, start)));
     }
 
     private static float seekTargetSeconds(float playbackSeconds, double durationSeconds) {
@@ -781,13 +959,41 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         return (float) Math.max(0.0D, Math.min(upperBound, playbackSeconds + FMP4_SEEK_LEAD_SECONDS));
     }
 
-    private static void closeQuietly(InputStream stream) {
+    private IOException closeBeforeThrow(InputStream stream, IOException failure) {
+        try {
+            awaitInputClose(closeInputTracked(stream));
+        } catch (IOException closeFailure) {
+            failure.addSuppressed(closeFailure);
+        }
+        return failure;
+    }
+
+    private static void awaitInputClose(CompletableFuture<Void> closeOutcome) throws IOException {
+        try {
+            closeOutcome.join();
+        } catch (java.util.concurrent.CompletionException error) {
+            Throwable cause = error.getCause() != null ? error.getCause() : error;
+            throw new IOException("native video input close failed", cause);
+        }
+    }
+
+    private void closeQuietly(InputStream stream) {
         if (stream == null) {
             return;
         }
-        try {
-            stream.close();
-        } catch (IOException ignored) {
+        closeInputTracked(stream);
+    }
+
+    private final class TrackedInputLease implements AutoCloseable {
+        private final InputStream stream;
+
+        private TrackedInputLease(InputStream stream) {
+            this.stream = stream;
+        }
+
+        @Override
+        public void close() throws IOException {
+            awaitInputClose(closeInputTracked(stream));
         }
     }
 
@@ -851,7 +1057,37 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             return;
         }
         byte[] packet = packetizeSample(mp4Sample);
-        if (!decoder.sendPacket(packet, samplePtsNanos)) {
+        Av1FirstFrameProbe probe = activeFirstFrameProbe;
+        Av1FirstFrameProbe.PacketPermit packetPermit = null;
+        if (probe != null) {
+            Av1FirstFrameProbe.PacketAdmission admission = probe.beginPacketNow();
+            if (admission.admitted()) {
+                packetPermit = admission.permit();
+            } else if (!admission.bypassedAfterCommit()) {
+                Av1FirstFrameProbe.Decision decision = admission.decision();
+                if (decision == Av1FirstFrameProbe.Decision.CANCELLED || closed.get()) {
+                    return;
+                }
+                if (isProbeFailure(decision)) {
+                    throw firstFrameProbeFailure(decision, probe,
+                            Math.max(0L, System.nanoTime() - probe.startedNanos()));
+                }
+                throw new IOException("AV1 首帧探测拒绝新媒体包: decision=" + decision);
+            }
+        }
+        boolean sent;
+        try {
+            sent = decoder.sendPacket(packet, samplePtsNanos);
+        } catch (RuntimeException | Error error) {
+            if (probe != null && packetPermit != null) {
+                probe.endPacket(packetPermit, Av1FirstFrameProbe.PacketEnd.ABORTED);
+            }
+            throw error;
+        }
+        if (!sent) {
+            if (probe != null && packetPermit != null) {
+                probe.endPacket(packetPermit, Av1FirstFrameProbe.PacketEnd.SEND_REJECTED);
+            }
             logger().error(
                     "视频 native sendPacket 失败: codecId={} sampleBytes={} packetBytes={} ptsNanos={} sentPackets={} parsedMoofs={}",
                     codecId, mp4Sample.length, packet.length, samplePtsNanos, sentPacketCount, parsedMoofCount);
@@ -859,12 +1095,49 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     "VideoNativeDecoder.sendPacket failed codecId=" + codecId + ", packet=" + packet.length);
         }
         sentPacketCount++;
+        if (probe != null && packetPermit != null) {
+            Av1FirstFrameProbe.PacketTransition transition = probe.markPacketSent(packetPermit);
+            if (!transition.applied()) {
+                probe.endPacket(packetPermit, Av1FirstFrameProbe.PacketEnd.ABORTED);
+                throw new IOException("AV1 首帧探测 packet permit 已失效: ordinal="
+                        + packetPermit.ordinal() + ", decision=" + transition.decision());
+            }
+            if (transition.decision() == Av1FirstFrameProbe.Decision.CANCELLED || closed.get()) {
+                probe.endPacket(packetPermit, Av1FirstFrameProbe.PacketEnd.ABORTED);
+                return;
+            }
+        }
         if (sentPacketCount <= 3) {
             logger().debug("视频 native packet 已发送: index={} sampleBytes={} packetBytes={} ptsNanos={}",
                     sentPacketCount, mp4Sample.length, packet.length, samplePtsNanos);
         }
         pendingDecodedPtsNanos.addLast(samplePtsNanos);
-        drainFrames();
+        try {
+            drainFrames(packetPermit);
+        } finally {
+            if (probe != null && packetPermit != null) {
+                // No-op after a normal EAGAIN boundary. On cancellation or an
+                // exceptional drain this clears the exact lease without ever
+                // admitting another packet.
+                probe.endPacket(packetPermit, Av1FirstFrameProbe.PacketEnd.ABORTED);
+            }
+        }
+    }
+
+    private IOException firstFrameProbeFailure(Av1FirstFrameProbe.Decision decision,
+            Av1FirstFrameProbe probe, long elapsedNanos) {
+        String exhausted = decision == Av1FirstFrameProbe.Decision.PACKET_EXHAUSTED
+                ? "packet" : "time";
+        return new IOException("AV1 首帧探测预算耗尽: exhausted=" + exhausted
+                + ", elapsedMs=" + TimeUnit.NANOSECONDS.toMillis(elapsedNanos)
+                + ", sentPackets=" + probe.successfulPackets()
+                + ", timeoutMs=" + probe.timeoutMillis()
+                + ", maxPackets=" + probe.maxPackets());
+    }
+
+    private static boolean isProbeFailure(Av1FirstFrameProbe.Decision decision) {
+        return decision == Av1FirstFrameProbe.Decision.TIME_EXHAUSTED
+                || decision == Av1FirstFrameProbe.Decision.PACKET_EXHAUSTED;
     }
 
     private byte[] packetizeSample(byte[] mp4Sample) throws IOException {
@@ -888,17 +1161,18 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         return annexB.toByteArray();
     }
 
-    private void drainFrames() {
+    private void drainFrames(Av1FirstFrameProbe.PacketPermit packetPermit) throws IOException {
         if (!outputFrames) {
-            drainFramesNoOutput();
+            drainFramesNoOutput(packetPermit);
             return;
         }
-        while (totalFrames < maxFrames) {
-            if (drainDropFrameNoOutput()) {
+        while (!closed.get() && (packetPermit != null || totalFrames < maxFrames)) {
+            if (drainDropFrameNoOutput(packetPermit)) {
                 continue;
             }
             long nativeStartNs = System.nanoTime();
             DecodedFrame frame = getNextOutputFrame();
+            long frameReadyNanos = System.nanoTime();
             long nativeGetNs = System.nanoTime() - nativeStartNs;
             if (frame == null) {
                 if (!decoderStageLogged && sentPacketCount <= 3) {
@@ -906,9 +1180,22 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     logger().debug("视频 native 暂无输出帧: sentPackets={} parsedMoofs={} pendingPts={} nativeGet={}us",
                             sentPacketCount, parsedMoofCount, pendingDecodedPtsNanos.size(), nativeGetNs / 1_000L);
                 }
+                finishProbePacketDrain(packetPermit);
                 return;
             }
+            if (packetPermit != null && totalFrames >= maxFrames) {
+                // A committed probe may reach maxFrames before the packet that
+                // produced it has drained completely. Preserve FFmpeg's
+                // send/drain-to-EAGAIN contract, but do not enqueue or count
+                // additional output beyond the public frame cap.
+                if (!pendingDecodedPtsNanos.isEmpty()) {
+                    pendingDecodedPtsNanos.removeFirst();
+                }
+                frame.close();
+                continue;
+            }
             boolean enqueued = false;
+            boolean discardFrame = false;
             try {
                 frame = frame.withNativeGetNanos(nativeGetNs);
                 Long fallbackPtsNanos = pendingDecodedPtsNanos.isEmpty() ? null : pendingDecodedPtsNanos.removeFirst();
@@ -938,22 +1225,44 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                 }
                 long relativePtsNanos = mediaPtsNanos - startOffsetMillis * 1_000_000L;
                 frame = frame.withPtsNanos(Math.max(0L, relativePtsNanos));
+                FrameOffer frameOffer = FrameOffer.notOffered();
                 while (!closed.get()) {
                     try {
-                        if (frames.offer(frame, 250L, TimeUnit.MILLISECONDS)) {
+                        frameOffer = offerDecodedFrame(frame, packetPermit, frameReadyNanos,
+                                250L, TimeUnit.MILLISECONDS);
+                        if (frameOffer.discarded()) {
+                            discardFrame = true;
+                            break;
+                        }
+                        if (frameOffer.offered()) {
                             enqueued = true;
                             break;
                         }
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
-                        closed.set(true);
-                        return;
+                        if (closed.get()) {
+                            return;
+                        }
+                        throw new IOException("等待 AV1 首帧内部队列时被中断", e);
                     }
                 }
                 if (closed.get()) {
                     return;
                 }
-                totalFrames++;
+                if (discardFrame) {
+                    continue;
+                }
+                boolean provisionalProbeFrame = frameOffer.probeTicket() > 0L;
+                if (!provisionalProbeFrame) {
+                    totalFrames++;
+                }
+                if (!awaitProbeFrameDecision(frameOffer.probeTicket())) {
+                    return;
+                }
+                if (provisionalProbeFrame
+                        && activeFirstFrameProbe.decision() == Av1FirstFrameProbe.Decision.COMMITTED) {
+                    totalFrames++;
+                }
             } finally {
                 if (!enqueued) {
                     frame.close();
@@ -962,7 +1271,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         }
     }
 
-    private boolean drainDropFrameNoOutput() {
+    private boolean drainDropFrameNoOutput(Av1FirstFrameProbe.PacketPermit packetPermit) throws IOException {
         boolean hasPendingRealPts = !pendingDecodedPtsNanos.isEmpty()
                 && pendingDecodedPtsNanos.peekFirst() != null
                 && pendingDecodedPtsNanos.peekFirst().longValue() >= 0L;
@@ -980,6 +1289,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         if (!decoder.receiveFrameNoCopy()) {
             return false;
         }
+        long frameReadyNanos = System.nanoTime();
         receivedFrameCount++;
         Long fallbackPtsNanos = pendingDecodedPtsNanos.isEmpty() ? null : pendingDecodedPtsNanos.removeFirst();
         long samplePtsNanos = decoder.lastFramePtsNanos();
@@ -995,6 +1305,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         if (shouldDropByFallback && fallbackFramesToDrop > 0) {
             fallbackFramesToDrop--;
         }
+        acknowledgeDroppedProbeFrame(packetPermit, frameReadyNanos);
         droppedFrameCount++;
         if (!dropStageLogged && droppedFrameCount <= 3) {
             dropStageLogged = true;
@@ -1005,6 +1316,23 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                     pendingDecodedPtsNanos.size());
         }
         return true;
+    }
+
+    private void acknowledgeDroppedProbeFrame(Av1FirstFrameProbe.PacketPermit packetPermit,
+            long frameReadyNanos) throws IOException {
+        Av1FirstFrameProbe probe = activeFirstFrameProbe;
+        if (probe == null || packetPermit == null) {
+            return;
+        }
+        Av1FirstFrameProbe.FramePreparation preparation = probe.prepareFrame(packetPermit, frameReadyNanos);
+        if (preparation.hasTicket()) {
+            probe.reject(preparation.ticket());
+            return;
+        }
+        if (isProbeFailure(preparation.decision())) {
+            throw firstFrameProbeFailure(preparation.decision(), probe,
+                    Math.max(0L, System.nanoTime() - probe.startedNanos()));
+        }
     }
 
     private boolean shouldDropDecodedFrame(long mediaPtsNanos, boolean hasRealPts) {
@@ -1073,28 +1401,165 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         return frame;
     }
 
-    private void drainFramesNoOutput() {
-        while (totalFrames < maxFrames) {
+    private void drainFramesNoOutput(Av1FirstFrameProbe.PacketPermit packetPermit) throws IOException {
+        while (!closed.get() && (packetPermit != null || totalFrames < maxFrames)) {
             if (!decoder.receiveFrameNoCopy()) {
+                finishProbePacketDrain(packetPermit);
                 return;
             }
+            long frameReadyNanos = System.nanoTime();
+            if (packetPermit != null && totalFrames >= maxFrames) {
+                if (!pendingDecodedPtsNanos.isEmpty()) {
+                    pendingDecodedPtsNanos.removeFirst();
+                }
+                continue;
+            }
+            FrameOffer frameOffer = FrameOffer.notOffered();
+            boolean discardFrame = false;
             while (!closed.get()) {
                 try {
-                    if (frames.offer(DecodedFrame.wrap(DECODE_ONLY_FRAME, DecodedFrame.Format.RGBA), 250L,
-                            TimeUnit.MILLISECONDS)) {
+                    frameOffer = offerDecodedFrame(
+                            DecodedFrame.wrap(DECODE_ONLY_FRAME, DecodedFrame.Format.RGBA),
+                            packetPermit, frameReadyNanos,
+                            250L, TimeUnit.MILLISECONDS);
+                    if (frameOffer.discarded()) {
+                        discardFrame = true;
+                        break;
+                    }
+                    if (frameOffer.offered()) {
                         break;
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    closed.set(true);
-                    return;
+                    if (closed.get()) {
+                        return;
+                    }
+                    throw new IOException("等待 AV1 首帧内部队列时被中断", e);
                 }
             }
             if (closed.get()) {
                 return;
             }
-            totalFrames++;
+            if (discardFrame) {
+                continue;
+            }
+            boolean provisionalProbeFrame = frameOffer.probeTicket() > 0L;
+            if (!provisionalProbeFrame) {
+                totalFrames++;
+            }
+            if (!awaitProbeFrameDecision(frameOffer.probeTicket())) {
+                return;
+            }
+            if (provisionalProbeFrame
+                    && activeFirstFrameProbe.decision() == Av1FirstFrameProbe.Decision.COMMITTED) {
+                totalFrames++;
+            }
         }
+    }
+
+    private FrameOffer offerDecodedFrame(DecodedFrame frame,
+            Av1FirstFrameProbe.PacketPermit packetPermit, long frameReadyNanos,
+            long timeout, TimeUnit unit)
+            throws InterruptedException, IOException {
+        Av1FirstFrameProbe probe = activeFirstFrameProbe;
+        long ticket = -1L;
+        long probeElapsedNanos = -1L;
+        if (probe != null) {
+            Av1FirstFrameProbe.FramePreparation preparation = probe.prepareFrame(packetPermit, frameReadyNanos);
+            probeElapsedNanos = probe.pendingFrameElapsedNanos();
+            if (isProbeFailure(preparation.decision())) {
+                long failureElapsedNanos = Math.max(0L, System.nanoTime() - probe.startedNanos());
+                throw firstFrameProbeFailure(preparation.decision(), probe, failureElapsedNanos);
+            }
+            if (preparation.decision() == Av1FirstFrameProbe.Decision.CANCELLED) {
+                return FrameOffer.notOffered();
+            }
+            if (preparation.decision() == Av1FirstFrameProbe.Decision.DRAIN_IN_FLIGHT) {
+                return FrameOffer.discardedFrame();
+            }
+            if (preparation.hasTicket()) {
+                ticket = preparation.ticket();
+            } else {
+                probeElapsedNanos = -1L;
+            }
+        }
+        boolean offered = false;
+        try {
+            offered = frames.offer(new QueuedDecodedFrame(frame, probeElapsedNanos, ticket), timeout, unit);
+            return new FrameOffer(offered, false, offered ? ticket : -1L);
+        } finally {
+            if (!offered && probe != null && ticket > 0L) {
+                probe.cancelPreparedFrame(ticket);
+            }
+        }
+    }
+
+    private boolean awaitProbeFrameDecision(long ticket) throws IOException {
+        if (ticket <= 0L) {
+            return !closed.get();
+        }
+        Av1FirstFrameProbe probe = activeFirstFrameProbe;
+        if (probe == null) {
+            throw new IOException("AV1 首帧探测 ticket 已丢失: ticket=" + ticket);
+        }
+        Av1FirstFrameProbe.Decision decision;
+        try {
+            decision = probe.awaitFrameDecision(ticket, closed);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            if (closed.get()) {
+                return false;
+            }
+            throw new IOException("等待 AV1 首帧候选确认时被中断", error);
+        }
+        if (decision == Av1FirstFrameProbe.Decision.COMMITTED
+                || decision == Av1FirstFrameProbe.Decision.CONTINUE
+                || decision == Av1FirstFrameProbe.Decision.DRAIN_IN_FLIGHT) {
+            // Whether accepted or rejected, continue receiving from the current
+            // packet to EAGAIN before the next sendPacket call.
+            return !closed.get();
+        }
+        if (decision == Av1FirstFrameProbe.Decision.CANCELLED || closed.get()) {
+            return false;
+        }
+        long elapsedNanos = Math.max(0L, System.nanoTime() - probe.startedNanos());
+        if (isProbeFailure(decision)) {
+            throw firstFrameProbeFailure(decision, probe, elapsedNanos);
+        }
+        throw new IOException("AV1 首帧探测未能完成 ticket 决策: ticket=" + ticket
+                + ", decision=" + decision);
+    }
+
+    private void finishProbePacketDrain(Av1FirstFrameProbe.PacketPermit packetPermit) throws IOException {
+        Av1FirstFrameProbe probe = activeFirstFrameProbe;
+        if (probe == null || packetPermit == null) {
+            return;
+        }
+        long elapsedNanos = Math.max(0L, System.nanoTime() - probe.startedNanos());
+        Av1FirstFrameProbe.PacketTransition transition = probe.endPacket(
+                packetPermit, Av1FirstFrameProbe.PacketEnd.DRAINED);
+        if (!transition.applied()) {
+            throw new IOException("AV1 首帧探测未能完成 packet drain: ordinal="
+                    + packetPermit.ordinal() + ", decision=" + transition.decision());
+        }
+        Av1FirstFrameProbe.Decision decision = transition.decision();
+        if (isProbeFailure(decision)) {
+            throw firstFrameProbeFailure(decision, probe, elapsedNanos);
+        }
+        if (decision == Av1FirstFrameProbe.Decision.FRAME_PENDING) {
+            throw new IOException("AV1 首帧探测在 packet drain 边界仍有未确认帧");
+        }
+    }
+
+    private boolean hasActiveUncommittedProbe() {
+        Av1FirstFrameProbe probe = activeFirstFrameProbe;
+        if (probe == null) {
+            return false;
+        }
+        Av1FirstFrameProbe.Decision decision = probe.decision();
+        return decision == Av1FirstFrameProbe.Decision.CONTINUE
+                || decision == Av1FirstFrameProbe.Decision.DRAIN_IN_FLIGHT
+                || decision == Av1FirstFrameProbe.Decision.FRAME_PENDING;
     }
 
     private static void writeLengthPrefixedSampleAsAnnexB(byte[] sample, int lengthSize, ByteArrayOutputStream out)
@@ -1138,7 +1603,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         return false;
     }
 
-    private static DecoderConfig extractDecoderConfig(byte[] moovData, int codecId) {
+    static DecoderConfig extractDecoderConfig(byte[] moovData, int codecId) {
         String configBox = codecId == CODEC_AV1 ? "av1C" : "avcC";
         byte[] config = findBoxPayloadRecursive(moovData, configBox);
         if (config == null) {
@@ -1294,25 +1759,44 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                 logger().warn("Native video decoder worker did not stop within 2000ms: {}", videoUrl);
             }
         }
-        if (thread == null || thread == Thread.currentThread() || !thread.isAlive()) {
-            closeDecoderOnce();
-            termination.complete(null);
+        if (thread == null || !thread.isAlive()) {
+            schedulePhysicalTermination(thread);
         }
-        DecodedFrame frame;
-        while ((frame = frames.poll()) != null) {
-            frame.close();
-        }
+        releaseQueuedFrames();
         reusableBuffers.clear();
         nativeNv12Buffers.retire();
     }
 
     /** Requests cancellation without waiting for the decoder worker to exit. */
     public void requestClose() {
-        closed.set(true);
-        closeActiveInput();
-        Thread thread = worker;
-        if (thread != null) {
-            thread.interrupt();
+        Thread thread;
+        synchronized (this) {
+            closed.set(true);
+            Av1FirstFrameProbe probe = activeFirstFrameProbe;
+            if (probe != null) {
+                probe.cancel();
+            }
+            thread = worker;
+            if (thread != null) {
+                thread.interrupt();
+            }
+        }
+        // Every stream opened during init/range/seek is registered before use.
+        // Provider close calls stay off the cancellation caller thread.
+        trackedInputs.beginClose();
+        if (thread == null || !thread.isAlive()) {
+            schedulePhysicalTermination(thread);
+        }
+    }
+
+    private void signalCancel() {
+        requestClose();
+    }
+
+    private void releaseQueuedFrames() {
+        QueuedDecodedFrame frame;
+        while ((frame = frames.poll()) != null) {
+            frame.frame.close();
         }
     }
 
@@ -1321,16 +1805,282 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
      * handle is closed.
      */
     public CompletableFuture<Void> terminationFuture() {
-        return termination;
+        return termination.copy();
     }
 
-    private void closeDecoderOnce() {
-        if (decoderClosed.compareAndSet(false, true)) {
-            decoder.close();
+    private void schedulePhysicalTermination(Thread workerToObserve) {
+        trackedInputs.beginClose();
+        if (!physicalCloseScheduled.compareAndSet(false, true)) {
+            return;
+        }
+        CompletableFuture<Void> closeTask = MediaCloseExecutor.closeAsyncStrict(() -> {
+            awaitWorkerExit(workerToObserve);
+            completeTerminationAfterDecoderClose();
+        }, "native video physical termination");
+        closeTask.whenComplete((ignored, error) -> {
+            if (error != null) {
+                termination.completeExceptionally(error);
+            }
+        });
+    }
+
+    private static void awaitWorkerExit(Thread thread) {
+        if (thread == null || thread == Thread.currentThread()) {
+            return;
+        }
+        boolean interrupted = false;
+        while (thread.isAlive()) {
+            try {
+                thread.join();
+            } catch (InterruptedException ignored) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 
-    private record DecoderConfig(int nalLengthSize, byte[] packetPrefix) {
+    private void completeTerminationAfterDecoderClose() {
+        trackedInputs.beginClose();
+        closeDecoderOnce();
+        CompletableFuture<Void> physicalClose = CompletableFuture.allOf(
+                decoderCloseCompletion, trackedInputs.completionSnapshot());
+        physicalClose.whenComplete((ignored, error) -> {
+            if (error == null) {
+                termination.complete(null);
+            } else {
+                termination.completeExceptionally(error);
+            }
+        });
+    }
+
+    private void closeDecoderOnce() {
+        DecoderCloseState current = decoderCloseState.get();
+        if (current != DecoderCloseState.OPEN) {
+            return;
+        }
+        if (!decoderCloseState.compareAndSet(DecoderCloseState.OPEN, DecoderCloseState.CLOSING)) {
+            return;
+        }
+        Throwable closeFailure = closeWithBoundedRetry(decoder::close, DECODER_CLOSE_MAX_ATTEMPTS,
+                DECODER_CLOSE_INITIAL_BACKOFF_MILLIS, Thread::sleep,
+                (attempt, delayMillis, error) -> logger().warn(
+                        "Native video decoder handle close attempt {}/{} failed; retrying in {}ms",
+                        attempt, DECODER_CLOSE_MAX_ATTEMPTS, delayMillis, error));
+        if (closeFailure == null) {
+            decoderCloseState.set(DecoderCloseState.CLOSED);
+            decoderCloseCompletion.complete(null);
+        } else {
+            decoderCloseState.set(DecoderCloseState.FAILED);
+            decoderCloseCompletion.completeExceptionally(closeFailure);
+            logger().error("Native video decoder handle close failed after {} attempts; termination is exceptional",
+                    DECODER_CLOSE_MAX_ATTEMPTS, closeFailure);
+        }
+    }
+
+    static Throwable closeWithBoundedRetry(CloseOperation operation, int maxAttempts,
+            long initialBackoffMillis, RetrySleeper sleeper, CloseRetryListener retryListener) {
+        if (maxAttempts < 1) {
+            throw new IllegalArgumentException("maxAttempts must be positive");
+        }
+        long delayMillis = Math.max(0L, initialBackoffMillis);
+        Throwable previousFailure = null;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                operation.close();
+                return null;
+            } catch (Throwable failure) {
+                if (previousFailure != null && previousFailure != failure) {
+                    failure.addSuppressed(previousFailure);
+                }
+                previousFailure = failure;
+                if (attempt >= maxAttempts) {
+                    return failure;
+                }
+                try {
+                    retryListener.onRetry(attempt, delayMillis, failure);
+                } catch (Throwable listenerFailure) {
+                    failure.addSuppressed(listenerFailure);
+                }
+                try {
+                    sleeper.sleep(delayMillis);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    interrupted.addSuppressed(failure);
+                    return interrupted;
+                }
+                delayMillis = delayMillis > Long.MAX_VALUE / 2L ? Long.MAX_VALUE : delayMillis * 2L;
+            }
+        }
+        throw new AssertionError("unreachable bounded close state");
+    }
+
+    @FunctionalInterface
+    interface CloseOperation {
+        void close() throws Throwable;
+    }
+
+    @FunctionalInterface
+    interface RetrySleeper {
+        void sleep(long millis) throws InterruptedException;
+    }
+
+    @FunctionalInterface
+    interface CloseRetryListener {
+        void onRetry(int failedAttempt, long delayMillis, Throwable failure);
+    }
+
+    @FunctionalInterface
+    interface InputCloseScheduler {
+        CompletableFuture<Void> closeAsync(AutoCloseable resource, String description);
+    }
+
+    static final class TrackedInputRegistry {
+        private final java.util.IdentityHashMap<InputStream, TrackedInput> aliases =
+                new java.util.IdentityHashMap<>();
+        private final List<TrackedInput> inputs = new ArrayList<>();
+        private final InputCloseScheduler closeScheduler;
+        private CompletableFuture<Void> completion = CompletableFuture.completedFuture(null);
+        private boolean closing;
+
+        TrackedInputRegistry() {
+            this(MediaCloseExecutor::closeAsyncStrict);
+        }
+
+        TrackedInputRegistry(InputCloseScheduler closeScheduler) {
+            this.closeScheduler = closeScheduler;
+        }
+
+        InputStream track(InputStream stream) {
+            if (stream == null) {
+                throw new IllegalArgumentException("stream must not be null");
+            }
+            TrackedInput tracked;
+            boolean closeNow;
+            synchronized (this) {
+                tracked = aliases.get(stream);
+                if (tracked == null) {
+                    tracked = addTracked(stream);
+                }
+                closeNow = closing;
+            }
+            if (closeNow) {
+                tracked.closeAsync();
+            }
+            return tracked.exposedStream();
+        }
+
+        CompletableFuture<Void> closeAsync(InputStream stream) {
+            if (stream == null) {
+                return CompletableFuture.completedFuture(null);
+            }
+            TrackedInput tracked;
+            synchronized (this) {
+                tracked = aliases.get(stream);
+                if (tracked == null) {
+                    tracked = addTracked(stream);
+                }
+            }
+            tracked.closeAsync();
+            return tracked.outcome();
+        }
+
+        void beginClose() {
+            List<TrackedInput> snapshot;
+            synchronized (this) {
+                closing = true;
+                snapshot = new ArrayList<>(inputs);
+            }
+            for (TrackedInput tracked : snapshot) {
+                tracked.closeAsync();
+            }
+        }
+
+        synchronized CompletableFuture<Void> completionSnapshot() {
+            return completion;
+        }
+
+        synchronized int trackedCount() {
+            return inputs.size();
+        }
+
+        private TrackedInput addTracked(InputStream stream) {
+            TrackedInput tracked = new TrackedInput(stream, closeScheduler);
+            inputs.add(tracked);
+            aliases.put(stream, tracked);
+            aliases.put(tracked.exposedStream(), tracked);
+            completion = CompletableFuture.allOf(completion, tracked.outcome());
+            return tracked;
+        }
+    }
+
+    private static final class TrackedInput {
+        private final InputStream stream;
+        private final InputStream exposedStream;
+        private final InputCloseScheduler closeScheduler;
+        private final AtomicBoolean closeStarted = new AtomicBoolean(false);
+        private final CompletableFuture<Void> outcome = new CompletableFuture<>();
+
+        private TrackedInput(InputStream stream, InputCloseScheduler closeScheduler) {
+            this.stream = stream;
+            this.closeScheduler = closeScheduler;
+            this.exposedStream = new FilterInputStream(stream) {
+                @Override
+                public void close() {
+                    TrackedInput.this.closeAsync();
+                }
+            };
+        }
+
+        private InputStream exposedStream() {
+            return exposedStream;
+        }
+
+        private CompletableFuture<Void> outcome() {
+            return outcome;
+        }
+
+        private void closeAsync() {
+            if (!closeStarted.compareAndSet(false, true)) {
+                return;
+            }
+            try {
+                closeScheduler.closeAsync(stream, "native video tracked input")
+                        .whenComplete((ignored, error) -> {
+                            if (error == null) {
+                                outcome.complete(null);
+                            } else {
+                                outcome.completeExceptionally(error);
+                            }
+                        });
+            } catch (Throwable schedulingFailure) {
+                outcome.completeExceptionally(schedulingFailure);
+            }
+        }
+    }
+
+    private enum DecoderCloseState {
+        OPEN,
+        CLOSING,
+        CLOSED,
+        FAILED
+    }
+
+    record DecoderConfig(int nalLengthSize, byte[] packetPrefix) {
+    }
+
+    private record QueuedDecodedFrame(DecodedFrame frame, long probeElapsedNanos, long probeTicket) {
+    }
+
+    private record FrameOffer(boolean offered, boolean discarded, long probeTicket) {
+        private static FrameOffer notOffered() {
+            return new FrameOffer(false, false, -1L);
+        }
+
+        private static FrameOffer discardedFrame() {
+            return new FrameOffer(false, true, -1L);
+        }
     }
 
     public enum OutputFormat {
@@ -1354,6 +2104,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         private long ptsNanos;
         private long nativeGetNanos;
         private long queueWaitNanos;
+        private long probeTicket = -1L;
         private final AtomicBoolean closed = new AtomicBoolean(false);
 
         private DecodedFrame(byte[] data, Format format, Runnable release) {
@@ -1448,6 +2199,10 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             return queueWaitNanos;
         }
 
+        long probeTicket() {
+            return probeTicket;
+        }
+
         private DecodedFrame withPtsNanos(long ptsNanos) {
             this.ptsNanos = ptsNanos;
             return this;
@@ -1463,12 +2218,17 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             return this;
         }
 
+        private DecodedFrame withProbeTicket(long probeTicket) {
+            this.probeTicket = probeTicket;
+            return this;
+        }
+
         public DecodedFrame retain() {
             if (closed.get() || !release.tryRetain()) {
                 throw new IllegalStateException("decoded frame is already closed");
             }
             return new DecodedFrame(data, buffer, byteLength, format, release, ptsNanos, nativeGetNanos,
-                    queueWaitNanos);
+                    queueWaitNanos).withProbeTicket(probeTicket);
         }
 
         @Override

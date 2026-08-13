@@ -1,9 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
 import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
-import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientMediaPreparer;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.sounds.SoundInstance;
 
 import java.net.URL;
@@ -34,22 +32,6 @@ public interface ClientMediaPreparePolicy {
     default long totalMillis(ClientMediaSyncPayload payload, ClientMediaPlaybackRegistry.ActivePlayback current) {
         long currentTotal = current != null ? current.durationMillis() : 0L;
         return currentTotal > 0L ? currentTotal : Math.max(0L, payload.durationSeconds()) * 1000L;
-    }
-
-    default void loadLyricsAsync(UUID sourceId, String sessionId, String rawUrl, String songName) {
-        ClientMediaPreparer.buildLyricAsync(rawUrl, songName).whenComplete((record, error) -> {
-            if (error != null) {
-                LogUtils.getLogger().debug("{} 客户端歌词后台解析失败: source={} session={} song='{}' reason={}",
-                        lyricLogLabel(), sourceId, sessionId, songName, error.toString());
-                return;
-            }
-            if (record != null) {
-                Minecraft.getInstance().execute(() -> ClientMediaPlaybackRegistry.computeIfPresent(sourceId,
-                        (ignored, active) -> sessionId.equals(active.sessionId())
-                                ? active.withLyrics(record, "", "")
-                                : active));
-            }
-        });
     }
 
     String lyricLogLabel();

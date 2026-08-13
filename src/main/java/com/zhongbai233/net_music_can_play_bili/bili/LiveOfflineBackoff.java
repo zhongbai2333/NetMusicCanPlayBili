@@ -13,8 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * </p>
  */
 public final class LiveOfflineBackoff {
-    private static final long RETRY_MILLIS = Math.max(10_000L,
-            Long.getLong("ncpb.bili.live.offline_retry_seconds", 60L) * 1000L);
+    private static final long RETRY_MILLIS = BiliApiProperties.liveOfflineRetryMillis();
     private static final ConcurrentHashMap<String, Long> BLOCKED_UNTIL = new ConcurrentHashMap<>();
 
     private LiveOfflineBackoff() {
@@ -31,7 +30,7 @@ public final class LiveOfflineBackoff {
         }
         // 顺手清掉已过期的条目，长期运行时不同房间号不会无界累积。
         BLOCKED_UNTIL.entrySet().removeIf(entry -> nowMillis >= entry.getValue());
-        BLOCKED_UNTIL.put(roomId, nowMillis + RETRY_MILLIS);
+        BLOCKED_UNTIL.put(roomId, saturatedAdd(nowMillis, RETRY_MILLIS));
     }
 
     /** @return true 表示该房间仍在退避期内，本轮应直接跳过 */
@@ -63,5 +62,13 @@ public final class LiveOfflineBackoff {
 
     public static long retryMillis() {
         return RETRY_MILLIS;
+    }
+
+    private static long saturatedAdd(long value, long increment) {
+        try {
+            return Math.addExact(value, increment);
+        } catch (ArithmeticException ignored) {
+            return increment >= 0L ? Long.MAX_VALUE : Long.MIN_VALUE;
+        }
     }
 }

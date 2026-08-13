@@ -1,9 +1,9 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
 import com.zhongbai233.net_music_can_play_bili.blockentity.ControlConsoleBlockEntity;
-import com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleDocument;
-import com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleElement;
-import com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleSnapshotBudget;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElement;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleSnapshotBudget;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -125,9 +125,7 @@ public record ControlConsoleConfigPacket(BlockPos pos, UUID leaseId, UUID operat
             ControlConsoleBlockEntity.ReplaceResult result = console.replaceDocument(payload.operationId(),
                 payload.expectedRevision(), payload.displayName(), payload.hardRangeX(), payload.hardRangeY(),
                 payload.hardRangeZ(), payload.elements());
-            PacketDistributor.sendToPlayer(player, new ControlConsoleConfigResultPacket(payload.pos(),
-                payload.operationId(), console.documentRevision(),
-                ControlConsoleConfigResultPacket.fromReplaceResult(result)));
+            sendResult(player, payload, console, result);
         } catch (IllegalArgumentException ignored) {
             PacketDistributor.sendToPlayer(player, new ControlConsoleConfigResultPacket(payload.pos(),
                 payload.operationId(), console.documentRevision(),
@@ -135,7 +133,15 @@ public record ControlConsoleConfigPacket(BlockPos pos, UUID leaseId, UUID operat
         }
     }
 
-    private static ControlConsoleElement readElement(RegistryFriendlyByteBuf buf) {
+    private static void sendResult(ServerPlayer player, ControlConsoleConfigPacket payload,
+            ControlConsoleBlockEntity console, ControlConsoleBlockEntity.ReplaceResult result) {
+        ControlConsoleConfigResultPacket.Status status = ControlConsoleConfigResultPacket.fromReplaceResult(result);
+        PacketDistributor.sendToPlayer(player, new ControlConsoleConfigResultPacket(payload.pos(),
+                payload.operationId(), console.documentRevision(), status,
+                status == ControlConsoleConfigResultPacket.Status.CONFLICT ? console.document() : null));
+    }
+
+    static ControlConsoleElement readElement(RegistryFriendlyByteBuf buf) {
         return new ControlConsoleElement(buf.readUUID(), ControlConsoleElement.Type.parse(buf.readUtf(16)),
                 buf.readUtf(ControlConsoleElement.MAX_NAME_LENGTH),
                 buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat(),
@@ -143,10 +149,13 @@ public record ControlConsoleConfigPacket(BlockPos pos, UUID leaseId, UUID operat
             buf.readBoolean(), buf.readBoolean(), buf.readFloat(), buf.readInt(), buf.readFloat(),
             buf.readInt(), buf.readFloat(), buf.readBoolean(), buf.readInt(), buf.readInt(),
             ControlConsoleElement.Alignment.values()[buf.readUnsignedByte()], buf.readFloat(), buf.readBoolean(),
-            buf.readBoolean(), buf.readBoolean());
+            buf.readBoolean(), buf.readBoolean(),
+            buf.readFloat(), buf.readFloat(), buf.readFloat(),
+            buf.readFloat(), buf.readFloat(), buf.readFloat(),
+            buf.readFloat(), buf.readFloat());
     }
 
-    private static void writeElement(RegistryFriendlyByteBuf buf, ControlConsoleElement element) {
+    static void writeElement(RegistryFriendlyByteBuf buf, ControlConsoleElement element) {
         buf.writeUUID(element.elementId());
         buf.writeUtf(element.type().name(), 16);
         buf.writeUtf(element.name(), ControlConsoleElement.MAX_NAME_LENGTH);
@@ -175,5 +184,13 @@ public record ControlConsoleConfigPacket(BlockPos pos, UUID leaseId, UUID operat
         buf.writeBoolean(element.wrap());
         buf.writeBoolean(element.enabled());
         buf.writeBoolean(element.locked());
+        buf.writeFloat(element.scaleX());
+        buf.writeFloat(element.scaleY());
+        buf.writeFloat(element.scaleZ());
+        buf.writeFloat(element.pivotX());
+        buf.writeFloat(element.pivotY());
+        buf.writeFloat(element.pivotZ());
+        buf.writeFloat(element.skewXByY());
+        buf.writeFloat(element.skewYByX());
     }
 }

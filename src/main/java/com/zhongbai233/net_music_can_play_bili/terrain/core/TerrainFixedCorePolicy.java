@@ -44,12 +44,9 @@ public final class TerrainFixedCorePolicy {
         return (int) Math.floor(unitHash(seed, x, y, z, axis + 47) * 6.0D);
     }
 
-    /** 按到固定核心的距离合并外围线框；结果始终能整除 16 格 section。 */
+    /** 按到固定核心的距离生成 MID 4³ / FAR 8³ 材质单元。 */
     public static int overviewCellSize(double distance) {
-        if (!Double.isFinite(distance) || distance > RADIUS + 56.0D) {
-            return 16;
-        }
-        if (distance > RADIUS + 24.0D) {
+        if (!Double.isFinite(distance) || distance > RADIUS + 24.0D) {
             return 8;
         }
         return 4;

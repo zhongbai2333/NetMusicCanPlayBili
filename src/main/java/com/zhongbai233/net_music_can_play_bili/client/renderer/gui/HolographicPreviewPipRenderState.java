@@ -1,6 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.gui;
 
-import com.zhongbai233.net_music_can_play_bili.editor.core.camera.CameraFrame;
+import com.zhongbai233.scene_editor.core.camera.CameraFrame;
 import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainPreviewFrame;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
 import net.minecraft.client.renderer.entity.state.EntityRenderState;
@@ -15,6 +15,9 @@ public record HolographicPreviewPipRenderState(EntityRenderState playerState, Ve
         float screenHeight, float screenAspect, float screenRoll, int gizmoTool, int gizmoHandle, boolean localSpace,
         int selectedScreen, float[] screenDistances, float[] screenOffsetXs, float[] screenOffsetYs,
         float[] screenHeights, float[] screenAspects, float[] screenYaws, float[] screenPitches, float[] screenRolls,
+        float[] screenScaleXs, float[] screenScaleYs, float[] screenScaleZs,
+        float[] screenPivotXs, float[] screenPivotYs, float[] screenPivotZs,
+        float[] screenSkewXByYs, float[] screenSkewYByXs,
         int[] elementTypes,
         boolean controlConsoleModel, boolean renderWorldTerrain, int worldOriginX, int worldOriginY, int worldOriginZ,
         float worldRangeX, float worldRangeY, float worldRangeZ,
@@ -32,6 +35,14 @@ public record HolographicPreviewPipRenderState(EntityRenderState playerState, Ve
         screenYaws = copy(screenYaws);
         screenPitches = copy(screenPitches);
         screenRolls = copy(screenRolls);
+        screenScaleXs = copy(screenScaleXs);
+        screenScaleYs = copy(screenScaleYs);
+        screenScaleZs = copy(screenScaleZs);
+        screenPivotXs = copy(screenPivotXs);
+        screenPivotYs = copy(screenPivotYs);
+        screenPivotZs = copy(screenPivotZs);
+        screenSkewXByYs = copy(screenSkewXByYs);
+        screenSkewYByXs = copy(screenSkewYByXs);
         elementTypes = copy(elementTypes);
     }
 
@@ -47,7 +58,10 @@ public record HolographicPreviewPipRenderState(EntityRenderState playerState, Ve
                 screenHeight, screenAspect, screenRoll, gizmoTool, gizmoHandle, localSpace, 0,
                 new float[] { screenDistance }, new float[] { screenOffsetX }, new float[] { screenOffsetY },
                 new float[] { screenHeight }, new float[] { screenAspect }, new float[] { 0.0F },
-                new float[] { 0.0F }, new float[] { screenRoll }, new int[] { 0 },
+                new float[] { 0.0F }, new float[] { screenRoll },
+                new float[] { 1.0F }, new float[] { 1.0F }, new float[] { 1.0F },
+                new float[] { 0.0F }, new float[] { 0.0F }, new float[] { 0.0F },
+                new float[] { 0.0F }, new float[] { 0.0F }, new int[] { 0 },
                 false, false, 0, 0, 0, 0.0F, 0.0F, 0.0F, TerrainPreviewFrame.empty(), null,
                 x0, y0, x1, y1, scale, scissorArea,
                 PictureInPictureRenderState.getBounds(x0, y0, x1, y1, scissorArea));
@@ -58,6 +72,9 @@ public record HolographicPreviewPipRenderState(EntityRenderState playerState, Ve
             boolean playerGlowing, int selectedScreen, float[] screenDistances, float[] screenOffsetXs,
             float[] screenOffsetYs, float[] screenHeights, float[] screenAspects, float[] screenYaws,
             float[] screenPitches, float[] screenRolls, int[] elementTypes,
+            float[] screenScaleXs, float[] screenScaleYs, float[] screenScaleZs,
+            float[] screenPivotXs, float[] screenPivotYs, float[] screenPivotZs,
+            float[] screenSkewXByYs, float[] screenSkewYByXs,
             int gizmoTool, int gizmoHandle, boolean localSpace,
             boolean controlConsoleModel, boolean renderWorldTerrain, int worldOriginX, int worldOriginY,
             int worldOriginZ, float worldRangeX, float worldRangeY, float worldRangeZ,
@@ -72,7 +89,9 @@ public record HolographicPreviewPipRenderState(EntityRenderState playerState, Ve
                 valueAt(screenAspects, selectedScreen, HolographicScreenSettings.DEFAULT_ASPECT),
                 valueAt(screenRolls, selectedScreen, HolographicScreenSettings.DEFAULT_ROLL), gizmoTool,
                 gizmoHandle, localSpace, selectedScreen, screenDistances, screenOffsetXs, screenOffsetYs,
-                screenHeights, screenAspects, screenYaws, screenPitches, screenRolls, elementTypes, controlConsoleModel,
+                screenHeights, screenAspects, screenYaws, screenPitches, screenRolls,
+                screenScaleXs, screenScaleYs, screenScaleZs, screenPivotXs, screenPivotYs, screenPivotZs,
+                screenSkewXByYs, screenSkewYByXs, elementTypes, controlConsoleModel,
                 renderWorldTerrain, worldOriginX, worldOriginY, worldOriginZ, worldRangeX, worldRangeY, worldRangeZ,
                 terrainFrame, cameraFrame,
                 x0, y0, x1, y1, scale, scissorArea,
@@ -94,7 +113,9 @@ public record HolographicPreviewPipRenderState(EntityRenderState playerState, Ve
                 valueAt(screenRolls, selectedScreen, HolographicScreenSettings.DEFAULT_ROLL),
                 gizmoTool, gizmoHandle, localSpace, selectedScreen, screenDistances, screenOffsetXs, screenOffsetYs, screenHeights,
                 screenAspects, new float[screenRolls.length], new float[screenRolls.length], screenRolls,
-                new int[screenRolls.length],
+                ones(screenRolls.length), ones(screenRolls.length), ones(screenRolls.length),
+                new float[screenRolls.length], new float[screenRolls.length], new float[screenRolls.length],
+                new float[screenRolls.length], new float[screenRolls.length], new int[screenRolls.length],
                 false, false, 0, 0, 0, 0.0F, 0.0F, 0.0F, TerrainPreviewFrame.empty(), null,
                 x0, y0, x1, y1, scale, scissorArea,
                 PictureInPictureRenderState.getBounds(x0, y0, x1, y1, scissorArea));
@@ -115,7 +136,9 @@ public record HolographicPreviewPipRenderState(EntityRenderState playerState, Ve
                 valueAt(screenRolls, selectedScreen, HolographicScreenSettings.DEFAULT_ROLL),
                 gizmoTool, gizmoHandle, localSpace, selectedScreen, screenDistances, screenOffsetXs, screenOffsetYs,
                 screenHeights, screenAspects, new float[screenRolls.length], new float[screenRolls.length], screenRolls,
-                new int[screenRolls.length],
+                ones(screenRolls.length), ones(screenRolls.length), ones(screenRolls.length),
+                new float[screenRolls.length], new float[screenRolls.length], new float[screenRolls.length],
+                new float[screenRolls.length], new float[screenRolls.length], new int[screenRolls.length],
                 false, false, 0, 0, 0, 0.0F, 0.0F, 0.0F, TerrainPreviewFrame.empty(), cameraFrame,
                 x0, y0, x1, y1, scale, scissorArea,
                 PictureInPictureRenderState.getBounds(x0, y0, x1, y1, scissorArea));
@@ -127,6 +150,12 @@ public record HolographicPreviewPipRenderState(EntityRenderState playerState, Ve
 
     private static int[] copy(int[] values) {
         return values != null ? values.clone() : null;
+    }
+
+    private static float[] ones(int length) {
+        float[] values = new float[Math.max(0, length)];
+        java.util.Arrays.fill(values, 1.0F);
+        return values;
     }
 
     private static float valueAt(float[] values, int index, float fallback) {

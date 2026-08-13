@@ -70,18 +70,27 @@ public class NetMusicCanPlayBili {
     }
 
     private static void registerDevelopmentSelfTests() {
-        if (!Boolean.getBoolean("ncpb.pad.map.server_self_test")) {
-            return;
+        if (PadDiagnosticsProperties.mapServerSelfTestEnabled()) {
+            registerDevelopmentSelfTest(
+                    "com.zhongbai233.net_music_can_play_bili.server.PadMapSamplerServerSelfTest",
+                    "Pad map server self-test");
         }
+        if (Boolean.getBoolean("ncpb.scene_editor.server_self_test")) {
+            registerDevelopmentSelfTest(
+                    "com.zhongbai233.net_music_can_play_bili.server.SceneEditorDedicatedServerSelfTest",
+                    "Scene Editor dedicated-server self-test");
+        }
+    }
+
+    private static void registerDevelopmentSelfTest(String className, String description) {
         try {
-            Class<?> selfTest = Class.forName(
-                    "com.zhongbai233.net_music_can_play_bili.server.PadMapSamplerServerSelfTest");
+            Class<?> selfTest = Class.forName(className);
             var handler = selfTest.getMethod("onServerStarted",
                     net.neoforged.neoforge.event.server.ServerStartedEvent.class);
             NeoForge.EVENT_BUS.addListener(net.neoforged.neoforge.event.server.ServerStartedEvent.class,
                     event -> invokeDevelopmentSelfTest(handler, event));
         } catch (ReflectiveOperationException ex) {
-            throw new IllegalStateException("Unable to register Pad map server self-test", ex);
+            throw new IllegalStateException("Unable to register " + description, ex);
         }
     }
 

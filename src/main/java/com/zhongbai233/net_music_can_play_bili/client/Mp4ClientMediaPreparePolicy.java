@@ -3,9 +3,11 @@ package com.zhongbai233.net_music_can_play_bili.client;
 import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.github.tartaricacid.netmusic.config.GeneralConfig;
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.PadDiagnosticsProperties;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientMediaPreparer;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaAudioRouting;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPrepareProperties;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPreparePolicy;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackSessions;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
@@ -22,9 +24,9 @@ import java.util.UUID;
 final class Mp4ClientMediaPreparePolicy implements ClientMediaPreparePolicy {
     static final Mp4ClientMediaPreparePolicy INSTANCE = new Mp4ClientMediaPreparePolicy();
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final boolean PAD_VIDEO_DEBUG_LOG = Boolean.getBoolean("ncpb.pad.video.debug_log");
-    private static final long PREPARE_TIMEOUT_SECONDS = Math.max(3L,
-            Long.getLong("ncpb.mp4.client_prepare_timeout_seconds", 12L));
+    private static final boolean PAD_VIDEO_DEBUG_LOG = PadDiagnosticsProperties.videoDebugLogEnabled();
+    private static final long PREPARE_TIMEOUT_SECONDS =
+            ClientMediaPrepareProperties.settings().mp4PrepareTimeoutSeconds();
 
     private Mp4ClientMediaPreparePolicy() {
     }

@@ -1,0 +1,246 @@
+CTOR public public com.zhongbai233.scene_editor.core.camera.CameraFrame(com.zhongbai233.scene_editor.core.camera.CameraMatrices,com.zhongbai233.scene_editor.core.projection.EditorViewport,com.zhongbai233.scene_editor.core.camera.EditorCameraMode)
+CTOR public public com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings(double,double,double,double,double,double,double,double,double)
+CTOR public public com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings(double,double,double,double,double,double,double,double,double,double)
+CTOR public public com.zhongbai233.scene_editor.core.camera.EditorCameraController()
+CTOR public public com.zhongbai233.scene_editor.core.camera.EditorCameraController(com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings)
+CTOR public public com.zhongbai233.scene_editor.core.camera.EditorCameraState(com.zhongbai233.scene_editor.core.camera.EditorCameraMode,org.joml.Vector3dc,org.joml.Quaternionfc,org.joml.Vector3dc,float,float,float,float)
+CTOR public public com.zhongbai233.scene_editor.core.command.CommandStack(int)
+CTOR public public com.zhongbai233.scene_editor.core.command.StateReplacementCommand(S,S,java.lang.String)
+CTOR public public com.zhongbai233.scene_editor.core.host.EditorHostAdapter$PropertyDescriptor(java.lang.String,java.lang.String,java.lang.String)
+CTOR public public com.zhongbai233.scene_editor.core.host.EditorHostAdapter$ValidationResult(boolean,java.lang.String)
+CTOR public public com.zhongbai233.scene_editor.core.math.EditorTransform(org.joml.Vector3fc,org.joml.Quaternionfc,org.joml.Vector3fc,org.joml.Vector3fc,float,float)
+CTOR public public com.zhongbai233.scene_editor.core.projection.EditorViewport(int,int,int,int)
+CTOR public public com.zhongbai233.scene_editor.core.projection.PickingRay(org.joml.Vector3dc,org.joml.Vector3dc)
+CTOR public public com.zhongbai233.scene_editor.core.projection.ProjectedPoint(double,double,double,boolean,boolean)
+CTOR public public com.zhongbai233.scene_editor.core.projection.RayRectangleIntersection(double,org.joml.Vector3dc,double,double)
+CTOR public public com.zhongbai233.scene_editor.core.scene.SceneDocument(java.util.List<? extends E>)
+CTOR public public com.zhongbai233.scene_editor.core.transaction.DragTransaction(S,java.lang.String)
+FIELD public static final com.zhongbai233.scene_editor.core.camera.EditorCameraMode#FIRST_PERSON:com.zhongbai233.scene_editor.core.camera.EditorCameraMode
+FIELD public static final com.zhongbai233.scene_editor.core.camera.EditorCameraMode#FLY:com.zhongbai233.scene_editor.core.camera.EditorCameraMode
+FIELD public static final com.zhongbai233.scene_editor.core.camera.EditorCameraMode#ORBIT:com.zhongbai233.scene_editor.core.camera.EditorCameraMode
+FIELD public static final com.zhongbai233.scene_editor.core.camera.EditorCameraMode#ORTHOGRAPHIC:com.zhongbai233.scene_editor.core.camera.EditorCameraMode
+FIELD public static final com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy$Action#GIZMO:com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy$Action
+FIELD public static final com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy$Action#ORBIT:com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy$Action
+FIELD public static final com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy$Action#PAN:com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy$Action
+FIELD public static final com.zhongbai233.scene_editor.core.camera.StandardCameraView#BACK:com.zhongbai233.scene_editor.core.camera.StandardCameraView
+FIELD public static final com.zhongbai233.scene_editor.core.camera.StandardCameraView#BOTTOM:com.zhongbai233.scene_editor.core.camera.StandardCameraView
+FIELD public static final com.zhongbai233.scene_editor.core.camera.StandardCameraView#FRONT:com.zhongbai233.scene_editor.core.camera.StandardCameraView
+FIELD public static final com.zhongbai233.scene_editor.core.camera.StandardCameraView#LEFT:com.zhongbai233.scene_editor.core.camera.StandardCameraView
+FIELD public static final com.zhongbai233.scene_editor.core.camera.StandardCameraView#RIGHT:com.zhongbai233.scene_editor.core.camera.StandardCameraView
+FIELD public static final com.zhongbai233.scene_editor.core.camera.StandardCameraView#TOP:com.zhongbai233.scene_editor.core.camera.StandardCameraView
+FIELD public static final com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint#VIEW_PLANE:com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint
+FIELD public static final com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint#XY_PLANE:com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint
+FIELD public static final com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint#XZ_PLANE:com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint
+FIELD public static final com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint#X_AXIS:com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint
+FIELD public static final com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint#YZ_PLANE:com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint
+FIELD public static final com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint#Y_AXIS:com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint
+FIELD public static final com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint#Z_AXIS:com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint
+FIELD public static final com.zhongbai233.scene_editor.core.gizmo.GizmoCoordinateSpace#LOCAL:com.zhongbai233.scene_editor.core.gizmo.GizmoCoordinateSpace
+FIELD public static final com.zhongbai233.scene_editor.core.gizmo.GizmoCoordinateSpace#WORLD:com.zhongbai233.scene_editor.core.gizmo.GizmoCoordinateSpace
+METHOD public abstract public abstract D com.zhongbai233.scene_editor.core.host.EditorHostAdapter.loadDocument()
+METHOD public abstract public abstract S com.zhongbai233.scene_editor.core.command.EditorCommand.apply(S)
+METHOD public abstract public abstract S com.zhongbai233.scene_editor.core.command.EditorCommand.undo(S)
+METHOD public abstract public abstract com.zhongbai233.scene_editor.core.host.EditorHostAdapter$ValidationResult com.zhongbai233.scene_editor.core.host.EditorHostAdapter.validateDraft(D)
+METHOD public abstract public abstract com.zhongbai233.scene_editor.core.math.EditorTransform com.zhongbai233.scene_editor.core.scene.SceneElement.transform()
+METHOD public abstract public abstract java.lang.String com.zhongbai233.scene_editor.core.command.EditorCommand.description()
+METHOD public abstract public abstract java.lang.String com.zhongbai233.scene_editor.core.scene.SceneElement.typeId()
+METHOD public abstract public abstract java.util.UUID com.zhongbai233.scene_editor.core.scene.SceneElement.id()
+METHOD public abstract public abstract void com.zhongbai233.scene_editor.core.host.EditorHostAdapter.renderEnvironment(java.lang.Object,D)
+METHOD public abstract public abstract void com.zhongbai233.scene_editor.core.host.EditorHostAdapter.submitOperations(O)
+METHOD public final public final boolean com.zhongbai233.scene_editor.core.camera.CameraFrame.equals(java.lang.Object)
+METHOD public final public final boolean com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings.equals(java.lang.Object)
+METHOD public final public final boolean com.zhongbai233.scene_editor.core.command.StateReplacementCommand.equals(java.lang.Object)
+METHOD public final public final boolean com.zhongbai233.scene_editor.core.host.EditorHostAdapter$PropertyDescriptor.equals(java.lang.Object)
+METHOD public final public final boolean com.zhongbai233.scene_editor.core.host.EditorHostAdapter$ValidationResult.equals(java.lang.Object)
+METHOD public final public final boolean com.zhongbai233.scene_editor.core.projection.EditorViewport.equals(java.lang.Object)
+METHOD public final public final boolean com.zhongbai233.scene_editor.core.projection.ProjectedPoint.equals(java.lang.Object)
+METHOD public final public final boolean com.zhongbai233.scene_editor.core.projection.RayRectangleIntersection.equals(java.lang.Object)
+METHOD public final public final int com.zhongbai233.scene_editor.core.camera.CameraFrame.hashCode()
+METHOD public final public final int com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings.hashCode()
+METHOD public final public final int com.zhongbai233.scene_editor.core.command.StateReplacementCommand.hashCode()
+METHOD public final public final int com.zhongbai233.scene_editor.core.host.EditorHostAdapter$PropertyDescriptor.hashCode()
+METHOD public final public final int com.zhongbai233.scene_editor.core.host.EditorHostAdapter$ValidationResult.hashCode()
+METHOD public final public final int com.zhongbai233.scene_editor.core.projection.EditorViewport.hashCode()
+METHOD public final public final int com.zhongbai233.scene_editor.core.projection.ProjectedPoint.hashCode()
+METHOD public final public final int com.zhongbai233.scene_editor.core.projection.RayRectangleIntersection.hashCode()
+METHOD public final public final java.lang.String com.zhongbai233.scene_editor.core.camera.CameraFrame.toString()
+METHOD public final public final java.lang.String com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings.toString()
+METHOD public final public final java.lang.String com.zhongbai233.scene_editor.core.command.StateReplacementCommand.toString()
+METHOD public final public final java.lang.String com.zhongbai233.scene_editor.core.host.EditorHostAdapter$PropertyDescriptor.toString()
+METHOD public final public final java.lang.String com.zhongbai233.scene_editor.core.host.EditorHostAdapter$ValidationResult.toString()
+METHOD public final public final java.lang.String com.zhongbai233.scene_editor.core.projection.EditorViewport.toString()
+METHOD public final public final java.lang.String com.zhongbai233.scene_editor.core.projection.ProjectedPoint.toString()
+METHOD public final public final java.lang.String com.zhongbai233.scene_editor.core.projection.RayRectangleIntersection.toString()
+METHOD public public S com.zhongbai233.scene_editor.core.command.CommandStack.execute(S,com.zhongbai233.scene_editor.core.command.EditorCommand<S>)
+METHOD public public S com.zhongbai233.scene_editor.core.command.CommandStack.redo(S)
+METHOD public public S com.zhongbai233.scene_editor.core.command.CommandStack.undo(S)
+METHOD public public S com.zhongbai233.scene_editor.core.command.StateReplacementCommand.after()
+METHOD public public S com.zhongbai233.scene_editor.core.command.StateReplacementCommand.apply(S)
+METHOD public public S com.zhongbai233.scene_editor.core.command.StateReplacementCommand.before()
+METHOD public public S com.zhongbai233.scene_editor.core.command.StateReplacementCommand.undo(S)
+METHOD public public S com.zhongbai233.scene_editor.core.transaction.DragTransaction.before()
+METHOD public public S com.zhongbai233.scene_editor.core.transaction.DragTransaction.commit(com.zhongbai233.scene_editor.core.command.CommandStack<S>)
+METHOD public public S com.zhongbai233.scene_editor.core.transaction.DragTransaction.current()
+METHOD public public S com.zhongbai233.scene_editor.core.transaction.DragTransaction.update(java.util.function.UnaryOperator<S>)
+METHOD public public boolean com.zhongbai233.scene_editor.core.command.CommandStack.canRedo()
+METHOD public public boolean com.zhongbai233.scene_editor.core.command.CommandStack.canUndo()
+METHOD public public boolean com.zhongbai233.scene_editor.core.host.EditorHostAdapter$ValidationResult.valid()
+METHOD public public boolean com.zhongbai233.scene_editor.core.projection.ProjectedPoint.behindCamera()
+METHOD public public boolean com.zhongbai233.scene_editor.core.projection.ProjectedPoint.visible()
+METHOD public public boolean com.zhongbai233.scene_editor.core.session.EditorSession.isClosed()
+METHOD public public boolean com.zhongbai233.scene_editor.core.transaction.DragTransaction.changed()
+METHOD public public com.zhongbai233.scene_editor.core.camera.CameraMatrices com.zhongbai233.scene_editor.core.camera.CameraFrame.matrices()
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraMode com.zhongbai233.scene_editor.core.camera.CameraFrame.mode()
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraMode com.zhongbai233.scene_editor.core.camera.EditorCameraState.mode()
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraState com.zhongbai233.scene_editor.core.camera.EditorCameraController.dolly(com.zhongbai233.scene_editor.core.camera.EditorCameraState,double)
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraState com.zhongbai233.scene_editor.core.camera.EditorCameraController.fly(com.zhongbai233.scene_editor.core.camera.EditorCameraState,boolean,boolean,boolean,boolean,boolean,boolean,double,boolean,org.joml.Vector3dc)
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraState com.zhongbai233.scene_editor.core.camera.EditorCameraController.fly(com.zhongbai233.scene_editor.core.camera.EditorCameraState,org.joml.Vector3dc,double,double,org.joml.Vector3dc)
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraState com.zhongbai233.scene_editor.core.camera.EditorCameraController.focus(com.zhongbai233.scene_editor.core.camera.EditorCameraState,org.joml.Vector3dc,double,com.zhongbai233.scene_editor.core.projection.EditorViewport,org.joml.Vector3dc)
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraState com.zhongbai233.scene_editor.core.camera.EditorCameraController.orbit(com.zhongbai233.scene_editor.core.camera.EditorCameraState,double,double,org.joml.Vector3dc)
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraState com.zhongbai233.scene_editor.core.camera.EditorCameraController.panPixels(com.zhongbai233.scene_editor.core.camera.EditorCameraState,double,double,com.zhongbai233.scene_editor.core.projection.EditorViewport)
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraState com.zhongbai233.scene_editor.core.camera.EditorCameraController.standardView(com.zhongbai233.scene_editor.core.camera.EditorCameraState,com.zhongbai233.scene_editor.core.camera.StandardCameraView,org.joml.Vector3dc)
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraState com.zhongbai233.scene_editor.core.camera.EditorCameraController.switchProjection(com.zhongbai233.scene_editor.core.camera.EditorCameraState,com.zhongbai233.scene_editor.core.camera.EditorCameraMode)
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraState com.zhongbai233.scene_editor.core.camera.EditorCameraController.walk(com.zhongbai233.scene_editor.core.camera.EditorCameraState,boolean,boolean,boolean,boolean,boolean,boolean,double,boolean,org.joml.Vector3dc)
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraState com.zhongbai233.scene_editor.core.camera.EditorCameraState.withMode(com.zhongbai233.scene_editor.core.camera.EditorCameraMode)
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraState com.zhongbai233.scene_editor.core.camera.EditorCameraState.withOrthoScale(float)
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraState com.zhongbai233.scene_editor.core.camera.EditorCameraState.withPose(org.joml.Vector3dc,org.joml.Quaternionfc,org.joml.Vector3dc)
+METHOD public public com.zhongbai233.scene_editor.core.camera.EditorCameraState com.zhongbai233.scene_editor.core.session.EditorSession.camera()
+METHOD public public com.zhongbai233.scene_editor.core.command.CommandStack<com.zhongbai233.scene_editor.core.scene.SceneDocument<E>> com.zhongbai233.scene_editor.core.session.EditorSession.commands()
+METHOD public public com.zhongbai233.scene_editor.core.math.EditorTransform com.zhongbai233.scene_editor.core.math.EditorTransform.withEulerDegrees(float,float,float)
+METHOD public public com.zhongbai233.scene_editor.core.math.EditorTransform com.zhongbai233.scene_editor.core.math.EditorTransform.withPivot(org.joml.Vector3fc)
+METHOD public public com.zhongbai233.scene_editor.core.math.EditorTransform com.zhongbai233.scene_editor.core.math.EditorTransform.withPosition(org.joml.Vector3fc)
+METHOD public public com.zhongbai233.scene_editor.core.math.EditorTransform com.zhongbai233.scene_editor.core.math.EditorTransform.withRotation(org.joml.Quaternionfc)
+METHOD public public com.zhongbai233.scene_editor.core.math.EditorTransform com.zhongbai233.scene_editor.core.math.EditorTransform.withScale(org.joml.Vector3fc)
+METHOD public public com.zhongbai233.scene_editor.core.math.EditorTransform com.zhongbai233.scene_editor.core.math.EditorTransform.withSkew(float,float)
+METHOD public public com.zhongbai233.scene_editor.core.projection.EditorViewport com.zhongbai233.scene_editor.core.camera.CameraFrame.viewport()
+METHOD public public com.zhongbai233.scene_editor.core.projection.EditorViewport com.zhongbai233.scene_editor.core.session.EditorSession.viewport()
+METHOD public public com.zhongbai233.scene_editor.core.scene.SceneDocument<E> com.zhongbai233.scene_editor.core.scene.SceneDocument.withElement(E)
+METHOD public public com.zhongbai233.scene_editor.core.scene.SceneDocument<E> com.zhongbai233.scene_editor.core.scene.SceneDocument.withoutElement(java.util.UUID)
+METHOD public public com.zhongbai233.scene_editor.core.scene.SceneDocument<E> com.zhongbai233.scene_editor.core.session.EditorSession.document()
+METHOD public public default void com.zhongbai233.scene_editor.core.host.EditorHostAdapter.describeProperties(D,java.util.function.Consumer<com.zhongbai233.scene_editor.core.host.EditorHostAdapter$PropertyDescriptor>)
+METHOD public public double com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings.dollyExponent()
+METHOD public public double com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings.flyBoostMultiplier()
+METHOD public public double com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings.flySpeed()
+METHOD public public double com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings.focusMargin()
+METHOD public public double com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings.maximumDistance()
+METHOD public public double com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings.maximumOrthoScale()
+METHOD public public double com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings.minimumDistance()
+METHOD public public double com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings.minimumFocusRadius()
+METHOD public public double com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings.minimumOrthoScale()
+METHOD public public double com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings.minimumPoleAngleDegrees()
+METHOD public public double com.zhongbai233.scene_editor.core.projection.EditorViewport.aspectRatio()
+METHOD public public double com.zhongbai233.scene_editor.core.projection.ProjectedPoint.depth()
+METHOD public public double com.zhongbai233.scene_editor.core.projection.ProjectedPoint.screenX()
+METHOD public public double com.zhongbai233.scene_editor.core.projection.ProjectedPoint.screenY()
+METHOD public public double com.zhongbai233.scene_editor.core.projection.RayRectangleIntersection.distance()
+METHOD public public double com.zhongbai233.scene_editor.core.projection.RayRectangleIntersection.localX()
+METHOD public public double com.zhongbai233.scene_editor.core.projection.RayRectangleIntersection.localY()
+METHOD public public float com.zhongbai233.scene_editor.core.camera.EditorCameraState.farPlane()
+METHOD public public float com.zhongbai233.scene_editor.core.camera.EditorCameraState.fovDegrees()
+METHOD public public float com.zhongbai233.scene_editor.core.camera.EditorCameraState.nearPlane()
+METHOD public public float com.zhongbai233.scene_editor.core.camera.EditorCameraState.orthoScale()
+METHOD public public float com.zhongbai233.scene_editor.core.camera.WorldCameraPose.pitchDegrees()
+METHOD public public float com.zhongbai233.scene_editor.core.camera.WorldCameraPose.yawDegrees()
+METHOD public public float com.zhongbai233.scene_editor.core.math.EditorTransform.skewXByY()
+METHOD public public float com.zhongbai233.scene_editor.core.math.EditorTransform.skewYByX()
+METHOD public public int com.zhongbai233.scene_editor.core.projection.EditorViewport.height()
+METHOD public public int com.zhongbai233.scene_editor.core.projection.EditorViewport.width()
+METHOD public public int com.zhongbai233.scene_editor.core.projection.EditorViewport.x()
+METHOD public public int com.zhongbai233.scene_editor.core.projection.EditorViewport.y()
+METHOD public public java.lang.String com.zhongbai233.scene_editor.core.command.StateReplacementCommand.description()
+METHOD public public java.lang.String com.zhongbai233.scene_editor.core.host.EditorHostAdapter$PropertyDescriptor.id()
+METHOD public public java.lang.String com.zhongbai233.scene_editor.core.host.EditorHostAdapter$PropertyDescriptor.label()
+METHOD public public java.lang.String com.zhongbai233.scene_editor.core.host.EditorHostAdapter$PropertyDescriptor.unit()
+METHOD public public java.lang.String com.zhongbai233.scene_editor.core.host.EditorHostAdapter$ValidationResult.message()
+METHOD public public java.lang.String com.zhongbai233.scene_editor.core.transaction.DragTransaction.description()
+METHOD public public java.util.List<E> com.zhongbai233.scene_editor.core.scene.SceneDocument.elements()
+METHOD public public java.util.Optional<E> com.zhongbai233.scene_editor.core.scene.SceneDocument.element(java.util.UUID)
+METHOD public public java.util.Optional<com.zhongbai233.scene_editor.core.projection.RayRectangleIntersection> com.zhongbai233.scene_editor.core.projection.PickingRay.intersectRectangle(org.joml.Vector3dc,org.joml.Vector3dc,org.joml.Vector3dc,double,double)
+METHOD public public java.util.Optional<com.zhongbai233.scene_editor.core.projection.RayRectangleIntersection> com.zhongbai233.scene_editor.core.projection.PickingRay.intersectTransformedRectangle(org.joml.Matrix4fc,double,double)
+METHOD public public java.util.Optional<java.util.UUID> com.zhongbai233.scene_editor.core.session.EditorSession.selectedElementId()
+METHOD public public java.util.OptionalDouble com.zhongbai233.scene_editor.core.projection.PickingRay.intersectAabb(org.joml.Vector3dc,org.joml.Vector3dc)
+METHOD public public org.joml.Matrix4f com.zhongbai233.scene_editor.core.camera.CameraMatrices.inverseViewProjection()
+METHOD public public org.joml.Matrix4f com.zhongbai233.scene_editor.core.camera.CameraMatrices.projection()
+METHOD public public org.joml.Matrix4f com.zhongbai233.scene_editor.core.camera.CameraMatrices.view()
+METHOD public public org.joml.Matrix4f com.zhongbai233.scene_editor.core.camera.CameraMatrices.viewProjection()
+METHOD public public org.joml.Matrix4f com.zhongbai233.scene_editor.core.math.EditorTransform.matrix()
+METHOD public public org.joml.Quaternionf com.zhongbai233.scene_editor.core.camera.EditorCameraState.orientation()
+METHOD public public org.joml.Quaternionf com.zhongbai233.scene_editor.core.math.EditorTransform.rotation()
+METHOD public public org.joml.Vector3d com.zhongbai233.scene_editor.core.camera.EditorCameraState.focus()
+METHOD public public org.joml.Vector3d com.zhongbai233.scene_editor.core.camera.EditorCameraState.position()
+METHOD public public org.joml.Vector3d com.zhongbai233.scene_editor.core.camera.WorldCameraPose.position()
+METHOD public public org.joml.Vector3d com.zhongbai233.scene_editor.core.projection.PickingRay.direction()
+METHOD public public org.joml.Vector3d com.zhongbai233.scene_editor.core.projection.PickingRay.origin()
+METHOD public public org.joml.Vector3d com.zhongbai233.scene_editor.core.projection.PickingRay.pointAt(double)
+METHOD public public org.joml.Vector3dc com.zhongbai233.scene_editor.core.projection.RayRectangleIntersection.worldPoint()
+METHOD public public org.joml.Vector3f com.zhongbai233.scene_editor.core.math.EditorTransform.pivot()
+METHOD public public org.joml.Vector3f com.zhongbai233.scene_editor.core.math.EditorTransform.position()
+METHOD public public org.joml.Vector3f com.zhongbai233.scene_editor.core.math.EditorTransform.scale()
+METHOD public public void com.zhongbai233.scene_editor.core.command.CommandStack.clear()
+METHOD public public void com.zhongbai233.scene_editor.core.session.EditorSession.camera(com.zhongbai233.scene_editor.core.camera.EditorCameraState)
+METHOD public public void com.zhongbai233.scene_editor.core.session.EditorSession.clearSelection()
+METHOD public public void com.zhongbai233.scene_editor.core.session.EditorSession.close()
+METHOD public public void com.zhongbai233.scene_editor.core.session.EditorSession.document(com.zhongbai233.scene_editor.core.scene.SceneDocument<E>)
+METHOD public public void com.zhongbai233.scene_editor.core.session.EditorSession.resize(com.zhongbai233.scene_editor.core.projection.EditorViewport)
+METHOD public public void com.zhongbai233.scene_editor.core.session.EditorSession.select(java.util.UUID)
+METHOD public static public static <E extends com.zhongbai233.scene_editor.core.scene.SceneElement> com.zhongbai233.scene_editor.core.scene.SceneDocument<E> com.zhongbai233.scene_editor.core.scene.SceneDocument.empty()
+METHOD public static public static <E extends com.zhongbai233.scene_editor.core.scene.SceneElement> com.zhongbai233.scene_editor.core.session.EditorSession<E> com.zhongbai233.scene_editor.core.session.EditorSession.open(com.zhongbai233.scene_editor.core.scene.SceneDocument<E>,com.zhongbai233.scene_editor.core.camera.EditorCameraState,com.zhongbai233.scene_editor.core.projection.EditorViewport,int)
+METHOD public static public static boolean com.zhongbai233.scene_editor.core.selection.BlankClickSelectionPolicy.shouldDeselect(boolean,int,double,double,double,double)
+METHOD public static public static com.zhongbai233.scene_editor.core.camera.CameraMatrices com.zhongbai233.scene_editor.core.camera.CameraMatrices.create(com.zhongbai233.scene_editor.core.camera.EditorCameraState,com.zhongbai233.scene_editor.core.projection.EditorViewport)
+METHOD public static public static com.zhongbai233.scene_editor.core.camera.CameraMatrices com.zhongbai233.scene_editor.core.camera.CameraMatrices.from(org.joml.Matrix4f,org.joml.Matrix4f)
+METHOD public static public static com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings.defaults()
+METHOD public static public static com.zhongbai233.scene_editor.core.camera.EditorCameraMode com.zhongbai233.scene_editor.core.camera.EditorCameraMode.valueOf(java.lang.String)
+METHOD public static public static com.zhongbai233.scene_editor.core.camera.EditorCameraMode[] com.zhongbai233.scene_editor.core.camera.EditorCameraMode.values()
+METHOD public static public static com.zhongbai233.scene_editor.core.camera.EditorCameraState com.zhongbai233.scene_editor.core.camera.EditorCameraState.lookingAt(com.zhongbai233.scene_editor.core.camera.EditorCameraMode,org.joml.Vector3dc,org.joml.Vector3dc,org.joml.Vector3dc,float,float,float,float)
+METHOD public static public static com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy$Action com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy$Action.valueOf(java.lang.String)
+METHOD public static public static com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy$Action com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy.action(int,boolean,boolean)
+METHOD public static public static com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy$Action[] com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy$Action.values()
+METHOD public static public static com.zhongbai233.scene_editor.core.camera.StandardCameraView com.zhongbai233.scene_editor.core.camera.StandardCameraView.valueOf(java.lang.String)
+METHOD public static public static com.zhongbai233.scene_editor.core.camera.StandardCameraView[] com.zhongbai233.scene_editor.core.camera.StandardCameraView.values()
+METHOD public static public static com.zhongbai233.scene_editor.core.camera.WorldCameraPose com.zhongbai233.scene_editor.core.camera.WorldCameraPose.fromLocal(org.joml.Vector3dc,org.joml.Vector3dc,org.joml.Quaternionfc,float)
+METHOD public static public static com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint.valueOf(java.lang.String)
+METHOD public static public static com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint[] com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint.values()
+METHOD public static public static com.zhongbai233.scene_editor.core.gizmo.GizmoCoordinateSpace com.zhongbai233.scene_editor.core.gizmo.GizmoCoordinateSpace.valueOf(java.lang.String)
+METHOD public static public static com.zhongbai233.scene_editor.core.gizmo.GizmoCoordinateSpace[] com.zhongbai233.scene_editor.core.gizmo.GizmoCoordinateSpace.values()
+METHOD public static public static com.zhongbai233.scene_editor.core.host.EditorHostAdapter$ValidationResult com.zhongbai233.scene_editor.core.host.EditorHostAdapter$ValidationResult.ok()
+METHOD public static public static com.zhongbai233.scene_editor.core.host.EditorHostAdapter$ValidationResult com.zhongbai233.scene_editor.core.host.EditorHostAdapter$ValidationResult.rejected(java.lang.String)
+METHOD public static public static com.zhongbai233.scene_editor.core.math.EditorTransform com.zhongbai233.scene_editor.core.gizmo.GizmoTransformMath.rotate(com.zhongbai233.scene_editor.core.math.EditorTransform,int,float,com.zhongbai233.scene_editor.core.gizmo.GizmoCoordinateSpace)
+METHOD public static public static com.zhongbai233.scene_editor.core.math.EditorTransform com.zhongbai233.scene_editor.core.math.EditorTransform.fromEulerDegrees(org.joml.Vector3fc,float,float,float,org.joml.Vector3fc,org.joml.Vector3fc,float,float)
+METHOD public static public static com.zhongbai233.scene_editor.core.math.EditorTransform com.zhongbai233.scene_editor.core.math.EditorTransform.identity()
+METHOD public static public static com.zhongbai233.scene_editor.core.projection.PickingRay com.zhongbai233.scene_editor.core.projection.EditorProjection.rayFromScreen(double,double,com.zhongbai233.scene_editor.core.camera.CameraMatrices,com.zhongbai233.scene_editor.core.projection.EditorViewport)
+METHOD public static public static com.zhongbai233.scene_editor.core.projection.ProjectedPoint com.zhongbai233.scene_editor.core.projection.EditorProjection.project(org.joml.Vector3dc,com.zhongbai233.scene_editor.core.camera.CameraMatrices,com.zhongbai233.scene_editor.core.projection.EditorViewport)
+METHOD public static public static double com.zhongbai233.scene_editor.core.gizmo.GizmoDragMath.signedAxisDelta(org.joml.Vector3dc,org.joml.Vector3dc,org.joml.Vector3dc)
+METHOD public static public static float com.zhongbai233.scene_editor.core.gizmo.GizmoDragMath.rotationDeltaDegrees(org.joml.Vector3dc,org.joml.Vector3dc,org.joml.Vector3dc,org.joml.Vector3dc)
+METHOD public static public static java.util.Optional<com.zhongbai233.scene_editor.core.math.EditorTransform> com.zhongbai233.scene_editor.core.gizmo.GizmoTransformMath.scale(com.zhongbai233.scene_editor.core.math.EditorTransform,int,float,com.zhongbai233.scene_editor.core.gizmo.GizmoCoordinateSpace,float,float,float)
+METHOD public static public static java.util.Optional<org.joml.Vector3d> com.zhongbai233.scene_editor.core.gizmo.GizmoDragMath.intersectConstraint(com.zhongbai233.scene_editor.core.projection.PickingRay,org.joml.Vector3dc,org.joml.Vector3dc,com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint)
+TYPE public abstract interface com.zhongbai233.scene_editor.core.command.EditorCommand<S>
+TYPE public abstract interface com.zhongbai233.scene_editor.core.host.EditorHostAdapter<D,O>
+TYPE public abstract interface com.zhongbai233.scene_editor.core.scene.SceneElement
+TYPE public final class com.zhongbai233.scene_editor.core.camera.CameraMatrices
+TYPE public final class com.zhongbai233.scene_editor.core.camera.EditorCameraController
+TYPE public final class com.zhongbai233.scene_editor.core.camera.EditorCameraState
+TYPE public final class com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy
+TYPE public final class com.zhongbai233.scene_editor.core.camera.WorldCameraPose
+TYPE public final class com.zhongbai233.scene_editor.core.command.CommandStack<S>
+TYPE public final class com.zhongbai233.scene_editor.core.gizmo.GizmoDragMath
+TYPE public final class com.zhongbai233.scene_editor.core.gizmo.GizmoTransformMath
+TYPE public final class com.zhongbai233.scene_editor.core.math.EditorTransform
+TYPE public final class com.zhongbai233.scene_editor.core.projection.EditorProjection
+TYPE public final class com.zhongbai233.scene_editor.core.projection.PickingRay
+TYPE public final class com.zhongbai233.scene_editor.core.scene.SceneDocument<E extends com.zhongbai233.scene_editor.core.scene.SceneElement>
+TYPE public final class com.zhongbai233.scene_editor.core.selection.BlankClickSelectionPolicy
+TYPE public final class com.zhongbai233.scene_editor.core.session.EditorSession<E extends com.zhongbai233.scene_editor.core.scene.SceneElement>
+TYPE public final class com.zhongbai233.scene_editor.core.transaction.DragTransaction<S>
+TYPE public final enum com.zhongbai233.scene_editor.core.camera.EditorCameraMode
+TYPE public final enum com.zhongbai233.scene_editor.core.camera.StandardCameraView
+TYPE public final enum com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint
+TYPE public final enum com.zhongbai233.scene_editor.core.gizmo.GizmoCoordinateSpace
+TYPE public final record com.zhongbai233.scene_editor.core.camera.CameraFrame
+TYPE public final record com.zhongbai233.scene_editor.core.command.StateReplacementCommand<S>
+TYPE public final record com.zhongbai233.scene_editor.core.projection.EditorViewport
+TYPE public final record com.zhongbai233.scene_editor.core.projection.ProjectedPoint
+TYPE public final record com.zhongbai233.scene_editor.core.projection.RayRectangleIntersection
+TYPE public static final enum com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy$Action
+TYPE public static final record com.zhongbai233.scene_editor.core.camera.EditorCameraController$Settings
+TYPE public static final record com.zhongbai233.scene_editor.core.host.EditorHostAdapter$PropertyDescriptor
+TYPE public static final record com.zhongbai233.scene_editor.core.host.EditorHostAdapter$ValidationResult

@@ -4,7 +4,7 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaRetryPolicy;
 import com.zhongbai233.net_music_can_play_bili.item.PadItem;
-import com.zhongbai233.net_music_can_play_bili.network.PadPlaybackControlPacket;
+import com.zhongbai233.net_music_can_play_bili.network.PadPlaybackRetryPacket;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.item.ItemStack;
 import org.slf4j.Logger;
@@ -36,19 +36,26 @@ final class PadClientMediaRetryPolicy implements ClientMediaRetryPolicy {
     @Override
     public void scheduleRetry(UUID deviceId, String sessionId, ClientMediaPlaybackRegistry.ActivePlayback active,
             Throwable error) {
+        tryScheduleRetry(deviceId, sessionId, active, error);
+    }
+
+    @Override
+    public boolean tryScheduleRetry(UUID deviceId, String sessionId,
+            ClientMediaPlaybackRegistry.ActivePlayback active, Throwable error) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null || client.getConnection() == null) {
-            return;
+            return false;
         }
         ItemStack stack = PadItem.findByDeviceId(client.player, deviceId);
         if (!PadItem.isPad(stack)) {
-            return;
+            return false;
         }
         UUID pointId = PadClientMediaSessionIds.pointId(sessionId);
         if (pointId == null) {
-            return;
+            return false;
         }
-        client.getConnection().send(new PadPlaybackControlPacket(PadPlaybackControlPacket.Action.SEEK, deviceId,
-                pointId, Math.max(0L, active.elapsedMillis())));
+        client.getConnection().send(new PadPlaybackRetryPacket(deviceId, pointId, sessionId,
+                Math.max(0L, active.elapsedMillis())));
+        return true;
     }
 }

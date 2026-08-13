@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.media.audio;
 
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseProperties;
+
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -10,10 +12,10 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class AudioNativeCloseDiagnostics {
     private static final int DEFAULT_ACTIVE_LIMIT = 256;
     private static final int DEFAULT_HISTORY_LIMIT = 128;
+    private static final MediaCloseProperties.Timeouts TIMEOUTS = MediaCloseProperties.openAlTimeouts();
     private static final AudioNativeCloseDiagnostics GLOBAL = new AudioNativeCloseDiagnostics(
             DEFAULT_ACTIVE_LIMIT, DEFAULT_HISTORY_LIMIT,
-            Long.getLong("ncpb.close_diag.openal_soft_ms", 500L) * 1_000_000L,
-            Long.getLong("ncpb.close_diag.openal_hard_ms", 3_000L) * 1_000_000L);
+            TIMEOUTS.softTimeoutNanos(), TIMEOUTS.hardTimeoutNanos());
 
     private final int activeLimit;
     private final int historyLimit;
@@ -28,6 +30,9 @@ public final class AudioNativeCloseDiagnostics {
     private long droppedOperations;
     private long totalSourcesRequested;
     private long totalBuffersRequested;
+    private long failedOperations;
+    private long sourceDeleteFailures;
+    private long bufferDeleteFailures;
 
     public AudioNativeCloseDiagnostics(int activeLimit, int historyLimit, long softTimeoutNanos,
             long hardTimeoutNanos) {
@@ -56,7 +61,10 @@ public final class AudioNativeCloseDiagnostics {
                 + " late=" + snapshot.lateConvergences()
                 + " dropped=" + snapshot.droppedOperations()
                 + " requestedSources=" + snapshot.totalSourcesRequested()
-                + " requestedBuffers=" + snapshot.totalBuffersRequested();
+                + " requestedBuffers=" + snapshot.totalBuffersRequested()
+                + " failedBatches=" + snapshot.failedOperations()
+                + " sourceDeleteFailures=" + snapshot.sourceDeleteFailures()
+                + " bufferDeleteFailures=" + snapshot.bufferDeleteFailures();
     }
 
     public synchronized long begin(int sourceCount, int bufferCount, long nowNanos) {
@@ -82,15 +90,28 @@ public final class AudioNativeCloseDiagnostics {
     }
 
     public synchronized void complete(long operationId, long nowNanos) {
+        complete(operationId, nowNanos, 0, 0);
+    }
+
+    public synchronized void complete(long operationId, long nowNanos, int failedSourceDeletes,
+            int failedBufferDeletes) {
         Operation operation = active.remove(operationId);
         if (operation == null) {
             return;
+        }
+        int sourceFailures = Math.min(operation.sourceCount, Math.max(0, failedSourceDeletes));
+        int bufferFailures = Math.min(operation.bufferCount, Math.max(0, failedBufferDeletes));
+        if (sourceFailures > 0 || bufferFailures > 0) {
+            failedOperations++;
+            sourceDeleteFailures += sourceFailures;
+            bufferDeleteFailures += bufferFailures;
         }
         long duration = elapsed(operation.requestedNanos, nowNanos);
         if (operation.hardTimedOut) {
             lateConvergences++;
         }
-        history.addLast(new CompletedOperation(duration, operation.deferred, operation.hardTimedOut));
+        history.addLast(new CompletedOperation(duration, operation.deferred, operation.hardTimedOut,
+                sourceFailures, bufferFailures));
         while (history.size() > historyLimit) {
             history.removeFirst();
         }
@@ -124,7 +145,8 @@ public final class AudioNativeCloseDiagnostics {
             }
         }
         return new Snapshot(active.size(), deferred, history.size(), softTimeouts, hardTimeouts,
-                lateConvergences, droppedOperations, oldestAge, totalSourcesRequested, totalBuffersRequested);
+                lateConvergences, droppedOperations, oldestAge, totalSourcesRequested, totalBuffersRequested,
+                failedOperations, sourceDeleteFailures, bufferDeleteFailures);
     }
 
     private static String describeTimeout(Operation operation, long ageNanos, boolean hard) {
@@ -140,7 +162,8 @@ public final class AudioNativeCloseDiagnostics {
 
     public record Snapshot(int activeOperations, int deferredOperations, int retainedCompleted,
             long softTimeouts, long hardTimeouts, long lateConvergences, long droppedOperations,
-            long oldestPendingNanos, long totalSourcesRequested, long totalBuffersRequested) {
+            long oldestPendingNanos, long totalSourcesRequested, long totalBuffersRequested,
+            long failedOperations, long sourceDeleteFailures, long bufferDeleteFailures) {
     }
 
     private static final class Operation {
@@ -160,6 +183,7 @@ public final class AudioNativeCloseDiagnostics {
         }
     }
 
-    private record CompletedOperation(long durationNanos, boolean deferred, boolean late) {
+    private record CompletedOperation(long durationNanos, boolean deferred, boolean late,
+            int sourceDeleteFailures, int bufferDeleteFailures) {
     }
 }

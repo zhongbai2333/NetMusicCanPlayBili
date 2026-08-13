@@ -7,15 +7,18 @@ import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.vertex.MeshData;
+import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.TlsfAllocator;
 import com.mojang.blaze3d.vertex.UberGpuBuffer;
 import com.mojang.blaze3d.vertex.VertexFormat;
+import com.mojang.blaze3d.vertex.VertexSorting;
 import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainBlockSectionSnapshot;
 import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainCompilationAdmission;
 import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainPreviewFrame;
 import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainPreviewManager;
 import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainPreviewSectionCompiler;
 import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainResidentSectionPolicy;
+import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainTranslucentSortPolicy;
 import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainBounds;
 import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainSectionKey;
 import net.minecraft.client.Minecraft;
@@ -315,6 +318,7 @@ final class TerrainPreviewGpuCache implements AutoCloseable {
             if (outcome.failure instanceof VirtualMachineError fatal) {
                 throw fatal;
             }
+            TerrainPreviewRenderDiagnostics.recordFailure();
             failedSources.put(outcome.request.source.section(), outcome.request.source);
             LOGGER.warn("无法编译地形预览 section {}，保留旧网格",
                     outcome.request.source.section(), outcome.failure);
@@ -325,6 +329,10 @@ final class TerrainPreviewGpuCache implements AutoCloseable {
         try (TerrainPreviewSectionCompiler.CompiledCpuSection compiled = outcome.compiled) {
             try {
                 GpuSection replacement = GpuSection.upload(compiled, sharedBuffers);
+                boolean materialLod = compiled.source().blocks().stream()
+                        .anyMatch(block -> block.cellSize() > 1);
+                boolean translucent = compiled.layers().containsKey(ChunkSectionLayer.TRANSLUCENT);
+                TerrainPreviewRenderDiagnostics.recordSectionUpload(materialLod, translucent);
                 GpuSection old = sections.put(outcome.request.source.section(), replacement);
                 if (old != null) {
                     old.close();
@@ -343,6 +351,7 @@ final class TerrainPreviewGpuCache implements AutoCloseable {
                 if (failure instanceof Error fatal) {
                     throw fatal;
                 }
+                TerrainPreviewRenderDiagnostics.recordFailure();
                 failedSources.put(outcome.request.source.section(), outcome.request.source);
                 LOGGER.warn("无法上传地形预览 section {}，跳过该 section",
                     outcome.request.source.section(), failure);
@@ -362,6 +371,11 @@ final class TerrainPreviewGpuCache implements AutoCloseable {
         TerrainPreviewCoordinateTransform.Frame terrainTransform =
                 TerrainPreviewCoordinateTransform.create(modelView,
                         mainCameraPosition.x, mainCameraPosition.y, mainCameraPosition.z);
+        if (resortTranslucentQuads(frame, modelView, viewProjection)) {
+            residentRevision++;
+            cachedRenderPlan = null;
+            cachedUniformPlan = null;
+        }
         RenderPlan plan = renderPlan(frame, modelView, viewProjection);
         List<GpuSection> visible = plan.visible;
         logCoverage(frame, visible.size());
@@ -378,6 +392,28 @@ final class TerrainPreviewGpuCache implements AutoCloseable {
             }
             throw new TerrainPreviewRenderFailure(failure);
         }
+    }
+
+    private boolean resortTranslucentQuads(TerrainPreviewFrame frame, Matrix4fc modelView,
+            Matrix4fc viewProjection) {
+        boolean changed = false;
+        for (GpuSection section : sections.values()) {
+            GpuLayer layer = section.layers.get(ChunkSectionLayer.TRANSLUCENT);
+            if (layer == null || layer.sortState == null || layer.sortedFor(modelView)
+                    || !intersectsFrustum(frame, viewProjection, section.key)) {
+                continue;
+            }
+            float sectionX = section.key.minBlockX() - frame.originX();
+            float sectionY = section.key.minBlockY() - frame.originY();
+            float sectionZ = section.key.minBlockZ() - frame.originZ();
+            VertexSorting sorting = VertexSorting.byDistance(point -> {
+                return TerrainTranslucentSortPolicy.viewDistanceSquared(modelView,
+                        sectionX, sectionY, sectionZ, point.x(), point.y(), point.z());
+            });
+            layer.resort(sorting, modelView);
+            changed = true;
+        }
+        return changed;
     }
 
     private void disableForSession(String message, Throwable failure) {
@@ -657,7 +693,8 @@ final class TerrainPreviewGpuCache implements AutoCloseable {
             Map<ChunkSectionLayer, GpuLayer> layers = new EnumMap<>(ChunkSectionLayer.class);
             try {
                 for (Map.Entry<ChunkSectionLayer, MeshData> entry : compiled.layers().entrySet()) {
-                    GpuLayer layer = GpuLayer.create(entry.getValue());
+                    GpuLayer layer = GpuLayer.create(entry.getValue(),
+                            compiled.sortStates().get(entry.getKey()));
                     sharedBuffers.upload(entry.getKey(), layer, entry.getValue());
                     layers.put(entry.getKey(), layer);
                 }
@@ -679,19 +716,35 @@ final class TerrainPreviewGpuCache implements AutoCloseable {
         private final int indexCount;
         private final VertexFormat.IndexType indexType;
         private final boolean customIndices;
+        private final MeshData.SortState sortState;
         private SharedTerrainBuffers owner;
         private ChunkSectionLayer ownerLayer;
+        private Matrix4f lastSortModelView;
 
         private GpuLayer(int indexCount, VertexFormat.IndexType indexType,
-                boolean customIndices) {
+                boolean customIndices, MeshData.SortState sortState) {
             this.indexCount = indexCount;
             this.indexType = indexType;
             this.customIndices = customIndices;
+            this.sortState = sortState;
         }
 
-        private static GpuLayer create(MeshData mesh) {
+        private static GpuLayer create(MeshData mesh, MeshData.SortState sortState) {
             return new GpuLayer(mesh.drawState().indexCount(), mesh.drawState().indexType(),
-                    mesh.indexBuffer() != null);
+                    mesh.indexBuffer() != null, sortState);
+        }
+
+        private boolean sortedFor(Matrix4fc modelView) {
+            return !TerrainTranslucentSortPolicy.needsResort(lastSortModelView, modelView);
+        }
+
+        private void resort(VertexSorting sorting, Matrix4fc modelView) {
+            if (owner == null || ownerLayer != ChunkSectionLayer.TRANSLUCENT || sortState == null) {
+                return;
+            }
+            owner.resort(this, sortState, sorting);
+            lastSortModelView = new Matrix4f(modelView);
+            TerrainPreviewRenderDiagnostics.recordTranslucentResort();
         }
 
         @Override
@@ -783,6 +836,30 @@ final class TerrainPreviewGpuCache implements AutoCloseable {
             vertices.get(layer).removeAllocation(key);
             if (key.customIndices) {
                 translucentIndices.removeAllocation(key);
+            }
+        }
+
+        private void resort(GpuLayer key, MeshData.SortState sortState, VertexSorting sorting) {
+            if (!key.customIndices) {
+                return;
+            }
+            int bytes = Math.max(256, key.indexCount * key.indexType.bytes);
+            try (ByteBufferBuilder storage = new ByteBufferBuilder(bytes)) {
+                ByteBufferBuilder.Result result = sortState.buildSortedIndexBuffer(storage, sorting);
+                if (result == null) {
+                    return;
+                }
+                try (result) {
+                    translucentIndices.removeAllocation(key);
+                    if (!translucentIndices.addAllocation(key, null, result.byteBuffer())) {
+                        throw new IllegalStateException("terrain translucent index staging buffer exhausted");
+                    }
+                    var device = RenderSystem.getDevice();
+                    translucentIndices.uploadStagedAllocations(device, device.createCommandEncoder());
+                } catch (Throwable failure) {
+                    translucentIndices.removeAllocation(key);
+                    throw failure;
+                }
             }
         }
 

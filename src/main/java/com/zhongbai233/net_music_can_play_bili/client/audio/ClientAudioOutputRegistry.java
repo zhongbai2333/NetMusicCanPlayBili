@@ -5,6 +5,7 @@ import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioHandler;
 import com.zhongbai233.net_music_can_play_bili.bili.SpeakerAudioRelay;
 import com.zhongbai233.net_music_can_play_bili.bili.StereoOpenALHandler;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
@@ -12,6 +13,7 @@ import org.slf4j.Logger;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
@@ -36,6 +38,7 @@ public class ClientAudioOutputRegistry {
     private static final ConcurrentMap<BlockPos, Boolean> CONSOLE_ROUTE_SUPPRESSED = new ConcurrentHashMap<>();
 
     private static volatile float[] listenerPos;
+    private static volatile boolean paused;
 
     public static void register(DolbyAudioHandler handler) {
         register(handler, null);
@@ -58,19 +61,21 @@ public class ClientAudioOutputRegistry {
         if (handler == null) {
             return;
         }
-        BlockPos key = keyFor(pos, ownerId, sessionId);
-        String normalizedSessionId = normalizeSessionId(sessionId);
+        Optional<PlaybackSessionId> playbackSessionId = PlaybackSessionId.parse(sessionId);
+        BlockPos key = keyFor(pos, ownerId, playbackSessionId);
+        String normalizedSessionId = playbackSessionId.map(PlaybackSessionId::value).orElse("");
         if (!ClientAudioOutputPolicy.isCurrentSession(pos, normalizedSessionId)) {
             handler.hardStopOutput();
             handler.cleanup();
             return;
         }
         AudioEntry entry = new AudioEntry(key, centerFor(pos), handler, OutputKind.DOLBY, System.currentTimeMillis(),
-                startOffsetTicks(startOffsetSeconds), normalizedSessionId, ownerId);
+                startOffsetTicks(startOffsetSeconds), playbackSessionId, ownerId);
         if (pos != null) {
             CONSOLE_ROUTE_SUPPRESSED.remove(pos.immutable());
         }
         handler.setConsoleRouteSuppressed(false);
+        handler.setPaused(paused);
         handler.setUserVolume(ownerId != null ? OWNER_VOLUMES.getOrDefault(ownerId, 1.0F)
                 : ClientAudioOutputPolicy.volume(pos));
         cleanupAfterPut(OUTPUTS.put(key, entry, entry.createdAtMillis()));
@@ -107,19 +112,21 @@ public class ClientAudioOutputRegistry {
         if (handler == null) {
             return;
         }
-        BlockPos key = keyFor(pos, ownerId, sessionId);
-        String normalizedSessionId = normalizeSessionId(sessionId);
+        Optional<PlaybackSessionId> playbackSessionId = PlaybackSessionId.parse(sessionId);
+        BlockPos key = keyFor(pos, ownerId, playbackSessionId);
+        String normalizedSessionId = playbackSessionId.map(PlaybackSessionId::value).orElse("");
         if (!ClientAudioOutputPolicy.isCurrentSession(pos, normalizedSessionId)) {
             handler.hardStopOutput();
             handler.cleanup();
             return;
         }
         AudioEntry entry = new AudioEntry(key, centerFor(pos), handler, OutputKind.STEREO, System.currentTimeMillis(),
-                startOffsetTicks(startOffsetSeconds), normalizedSessionId, ownerId);
+                startOffsetTicks(startOffsetSeconds), playbackSessionId, ownerId);
         if (pos != null) {
             CONSOLE_ROUTE_SUPPRESSED.remove(pos.immutable());
         }
         handler.setConsoleRouteSuppressed(false);
+        handler.setPaused(paused);
         handler.setUserVolume(ownerId != null ? OWNER_VOLUMES.getOrDefault(ownerId, 1.0F)
                 : ClientAudioOutputPolicy.volume(pos));
         cleanupAfterPut(OUTPUTS.put(key, entry, entry.createdAtMillis()));
@@ -196,6 +203,17 @@ public class ClientAudioOutputRegistry {
                             .HeadphoneClientState.handlesTurntable(entry.pos()),
                         false,
                         followLocalPlayerFront));
+        }
+    }
+
+    /** Applies Minecraft's pause transition to OpenAL sources not owned by SoundEngine. */
+    public static void setPaused(boolean paused) {
+        ClientAudioOutputRegistry.paused = paused;
+        for (AudioEntry entry : OUTPUTS.values()) {
+            entry.output().setPaused(paused);
+        }
+        for (SpeakerAudioRelay relay : RELAYS.values()) {
+            relay.setPaused(paused);
         }
     }
 
@@ -329,6 +347,7 @@ public class ClientAudioOutputRegistry {
         if (speakerPos == null || turntablePos == null || relay == null)
             return;
         relay.setSpeakerPos(AudioUtils.centerFor(speakerPos));
+        relay.setPaused(paused);
         SpeakerAudioRelay old = RELAYS.put(speakerPos, relay);
         RELAY_TURNTABLE.put(speakerPos, turntablePos);
         if (old != null) {
@@ -492,10 +511,10 @@ public class ClientAudioOutputRegistry {
         RelayTimeline relayTimeline = getRelayTimeline(key);
         long mainMillis = -1L;
         long mainFedMillis = -1L;
-        String mainSessionId = "";
+        Optional<PlaybackSessionId> mainSessionId = Optional.empty();
         AudioEntry entry = OUTPUTS.get(key);
         if (entry != null) {
-            mainSessionId = entry.sessionId();
+            mainSessionId = entry.playbackSessionId();
             long positionMillis = entry.output().getPositionMillis();
             if (positionMillis >= 0L) {
                 mainMillis = adjustedAudibleMillis(entry.startOffsetTicks(), positionMillis,
@@ -532,6 +551,49 @@ public class ClientAudioOutputRegistry {
             return new AudioTimeline(audibleMillis, mainFedMillis, -1L, audibleMillis, 0, 0, entry.sessionId());
         }
         return AudioTimeline.EMPTY;
+    }
+
+    public static Optional<StereoOpenALHandler.DiagnosticSnapshot> getOwnerStereoSnapshot(UUID ownerId) {
+        if (ownerId == null) {
+            return Optional.empty();
+        }
+        return OUTPUTS.values().stream()
+                .filter(candidate -> ownerId.equals(candidate.ownerId()))
+                .filter(candidate -> candidate.kind() == OutputKind.STEREO)
+                .max(Comparator.comparingLong(candidate -> candidate.createdAtMillis()))
+                .map(AudioEntry::output)
+                .filter(StereoOpenALHandler.class::isInstance)
+                .map(StereoOpenALHandler.class::cast)
+                .map(StereoOpenALHandler::snapshot);
+    }
+
+    /** Read-only diagnostics for the Stereo output owned by one exact playback session. */
+    public static Optional<StereoOpenALHandler.DiagnosticSnapshot> getSessionStereoSnapshot(
+            PlaybackSessionId sessionId) {
+        if (sessionId == null) {
+            return Optional.empty();
+        }
+        return OUTPUTS.values().stream()
+                .filter(candidate -> candidate.playbackSessionId().filter(sessionId::equals).isPresent())
+                .filter(candidate -> candidate.kind() == OutputKind.STEREO)
+                .max(Comparator.comparingLong(candidate -> candidate.createdAtMillis()))
+                .map(AudioEntry::output)
+                .filter(StereoOpenALHandler.class::isInstance)
+                .map(StereoOpenALHandler.class::cast)
+                .map(StereoOpenALHandler::snapshot);
+    }
+
+    /** Read-only diagnostics for the current world-position-owned Stereo output. */
+    public static Optional<StereoOpenALHandler.DiagnosticSnapshot> getStereoSnapshot(BlockPos turntablePos) {
+        if (turntablePos == null) {
+            return Optional.empty();
+        }
+        AudioEntry entry = OUTPUTS.get(keyFor(turntablePos));
+        if (entry == null || entry.kind() != OutputKind.STEREO
+                || !(entry.output() instanceof StereoOpenALHandler stereo)) {
+            return Optional.empty();
+        }
+        return Optional.of(stereo.snapshot());
     }
 
     private static long getRelayMediaMillis(BlockPos turntableKey) {
@@ -593,8 +655,18 @@ public class ClientAudioOutputRegistry {
     }
 
     public record AudioTimeline(long mainMillis, long mainFedMillis, long relayMillis, long combinedMillis,
-            int relayStartedCount, int relayRegisteredCount, String sessionId) {
-        private static final AudioTimeline EMPTY = new AudioTimeline(-1L, -1L, -1L, -1L, 0, 0, "");
+            int relayStartedCount, int relayRegisteredCount, Optional<PlaybackSessionId> playbackSessionId) {
+        private static final AudioTimeline EMPTY = new AudioTimeline(-1L, -1L, -1L, -1L, 0, 0, Optional.empty());
+
+        public AudioTimeline {
+            playbackSessionId = playbackSessionId != null ? playbackSessionId : Optional.empty();
+        }
+
+        public AudioTimeline(long mainMillis, long mainFedMillis, long relayMillis, long combinedMillis,
+                int relayStartedCount, int relayRegisteredCount, String sessionId) {
+            this(mainMillis, mainFedMillis, relayMillis, combinedMillis, relayStartedCount, relayRegisteredCount,
+                    PlaybackSessionId.parse(sessionId));
+        }
 
         public long audibleMillis() {
             return mainMillis >= 0L ? mainMillis : relayMillis;
@@ -602,7 +674,12 @@ public class ClientAudioOutputRegistry {
 
         /** 显式语义 accessor，避免调用方把输出 session 与播放命令 session 混淆。 */
         public String audioSessionId() {
-            return sessionId;
+            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+        }
+
+        /** 保留原 record component 的字符串 accessor 兼容。 */
+        public String sessionId() {
+            return audioSessionId();
         }
 
         /** 已送入主输出队列的媒体位置。 */
@@ -744,8 +821,10 @@ public class ClientAudioOutputRegistry {
         return keyFor((BlockPos) null);
     }
 
-    private static BlockPos keyFor(BlockPos pos, UUID ownerId, String sessionId) {
-        UUID minecartUuid = ClientMinecartAudioAnchors.entityUuid(sessionId);
+    private static BlockPos keyFor(BlockPos pos, UUID ownerId, Optional<PlaybackSessionId> playbackSessionId) {
+        UUID minecartUuid = playbackSessionId
+                .map(sessionId -> ClientMinecartAudioAnchors.entityUuid(sessionId.value()))
+                .orElse(null);
         if (minecartUuid != null) {
             return MINECART_KEYS.computeIfAbsent(minecartUuid,
                     ignored -> new BlockPos(Integer.MIN_VALUE + 2, 0, ANONYMOUS_COUNTER.getAndIncrement()));
@@ -762,7 +841,16 @@ public class ClientAudioOutputRegistry {
     }
 
     private record AudioEntry(BlockPos pos, float[] machinePos, AudioOutputHandle output, OutputKind kind,
-            long createdAtMillis, long startOffsetTicks, String sessionId, UUID ownerId) {
+            long createdAtMillis, long startOffsetTicks, Optional<PlaybackSessionId> playbackSessionId,
+            UUID ownerId) {
+        private AudioEntry {
+            playbackSessionId = playbackSessionId != null ? playbackSessionId : Optional.empty();
+        }
+
+        private String sessionId() {
+            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+        }
+
         private void cleanup() {
             output.cleanup();
         }
@@ -783,7 +871,4 @@ public class ClientAudioOutputRegistry {
         }
     }
 
-    private static String normalizeSessionId(String sessionId) {
-        return sessionId != null ? sessionId : "";
-    }
 }

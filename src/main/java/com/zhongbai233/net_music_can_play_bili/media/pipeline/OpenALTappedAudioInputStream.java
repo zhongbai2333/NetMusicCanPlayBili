@@ -10,10 +10,13 @@ import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.AudioSystem;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicLong;
 
 public final class OpenALTappedAudioInputStream extends AudioInputStream {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int SKIP_BUFFER_SIZE = 64 * 1024;
+    private static final AtomicLong INSTANCES_CREATED = new AtomicLong();
+    private static final AtomicLong CLOSES_COMPLETED = new AtomicLong();
 
     private final AudioInputStream source;
     private final StereoOpenALHandler stereo;
@@ -25,7 +28,7 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
     private final long initialSkipBytes;
     private long skipBytesRemaining;
     private int carryLength;
-    private boolean closed;
+    private volatile boolean closed;
     private boolean firstDiagnostics;
     private boolean inputFinished;
     private boolean skipLogged;
@@ -50,6 +53,7 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
                 * (long) this.frameBytes);
         this.initialSkipBytes = this.skipBytesRemaining;
         this.carry = new byte[this.frameBytes];
+        INSTANCES_CREATED.incrementAndGet();
     }
 
     @Override
@@ -106,25 +110,29 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
     }
 
     @Override
-    public void close() throws IOException {
+    public synchronized void close() throws IOException {
         if (closed) {
             return;
         }
         closed = true;
         IOException error = null;
         try {
-            source.close();
-        } catch (IOException e) {
-            error = e;
-        }
-        try {
-            onClose.run();
-        } catch (RuntimeException e) {
-            if (error == null) {
-                error = new IOException("OpenAL tapped stream cleanup failed", e);
-            } else {
-                error.addSuppressed(e);
+            try {
+                source.close();
+            } catch (IOException e) {
+                error = e;
             }
+            try {
+                onClose.run();
+            } catch (RuntimeException e) {
+                if (error == null) {
+                    error = new IOException("OpenAL tapped stream cleanup failed", e);
+                } else {
+                    error.addSuppressed(e);
+                }
+            }
+        } finally {
+            CLOSES_COMPLETED.incrementAndGet();
         }
         if (error != null) {
             throw error;
@@ -145,9 +153,10 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
         int aligned = combinedLength - (combinedLength % frameBytes);
         if (aligned > 0) {
             float[][] planar = PcmPlanarConverter.convert(tapBuffer, 0, aligned, getFormat());
-            if (!firstDiagnostics) {
+            StereoOpenALHandler.PcmQuality quality = stereo.observeFirstPcm(planar);
+            if (!firstDiagnostics && quality.samples() >= 1_024L) {
                 firstDiagnostics = true;
-                logFirstPcmDiagnostics(aligned, planar);
+                logFirstPcmDiagnostics(aligned, quality);
             }
             stereo.enqueuePcm(planar);
         }
@@ -180,34 +189,26 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
         }
     }
 
-    private void logFirstPcmDiagnostics(int bytes, float[][] planar) {
+    public boolean isClosed() {
+        return closed;
+    }
+
+    /** Global scalar lifecycle state used to verify the Minecraft streaming-channel close path. */
+    public static LifecycleSnapshot lifecycleSnapshot() {
+        long created = INSTANCES_CREATED.get();
+        long closed = CLOSES_COMPLETED.get();
+        return new LifecycleSnapshot(created, closed, Math.max(0L, created - closed));
+    }
+
+    public record LifecycleSnapshot(long instancesCreated, long closesCompleted, long activeInstances) {
+    }
+
+    private void logFirstPcmDiagnostics(int bytes, StereoOpenALHandler.PcmQuality quality) {
         AudioFormat format = getFormat();
-        int samples = planar.length > 0 && planar[0] != null ? planar[0].length : 0;
-        double sumSquares = 0.0;
-        float peak = 0.0f;
-        int count = 0;
-        int clipped = 0;
-        for (float[] channel : planar) {
-            if (channel == null) {
-                continue;
-            }
-            for (float sample : channel) {
-                float abs = Math.abs(sample);
-                if (abs > peak) {
-                    peak = abs;
-                }
-                if (abs >= 0.999f) {
-                    clipped++;
-                }
-                sumSquares += sample * sample;
-                count++;
-            }
-        }
-        double rms = count > 0 ? Math.sqrt(sumSquares / count) : 0.0;
-        double clippedRatio = count > 0 ? clipped / (double) count : 0.0;
         LOGGER.debug(
                 "PCM tap first chunk: bytes={} frameBytes={} aligned={} sampleSize={} endian={} samples={} peak={} rms={} clippedRatio={}",
                 bytes, frameBytes, bytes % frameBytes == 0, format.getSampleSizeInBits(),
-                format.isBigEndian() ? "big" : "little", samples, peak, rms, clippedRatio);
+                format.isBigEndian() ? "big" : "little", quality.samples(), quality.peak(), quality.rms(),
+                quality.clippedRatio());
     }
 }

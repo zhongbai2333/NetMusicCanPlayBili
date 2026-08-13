@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.media.sync;
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 import net.minecraft.core.BlockPos;
 
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -16,7 +17,7 @@ import java.util.UUID;
 public record PlaybackRequest(
         String mediaUrl,
         BlockPos pos,
-        String sessionId,
+        Optional<PlaybackSessionId> playbackSessionId,
         long elapsedMillis,
         long totalMillis,
         UUID ownerId,
@@ -29,16 +30,26 @@ public record PlaybackRequest(
         }
         mediaUrl = PlaybackSync.strip(mediaUrl);
         pos = AudioUtils.copyPos(pos);
-        sessionId = sessionId != null ? sessionId : "";
+        playbackSessionId = playbackSessionId != null ? playbackSessionId : Optional.empty();
         elapsedMillis = Math.max(0L, elapsedMillis);
         totalMillis = Math.max(0L, totalMillis);
         capturedNanos = capturedNanos > 0L ? capturedNanos : System.nanoTime();
+    }
+
+    public PlaybackRequest(String mediaUrl, BlockPos pos, String sessionId, long elapsedMillis,
+            long totalMillis, UUID ownerId, UUID minecartUuid, long capturedNanos) {
+        this(mediaUrl, pos, PlaybackSessionId.parse(sessionId), elapsedMillis, totalMillis, ownerId, minecartUuid,
+                capturedNanos);
     }
 
     public static PlaybackRequest now(String mediaUrl, BlockPos pos, String sessionId, long elapsedMillis,
             long totalMillis, UUID ownerId, UUID minecartUuid) {
         return new PlaybackRequest(mediaUrl, pos, sessionId, elapsedMillis, totalMillis, ownerId, minecartUuid,
                 System.nanoTime());
+    }
+
+    public String sessionId() {
+        return playbackSessionId.map(PlaybackSessionId::value).orElse("");
     }
 
     public float startOffsetSeconds() {

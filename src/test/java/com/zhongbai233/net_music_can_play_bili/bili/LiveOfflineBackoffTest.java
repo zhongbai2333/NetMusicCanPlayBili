@@ -36,4 +36,16 @@ class LiveOfflineBackoffTest {
         assertFalse(LiveOfflineBackoff.isBlocked(null, 2L));
         assertFalse(LiveOfflineBackoff.isBlocked("", 2L));
     }
+
+    @Test
+    void deadlineSaturatesNearLongMaxValue() {
+        String room = "backoff-room-overflow";
+        long start = Long.MAX_VALUE - LiveOfflineBackoff.retryMillis() + 1L;
+        LiveOfflineBackoff.clear(room);
+
+        LiveOfflineBackoff.recordOffline(room, start);
+
+        assertTrue(LiveOfflineBackoff.isBlocked(room, Long.MAX_VALUE - 1L));
+        assertFalse(LiveOfflineBackoff.isBlocked(room, Long.MAX_VALUE));
+    }
 }

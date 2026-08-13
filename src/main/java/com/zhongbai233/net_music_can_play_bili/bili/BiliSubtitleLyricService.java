@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.bili;
 import com.github.tartaricacid.netmusic.api.lyric.LyricParser;
 import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import org.slf4j.Logger;
 
 /**
@@ -19,7 +20,7 @@ public final class BiliSubtitleLyricService {
     }
 
     public static LyricRecord tryBuildLyricRecord(String rawInput, String songName, boolean allowAi) {
-        BiliApiClient.VideoSelection selection = BiliApiClient.parseStoredVideoSelection(rawInput);
+        BiliApiClient.VideoSelection selection = BiliApiClient.parseStoredVideoSelection(PlaybackSync.strip(rawInput));
         if (selection == null) {
             return null;
         }
@@ -67,5 +68,28 @@ public final class BiliSubtitleLyricService {
             LOGGER.warn("B站 CC 字幕获取失败: {}", e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Fetches only a Bilibili AI-generated CC track. Absence returns {@code null}; transport/parse failures are
+     * propagated so the session owner can distinguish safe unavailability from a failed request.
+     */
+    public static LyricRecord buildAiLyricRecord(String rawInput, String songName) throws Exception {
+        String stored = PlaybackSync.strip(rawInput);
+        BiliApiClient.VideoSelection selection = BiliApiClient.parseStoredVideoSelection(stored);
+        if (selection == null) {
+            return null;
+        }
+        BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(selection.videoId(), selection.page());
+        String lyricJson = BiliApiClient.getBilingualSubtitleAsNetEaseLyric(
+                info, BiliApiClient.SubtitlePreference.AI_ONLY);
+        if (lyricJson == null || lyricJson.isBlank()) {
+            return null;
+        }
+        LyricRecord record = LyricParser.parseLyric(lyricJson, songName);
+        if (record == null) {
+            throw new IllegalStateException("B站 AI CC 字幕解析失败：LyricParser 返回 null");
+        }
+        return record;
     }
 }

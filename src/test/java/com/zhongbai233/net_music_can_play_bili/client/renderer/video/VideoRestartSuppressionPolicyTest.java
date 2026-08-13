@@ -14,6 +14,15 @@ class VideoRestartSuppressionPolicyTest {
     }
 
     @Test
+    void startupCandidateNeverPausesWithAnUncommittedProbeFrame() {
+        assertFalse(VideoRestartSuppressionPolicy.shouldPauseDecodeOffscreen(false, false, true));
+        assertFalse(VideoRestartSuppressionPolicy.shouldPauseDecodeOffscreen(false, true, true));
+        assertTrue(VideoRestartSuppressionPolicy.shouldPauseDecodeOffscreen(true, false, true));
+        assertFalse(VideoRestartSuppressionPolicy.shouldPauseDecodeOffscreen(true, true, true));
+        assertFalse(VideoRestartSuppressionPolicy.shouldPauseDecodeOffscreen(true, false, false));
+    }
+
+    @Test
     void liveAndDrainingDecoderCannotBeRestartedByVisibilityOrLag() {
         assertFalse(VideoRestartSuppressionPolicy.allowsRestart(true, false, 60_000L, 8_000L));
         assertFalse(VideoRestartSuppressionPolicy.allowsRestart(false, true, 60_000L, 8_000L));

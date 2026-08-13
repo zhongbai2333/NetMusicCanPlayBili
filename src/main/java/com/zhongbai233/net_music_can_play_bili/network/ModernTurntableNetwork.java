@@ -13,6 +13,10 @@ public final class ModernTurntableNetwork {
                 ModernTurntableControlPacket.TYPE,
                 ModernTurntableControlPacket.STREAM_CODEC,
                 ModernTurntableControlPacket::handle);
+        registrar.playToClient(
+                ModernTurntableStopPacket.TYPE,
+                ModernTurntableStopPacket.STREAM_CODEC,
+                ModernTurntableStopPacket::handle);
         registrar.playToServer(
                 LiveStreamerControlPacket.TYPE,
                 LiveStreamerControlPacket.STREAM_CODEC,
@@ -90,6 +94,10 @@ public final class ModernTurntableNetwork {
                 MP4PlaybackControlPacket.STREAM_CODEC,
                 MP4PlaybackControlPacket::handle);
         registrar.playToServer(
+                MP4PlaybackRetryPacket.TYPE,
+                MP4PlaybackRetryPacket.STREAM_CODEC,
+                MP4PlaybackRetryPacket::handle);
+        registrar.playToServer(
                 MP4EnsureDeviceIdPacket.TYPE,
                 MP4EnsureDeviceIdPacket.STREAM_CODEC,
                 MP4EnsureDeviceIdPacket::handle);
@@ -109,6 +117,10 @@ public final class ModernTurntableNetwork {
                 PadPlaybackControlPacket.TYPE,
                 PadPlaybackControlPacket.STREAM_CODEC,
                 PadPlaybackControlPacket::handle);
+        registrar.playToServer(
+                PadPlaybackRetryPacket.TYPE,
+                PadPlaybackRetryPacket.STREAM_CODEC,
+                PadPlaybackRetryPacket::handle);
         registrar.playToClient(
                 MP4DeviceIdPacket.TYPE,
                 MP4DeviceIdPacket.STREAM_CODEC,

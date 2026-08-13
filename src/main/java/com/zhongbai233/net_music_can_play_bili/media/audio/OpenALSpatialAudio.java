@@ -22,6 +22,7 @@ import org.lwjgl.openal.SOFTSourceSpatialize;
 import org.lwjgl.system.MemoryUtil;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker.Category;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseProperties;
 
 import java.util.ArrayDeque;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -46,10 +47,7 @@ public class OpenALSpatialAudio {
     private static final int SAMPLE_RATE = 48000;
     private static final float[] ZERO_LOCAL_POSITION = new float[] { 0f, 0f, 0f };
     private int actualSampleRate = SAMPLE_RATE;
-    private static final boolean FORCE_HRTF = Boolean.getBoolean("ncpb.dolby.forceHrtf")
-            && !Boolean.getBoolean("ncpb.dolby.disableHrtf");
-    private static final boolean FORCE_HRTF_WITH_CHANNEL = Boolean
-            .getBoolean("ncpb.dolby.forceHrtfWithChannel");
+    private static final OpenAlHrtfProperties.Settings HRTF_PROPERTIES = OpenAlHrtfProperties.settings();
 
     /** 是否支持 AL_EXT_FLOAT32（浮点 PCM，无量化损失） */
     private static final ThreadLocal<Long> CAPABILITIES_CONTEXT = ThreadLocal.withInitial(() -> 0L);
@@ -61,9 +59,8 @@ public class OpenALSpatialAudio {
     private static final ConcurrentLinkedQueue<NativeResources> PENDING_NATIVE_DELETES = new ConcurrentLinkedQueue<>();
     private static final Object NATIVE_DELETE_LOCK = new Object();
     private static final AtomicBoolean NATIVE_DELETE_DRAIN_SCHEDULED = new AtomicBoolean();
-        private static final AtomicLong NEXT_NATIVE_DELETE_RETRY_NANOS = new AtomicLong();
-        private static final long NATIVE_DELETE_RETRY_NANOS = Long.getLong(
-            "ncpb.close_diag.openal_retry_ms", 500L) * 1_000_000L;
+    private static final AtomicLong NEXT_NATIVE_DELETE_RETRY_NANOS = new AtomicLong();
+    private static final long NATIVE_DELETE_RETRY_NANOS = MediaCloseProperties.openAlRetryNanos();
     private static final ExecutorService NATIVE_DELETE_EXECUTOR = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "OpenALSpatialCleanup");
         thread.setDaemon(true);
@@ -92,6 +89,8 @@ public class OpenALSpatialAudio {
     private long mediaConsumedBuffers;
     /** Primary source 当前 OpenAL 队列中每个 buffer 是否承载真实媒体 PCM。 */
     private ArrayDeque<Boolean> primaryQueuedMediaFlags;
+    /** Desired Minecraft pause state for the native sources owned by this renderer. */
+    private boolean paused;
 
     public OpenALSpatialAudio() {
     }
@@ -162,10 +161,11 @@ public class OpenALSpatialAudio {
             }
 
             initialized = true;
+            setPaused(paused);
             LOGGER.debug(
                     "OpenAL 空间声初始化摘要: beds={} objects={} format={} sampleRate={}Hz sourceMode=world-follow spatialize=force hrtf={} preloadBuffers={} preload={}ms",
                     numBeds, numObjects, useFloat32 ? "float32" : "int16", actualSampleRate,
-                    FORCE_HRTF ? "force" : "vanilla", NUM_BUFFERS,
+                    HRTF_PROPERTIES.forceHrtf() ? "force" : "vanilla", NUM_BUFFERS,
                     Math.round(NUM_BUFFERS * SAMPLES_PER_BUFFER * 1000.0 / actualSampleRate));
             return true;
         } catch (Throwable error) {
@@ -259,6 +259,20 @@ public class OpenALSpatialAudio {
         for (int obj = 0; obj < numObjects; obj++) {
             pumpSource(objectSources[obj], objPending[obj], 1.0f);
         }
+    }
+
+    /** Pause/unpause every native source without discarding queued media or timeline state. */
+    public synchronized void setPaused(boolean paused) {
+        this.paused = paused;
+        if (!initialized || deviceLost || !ensureOpenAlContext(paused ? "pause" : "resume")) {
+            return;
+        }
+        applyPausedState(bedSources, paused);
+        applyPausedState(objectSources, paused);
+    }
+
+    public synchronized boolean isPaused() {
+        return paused;
     }
 
     /** 更新所有声源的 3D 位置及 listener */
@@ -514,6 +528,8 @@ public class OpenALSpatialAudio {
     }
 
     private static void deleteNativeResources(NativeResources resources) {
+        int sourceDeleteFailures = 0;
+        int bufferDeleteFailures = 0;
         try {
             int[] bedSourcesToDelete = resources.bedSources();
             int[] objectSourcesToDelete = resources.objectSources();
@@ -521,26 +537,23 @@ public class OpenALSpatialAudio {
             int[][] objBuffersToDelete = resources.objectBuffers();
             if (bedSourcesToDelete != null) {
                 for (int src : bedSourcesToDelete) {
-                    try {
-                        stopAndDelete(src);
-                    } catch (Throwable ignored) {
+                    if (!deleteSourceChecked(src)) {
+                        sourceDeleteFailures++;
                     }
                 }
             }
             if (objectSourcesToDelete != null) {
                 for (int src : objectSourcesToDelete) {
-                    try {
-                        stopAndDelete(src);
-                    } catch (Throwable ignored) {
+                    if (!deleteSourceChecked(src)) {
+                        sourceDeleteFailures++;
                     }
                 }
             }
             if (bedBuffersToDelete != null) {
                 for (int[] chBufs : bedBuffersToDelete) {
                     for (int buf : chBufs) {
-                        try {
-                            AL10.alDeleteBuffers(buf);
-                        } catch (Throwable ignored) {
+                        if (!deleteBufferChecked(buf)) {
+                            bufferDeleteFailures++;
                         }
                     }
                 }
@@ -548,15 +561,45 @@ public class OpenALSpatialAudio {
             if (objBuffersToDelete != null) {
                 for (int[] objBufs : objBuffersToDelete) {
                     for (int buf : objBufs) {
-                        try {
-                            AL10.alDeleteBuffers(buf);
-                        } catch (Throwable ignored) {
+                        if (!deleteBufferChecked(buf)) {
+                            bufferDeleteFailures++;
                         }
                     }
                 }
             }
         } finally {
-            AudioNativeCloseDiagnostics.global().complete(resources.operationId(), System.nanoTime());
+            AudioNativeCloseDiagnostics.global().complete(resources.operationId(), System.nanoTime(),
+                    sourceDeleteFailures, bufferDeleteFailures);
+            if (sourceDeleteFailures > 0 || bufferDeleteFailures > 0) {
+                LOGGER.warn("OpenAL native delete batch completed with item failures: op={} sources={} buffers={}",
+                        resources.operationId(), sourceDeleteFailures, bufferDeleteFailures);
+            }
+        }
+    }
+
+    private static boolean deleteSourceChecked(int source) {
+        if (source == 0) {
+            return true;
+        }
+        try {
+            clearAlErrors();
+            stopAndDelete(source);
+            return AL10.alGetError() == AL10.AL_NO_ERROR;
+        } catch (Throwable failure) {
+            return false;
+        }
+    }
+
+    private static boolean deleteBufferChecked(int buffer) {
+        if (buffer == 0) {
+            return true;
+        }
+        try {
+            clearAlErrors();
+            AL10.alDeleteBuffers(buffer);
+            return AL10.alGetError() == AL10.AL_NO_ERROR;
+        } catch (Throwable failure) {
+            return false;
         }
     }
 
@@ -758,6 +801,9 @@ public class OpenALSpatialAudio {
                     }
                 }
                 AL10.alSourcePlay(source);
+                if (paused) {
+                    AL10.alSourcePause(source);
+                }
             } catch (Throwable error) {
                 if (checkDeviceLost("flushQueuedAudio")) {
                     return;
@@ -822,10 +868,54 @@ public class OpenALSpatialAudio {
                 primaryQueuedMediaFlags.offerLast(pcm != null);
             }
         }
-        if (AL10.alGetSourcei(sourceId, AL10.AL_SOURCE_STATE) != AL10.AL_PLAYING
+        if (!paused && AL10.alGetSourcei(sourceId, AL10.AL_SOURCE_STATE) != AL10.AL_PLAYING
                 && AL10.alGetSourcei(sourceId, AL10.AL_BUFFERS_QUEUED) > 0) {
             AL10.alSourcePlay(sourceId);
         }
+    }
+
+    private void applyPausedState(int[] sources, boolean pause) {
+        if (sources == null) {
+            return;
+        }
+        for (int source : sources) {
+            if (source == 0) {
+                continue;
+            }
+            try {
+                int state = AL10.alGetSourcei(source, AL10.AL_SOURCE_STATE);
+                int queuedBuffers = !pause && state == AL10.AL_STOPPED
+                        ? AL10.alGetSourcei(source, AL10.AL_BUFFERS_QUEUED) : 0;
+                OpenAlPauseStatePolicy.Action action = OpenAlPauseStatePolicy.action(
+                        pause, pauseSourceState(state), queuedBuffers);
+                if (action == OpenAlPauseStatePolicy.Action.PAUSE) {
+                    AL10.alSourcePause(source);
+                } else if (action == OpenAlPauseStatePolicy.Action.PLAY) {
+                    AL10.alSourcePlay(source);
+                }
+                if (checkDeviceLost(pause ? "pauseSources" : "resumeSources")) {
+                    return;
+                }
+            } catch (Throwable error) {
+                if (checkDeviceLost(pause ? "pauseSources" : "resumeSources")) {
+                    return;
+                }
+                LOGGER.debug("OpenAL source {} failed: {}", pause ? "pause" : "resume", error.toString());
+            }
+        }
+    }
+
+    private static OpenAlPauseStatePolicy.SourceState pauseSourceState(int state) {
+        if (state == AL10.AL_PLAYING) {
+            return OpenAlPauseStatePolicy.SourceState.PLAYING;
+        }
+        if (state == AL10.AL_PAUSED) {
+            return OpenAlPauseStatePolicy.SourceState.PAUSED;
+        }
+        if (state == AL10.AL_STOPPED) {
+            return OpenAlPauseStatePolicy.SourceState.STOPPED;
+        }
+        return OpenAlPauseStatePolicy.SourceState.OTHER;
     }
 
     /**
@@ -1031,11 +1121,11 @@ public class OpenALSpatialAudio {
     }
 
     private static synchronized void ensureHrtfEnabled() {
-        if (hrtfAttempted || !FORCE_HRTF)
+        if (hrtfAttempted || !HRTF_PROPERTIES.forceHrtf())
             return;
-        if (isChannelLoaded() && !FORCE_HRTF_WITH_CHANNEL) {
+        if (isChannelLoaded() && !HRTF_PROPERTIES.forceHrtfWithChannel()) {
             LOGGER.warn(
-                    "OpenAL HRTF: Channel mod detected; skip alcResetDeviceSOFT to avoid disrupting voice EFX sources. Set -Dncpb.dolby.forceHrtfWithChannel=true to override.");
+                    "OpenAL HRTF: Channel mod detected; skip alcResetDeviceSOFT to avoid disrupting voice EFX sources. Set -Dncpb.dolby.force_hrtf_with_channel=true to override.");
             hrtfAttempted = true;
             return;
         }

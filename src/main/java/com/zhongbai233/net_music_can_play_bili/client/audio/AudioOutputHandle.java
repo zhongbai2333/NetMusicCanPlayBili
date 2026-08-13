@@ -14,6 +14,10 @@ public interface AudioOutputHandle extends AutoCloseable {
 
     void setUserVolume(float volume);
 
+    /** Mirrors Minecraft pause transitions into native sources owned outside SoundEngine. */
+    default void setPaused(boolean paused) {
+    }
+
     void addRelay(SpeakerAudioRelay relay);
 
     void removeRelay(SpeakerAudioRelay relay);

@@ -15,7 +15,7 @@ import java.util.UUID;
 public final class MP4HandheldMediaProfile implements HandheldMediaDeviceProfile {
     public static final MP4HandheldMediaProfile INSTANCE = new MP4HandheldMediaProfile();
     public static final HandheldMediaScreenSpec SCREEN = new HandheldMediaScreenSpec(256, 448,
-            Integer.getInteger("ncpb.mp4.offscreen_scale", 2));
+            VideoClientProperties.handheld().mp4OffscreenScale());
 
     private MP4HandheldMediaProfile() {
     }

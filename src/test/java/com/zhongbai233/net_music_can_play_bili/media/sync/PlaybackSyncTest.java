@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PlaybackSyncTest {
     @Test
@@ -17,6 +18,7 @@ class PlaybackSyncTest {
         PlaybackSync.Metadata metadata = PlaybackSync.parse(synced);
         PlaybackSync.MinecartAnchor anchor = PlaybackSync.parseMinecartAnchor(synced);
         assertEquals("session-1", metadata.sessionId());
+        assertEquals(PlaybackSessionId.of("session-1"), metadata.playbackSessionId().orElseThrow());
         assertEquals(1_250L, metadata.elapsedMillis());
         assertEquals(9_000L, metadata.totalMillis());
         assertNotNull(anchor);
@@ -37,10 +39,14 @@ class PlaybackSyncTest {
         String synced = PlaybackSync.withSync("https://example.invalid/audio.mp3", "session-2", 70_000L,
                 180_000L);
         synced = PlaybackSync.withMinecartAnchor(synced, 7, minecartUuid);
-        String tokenized = PlaybackSync.withRequestToken(synced, "request-123");
+        MediaRequestToken token = new MediaRequestToken("request-123");
+        String tokenized = PlaybackSync.withRequestToken(synced, token);
 
         assertEquals("request-123", PlaybackSync.parseRequestToken(tokenized));
+        assertEquals(token, PlaybackSync.parseMediaRequestToken(tokenized).orElseThrow());
         assertEquals("session-2", PlaybackSync.parse(tokenized).sessionId());
+        assertEquals(PlaybackSessionId.of("session-2"),
+                PlaybackSync.parsePlaybackSessionId(tokenized).orElseThrow());
         assertNotNull(PlaybackSync.parseMinecartAnchor(tokenized));
         assertEquals("https://example.invalid/audio.mp3", PlaybackSync.strip(tokenized));
     }
@@ -59,11 +65,16 @@ class PlaybackSyncTest {
     }
 
     @Test
-    void ignoresMissingOrBlankRequestTokens() {
+    void ignoresMissingOrInvalidFragmentIdentities() {
         String url = "https://example.invalid/audio.mp3";
 
+        assertEquals(url, PlaybackSync.withSync(url, "session&other=1", 1_000L));
         assertEquals(url, PlaybackSync.withRequestToken(url, ""));
+        assertEquals(url, PlaybackSync.withRequestToken(url, "request&other"));
         assertEquals("", PlaybackSync.parseRequestToken(url));
         assertEquals("", PlaybackSync.parseRequestToken(null));
+        assertEquals("", PlaybackSync.parseRequestToken(url + "#nmb_request=request=other"));
+        assertTrue(PlaybackSync.parsePlaybackSessionId(
+                url + "#nmb_session=session=other&nmb_elapsed_ms=1000").isEmpty());
     }
 }

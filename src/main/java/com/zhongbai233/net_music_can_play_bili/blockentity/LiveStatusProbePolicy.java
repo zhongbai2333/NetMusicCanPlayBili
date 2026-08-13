@@ -1,5 +1,9 @@
 package com.zhongbai233.net_music_can_play_bili.blockentity;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.ResolveGeneration;
+
+import java.util.Objects;
+
 /** 直播机后台开播探测的无状态调度规则。 */
 final class LiveStatusProbePolicy {
     static final long PROBE_INTERVAL_TICKS = 20L * 10L;
@@ -18,11 +22,12 @@ final class LiveStatusProbePolicy {
                 : gameTime + PROBE_INTERVAL_TICKS;
     }
 
-    static boolean acceptsResult(boolean autoResumeRequested, long currentGeneration,
-            long capturedGeneration, long currentProbeId, long capturedProbeId,
+    static boolean acceptsResult(boolean autoResumeRequested, ResolveGeneration currentGeneration,
+            ResolveGeneration capturedGeneration, long currentProbeId, long capturedProbeId,
             String currentRoomId, String requestedRoomId) {
         return autoResumeRequested
-                && currentGeneration == capturedGeneration
+                && Objects.requireNonNull(currentGeneration, "currentGeneration")
+                        .equals(Objects.requireNonNull(capturedGeneration, "capturedGeneration"))
                 && currentProbeId == capturedProbeId
                 && requestedRoomId.equals(currentRoomId);
     }

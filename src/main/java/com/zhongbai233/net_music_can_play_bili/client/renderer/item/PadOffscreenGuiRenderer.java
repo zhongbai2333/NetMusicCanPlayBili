@@ -10,6 +10,7 @@ import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.PadFocusState;
 import com.zhongbai233.net_music_can_play_bili.client.PadHandheldMediaProfile;
+import com.zhongbai233.net_music_can_play_bili.client.PadRenderProperties;
 import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapProjection;
 import com.zhongbai233.net_music_can_play_bili.client.pad.PadPerfLogger;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
@@ -38,19 +39,16 @@ import java.util.UUID;
 /** Pad 显卡离屏界面渲染器，输出固定横屏 448x256 逻辑纹理。 */
 final class PadOffscreenGuiRenderer implements AutoCloseable {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int SCALE = Integer.getInteger("ncpb.pad.offscreen_scale",
-            Integer.getInteger("ncpb.mp4.offscreen_scale", 2));
-    private static final float MAP_PAN_RENDER_BLOCKS = Math.max(0.05F,
-            Float.parseFloat(System.getProperty("ncpb.pad.gui_pan_render_blocks", "0.5")));
-    private static final float MAP_YAW_RENDER_DEGREES = Math.max(0.5F,
-            Float.parseFloat(System.getProperty("ncpb.pad.gui_yaw_render_degrees", "4.0")));
-    private static final int PLAYBACK_REFRESH_TICKS = Math.max(1,
-            Integer.getInteger("ncpb.pad.gui_playback_refresh_ticks", 20));
+    private static final PadRenderProperties.Offscreen PROPERTIES = PadRenderProperties.offscreen();
+    private static final int SCALE = PROPERTIES.scale();
+    private static final float MAP_PAN_RENDER_BLOCKS = PROPERTIES.mapPanRenderBlocks();
+    private static final float MAP_YAW_RENDER_DEGREES = PROPERTIES.mapYawRenderDegrees();
+    private static final int PLAYBACK_REFRESH_TICKS = PROPERTIES.playbackRefreshTicks();
     private static final int WIDTH = PadGuiTexture.WIDTH;
     private static final int HEIGHT = PadGuiTexture.HEIGHT;
     private static final int TARGET_WIDTH = WIDTH * Math.max(1, SCALE);
     private static final int TARGET_HEIGHT = HEIGHT * Math.max(1, SCALE);
-    private static final long MAX_GUI_FPS = Long.getLong("ncpb.pad.gui_max_fps", 60L);
+    private static final long MAX_GUI_FPS = PROPERTIES.maxFps();
     private static final long MIN_FRAME_INTERVAL_NANOS = MAX_GUI_FPS <= 0L ? 0L : 1_000_000_000L / MAX_GUI_FPS;
     private final Identifier textureId;
     private TextureTarget target;

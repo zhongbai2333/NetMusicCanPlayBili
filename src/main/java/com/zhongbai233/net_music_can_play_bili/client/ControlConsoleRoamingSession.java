@@ -3,9 +3,10 @@ package com.zhongbai233.net_music_can_play_bili.client;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ControlConsoleBlockEntity;
-import com.zhongbai233.net_music_can_play_bili.editor.core.camera.WorldCameraPose;
-import com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleElement;
-import com.zhongbai233.net_music_can_play_bili.editor.core.projection.PickingRay;
+import com.zhongbai233.scene_editor.core.camera.WorldCameraPose;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElement;
+import com.zhongbai233.scene_editor.core.math.EditorTransform;
+import com.zhongbai233.scene_editor.core.projection.PickingRay;
 import com.zhongbai233.net_music_can_play_bili.gui.HolographicScreenConfigTestScreen;
 import com.zhongbai233.net_music_can_play_bili.item.HolographicGlassesItem;
 import com.zhongbai233.net_music_can_play_bili.mixin.ClientInputAccessor;
@@ -26,6 +27,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec2;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Quaternionf;
+import org.joml.Matrix4f;
 import org.joml.Quaternionfc;
 import org.joml.Vector3d;
 import org.joml.Vector3dc;
@@ -241,7 +243,7 @@ public final class ControlConsoleRoamingSession {
         if (type == null) {
             return false;
         }
-        if (session.elements.size() >= com.zhongbai233.net_music_can_play_bili.editor.core.document
+        if (session.elements.size() >= com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document
                 .ControlConsoleDocument.MAX_ELEMENTS) {
             session.player.sendSystemMessage(Component.literal("中控台元素已达到传输安全阈值"));
             return true;
@@ -313,10 +315,12 @@ public final class ControlConsoleRoamingSession {
                     orientedBox(buffer, pose, cx, cy, cz, xAxis, yAxis, zAxis, halfW, halfH,
                             element.audioHalfDepth(), color, 2.0F);
                 } else {
-                    Vector3f p0 = corner(cx, cy, cz, xAxis, yAxis, -halfW, -halfH);
-                    Vector3f p1 = corner(cx, cy, cz, xAxis, yAxis, halfW, -halfH);
-                    Vector3f p2 = corner(cx, cy, cz, xAxis, yAxis, halfW, halfH);
-                    Vector3f p3 = corner(cx, cy, cz, xAxis, yAxis, -halfW, halfH);
+                    Matrix4f transform = new Matrix4f().translate(0.0F, (float) SCREEN_BASE_Y, 0.0F)
+                            .mul(element.editorTransform().matrix());
+                    Vector3f p0 = roamingCorner(transform, session, cameraPos, -halfW, -halfH);
+                    Vector3f p1 = roamingCorner(transform, session, cameraPos, halfW, -halfH);
+                    Vector3f p2 = roamingCorner(transform, session, cameraPos, halfW, halfH);
+                    Vector3f p3 = roamingCorner(transform, session, cameraPos, -halfW, halfH);
                     line(buffer, pose, p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, color, 2.0F);
                     line(buffer, pose, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z, color, 2.0F);
                     line(buffer, pose, p2.x, p2.y, p2.z, p3.x, p3.y, p3.z, color, 2.0F);
@@ -446,9 +450,12 @@ public final class ControlConsoleRoamingSession {
                         new Vector3d(halfW, halfH, element.audioHalfDepth()));
                 hitDistance = hit.isPresent() ? hit.orElseThrow() : Double.POSITIVE_INFINITY;
             } else {
-                Vector3d xAxis = new Vector3d(rotation.transform(new Vector3f(1.0F, 0.0F, 0.0F)));
-                Vector3d yAxis = new Vector3d(rotation.transform(new Vector3f(0.0F, 1.0F, 0.0F)));
-                var hit = ray.intersectRectangle(element.worldCenter(session.consolePos), xAxis, yAxis,
+                Vector3d consoleOrigin = new Vector3d(session.consolePos.getX() + 0.5D,
+                        session.consolePos.getY(), session.consolePos.getZ() + 0.5D);
+                PickingRay localRay = new PickingRay(new Vector3d(ray.origin()).sub(consoleOrigin), ray.direction());
+                Matrix4f transform = new Matrix4f().translate(0.0F, (float) SCREEN_BASE_Y, 0.0F)
+                        .mul(element.editorTransform().matrix());
+                var hit = localRay.intersectTransformedRectangle(transform,
                         element.height() * element.aspect() * 0.5D, element.height() * 0.5D);
                 hitDistance = hit.isPresent() ? hit.orElseThrow().distance() : Double.POSITIVE_INFINITY;
             }
@@ -486,6 +493,14 @@ public final class ControlConsoleRoamingSession {
     private static Vector3f corner(float cx, float cy, float cz, Vector3f xAxis, Vector3f yAxis,
             float x, float y) {
         return new Vector3f(cx, cy, cz).fma(x, xAxis).fma(y, yAxis);
+    }
+
+    private static Vector3f roamingCorner(Matrix4f transform, Session session, Vec3 cameraPos,
+            float x, float y) {
+        Vector3f local = transform.transformPosition(new Vector3f(x, y, 0.0F));
+        return new Vector3f((float) (session.consolePos.getX() + 0.5D + local.x - cameraPos.x),
+                (float) (session.consolePos.getY() + local.y - cameraPos.y),
+                (float) (session.consolePos.getZ() + 0.5D + local.z - cameraPos.z));
     }
 
     private static Vector3f corner(float cx, float cy, float cz, Vector3f xAxis, Vector3f yAxis,
@@ -578,14 +593,17 @@ public final class ControlConsoleRoamingSession {
             float aspect, float yaw, float pitch, float roll, String contentMode, String text,
             boolean followLyrics, boolean showTranslation, float textScale, int color, float volume,
             int channelIndex, float maxDistance, boolean autoMixJoc, int translationColor, int backgroundColor,
-            ControlConsoleElement.Alignment alignment, float maxWidth, boolean wrap, boolean enabled, boolean locked) {
+            ControlConsoleElement.Alignment alignment, float maxWidth, boolean wrap, boolean enabled, boolean locked,
+            float scaleX, float scaleY, float scaleZ, float pivotX, float pivotY, float pivotZ,
+            float skewXByY, float skewYByX) {
         public static RoamingElement defaultScreen() {
             HolographicGlassesItem.ScreenConfig config = HolographicGlassesItem.defaultScreenConfig();
             return new RoamingElement(UUID.randomUUID(), "SCREEN", "主屏幕", config.distance(), config.offsetX(), config.offsetY(),
                 config.height(), config.aspect(), 0.0F, 0.0F, config.roll(), "SOURCE", "", false, true,
                 1.0F, 0xFFFFFFFF, 1.0F, 0, 32.0F, false, ControlConsoleElement.DEFAULT_TRANSLATION_COLOR,
                 ControlConsoleElement.DEFAULT_BACKGROUND_COLOR, ControlConsoleElement.Alignment.CENTER,
-                ControlConsoleElement.DEFAULT_MAX_WIDTH, false, true, false);
+                ControlConsoleElement.DEFAULT_MAX_WIDTH, false, true, false,
+                1.0F, 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F);
         }
 
         public static RoamingElement placed(String type, String name, float distance, float offsetX, float offsetY,
@@ -595,7 +613,8 @@ public final class ControlConsoleRoamingSession {
                 yaw, pitch, config.roll(), "SUBTITLE".equals(type) ? "LYRICS" : "SOURCE", "",
                 "SUBTITLE".equals(type), true, 1.0F, 0xFFFFFFFF, 1.0F, 0, 32.0F, false,
                 ControlConsoleElement.DEFAULT_TRANSLATION_COLOR, ControlConsoleElement.DEFAULT_BACKGROUND_COLOR,
-                ControlConsoleElement.Alignment.CENTER, ControlConsoleElement.DEFAULT_MAX_WIDTH, false, true, false);
+                ControlConsoleElement.Alignment.CENTER, ControlConsoleElement.DEFAULT_MAX_WIDTH, false, true, false,
+                1.0F, 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F);
         }
 
         private Vector3d worldCenter(BlockPos consolePos) {
@@ -623,6 +642,12 @@ public final class ControlConsoleRoamingSession {
         private Quaternionf rotation() {
             return new Quaternionf().rotateYXZ((float) Math.toRadians(yaw),
                     (float) Math.toRadians(pitch), (float) Math.toRadians(roll));
+        }
+
+        private EditorTransform editorTransform() {
+            return EditorTransform.fromEulerDegrees(new Vector3f(offsetX, offsetY, distance), yaw, pitch, roll,
+                    new Vector3f(scaleX, scaleY, scaleZ), new Vector3f(pivotX, pivotY, pivotZ),
+                    skewXByY, skewYByX);
         }
     }
 }

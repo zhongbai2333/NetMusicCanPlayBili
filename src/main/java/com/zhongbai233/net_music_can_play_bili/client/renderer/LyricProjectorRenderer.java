@@ -7,8 +7,8 @@ import com.mojang.math.Axis;
 import com.zhongbai233.net_music_can_play_bili.block.LyricProjectorBlock;
 import com.zhongbai233.net_music_can_play_bili.blockentity.LyricProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
-import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
-import com.zhongbai233.net_music_can_play_bili.bili.BiliSubtitleLyricService;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientAiSubtitleRegistry;
 import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
 import it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap;
 import net.minecraft.client.Minecraft;
@@ -40,22 +40,14 @@ public class LyricProjectorRenderer
     private static final float TEXT_SCALE = 0.025F;
     private static final float TRANSLATED_LINE_OFFSET = 12.0F;
     private static final long SCROLL_DURATION_MS = 500;
-    private static final long SCROLL_MIN_DURATION_MS = Long.getLong("ncpb.lyric.scroll.min_duration_ms", 120L);
-    private static final long SCROLL_FAST_GAP_MS = Long.getLong("ncpb.lyric.scroll.fast_gap_ms", 850L);
-    private static final long SCROLL_INTERPOLATION_HALF_LIFE_MS = Long.getLong(
-            "bili.lyric.scroll.interpolation_half_life_ms", 35L);
+    private static final ProjectorRenderProperties.LyricScroll SCROLL_PROPERTIES =
+            ProjectorRenderProperties.lyricScroll();
     private static final float SCROLL_MAX_INTERPOLATION_LAG = 0.18F;
-    private static final long LYRIC_AUDIO_DELAY_MS = Long.getLong("ncpb.lyric.audio_delay_ms", 0L);
     private static final float LINE_STEP = 14.0F;
     private static final int VISIBLE_LINES_ABOVE = 2;
     private static final int VISIBLE_LINES_BELOW = 2;
-    private static final long AI_BASE_RESYNC_TICKS = 40L;
-    private static final double PROJECTOR_RENDER_MARGIN = Double.parseDouble(
-            System.getProperty("ncpb.lyric.projector.render_margin", "2.0"));
-    private static final double PROJECTOR_RENDER_MIN_INFLATE = Double.parseDouble(
-            System.getProperty("ncpb.lyric.projector.render_min_inflate", "2.5"));
-    private static final double PROJECTOR_RENDER_MAX_TEXT_WIDTH = Double.parseDouble(
-            System.getProperty("ncpb.lyric.projector.render_max_text_width", "8.0"));
+    private static final ProjectorRenderProperties.LyricBounds RENDER_BOUNDS =
+            ProjectorRenderProperties.lyricBounds();
 
     private static final Map<BlockPos, ScrollProgressState> scrollProgressStates = new ConcurrentHashMap<>();
 
@@ -92,6 +84,7 @@ public class LyricProjectorRenderer
         state.allowAi = projector.getAllowAi();
 
         if (state.linkedPos == null || projector.getLevel() == null) {
+            ClientAiSubtitleRegistry.release(state.projectorPos);
             ClientLinkRegistry.unlink(projector.getBlockPos());
             syncActivatedState(projector, false);
             return;
@@ -100,6 +93,7 @@ public class LyricProjectorRenderer
         // 从连接的现代唱片机获取歌词
         var level = projector.getLevel();
         if (!(level.getBlockEntity(state.linkedPos) instanceof ModernTurntableBlockEntity turntable)) {
+            ClientAiSubtitleRegistry.release(state.projectorPos);
             ClientLinkRegistry.unlink(projector.getBlockPos());
             projector.unlink();
             syncActivatedState(projector, false);
@@ -109,50 +103,36 @@ public class LyricProjectorRenderer
         ClientLinkRegistry.link(projector.getBlockPos(), state.linkedPos);
 
         if (!turntable.isPlaying()) {
+            ClientAiSubtitleRegistry.release(state.projectorPos);
             syncActivatedState(projector, false);
             return;
         }
 
         LyricRecord lyricRecord = turntable.getClientLyricRecord();
+        float lyricTickOverride = resolveProjectorLyricTick(state.linkedPos, turntable);
+
+        // AI-CC is shared by source/session. The final projector/console consumer cancels the exact HTTP worker;
+        // late completion cannot overwrite a replacement session.
+        if (state.allowAi) {
+            String rawUrl = turntable.getRawUrl();
+            var sessionId = turntable.getPlaybackSyncMetadata(level.getGameTime()).playbackSessionId().orElse(null);
+            if (rawUrl != null && !rawUrl.isBlank() && BiliVideoStreamResolver.selectionOrNull(rawUrl) != null
+                    && sessionId != null) {
+                ClientAiSubtitleRegistry.acquire(state.projectorPos, state.linkedPos, sessionId,
+                        rawUrl, turntable.getSongName());
+                var snapshot = ClientAiSubtitleRegistry.snapshot(state.linkedPos, sessionId);
+                if (snapshot.ready()) {
+                    lyricRecord = snapshot.lyricRecord();
+                }
+            } else {
+                ClientAiSubtitleRegistry.release(state.projectorPos);
+            }
+        } else {
+            ClientAiSubtitleRegistry.release(state.projectorPos);
+        }
         if (lyricRecord == null) {
             syncActivatedState(projector, false);
             return;
-        }
-        float lyricTickOverride = resolveProjectorLyricTick(state.linkedPos, turntable);
-
-        // 动态 AI 字幕刷新：当 allowAi 开启但尚未缓存 AI 歌词时，异步获取
-        if (state.allowAi) {
-            String rawUrl = turntable.getRawUrl();
-            if (rawUrl != null && !rawUrl.isBlank() && BiliApiClient.isStoredVideoSelection(rawUrl)) {
-                String cachedUrl = projector.getCachedAiRawUrl();
-                LyricRecord aiCached = projector.getCachedAiLyricRecord();
-                if (aiCached != null && rawUrl.equals(cachedUrl)) {
-                    if (lyricTickOverride >= 0.0F) {
-                        long baseTick = projector.getCachedAiBaseTick();
-                        long roundedTick = Math.round(lyricTickOverride);
-                        if (baseTick < 0L || Math.abs(baseTick - roundedTick) > AI_BASE_RESYNC_TICKS) {
-                            projector.setCachedAiBaseTick(roundedTick);
-                        }
-                    }
-                    lyricRecord = aiCached;
-                } else if (cachedUrl == null || !cachedUrl.equals(rawUrl)) {
-                    // 新歌曲或无缓存，标记 URL 并触发异步获取（标记即防重）
-                    projector.setCachedAiLyricRecord(null, rawUrl);
-                    String songName = turntable.getSongName();
-                    java.util.concurrent.CompletableFuture.runAsync(() -> {
-                        try {
-                            LyricRecord aiRecord = BiliSubtitleLyricService.tryBuildLyricRecord(rawUrl, songName, true);
-                            if (aiRecord != null) {
-                                Minecraft.getInstance().execute(() -> {
-                                    projector.setCachedAiLyricRecord(aiRecord, rawUrl);
-                                });
-                            }
-                        } catch (Exception ignored) {
-                        }
-                    });
-                }
-                // else: pending（cachedUrl 匹配但 record 为 null），等待异步结果，先用现有歌词
-            }
         }
 
         int lyricLookupTick = lyricTickOverride >= 0.0F ? (int) Math.floor(lyricTickOverride)
@@ -359,7 +339,7 @@ public class LyricProjectorRenderer
     @Override
     public AABB getRenderBoundingBox(LyricProjectorBlockEntity blockEntity) {
         double scale = Math.max(0.25D, Math.abs(blockEntity.getProjectionScale()));
-        double textHalfWidth = PROJECTOR_RENDER_MAX_TEXT_WIDTH * scale * 0.5D;
+        double textHalfWidth = RENDER_BOUNDS.maxTextWidth() * scale * 0.5D;
         double lineHeight = LINE_STEP * TEXT_SCALE * scale;
         double textHalfHeight = Math.max(lineHeight,
                 lineHeight * (1 + VISIBLE_LINES_ABOVE + VISIBLE_LINES_BELOW) * 0.5D);
@@ -368,7 +348,8 @@ public class LyricProjectorRenderer
                 blockEntity.getProjectionDistanceX() * blockEntity.getProjectionDistanceX()
                         + blockEntity.getProjectionHeight() * blockEntity.getProjectionHeight()
                         + blockEntity.getProjectionDistanceZ() * blockEntity.getProjectionDistanceZ());
-        double inflate = Math.max(PROJECTOR_RENDER_MIN_INFLATE, offsetRadius + textRadius + PROJECTOR_RENDER_MARGIN);
+        double inflate = Math.max(RENDER_BOUNDS.minInflate(),
+                offsetRadius + textRadius + RENDER_BOUNDS.margin());
         return new AABB(blockEntity.getBlockPos()).inflate(inflate, inflate, inflate);
     }
 
@@ -502,7 +483,7 @@ public class LyricProjectorRenderer
         if (elapsedNanos <= 0L) {
             return 0.0F;
         }
-        double halfLifeMillis = Math.max(1.0D, SCROLL_INTERPOLATION_HALF_LIFE_MS);
+        double halfLifeMillis = SCROLL_PROPERTIES.interpolationHalfLifeMillis();
         double elapsedMillis = elapsedNanos / 1_000_000.0D;
         return (float) Math.clamp(1.0D - Math.pow(0.5D, elapsedMillis / halfLifeMillis), 0.0D, 1.0D);
     }
@@ -513,11 +494,13 @@ public class LyricProjectorRenderer
         }
         long gapMillis = Math.max(0L, (nextTick - currentTick) * 50L);
         if (gapMillis <= 0L) {
-            return SCROLL_MIN_DURATION_MS;
+            return SCROLL_PROPERTIES.minDurationMillis();
         }
-        long target = Math.min(SCROLL_DURATION_MS, Math.max(SCROLL_MIN_DURATION_MS, gapMillis * 2L / 3L));
-        if (gapMillis <= SCROLL_FAST_GAP_MS) {
-            target = Math.min(target, Math.max(SCROLL_MIN_DURATION_MS, gapMillis / 2L));
+        long target = Math.min(SCROLL_DURATION_MS,
+                Math.max(SCROLL_PROPERTIES.minDurationMillis(), gapMillis * 2L / 3L));
+        if (gapMillis <= SCROLL_PROPERTIES.fastGapMillis()) {
+            target = Math.min(target,
+                    Math.max(SCROLL_PROPERTIES.minDurationMillis(), gapMillis / 2L));
         }
         return target;
     }
@@ -525,7 +508,7 @@ public class LyricProjectorRenderer
     private static float resolveProjectorLyricTick(BlockPos turntablePos, ModernTurntableBlockEntity turntable) {
         long mediaMillis = com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackClock.mediaMillis(turntablePos);
         if (mediaMillis >= 0L) {
-            return Math.max(0L, mediaMillis - Math.max(0L, LYRIC_AUDIO_DELAY_MS)) / 50.0F;
+            return Math.max(0L, mediaMillis - SCROLL_PROPERTIES.audioDelayMillis()) / 50.0F;
         }
         return turntable.getClientLyricTick();
     }

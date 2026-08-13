@@ -1,6 +1,9 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import net.minecraft.client.Minecraft;
+
+import java.util.Optional;
 
 /**
  * 客户端媒体时间线公共时钟。
@@ -20,15 +23,12 @@ import net.minecraft.client.Minecraft;
  * </ul>
  */
 public final class MediaTimelineClock {
-    public static final long DEFAULT_HARD_SYNC_THRESHOLD_MILLIS = Long.getLong(
-            "bili.media.timeline.hard_sync_ms",
-            Long.getLong("ncpb.turntable.timeline.hard_sync_ms", 1_500L));
-    public static final long DEFAULT_MAX_SMOOTH_CORRECTION_MILLIS = Long.getLong(
-            "bili.media.timeline.max_smooth_correction_ms",
-            Long.getLong("ncpb.turntable.timeline.max_smooth_correction_ms", 80L));
-    public static final double DEFAULT_SMOOTH_CORRECTION_RATIO = parseSmoothCorrectionRatio();
+    private static final TimelineProperties.Clock PROPERTIES = TimelineProperties.clock();
+    public static final long DEFAULT_HARD_SYNC_THRESHOLD_MILLIS = PROPERTIES.hardSyncThresholdMillis();
+    public static final long DEFAULT_MAX_SMOOTH_CORRECTION_MILLIS = PROPERTIES.maxSmoothCorrectionMillis();
+    public static final double DEFAULT_SMOOTH_CORRECTION_RATIO = PROPERTIES.smoothCorrectionRatio();
 
-    private final String sessionId;
+    private final Optional<PlaybackSessionId> playbackSessionId;
     private final long hardSyncThresholdMillis;
     private final long maxSmoothCorrectionMillis;
     private final double smoothCorrectionRatio;
@@ -40,9 +40,9 @@ public final class MediaTimelineClock {
     private long lastObservedServerMillis;
         private long lastObservedGameTime = Long.MIN_VALUE;
 
-    private MediaTimelineClock(String sessionId, long serverMillis, long totalMillis,
+    private MediaTimelineClock(Optional<PlaybackSessionId> playbackSessionId, long serverMillis, long totalMillis,
             long hardSyncThresholdMillis, long maxSmoothCorrectionMillis, double smoothCorrectionRatio) {
-        this.sessionId = sessionId != null ? sessionId : "";
+        this.playbackSessionId = playbackSessionId != null ? playbackSessionId : Optional.empty();
         this.hardSyncThresholdMillis = Math.max(0L, hardSyncThresholdMillis);
         this.maxSmoothCorrectionMillis = Math.max(0L, maxSmoothCorrectionMillis);
         this.smoothCorrectionRatio = Math.max(0.0D, Math.min(1.0D, smoothCorrectionRatio));
@@ -54,7 +54,12 @@ public final class MediaTimelineClock {
     }
 
     public static MediaTimelineClock start(String sessionId, long serverMillis, long totalMillis) {
-        return new MediaTimelineClock(sessionId, serverMillis, totalMillis,
+        return start(PlaybackSessionId.parse(sessionId), serverMillis, totalMillis);
+    }
+
+    static MediaTimelineClock start(Optional<PlaybackSessionId> playbackSessionId, long serverMillis,
+            long totalMillis) {
+        return new MediaTimelineClock(playbackSessionId, serverMillis, totalMillis,
                 DEFAULT_HARD_SYNC_THRESHOLD_MILLIS,
                 DEFAULT_MAX_SMOOTH_CORRECTION_MILLIS,
                 DEFAULT_SMOOTH_CORRECTION_RATIO);
@@ -62,16 +67,25 @@ public final class MediaTimelineClock {
 
     public static MediaTimelineClock start(String sessionId, long serverMillis, long totalMillis,
             long hardSyncThresholdMillis, long maxSmoothCorrectionMillis, double smoothCorrectionRatio) {
-        return new MediaTimelineClock(sessionId, serverMillis, totalMillis, hardSyncThresholdMillis,
+        return new MediaTimelineClock(PlaybackSessionId.parse(sessionId), serverMillis, totalMillis,
+                hardSyncThresholdMillis,
                 maxSmoothCorrectionMillis, smoothCorrectionRatio);
     }
 
     public String sessionId() {
-        return sessionId;
+        return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+    }
+
+    public Optional<PlaybackSessionId> playbackSessionId() {
+        return playbackSessionId;
     }
 
     public synchronized boolean isForSession(String candidate) {
-        return sessionId.equals(candidate != null ? candidate : "");
+        return isForSession(PlaybackSessionId.parse(candidate));
+    }
+
+    synchronized boolean isForSession(Optional<PlaybackSessionId> candidate) {
+        return playbackSessionId.equals(candidate != null ? candidate : Optional.empty());
     }
 
     public synchronized void observeServer(long serverMillis, long newTotalMillis) {
@@ -153,7 +167,7 @@ public final class MediaTimelineClock {
 
     public synchronized TimelineSnapshot snapshot() {
         long local = localMillis();
-        return new TimelineSnapshot(sessionId, local, local, local, lastObservedServerMillis, totalMillis,
+        return new TimelineSnapshot(playbackSessionId, local, local, local, lastObservedServerMillis, totalMillis,
                 local - lastObservedServerMillis);
     }
 
@@ -213,22 +227,24 @@ public final class MediaTimelineClock {
         return total > 0L ? Math.min(total, value) : value;
     }
 
-    private static double parseSmoothCorrectionRatio() {
-        String raw = System.getProperty("ncpb.media.timeline.smooth_correction_ratio",
-                System.getProperty("ncpb.turntable.timeline.smooth_correction_ratio", "0.12"));
-        try {
-            double parsed = Double.parseDouble(raw);
-            if (!Double.isFinite(parsed)) {
-                return 0.12D;
-            }
-            return Math.max(0.0D, Math.min(1.0D, parsed));
-        } catch (NumberFormatException ignored) {
-            return 0.12D;
-        }
-    }
-
-    public record TimelineSnapshot(String sessionId, long mediaMillis, long visualMillis, long pacingMillis,
+    public record TimelineSnapshot(Optional<PlaybackSessionId> playbackSessionId, long mediaMillis,
+            long visualMillis, long pacingMillis,
             long serverMillis, long totalMillis, long mediaDriftMillis) {
-        public static final TimelineSnapshot EMPTY = new TimelineSnapshot("", -1L, -1L, -1L, -1L, 0L, 0L);
+        public static final TimelineSnapshot EMPTY = new TimelineSnapshot(
+                Optional.empty(), -1L, -1L, -1L, -1L, 0L, 0L);
+
+        public TimelineSnapshot {
+            playbackSessionId = playbackSessionId != null ? playbackSessionId : Optional.empty();
+        }
+
+        public TimelineSnapshot(String sessionId, long mediaMillis, long visualMillis, long pacingMillis,
+                long serverMillis, long totalMillis, long mediaDriftMillis) {
+            this(PlaybackSessionId.parse(sessionId), mediaMillis, visualMillis, pacingMillis, serverMillis,
+                    totalMillis, mediaDriftMillis);
+        }
+
+        public String sessionId() {
+            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+        }
     }
 }

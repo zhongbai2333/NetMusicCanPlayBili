@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.client.audio;
 
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackRuntimeProperties;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
@@ -23,8 +24,8 @@ import java.net.URL;
 public class LiveStreamerSound extends SyncedMediaSound {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int BLOCK_STATE_GRACE_TICKS = 40;
-    private static final int LIVE_STALL_TICKS = Math.max(100,
-            Integer.getInteger("ncpb.bili.live.watchdog.stall_ms", 45_000) / 50);
+    private static final int LIVE_STALL_TICKS =
+            PlaybackRuntimeProperties.watchdog().liveStallTicks();
 
     private final BlockPos pos;
     private volatile int streamReadyTick = -1;
@@ -39,7 +40,7 @@ public class LiveStreamerSound extends SyncedMediaSound {
         this.y = pos.getY() + 0.5D;
         this.z = pos.getZ() + 0.5D;
         this.volume = 4.0F;
-        ModernTurntablePlaybackTracker.registerSound(this, pos, this.sessionId);
+        ModernTurntablePlaybackTracker.registerSound(this, pos, sessionId());
     }
 
     @Override
@@ -56,7 +57,7 @@ public class LiveStreamerSound extends SyncedMediaSound {
                 : null;
         this.volume = 4.0F * (streamer != null ? streamer.getVolume() : 1.0F);
 
-        if (!ModernTurntablePlaybackTracker.isCurrent(pos, sessionId)) {
+        if (!ModernTurntablePlaybackTracker.isCurrent(pos, sessionId())) {
             stopAndFinish();
             return;
         }
@@ -74,7 +75,7 @@ public class LiveStreamerSound extends SyncedMediaSound {
 
         // 直播画面跟随音频会话：有链接的投影仪时启动/维持渲染会话
         if (tick % 20 == 0) {
-            com.zhongbai233.net_music_can_play_bili.client.LiveStreamerVideoClient.sync(pos, sessionId);
+            com.zhongbai233.net_music_can_play_bili.client.LiveStreamerVideoClient.sync(pos, sessionId());
         }
 
         if (level.getGameTime() % 8L == 0L) {
@@ -106,7 +107,7 @@ public class LiveStreamerSound extends SyncedMediaSound {
         }
         ClientAudioOutputRegistry.AudioTimeline timeline = ClientAudioOutputRegistry.getAudioTimeline(pos);
         boolean matchingTimeline = timeline.audioSessionId().isBlank()
-                || sessionId.equals(timeline.audioSessionId());
+                || sessionId().equals(timeline.audioSessionId());
         long observed = matchingTimeline ? Math.max(timeline.audibleMillis(), timeline.fedMillis()) : -1L;
         if (observed < 0L) {
             // 没有可观测的 OpenAL 时间线：HLS 兜底走 Minecraft 声音引擎播放，
@@ -124,13 +125,13 @@ public class LiveStreamerSound extends SyncedMediaSound {
             return;
         }
         LOGGER.warn("直播音频长时间无进展，结束当前会话等待服务端重新同步: pos={} session={} stalled={}ms",
-                pos, sessionId, stalledTicks * 50L);
+                pos, sessionId(), stalledTicks * 50L);
         stopAndFinish();
     }
 
     @Override
     protected void onStreamReady() {
-        ModernTurntablePlaybackTracker.markStreamStarted(pos, sessionId);
+        ModernTurntablePlaybackTracker.markStreamStarted(pos, sessionId());
         streamReadyTick = tick;
         lastAudioProgressTick = tick;
     }
@@ -139,7 +140,7 @@ public class LiveStreamerSound extends SyncedMediaSound {
     protected void onStreamFailure(Exception error) {
         Minecraft minecraft = Minecraft.getInstance();
         minecraft.execute(() -> {
-            ModernTurntablePlaybackTracker.fail(pos, sessionId);
+            ModernTurntablePlaybackTracker.fail(pos, sessionId());
             finishSession();
             stop();
         });
@@ -151,9 +152,13 @@ public class LiveStreamerSound extends SyncedMediaSound {
             return;
         }
         sessionFinished = true;
+        com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId.parse(sessionId()).ifPresent(session ->
+                com.zhongbai233.net_music_can_play_bili.client.sync.LiveRoomMetadataRegistry.remove(
+                        new com.zhongbai233.net_music_can_play_bili.client.sync.LiveRoomMetadataRegistry.SourceKey(
+                                pos.getX(), pos.getY(), pos.getZ()), session));
         ModernTurntablePlaybackTracker.unregisterSound(this);
-        com.zhongbai233.net_music_can_play_bili.client.LiveStreamerVideoClient.forget(sessionId);
-        ModernTurntablePlaybackCoordinator.finishSession(pos, sessionId);
+        com.zhongbai233.net_music_can_play_bili.client.LiveStreamerVideoClient.forget(sessionId());
+        ModernTurntablePlaybackCoordinator.finishSession(pos, sessionId());
     }
 
     @Override

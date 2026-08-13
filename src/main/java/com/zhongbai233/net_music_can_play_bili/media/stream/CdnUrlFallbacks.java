@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class CdnUrlFallbacks {
     private static final long TTL_MILLIS = TimeUnit.MINUTES.toMillis(30);
-    private static final int MAX_GROUPS = Integer.getInteger("ncpb.bili.cdn_fallback.max_groups", 512);
+    private static final int MAX_GROUPS = CdnProperties.fallback().maxGroups();
     private static final ConcurrentHashMap<String, UrlGroup> GROUPS_BY_URL = new ConcurrentHashMap<>();
 
     private CdnUrlFallbacks() {
@@ -99,8 +99,7 @@ public final class CdnUrlFallbacks {
                 GROUPS_BY_URL.remove(url, group);
             }
         });
-        int maxEntries = Math.max(1, MAX_GROUPS);
-        while (GROUPS_BY_URL.size() > maxEntries) {
+        while (GROUPS_BY_URL.size() > MAX_GROUPS) {
             UrlGroup oldest = null;
             for (UrlGroup group : GROUPS_BY_URL.values()) {
                 if (oldest == null || group.expiresAtMillis() < oldest.expiresAtMillis()) {

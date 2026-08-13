@@ -6,6 +6,7 @@ import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputReg
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
 import com.zhongbai233.net_music_can_play_bili.media.stream.LiveVideoSampleBus;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -27,13 +28,12 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class LiveStreamerVideoClient {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int DEFAULT_FPS = Math.max(15, Integer.getInteger("ncpb.video.live.fps", 30));
+    private static final VideoClientProperties.Live VIDEO_PROPERTIES = VideoClientProperties.live();
     private static final int HIGH_QUALITY_CEILING = 116;
-    private static final int DEFAULT_QUALITY_CEILING = Integer.getInteger("bili.video.turntable.quality", 116);
 
     /** 每个 session 最近一次的决策指纹，只在状态变化时输出日志。 */
-    private static final ConcurrentHashMap<String, String> LAST_DECISION = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, Integer> ACTIVE_QUALITY = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<PlaybackSessionId, String> LAST_DECISION = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<PlaybackSessionId, Integer> ACTIVE_QUALITY = new ConcurrentHashMap<>();
     private static final MediaConsumerRegistry<BlockPos> CONTROL_CONSOLE_CONSUMERS = new MediaConsumerRegistry<>();
     private static final ConcurrentHashMap<BlockPos, Integer> CONTROL_CONSOLE_QUALITY = new ConcurrentHashMap<>();
 
@@ -43,7 +43,8 @@ public final class LiveStreamerVideoClient {
     /** 由 LiveStreamerSound 周期性调用（客户端线程）。 */
     public static void sync(BlockPos livePos, String sessionId) {
         Minecraft minecraft = Minecraft.getInstance();
-        if (livePos == null || sessionId == null || sessionId.isBlank() || minecraft.level == null) {
+        PlaybackSessionId sessionKey = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (livePos == null || sessionKey == null || minecraft.level == null) {
             return;
         }
         int rawSourceCount = ClientLinkRegistry.getSources(livePos).size();
@@ -53,23 +54,23 @@ public final class LiveStreamerVideoClient {
         positions.addAll(CONTROL_CONSOLE_CONSUMERS.consumersFor(livePos));
         boolean holographicConsumer = HolographicGlassesClient.handlesTurntable(livePos);
         if (positions.isEmpty() && !holographicConsumer) {
-            logDecision(sessionId, "no-consumer", "直播画面暂无消费端: pos=" + livePos + " session=" + sessionId
+            logDecision(sessionKey, "no-consumer", "直播画面暂无消费端: pos=" + livePos + " session=" + sessionId
                     + " registrySources=" + rawSourceCount + "（需要链接视频投影仪或佩戴全息眼镜）");
             VideoBillboardPreview.stopIfSession(sessionId);
             return;
         }
         if (!isAudioReady(livePos, sessionId)) {
-            logDecision(sessionId, "wait-audio", "直播画面等待音频输出就绪: pos=" + livePos + " session=" + sessionId);
+            logDecision(sessionKey, "wait-audio", "直播画面等待音频输出就绪: pos=" + livePos + " session=" + sessionId);
             return;
         }
         List<BlockPos> consumerPositions = List.copyOf(positions);
         int qualityCeiling = qualityCeiling(projectors, CONTROL_CONSOLE_CONSUMERS.consumersFor(livePos));
         if (VideoBillboardPreview.isSessionRunning(sessionId)) {
-            if (!java.util.Objects.equals(ACTIVE_QUALITY.get(sessionId), qualityCeiling)) {
+            if (!java.util.Objects.equals(ACTIVE_QUALITY.get(sessionKey), qualityCeiling)) {
                 VideoBillboardPreview.stopIfSession(sessionId);
             } else {
                 VideoBillboardPreview.updateSessionProjectors(sessionId, consumerPositions);
-                logDecision(sessionId, "running:" + consumerPositions.size(),
+                logDecision(sessionKey, "running:" + consumerPositions.size(),
                     "直播画面会话运行中: session=" + sessionId + " consumers=" + consumerPositions.size());
                 return;
             }
@@ -77,10 +78,12 @@ public final class LiveStreamerVideoClient {
         int width = qualityCeiling >= HIGH_QUALITY_CEILING ? 1920 : 1280;
         int height = qualityCeiling >= HIGH_QUALITY_CEILING ? 1080 : 720;
         LOGGER.info("直播画面会话启动: session={} pos={} {}x{}@{}fps projectors={} holographic={}",
-                sessionId, livePos, width, height, DEFAULT_FPS, consumerPositions.size(), holographicConsumer);
-        LAST_DECISION.put(sessionId, "started");
-        ACTIVE_QUALITY.put(sessionId, qualityCeiling);
-        VideoBillboardPreview.startLiveSession(LiveVideoSampleBus.busUrl(sessionId), width, height, DEFAULT_FPS,
+                sessionId, livePos, width, height, VIDEO_PROPERTIES.fps(), consumerPositions.size(),
+                holographicConsumer);
+        LAST_DECISION.put(sessionKey, "started");
+        ACTIVE_QUALITY.put(sessionKey, qualityCeiling);
+        VideoBillboardPreview.startLiveSession(LiveVideoSampleBus.busUrl(sessionKey), width, height,
+                VIDEO_PROPERTIES.fps(),
                 sessionId, consumerPositions, livePos);
     }
 
@@ -107,14 +110,14 @@ public final class LiveStreamerVideoClient {
 
     /** 直播会话结束时停止渲染实例。 */
     public static void forget(String sessionId) {
-        if (sessionId != null && !sessionId.isBlank()) {
-            LAST_DECISION.remove(sessionId);
-            ACTIVE_QUALITY.remove(sessionId);
+        PlaybackSessionId.parse(sessionId).ifPresent(sessionKey -> {
+            LAST_DECISION.remove(sessionKey);
+            ACTIVE_QUALITY.remove(sessionKey);
             VideoBillboardPreview.stopIfSession(sessionId);
-        }
+        });
     }
 
-    private static void logDecision(String sessionId, String fingerprint, String message) {
+    private static void logDecision(PlaybackSessionId sessionId, String fingerprint, String message) {
         String previous = LAST_DECISION.put(sessionId, fingerprint);
         if (!fingerprint.equals(previous)) {
             LOGGER.debug("{}", message);
@@ -136,15 +139,15 @@ public final class LiveStreamerVideoClient {
         int projectorQuality = projectors.stream()
                 .mapToInt(projector -> projector.getPreferredQuality() > 0
                         ? projector.getPreferredQuality()
-                        : DEFAULT_QUALITY_CEILING)
+                        : VIDEO_PROPERTIES.qualityCeiling())
                 .max()
                 .orElse(0);
         int consoleQuality = consoleConsumers.stream()
-            .mapToInt(pos -> CONTROL_CONSOLE_QUALITY.getOrDefault(pos, DEFAULT_QUALITY_CEILING))
+            .mapToInt(pos -> CONTROL_CONSOLE_QUALITY.getOrDefault(pos, VIDEO_PROPERTIES.qualityCeiling()))
             .max()
             .orElse(0);
         int selected = Math.max(projectorQuality, consoleQuality);
-        return selected > 0 ? selected : DEFAULT_QUALITY_CEILING;
+        return selected > 0 ? selected : VIDEO_PROPERTIES.qualityCeiling();
     }
 
     private static List<VideoProjectorBlockEntity> findLinkedVideoProjectors(BlockPos livePos) {

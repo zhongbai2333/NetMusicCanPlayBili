@@ -26,6 +26,16 @@ class NcpbSystemPropertiesTest {
     }
 
     @Test
+    void trimsStringsAndFallsBackPastBlankValues() {
+        System.setProperty(KEY, "   ");
+        System.setProperty(LEGACY_KEY, " legacy-value ");
+        assertEquals("legacy-value", NcpbSystemProperties.stringValue(KEY, LEGACY_KEY, "fallback"));
+
+        System.clearProperty(LEGACY_KEY);
+        assertEquals("fallback", NcpbSystemProperties.stringValue(KEY, LEGACY_KEY, "fallback"));
+    }
+
+    @Test
     void fallsBackToLegacyKeyWhenNewValueIsInvalid() {
         System.setProperty(KEY, "not-a-number");
         System.setProperty(LEGACY_KEY, "21");
@@ -39,6 +49,16 @@ class NcpbSystemPropertiesTest {
         System.setProperty(LEGACY_KEY, "Infinity");
 
         assertEquals(0.72D, NcpbSystemProperties.doubleValue(KEY, LEGACY_KEY, 0.72D));
+    }
+
+    @Test
+    void parsesFiniteFloatsAndFallsBackPastNonFiniteValues() {
+        System.setProperty(KEY, "NaN");
+        System.setProperty(LEGACY_KEY, "1.25");
+        assertEquals(1.25F, NcpbSystemProperties.floatValue(KEY, LEGACY_KEY, 0.5F));
+
+        System.setProperty(LEGACY_KEY, "Infinity");
+        assertEquals(0.5F, NcpbSystemProperties.floatValue(KEY, LEGACY_KEY, 0.5F));
     }
 
     @Test

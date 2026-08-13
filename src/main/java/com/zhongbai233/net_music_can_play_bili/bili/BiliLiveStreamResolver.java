@@ -16,6 +16,10 @@ import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import com.zhongbai233.net_music_can_play_bili.media.stream.CancellableHttpRequestScope;
+import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRequestCloseDiagnostics;
 
 /**
  * B站直播流地址解析。
@@ -35,9 +39,13 @@ public final class BiliLiveStreamResolver {
     public static final int LIVE_STATUS_CAROUSEL = 2;
 
     private static final String ROOM_INIT_API = "https://api.live.bilibili.com/room/v1/Room/room_init";
+    private static final String ROOM_INFO_API = "https://api.live.bilibili.com/room/v1/Room/get_info";
     private static final String PLAY_INFO_API = "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo";
     private static final String LEGACY_PLAY_URL_API = "https://api.live.bilibili.com/room/v1/Room/playUrl";
     private static final Duration API_TIMEOUT = Duration.ofSeconds(10);
+    private static final long ROOM_METADATA_TTL_NANOS = TimeUnit.MINUTES.toNanos(5L);
+    private static final int ROOM_METADATA_CACHE_LIMIT = 128;
+    private static final ConcurrentHashMap<String, CachedLiveMetadata> ROOM_METADATA = new ConcurrentHashMap<>();
 
     private BiliLiveStreamResolver() {
     }
@@ -53,10 +61,31 @@ public final class BiliLiveStreamResolver {
         }
     }
 
+    /** 一次房间信息快照；播放 URL 刷新时可复用，不按字幕元素重复请求。 */
+    public record LiveMetadata(String roomId, String title, String parentAreaName, String areaName,
+            String liveTime) {
+        public LiveMetadata {
+            roomId = safeMetadataText(roomId, 32);
+            title = safeMetadataText(title, 256);
+            parentAreaName = safeMetadataText(parentAreaName, 64);
+            areaName = safeMetadataText(areaName, 64);
+            liveTime = safeMetadataText(liveTime, 64);
+        }
+
+        public static LiveMetadata empty(String roomId) {
+            return new LiveMetadata(roomId, "", "", "", "");
+        }
+    }
+
     /** 直播间解析结果；{@code roomId} 为 room_init 归一化后的真实房间号。 */
-    public record LiveRoom(String roomId, int liveStatus, List<LiveStream> streams) {
+    public record LiveRoom(String roomId, int liveStatus, List<LiveStream> streams, LiveMetadata metadata) {
         public LiveRoom {
             streams = streams != null ? List.copyOf(streams) : List.of();
+            metadata = metadata != null ? metadata : LiveMetadata.empty(roomId);
+        }
+
+        public LiveRoom(String roomId, int liveStatus, List<LiveStream> streams) {
+            this(roomId, liveStatus, streams, LiveMetadata.empty(roomId));
         }
 
         public boolean isLive() {
@@ -107,7 +136,7 @@ public final class BiliLiveStreamResolver {
                 streams = List.of(new LiveStream("http_stream", "flv", "", legacy));
             }
         }
-        return new LiveRoom(realRoomId, liveStatus, streams);
+        return new LiveRoom(realRoomId, liveStatus, streams, requestRoomMetadata(realRoomId));
     }
 
     private record RoomInit(long roomId, int liveStatus) {
@@ -148,6 +177,55 @@ public final class BiliLiveStreamResolver {
         }
         long realRoomId = optLong(data, "room_id", 0L);
         return new RoomInit(realRoomId, optInt(data, "live_status", LIVE_STATUS_OFFLINE));
+    }
+
+    private static LiveMetadata requestRoomMetadata(String roomId) {
+        long now = System.nanoTime();
+        CachedLiveMetadata cached = ROOM_METADATA.get(roomId);
+        if (cached != null && now - cached.storedNanos() >= 0L
+                && now - cached.storedNanos() < ROOM_METADATA_TTL_NANOS) {
+            return cached.metadata();
+        }
+        try {
+            LiveMetadata metadata = parseRoomMetadata(getJson(ROOM_INFO_API + "?room_id=" + roomId), roomId);
+            cacheRoomMetadata(roomId, new CachedLiveMetadata(metadata, now), now);
+            return metadata;
+        } catch (IOException | RuntimeException ignored) {
+            return cached != null ? cached.metadata() : LiveMetadata.empty(roomId);
+        }
+    }
+
+    private static void cacheRoomMetadata(String roomId, CachedLiveMetadata metadata, long now) {
+        if (ROOM_METADATA.size() >= ROOM_METADATA_CACHE_LIMIT) {
+            ROOM_METADATA.entrySet().removeIf(entry -> {
+                long age = now - entry.getValue().storedNanos();
+                return age < 0L || age >= ROOM_METADATA_TTL_NANOS;
+            });
+        }
+        while (ROOM_METADATA.size() >= ROOM_METADATA_CACHE_LIMIT) {
+            String oldestKey = ROOM_METADATA.entrySet().stream()
+                    .min(java.util.Comparator.comparingLong(entry -> entry.getValue().storedNanos()))
+                    .map(java.util.Map.Entry::getKey).orElse(null);
+            if (oldestKey == null || ROOM_METADATA.remove(oldestKey) == null) {
+                break;
+            }
+        }
+        ROOM_METADATA.put(roomId, metadata);
+    }
+
+    static LiveMetadata parseRoomMetadata(JsonObject root, String fallbackRoomId) throws IOException {
+        if (optInt(root, "code", -1) != 0) {
+            throw new IOException("B站直播房间信息接口返回错误: code=" + optInt(root, "code", -1));
+        }
+        JsonObject data = optObject(root, "data");
+        if (data == null) {
+            throw new IOException("B站直播房间信息接口未返回 data");
+        }
+        long numericRoomId = optLong(data, "room_id", 0L);
+        String roomId = numericRoomId > 0L ? Long.toString(numericRoomId) : fallbackRoomId;
+        return new LiveMetadata(roomId, optString(data, "title", ""),
+                optString(data, "parent_area_name", ""), optString(data, "area_name", ""),
+                optString(data, "live_time", ""));
     }
 
     /**
@@ -284,8 +362,9 @@ public final class BiliLiveStreamResolver {
                 .GET();
         BiliRequestHeaders.applyLiveHeaders(builder, null);
         try {
-            HttpResponse<String> response = BiliWbiSigner.HTTP.send(builder.build(),
-                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            HttpResponse<String> response = CancellableHttpRequestScope.sendOneBlocking(BiliWbiSigner.HTTP,
+                    builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8),
+                    HttpRequestCloseDiagnostics.global(), "bili-api-live-resolve");
             if (response.statusCode() != 200) {
                 throw new IOException("B站直播接口 HTTP " + response.statusCode());
             }
@@ -356,6 +435,14 @@ public final class BiliLiveStreamResolver {
         }
     }
 
+    private static String safeMetadataText(String value, int maxLength) {
+        String normalized = value == null ? "" : value.trim();
+        return normalized.length() <= maxLength ? normalized : normalized.substring(0, maxLength);
+    }
+
     private record RankedStream(int rank, LiveStream stream) {
+    }
+
+    private record CachedLiveMetadata(LiveMetadata metadata, long storedNanos) {
     }
 }

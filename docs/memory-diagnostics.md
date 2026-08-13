@@ -74,6 +74,10 @@ gradlew runClient -PncpbMemoryDiagnostics=true -PncpbMemoryReportIntervalMs=3000
 设置 `-Dncpb.memory.protection=false` 会关闭熔断与 NCPB Java 资源计数；若周期诊断日志开启，计数仍会
 保留供报告使用。阈值设为 `0` 可单独禁用对应指标。
 
+属性使用严格布尔值与有限数值解析：空白、格式错误、`NaN` 和 `Infinity` 会回退到上述兼容默认值。
+周期诊断最小间隔为 1000ms，保护采样最小间隔为 500ms，冷却最短为 5000ms；MiB 换算和时间换算
+会在超大配置下饱和到 `long` 上限，不会溢出为负数。
+
 ## 指标说明
 
 - `heap=used/committed/max`：Java 堆，包含对象、集合、RGBA `byte[]` 等。

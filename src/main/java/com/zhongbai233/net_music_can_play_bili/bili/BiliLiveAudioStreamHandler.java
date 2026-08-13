@@ -8,8 +8,10 @@ import com.zhongbai233.net_music_can_play_bili.media.pipeline.AacPcmPipeline;
 import com.zhongbai233.net_music_can_play_bili.media.pipeline.AudioDecodePipeline;
 import com.zhongbai233.net_music_can_play_bili.media.stream.BlockingAudioPipe;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackRequest;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.sync.LiveRoomMetadataRegistry;
 import com.zhongbai233.net_music_can_play_bili.media.stream.FlvStreamParser;
 import com.zhongbai233.net_music_can_play_bili.media.stream.LiveReconnectPolicy;
 import com.zhongbai233.net_music_can_play_bili.media.stream.LiveVideoSampleBus;
@@ -90,6 +92,7 @@ public final class BiliLiveAudioStreamHandler implements IAudioStreamHandler {
         }
 
         BiliLiveStreamResolver.LiveRoom room = BiliLiveStreamResolver.resolve(roomId);
+        publishLiveMetadata(request, room);
         if (!room.isLive()) {
             LiveOfflineBackoff.recordOffline(roomId);
             LiveOfflineBackoff.recordOffline(room.roomId());
@@ -275,6 +278,7 @@ public final class BiliLiveAudioStreamHandler implements IAudioStreamHandler {
                     videoBus.close();
                 }
                 finishPipeline();
+                removeLiveMetadata(request);
             }
         }
 
@@ -299,6 +303,7 @@ public final class BiliLiveAudioStreamHandler implements IAudioStreamHandler {
                 if (current == null) {
                     current = BiliLiveStreamResolver.resolve(roomId);
                     room = current;
+                    publishLiveMetadata(request, current);
                 }
                 if (!current.isLive()) {
                     LOGGER.info("B站直播已结束: room={} status={}", roomId,
@@ -489,5 +494,29 @@ public final class BiliLiveAudioStreamHandler implements IAudioStreamHandler {
             throw new IOException("直播流响应为空: host=" + target.getHost());
         }
         return new BufferedInputStream(body, READ_BUFFER_BYTES);
+    }
+
+    private static void publishLiveMetadata(PlaybackRequest request, BiliLiveStreamResolver.LiveRoom room) {
+        if (request == null || request.pos() == null || room == null || request.playbackSessionId().isEmpty()) {
+            return;
+        }
+        var pos = request.pos();
+        var metadata = room.metadata();
+        LiveRoomMetadataRegistry.publish(new LiveRoomMetadataRegistry.SourceKey(pos.getX(), pos.getY(), pos.getZ()),
+                request.playbackSessionId().orElseThrow(), room.roomId(), metadata.title(),
+                metadata.parentAreaName(), metadata.areaName(), room.liveStatus());
+    }
+
+    private static void removeLiveMetadata(PlaybackRequest request) {
+        if (request == null || request.pos() == null) {
+            return;
+        }
+        PlaybackSessionId sessionId = request.playbackSessionId().orElse(null);
+        if (sessionId == null) {
+            return;
+        }
+        var pos = request.pos();
+        LiveRoomMetadataRegistry.remove(new LiveRoomMetadataRegistry.SourceKey(pos.getX(), pos.getY(), pos.getZ()),
+                sessionId);
     }
 }

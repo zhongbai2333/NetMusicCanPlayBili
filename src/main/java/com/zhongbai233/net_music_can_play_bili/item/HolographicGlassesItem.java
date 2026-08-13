@@ -27,6 +27,9 @@ import java.util.function.Consumer;
 
 public class HolographicGlassesItem extends Item {
     public static final int MAX_BOUND_MEDIA = 4;
+    /** Host-owned persistence version. It is intentionally independent from the Scene Editor library version. */
+    public static final int PERSISTENCE_SCHEMA_VERSION = 1;
+    private static final String DATA_SCHEMA_VERSION = "holographic_glasses_schema_version";
     private static final String DATA_MP4_SCREENS = "holographic_glasses_mp4_screens";
     private static final String DATA_SCREEN_DISTANCE = "holographic_screen_distance";
     private static final String DATA_SCREEN_OFFSET_X = "holographic_screen_offset_x";
@@ -212,6 +215,14 @@ public class HolographicGlassesItem extends Item {
         return List.copyOf(result);
     }
 
+    public static int readPersistenceSchemaVersion(ItemStack stack) {
+        CustomData customData = stack.get(DataComponents.CUSTOM_DATA);
+        if (customData == null || customData.isEmpty()) {
+            return PERSISTENCE_SCHEMA_VERSION;
+        }
+        return customData.copyTag().getInt(DATA_SCHEMA_VERSION).orElse(PERSISTENCE_SCHEMA_VERSION);
+    }
+
     public static List<ScreenConfig> readScreenConfigs(ItemStack stack) {
         List<ScreenConfig> result = new ArrayList<>();
         List<ScreenBinding> bindings = readScreenBindings(stack);
@@ -260,6 +271,7 @@ public class HolographicGlassesItem extends Item {
         }
         stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY,
                 customData -> customData.update(tag -> {
+                    tag.putInt(DATA_SCHEMA_VERSION, PERSISTENCE_SCHEMA_VERSION);
                     tag.put(DATA_MP4_SCREENS, list);
                 }));
     }

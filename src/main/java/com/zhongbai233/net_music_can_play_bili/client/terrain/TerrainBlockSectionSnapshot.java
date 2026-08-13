@@ -65,20 +65,28 @@ public record TerrainBlockSectionSnapshot(TerrainSectionKey section, List<Visibl
         return neighborhoodLight[TerrainNeighborhoodIndex.index(localX, localY, localZ)];
     }
 
-    public record VisibleBlock(int localX, int localY, int localZ, BlockState state,
-            TerrainTintColors tintColors) {
+    public record VisibleBlock(int localX, int localY, int localZ, int cellSize, BlockState state,
+            TerrainTintColors tintColors, List<Integer> tintLayers, byte packedLight) {
         public VisibleBlock(int localX, int localY, int localZ, BlockState state) {
-            this(localX, localY, localZ, state, TerrainTintColors.UNTINTED);
+            this(localX, localY, localZ, 1, state, TerrainTintColors.UNTINTED, List.of(), (byte) 0);
+        }
+
+        public VisibleBlock(int localX, int localY, int localZ, BlockState state,
+                TerrainTintColors tintColors) {
+            this(localX, localY, localZ, 1, state, tintColors, List.of(), (byte) 0);
         }
 
         public VisibleBlock {
-            if (localX < 0 || localX >= TerrainSectionKey.SIZE
-                    || localY < 0 || localY >= TerrainSectionKey.SIZE
-                    || localZ < 0 || localZ >= TerrainSectionKey.SIZE) {
-                throw new IllegalArgumentException("visible block coordinates must be within [0, 15]");
+            if (cellSize <= 0 || TerrainSectionKey.SIZE % cellSize != 0
+                    || localX < 0 || localY < 0 || localZ < 0
+                    || localX + cellSize > TerrainSectionKey.SIZE
+                    || localY + cellSize > TerrainSectionKey.SIZE
+                    || localZ + cellSize > TerrainSectionKey.SIZE) {
+                throw new IllegalArgumentException("visible terrain cell must fit inside its section");
             }
             java.util.Objects.requireNonNull(state, "state");
             java.util.Objects.requireNonNull(tintColors, "tintColors");
+            tintLayers = List.copyOf(java.util.Objects.requireNonNull(tintLayers, "tintLayers"));
         }
     }
 }

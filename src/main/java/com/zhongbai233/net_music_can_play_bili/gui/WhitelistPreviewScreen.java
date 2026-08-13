@@ -13,6 +13,7 @@ import com.zhongbai233.net_music_can_play_bili.network.WhitelistPreviewPacket;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistReviewPacket;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistReviewActionPacket;
 import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackSyncPacket;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.CancellableTaskFuture;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
@@ -42,6 +43,7 @@ public class WhitelistPreviewScreen extends Screen {
     private boolean scrubbing;
     private boolean closeHovered;
     private String durationProbeKey = "";
+    private CancellableTaskFuture<OptionalLong> durationProbeTask;
     private String pendingVideoSessionId = "";
     private String resolvingVideoKey = "";
     private boolean videoResolveFailed;
@@ -65,6 +67,7 @@ public class WhitelistPreviewScreen extends Screen {
     }
 
     private void update(WhitelistPreviewPacket next) {
+        cancelDurationProbe();
         stopCurrentPlayback();
         this.payload = next;
         this.probedDurationMillis = 0L;
@@ -126,8 +129,14 @@ public class WhitelistPreviewScreen extends Screen {
             cancelDelete();
             return;
         }
+        cancelDurationProbe();
         stopCurrentPlayback();
         returnToReviewMenu();
+    }
+
+    @Override
+    public void removed() {
+        cancelDurationProbe();
     }
 
     @Override
@@ -478,13 +487,28 @@ public class WhitelistPreviewScreen extends Screen {
         if (key.equals(durationProbeKey)) {
             return;
         }
+        cancelDurationProbe();
         durationProbeKey = key;
-        AudioDurationProbe.probeMillisAsync(probeUrl).whenComplete((duration, error) -> {
-            if (error != null || duration == null || duration.isEmpty()) {
+        CancellableTaskFuture<OptionalLong> task = AudioDurationProbe.probeMillisAsync(probeUrl);
+        durationProbeTask = task;
+        task.whenComplete((duration, error) -> Minecraft.getInstance().execute(() -> {
+            if (durationProbeTask != task) {
                 return;
             }
-            Minecraft.getInstance().execute(() -> applyProbedDuration(packet.previewId(), key, duration));
-        });
+            durationProbeTask = null;
+            if (error == null && duration != null && duration.isPresent()) {
+                applyProbedDuration(packet.previewId(), key, duration);
+            }
+        }));
+    }
+
+    private void cancelDurationProbe() {
+        CancellableTaskFuture<OptionalLong> task = durationProbeTask;
+        durationProbeTask = null;
+        durationProbeKey = "";
+        if (task != null) {
+            task.cancel(true);
+        }
     }
 
     private void applyProbedDuration(UUID previewId, String key, OptionalLong duration) {
@@ -591,6 +615,7 @@ public class WhitelistPreviewScreen extends Screen {
         if (id == null) {
             return;
         }
+        cancelDurationProbe();
         stopCurrentPlayback();
         locallyPaused = false;
         pausedAtMillis = -1L;
@@ -618,6 +643,7 @@ public class WhitelistPreviewScreen extends Screen {
             return;
         }
         confirmingDelete = false;
+        cancelDurationProbe();
         stopCurrentPlayback();
         ClientPacketDistributor.sendToServer(new WhitelistReviewActionPacket(
                 WhitelistReviewActionPacket.Action.REMOVE, entry.id()));

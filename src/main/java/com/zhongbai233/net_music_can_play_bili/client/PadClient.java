@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.client;
 import com.zhongbai233.net_music_can_play_bili.gui.PadFocusScreen;
 import com.zhongbai233.net_music_can_play_bili.item.PadItem;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadDocument;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import com.zhongbai233.net_music_can_play_bili.network.PadStatePacket;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.InteractionHand;
@@ -21,9 +22,9 @@ public final class PadClient {
     private static final int FAST_SYNC_INTERVAL_TICKS = 10;
     private static final int AUTO_PLAY_SCAN_INTERVAL_TICKS = 5;
     private static final int PAD_INDEX_REBUILD_INTERVAL_TICKS = 20;
-    private static final Map<UUID, PadDocument> DOCUMENTS = new ConcurrentHashMap<>();
-    private static final Map<UUID, PendingDocumentSync> PENDING_SYNCS = new ConcurrentHashMap<>();
-    private static final Map<UUID, List<IndexedPadStack>> PAD_INDEX = new HashMap<>();
+    private static final Map<PlaybackSourceId, PadDocument> DOCUMENTS = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, PendingDocumentSync> PENDING_SYNCS = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, List<IndexedPadStack>> PAD_INDEX = new HashMap<>();
     private static long localSequence;
     private static int fastSyncTicks;
     private static int autoPlayScanTicks;
@@ -72,7 +73,7 @@ public final class PadClient {
 
     public static PadDocument cachedDocumentFor(ItemStack stack) {
         UUID deviceId = PadItem.readDeviceId(stack);
-        PadDocument cached = deviceId != null ? DOCUMENTS.get(deviceId) : null;
+        PadDocument cached = deviceId != null ? DOCUMENTS.get(PlaybackSourceId.of(deviceId)) : null;
         PadDocument itemDocument = PadItem.readDocument(stack);
         if (cached == null) {
             return itemDocument;
@@ -90,8 +91,10 @@ public final class PadClient {
         if (deviceId == null || document == null) {
             return;
         }
-        DOCUMENTS.put(deviceId, document);
-        PENDING_SYNCS.put(deviceId, new PendingDocumentSync(document, System.currentTimeMillis(), ++localSequence));
+        PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+        DOCUMENTS.put(sourceId, document);
+        PENDING_SYNCS.put(sourceId,
+                new PendingDocumentSync(document, System.currentTimeMillis(), ++localSequence));
         syncRequested = true;
     }
 
@@ -100,12 +103,13 @@ public final class PadClient {
         if (minecraft.player == null || deviceId == null || document == null) {
             return;
         }
-        PadDocument current = DOCUMENTS.get(deviceId);
+        PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+        PadDocument current = DOCUMENTS.get(sourceId);
         if (current != null && compareVersion(document, current) < 0) {
             return;
         }
-        DOCUMENTS.put(deviceId, document);
-        PENDING_SYNCS.remove(deviceId);
+        DOCUMENTS.put(sourceId, document);
+        PENDING_SYNCS.remove(sourceId);
         for (IndexedPadStack indexed : indexedStacks(deviceId)) {
             ItemStack stack = indexed.stack();
             boolean locked = PadItem.readLocked(stack);
@@ -138,13 +142,14 @@ public final class PadClient {
             syncRequested = false;
             return;
         }
-        for (Map.Entry<UUID, PendingDocumentSync> entry : new ArrayList<>(PENDING_SYNCS.entrySet())) {
-            UUID deviceId = entry.getKey();
-            PendingDocumentSync pending = PENDING_SYNCS.remove(deviceId);
+        for (Map.Entry<PlaybackSourceId, PendingDocumentSync> entry : new ArrayList<>(PENDING_SYNCS.entrySet())) {
+            PlaybackSourceId sourceId = entry.getKey();
+            UUID deviceId = sourceId.value();
+            PendingDocumentSync pending = PENDING_SYNCS.remove(sourceId);
             if (pending == null) {
                 continue;
             }
-            if (!PAD_INDEX.containsKey(deviceId)) {
+            if (!PAD_INDEX.containsKey(sourceId)) {
                 continue;
             }
             minecraft.getConnection().send(new PadStatePacket(deviceId, pending.document(), pending.updatedAtMillis(),
@@ -160,7 +165,9 @@ public final class PadClient {
     }
 
     private static List<IndexedPadStack> indexedStacks(UUID deviceId) {
-        return deviceId == null ? List.of() : PAD_INDEX.getOrDefault(deviceId, List.of());
+        return deviceId == null
+                ? List.of()
+                : PAD_INDEX.getOrDefault(PlaybackSourceId.of(deviceId), List.of());
     }
 
     private static IndexedPadStack firstLocked(List<IndexedPadStack> stacks) {
@@ -200,7 +207,7 @@ public final class PadClient {
         if (deviceId == null) {
             return;
         }
-        PAD_INDEX.computeIfAbsent(deviceId, ignored -> new ArrayList<>())
+        PAD_INDEX.computeIfAbsent(PlaybackSourceId.of(deviceId), ignored -> new ArrayList<>())
                 .add(new IndexedPadStack(stack, PadItem.readLocked(stack)));
     }
 

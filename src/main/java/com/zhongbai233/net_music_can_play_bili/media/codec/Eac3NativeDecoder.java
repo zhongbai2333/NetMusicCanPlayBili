@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.net.JarURLConnection;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -175,9 +176,9 @@ public class Eac3NativeDecoder implements AutoCloseable {
 
         NativeLibrarySet libraries = discoverNativeLibraries(platformDir, os, isWindows);
         String bundleFingerprint = nativeBundleFingerprint();
-        // Windows MinGW 运行时依赖必须先显式加载；FFmpeg x64/ARM64 构建均依赖
-        // libiconv，avutil 还可能依赖 libwinpthread。顺序保持在 FFmpeg DLL 之前。
-        String[] runtimeLibs = isWindows ? new String[] { "libiconv-2", "libwinpthread-1" } : new String[0];
+        // Windows MinGW 运行时依赖必须先显式加载。v48 已禁用 iconv，仅保留
+        // libwinpthread；顺序保持在 FFmpeg DLL 之前。
+        String[] runtimeLibs = isWindows ? new String[] { "libwinpthread-1" } : new String[0];
         boolean[] runtimeLibPresent = new boolean[runtimeLibs.length];
 
         // ── 提取到 config 目录（避免 temp 被杀软拦截 DLL 加载；平台子目录隔离多版本）──
@@ -369,10 +370,41 @@ public class Eac3NativeDecoder implements AutoCloseable {
                 listJarResourceNames(url, resourceDir, names);
             }
         }
+        // NeoForge 的开发目录 classloader 能按完整路径读取资源，但不保证为资源目录本身
+        // 生成 URL。生产包要求携带的 SHA256SUMS 同时也是精确文件清单，因此优先用它
+        // 补全目录枚举，确保 runClient/ModBench 与最终 JAR 使用同一套 native bundle。
+        listManifestResourceNames(platformDir, names);
         if (names.isEmpty()) {
             listCodeSourceResourceNames(resourceDir, names);
         }
         return names;
+    }
+
+    private static void listManifestResourceNames(String platformDir, Set<String> names) throws IOException {
+        String prefix = platformDir + "/";
+        try (InputStream embedded = Eac3NativeDecoder.class.getResourceAsStream("/native/SHA256SUMS")) {
+            InputStream source = embedded != null ? embedded : openFilesystemNativeResource("SHA256SUMS");
+            if (source == null) {
+                return;
+            }
+            try (source) {
+                String manifest = new String(source.readAllBytes(), StandardCharsets.UTF_8);
+                for (String rawLine : manifest.split("\\R")) {
+                    String line = rawLine.trim();
+                    if (line.isEmpty() || line.startsWith("#")) {
+                        continue;
+                    }
+                    String[] fields = line.split("\\s+", 2);
+                    if (fields.length != 2 || !fields[1].startsWith(prefix)) {
+                        continue;
+                    }
+                    String fileName = fields[1].substring(prefix.length());
+                    if (!fileName.isEmpty() && !fileName.contains("/") && !fileName.contains("\\")) {
+                        names.add(fileName);
+                    }
+                }
+            }
+        }
     }
 
     private static void listFileResourceNames(URL url, Set<String> names) throws IOException {

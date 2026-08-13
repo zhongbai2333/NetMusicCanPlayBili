@@ -173,7 +173,7 @@ public class ModernTurntableRenderer
             if (level.getBlockEntity(sourcePos) instanceof ControlConsoleBlockEntity console
                     && console.document().hasSourceBinding()
                     && console.document().sourceKind()
-                        == com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleDocument.SourceKind.TURNTABLE
+                        == com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument.SourceKind.TURNTABLE
                     && console.document().sourceX() == turntable.getBlockPos().getX()
                     && console.document().sourceY() == turntable.getBlockPos().getY()
                     && console.document().sourceZ() == turntable.getBlockPos().getZ()) {

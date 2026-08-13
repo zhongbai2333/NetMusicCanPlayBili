@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.audio;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -9,7 +11,7 @@ import org.junit.jupiter.api.Test;
 class ClientPlaybackCommandTest {
     @Test
     void normalizesProtocolSnapshot() {
-        ClientPlaybackCommand command = new ClientPlaybackCommand(1, 2, 3, null, null, null, 0, null,
+        ClientPlaybackCommand command = new ClientPlaybackCommand(1, 2, 3, null, null, null, 0, (String) null,
                 -100L, -200L, null, false, false);
 
         assertEquals("", command.rawUrl());
@@ -30,6 +32,17 @@ class ClientPlaybackCommandTest {
         assertEquals(10_000L, command.totalMillis());
         assertEquals(10_000L, command.durationMillis());
         assertTrue(command.hasSession());
+        assertEquals(PlaybackSessionId.of("source-100-3"), command.playbackSessionId().orElseThrow());
         assertEquals("source-100-3", command.syncMetadata().sessionId());
+    }
+
+    @Test
+    void rejectsFragmentDelimiterSessionIdentityAtTheProtocolBoundary() {
+        ClientPlaybackCommand command = new ClientPlaybackCommand(1, 2, 3, "raw", "play", "song", 12,
+                "source-100&other=1", 1_000L, 10_000L, null, true, true);
+
+        assertFalse(command.hasSession());
+        assertTrue(command.playbackSessionId().isEmpty());
+        assertEquals("", command.sessionId());
     }
 }

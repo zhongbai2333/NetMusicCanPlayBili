@@ -6,7 +6,10 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.ResolvedVideoStream;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientMediaPreparer;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.ResolveGeneration;
 import com.zhongbai233.net_music_can_play_bili.client.sync.VideoAudioReadinessPolicy;
 import com.zhongbai233.net_music_can_play_bili.client.sync.VideoAudioPresenceRegistry;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
@@ -14,6 +17,7 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEn
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoResolveAdmissionPolicy;
 import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.CancellableTaskFuture;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -23,12 +27,13 @@ import org.slf4j.Logger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 现代化唱片机的视频同步入口。
@@ -40,8 +45,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class ModernTurntableVideoClient {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final boolean ENABLED = Boolean.parseBoolean(
-            System.getProperty("ncpb.video.turntable.enabled", "true"));
+    private static final VideoClientProperties.Turntable VIDEO_PROPERTIES = VideoClientProperties.turntable();
     private static final int DEFAULT_PREFERRED_QUALITY = VideoFeatureFlags.advancedInt("bili.video.turntable.quality",
             116);
     private static final int DEFAULT_FPS = VideoFeatureFlags.advancedInt("bili.video.turntable.default_fps", 60);
@@ -50,22 +54,27 @@ public final class ModernTurntableVideoClient {
             "bili.video.turntable.log_sync_decisions", false);
     private static final String DECODER_OVERRIDE = VideoFeatureFlags.advancedString("ncpb.video.ffmpeg.decoder", "")
             .trim();
-    private static final int VIDEO_RESOLVE_THREADS = Math.max(1, Integer.getInteger(
-            "bili.video.turntable.resolve_threads", 2));
     private static final ExecutorService VIDEO_RESOLVE_EXECUTOR = Executors.newFixedThreadPool(
-            VIDEO_RESOLVE_THREADS, NetMusicThreadFactory.daemon("BiliVideoResolve"));
+            VIDEO_PROPERTIES.resolveThreads(), NetMusicThreadFactory.daemon("BiliVideoResolve"));
 
-    private static final Set<String> ACTIVE_SESSION_IDS = ConcurrentHashMap.newKeySet();
-    private static final ConcurrentHashMap<BlockPos, String> ACTIVE_SESSION_BY_TURNTABLE = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<BlockPos, String> LATEST_SESSION_BY_TURNTABLE = new ConcurrentHashMap<>();
+    private static final Set<PlaybackSessionId> ACTIVE_SESSION_IDS = ConcurrentHashMap.newKeySet();
+    private static final ConcurrentHashMap<BlockPos, PlaybackSessionId> ACTIVE_SESSION_BY_TURNTABLE =
+            new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<BlockPos, PlaybackSessionId> LATEST_SESSION_BY_TURNTABLE =
+            new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<BlockPos, Set<BlockPos>> CONTROL_CONSOLE_CONSUMERS = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<BlockPos, Integer> CONTROL_CONSOLE_QUALITY = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, Integer> ACTIVE_QUALITY_CEILING_BY_SESSION = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, Long> ACTIVE_REQUEST_BY_SESSION = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, PendingVideoRequest> PENDING_REQUEST_BY_SESSION = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<PlaybackSessionId, Integer> ACTIVE_QUALITY_CEILING_BY_SESSION =
+            new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<PlaybackSessionId, ResolveGeneration> ACTIVE_REQUEST_BY_SESSION =
+            new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<PlaybackSessionId, VideoResolveRequestOwner<BlockPos>>
+            PENDING_REQUEST_BY_SESSION = new ConcurrentHashMap<>();
     private static final VideoAudioPresenceRegistry AUDIO_PRESENCE = new VideoAudioPresenceRegistry();
-    private static final ConcurrentHashMap<String, String> LAST_DECISION_BY_SESSION = new ConcurrentHashMap<>();
-    private static final AtomicLong REQUEST_SEQUENCE = new AtomicLong();
+    private static final ConcurrentHashMap<PlaybackSessionId, String> LAST_DECISION_BY_SESSION =
+            new ConcurrentHashMap<>();
+    private static final AtomicReference<ResolveGeneration> REQUEST_SEQUENCE =
+            new AtomicReference<>(ResolveGeneration.initial());
     private static final AtomicLong STALE_RESOLVE_DROPS = new AtomicLong();
     private static final AtomicLong NO_CONSUMER_RESOLVE_DROPS = new AtomicLong();
 
@@ -73,28 +82,34 @@ public final class ModernTurntableVideoClient {
     }
 
     public static void forgetSession(String sessionId) {
-        if (sessionId == null || sessionId.isBlank()) {
+        PlaybackSessionId key = sessionKey(sessionId);
+        if (key == null) {
             return;
         }
-        VideoBillboardPreview.clearPendingLoading(sessionId);
-        ACTIVE_SESSION_IDS.remove(sessionId);
-        ACTIVE_QUALITY_CEILING_BY_SESSION.remove(sessionId);
-        ACTIVE_REQUEST_BY_SESSION.remove(sessionId);
-        PENDING_REQUEST_BY_SESSION.remove(sessionId);
-        AUDIO_PRESENCE.forget(sessionId);
-        LAST_DECISION_BY_SESSION.remove(sessionId);
-        ACTIVE_SESSION_BY_TURNTABLE.entrySet().removeIf(entry -> sessionId.equals(entry.getValue()));
-        LATEST_SESSION_BY_TURNTABLE.entrySet().removeIf(entry -> sessionId.equals(entry.getValue()));
+        String normalizedSessionId = key.value();
+        VideoBillboardPreview.clearPendingLoading(normalizedSessionId);
+        ACTIVE_SESSION_IDS.remove(key);
+        ACTIVE_QUALITY_CEILING_BY_SESSION.remove(key);
+        ACTIVE_REQUEST_BY_SESSION.remove(key);
+        cancelPendingRequest(key);
+        AUDIO_PRESENCE.forget(key);
+        LAST_DECISION_BY_SESSION.remove(key);
+        ACTIVE_SESSION_BY_TURNTABLE.entrySet().removeIf(entry -> key.equals(entry.getValue()));
+        LATEST_SESSION_BY_TURNTABLE.entrySet().removeIf(entry -> key.equals(entry.getValue()));
     }
 
     /** 客户端断连/切世界时清理所有视频同步决策状态，避免旧世界 session 与 BlockPos 残留。 */
     public static void clear() {
+        PENDING_REQUEST_BY_SESSION.forEach((sessionId, pending) -> {
+            if (PENDING_REQUEST_BY_SESSION.remove(sessionId, pending)) {
+                pending.cancel();
+            }
+        });
         ACTIVE_SESSION_IDS.clear();
         ACTIVE_SESSION_BY_TURNTABLE.clear();
         LATEST_SESSION_BY_TURNTABLE.clear();
         ACTIVE_QUALITY_CEILING_BY_SESSION.clear();
         ACTIVE_REQUEST_BY_SESSION.clear();
-        PENDING_REQUEST_BY_SESSION.clear();
         AUDIO_PRESENCE.clear();
         LAST_DECISION_BY_SESSION.clear();
         CONTROL_CONSOLE_CONSUMERS.clear();
@@ -219,7 +234,11 @@ public final class ModernTurntableVideoClient {
 
     private static void syncFromPlayback(String rawUrl, BlockPos turntablePos, PlaybackSync.Metadata sync,
             List<VideoProjectorBlockEntity> explicitProjectors) {
-        if (!ENABLED || sync == null || !sync.hasSession()) {
+        if (!VIDEO_PROPERTIES.enabled() || sync == null || !sync.hasSession()) {
+            return;
+        }
+        PlaybackSessionId playbackSessionId = sync.playbackSessionId().orElse(null);
+        if (playbackSessionId == null) {
             return;
         }
         String cleanRawUrl = PlaybackSync.strip(rawUrl);
@@ -228,10 +247,10 @@ public final class ModernTurntableVideoClient {
             LOGGER.debug("现代唱片机视频同步跳过: 无法识别 B站视频 URL: rawUrl={}", cleanRawUrl);
             return;
         }
-        String sessionId = sync.sessionId();
+        String sessionId = playbackSessionId.value();
         BlockPos immutableTurntablePos = turntablePos != null ? turntablePos.immutable() : null;
         if (immutableTurntablePos != null) {
-            LATEST_SESSION_BY_TURNTABLE.put(immutableTurntablePos, sessionId);
+            LATEST_SESSION_BY_TURNTABLE.put(immutableTurntablePos, playbackSessionId);
         }
         List<VideoProjectorBlockEntity> projectors = explicitProjectors != null
                 ? explicitProjectors
@@ -245,7 +264,7 @@ public final class ModernTurntableVideoClient {
             if (VideoBillboardPreview.hasSessionForTurntable(turntablePos, sessionId)
                     && (VideoBillboardPreview.isSessionRunning(sessionId)
                         || VideoBillboardPreview.hasTerminalFailure(sessionId))) {
-                ACTIVE_SESSION_IDS.add(sessionId);
+                ACTIVE_SESSION_IDS.add(playbackSessionId);
                 rememberActiveSession(immutableTurntablePos, sessionId);
                 logDecision(sessionId, "reuse-simulated-projector", turntablePos, sync.elapsedMillis(), 0, 0, 0L,
                         VideoBillboardPreview.hasTerminalFailure(sessionId)
@@ -266,7 +285,7 @@ public final class ModernTurntableVideoClient {
             .toList();
         List<BlockPos> consumerPositions = new ArrayList<>(projectorPositions);
         consumerPositions.addAll(consoleConsumers);
-        ClientMediaPreparer.AudioPresence audioPresence = AUDIO_PRESENCE.presence(sessionId);
+        ClientMediaPreparer.AudioPresence audioPresence = AUDIO_PRESENCE.presence(playbackSessionId);
         if (!audioGateAllowsVideo(turntablePos, sessionId, audioPresence)) {
             // 这里只是 admission 尚未满足，不是 session 结束。stopIfSession/forgetSession 会删除
             // 音频能力状态，使刚发布的 PRESENT 下一帧又退回 UNKNOWN，形成永久等待循环。
@@ -280,21 +299,22 @@ public final class ModernTurntableVideoClient {
         int qualityCeiling = qualityCeiling(projectors, consoleConsumers);
         if (VideoBillboardPreview.hasTerminalFailure(sessionId)) {
             VideoBillboardPreview.updateSessionProjectors(sessionId, consumerPositions);
-            ACTIVE_SESSION_IDS.add(sessionId);
+            ACTIVE_SESSION_IDS.add(playbackSessionId);
             rememberActiveSession(immutableTurntablePos, sessionId);
             logDecision(sessionId, "hold-network-failure", turntablePos, elapsedMillis, qualityCeiling,
                     projectorPositions.size(), 0L,
                     "same session is held at the error placeholder until a new session or explicit retry");
             return;
         }
-        String existingForTurntable = immutableTurntablePos != null
+        PlaybackSessionId existingForTurntableKey = immutableTurntablePos != null
                 ? ACTIVE_SESSION_BY_TURNTABLE.get(immutableTurntablePos)
                 : null;
+        String existingForTurntable = existingForTurntableKey != null ? existingForTurntableKey.value() : null;
         if (existingForTurntable != null && VideoBillboardPreview.isSessionRunning(existingForTurntable)) {
-            if (existingForTurntable.equals(sessionId)) {
+            if (existingForTurntableKey.equals(playbackSessionId)) {
                 VideoBillboardPreview.updateSessionProjectors(existingForTurntable, consumerPositions);
                 if (VideoBillboardPreview.isSessionWaitingForFirstFrame(existingForTurntable)) {
-                    ACTIVE_SESSION_IDS.add(sessionId);
+                    ACTIVE_SESSION_IDS.add(playbackSessionId);
                     rememberActiveSession(immutableTurntablePos, sessionId);
                     logDecision(sessionId, "reuse-wait-first-frame", turntablePos, elapsedMillis, qualityCeiling,
                             projectorPositions.size(), 0L, "same session already decoding");
@@ -302,7 +322,7 @@ public final class ModernTurntableVideoClient {
                 }
                 if (isSessionRunningAtQualityCeiling(existingForTurntable, qualityCeiling)
                         && VideoBillboardPreview.canSessionChaseToOffset(existingForTurntable, elapsedMillis)) {
-                    ACTIVE_SESSION_IDS.add(sessionId);
+                    ACTIVE_SESSION_IDS.add(playbackSessionId);
                     rememberActiveSession(immutableTurntablePos, sessionId);
                     logDecision(sessionId, "reuse-chase", turntablePos, elapsedMillis, qualityCeiling,
                             projectorPositions.size(), 0L,
@@ -324,7 +344,7 @@ public final class ModernTurntableVideoClient {
         if (VideoBillboardPreview.isSessionRunning(sessionId)) {
             VideoBillboardPreview.updateSessionProjectors(sessionId, consumerPositions);
             if (VideoBillboardPreview.isSessionWaitingForFirstFrame(sessionId)) {
-                ACTIVE_SESSION_IDS.add(sessionId);
+                ACTIVE_SESSION_IDS.add(playbackSessionId);
                 rememberActiveSession(immutableTurntablePos, sessionId);
                 logDecision(sessionId, "reuse-wait-first-frame", turntablePos, elapsedMillis, qualityCeiling,
                         projectorPositions.size(), 0L, "running session has not produced first frame yet");
@@ -332,7 +352,7 @@ public final class ModernTurntableVideoClient {
             }
             if (isSessionRunningAtQualityCeiling(sessionId, qualityCeiling)
                     && VideoBillboardPreview.canSessionChaseToOffset(sessionId, elapsedMillis)) {
-                ACTIVE_SESSION_IDS.add(sessionId);
+                ACTIVE_SESSION_IDS.add(playbackSessionId);
                 rememberActiveSession(immutableTurntablePos, sessionId);
                 logDecision(sessionId, "reuse-chase", turntablePos, elapsedMillis, qualityCeiling,
                         projectorPositions.size(), 0L,
@@ -345,7 +365,7 @@ public final class ModernTurntableVideoClient {
             VideoBillboardPreview.stopIfSession(sessionId);
             markSessionRestarting(sessionId);
         }
-        if (!ACTIVE_SESSION_IDS.add(sessionId)) {
+        if (!ACTIVE_SESSION_IDS.add(playbackSessionId)) {
             if (isSessionRunningAtQualityCeiling(sessionId, qualityCeiling)
                     && VideoBillboardPreview.canSessionChaseToOffset(sessionId, elapsedMillis)) {
                 rememberActiveSession(immutableTurntablePos, sessionId);
@@ -357,26 +377,27 @@ public final class ModernTurntableVideoClient {
                 // 这里通常表示异步 B 站视频流解析已经在路上，但渲染实例还没创建。
                 // 不要为了每个同步包都 remove/add 并重新提交 CompletableFuture，否则拖动/续播时会
                 // 把同一个 HTTP/2 连接刷爆成 "too many concurrent streams"。
-                PendingVideoRequest pending = PENDING_REQUEST_BY_SESSION.get(sessionId);
+                VideoResolveRequestOwner<BlockPos> pending = PENDING_REQUEST_BY_SESSION.get(playbackSessionId);
                 if (pending != null && pending.matches(elapsedMillis, qualityCeiling)) {
                     VideoBillboardPreview.beginPendingLoading(sessionId, consumerPositions);
                     rememberActiveSession(immutableTurntablePos, sessionId);
                     logDecision(sessionId, "reuse-pending", turntablePos, elapsedMillis, qualityCeiling,
-                            projectorPositions.size(), pending.requestId(), "stream resolve already in flight");
+                            projectorPositions.size(), pending.requestGeneration().value(),
+                            "stream resolve already in flight");
                     return;
                 }
                 logDecision(sessionId, "replace-pending", turntablePos, elapsedMillis, qualityCeiling,
-                        projectorPositions.size(), pending != null ? pending.requestId() : 0L,
+                        projectorPositions.size(), pending != null ? pending.requestGeneration().value() : 0L,
                         pending != null ? "pending quality ceiling changed" : "active marker without renderer");
                 markSessionRestarting(sessionId);
-                ACTIVE_SESSION_IDS.add(sessionId);
+                ACTIVE_SESSION_IDS.add(playbackSessionId);
                 rememberActiveSession(immutableTurntablePos, sessionId);
             } else {
                 logDecision(sessionId, "restart-active-marker", turntablePos, elapsedMillis, qualityCeiling,
                         projectorPositions.size(), 0L, "active marker conflicts with renderer state");
                 VideoBillboardPreview.stopIfSession(sessionId);
                 markSessionRestarting(sessionId);
-                ACTIVE_SESSION_IDS.add(sessionId);
+                ACTIVE_SESSION_IDS.add(playbackSessionId);
             }
         }
         if (isSessionRunningAtQualityCeiling(sessionId, qualityCeiling)
@@ -387,40 +408,66 @@ public final class ModernTurntableVideoClient {
             return;
         }
         rememberActiveSession(immutableTurntablePos, sessionId);
-        ACTIVE_QUALITY_CEILING_BY_SESSION.put(sessionId, qualityCeiling);
+        ACTIVE_QUALITY_CEILING_BY_SESSION.put(playbackSessionId, qualityCeiling);
         long requestNanoTime = System.nanoTime();
-        long requestId = REQUEST_SEQUENCE.incrementAndGet();
-        ACTIVE_REQUEST_BY_SESSION.put(sessionId, requestId);
-        PENDING_REQUEST_BY_SESSION.put(sessionId, new PendingVideoRequest(elapsedMillis, qualityCeiling, requestId,
-            List.copyOf(consumerPositions)));
+        ResolveGeneration requestGeneration = REQUEST_SEQUENCE.updateAndGet(ResolveGeneration::next);
+        ACTIVE_REQUEST_BY_SESSION.put(playbackSessionId, requestGeneration);
+        VideoResolveRequestOwner<BlockPos> pendingRequest = new VideoResolveRequestOwner<>(qualityCeiling,
+                requestGeneration, List.copyOf(consumerPositions));
+        VideoResolveRequestOwner<BlockPos> replaced = PENDING_REQUEST_BY_SESSION.put(playbackSessionId, pendingRequest);
+        if (replaced != null) {
+            replaced.cancel();
+        }
+        if (!ModernTurntablePlaybackTracker.replaceResource(turntablePos, sessionId, "video-resolve",
+            pendingRequest::cancel)) {
+            PENDING_REQUEST_BY_SESSION.remove(playbackSessionId, pendingRequest);
+            ACTIVE_REQUEST_BY_SESSION.remove(playbackSessionId, requestGeneration);
+            ACTIVE_SESSION_IDS.remove(playbackSessionId);
+            pendingRequest.cancel();
+            return;
+        }
         VideoBillboardPreview.beginPendingLoading(sessionId, consumerPositions);
         logDecision(sessionId, "schedule-resolve", turntablePos, elapsedMillis, qualityCeiling,
-                projectorPositions.size(), requestId, "async B站 video stream resolve with quality ceiling");
-        CompletableFuture
-                .runAsync(() -> startResolved(cleanRawUrl, selection, turntablePos, consumerPositions, qualityCeiling,
-                        sync, requestNanoTime, requestId), VIDEO_RESOLVE_EXECUTOR)
+                projectorPositions.size(), requestGeneration.value(),
+                "async B站 video stream resolve with quality ceiling");
+        CancellableTaskFuture<Void> resolveTask = CancellableTaskFuture.submit(VIDEO_RESOLVE_EXECUTOR, () -> {
+            startResolved(cleanRawUrl, selection, turntablePos, consumerPositions, qualityCeiling,
+                sync, requestNanoTime, requestGeneration);
+            return null;
+        });
+        pendingRequest.bind(resolveTask);
+        resolveTask
                 .orTimeout(45, TimeUnit.SECONDS)
-                .exceptionally(error -> {
-                    LOGGER.warn("现代化唱片机视频同步启动失败: {}", cleanRawUrl, error);
-                    Minecraft.getInstance().execute(() -> clearTimedOutRequest(
-                            sessionId, requestId, turntablePos, consumerPositions, error));
-                    return null;
+            .whenComplete((ignored, error) -> {
+                if (error == null || error instanceof CancellationException) {
+                return;
+                }
+                if (isTimeout(error)) {
+                pendingRequest.cancel();
+                LOGGER.warn("现代唱片机视频同步启动超时: {}", cleanRawUrl, error);
+                Minecraft.getInstance().execute(() -> clearTimedOutRequest(
+                    sessionId, requestGeneration, turntablePos, consumerPositions, error));
+                }
                 });
     }
 
-    private static void clearTimedOutRequest(String sessionId, long requestId, BlockPos turntablePos,
+    private static void clearTimedOutRequest(String sessionId, ResolveGeneration requestGeneration,
+            BlockPos turntablePos,
             List<BlockPos> capturedConsumers, Throwable error) {
-        if (!isTimeout(error) || !isLatestRequestForTurntable(sessionId, requestId, turntablePos)) {
+        if (!isTimeout(error) || !isLatestRequestForTurntable(sessionId, requestGeneration, turntablePos)) {
             return;
         }
-        ACTIVE_REQUEST_BY_SESSION.remove(sessionId, requestId);
-        PENDING_REQUEST_BY_SESSION.computeIfPresent(sessionId,
-                (ignored, pending) -> pending.requestId() == requestId ? null : pending);
-        ACTIVE_SESSION_IDS.remove(sessionId);
+        PlaybackSessionId key = sessionKey(sessionId);
+        if (key == null) {
+            return;
+        }
+        ACTIVE_REQUEST_BY_SESSION.remove(key, requestGeneration);
+        cancelPendingRequest(key, requestGeneration);
+        ACTIVE_SESSION_IDS.remove(key);
         VideoBillboardPreview.clearPendingLoading(sessionId);
         LiveConsumers consumers = currentConsumers(turntablePos, sessionId, capturedConsumers);
         logDecision(sessionId, "resolve-timeout-cleared", turntablePos, 0L, 0,
-                consumers.positions().size(), requestId,
+                consumers.positions().size(), requestGeneration.value(),
                 "timed out request markers cleared so an active consumer can retry");
     }
 
@@ -434,40 +481,81 @@ public final class ModernTurntableVideoClient {
     }
 
     private static void markSessionRestarting(String sessionId) {
-        ACTIVE_SESSION_IDS.remove(sessionId);
-        ACTIVE_QUALITY_CEILING_BY_SESSION.remove(sessionId);
-        ACTIVE_REQUEST_BY_SESSION.remove(sessionId);
-        PENDING_REQUEST_BY_SESSION.remove(sessionId);
+        PlaybackSessionId key = sessionKey(sessionId);
+        if (key == null) {
+            return;
+        }
+        ACTIVE_SESSION_IDS.remove(key);
+        ACTIVE_QUALITY_CEILING_BY_SESSION.remove(key);
+        ACTIVE_REQUEST_BY_SESSION.remove(key);
+        cancelPendingRequest(key);
     }
 
-    private static boolean isLatestRequest(String sessionId, long requestId) {
-        Long active = ACTIVE_REQUEST_BY_SESSION.get(sessionId);
-        return active != null && active == requestId;
+    private static void cancelPendingRequest(String sessionId) {
+        PlaybackSessionId key = sessionKey(sessionId);
+        if (key == null) {
+            return;
+        }
+        cancelPendingRequest(key);
     }
 
-    private static boolean isLatestRequestForTurntable(String sessionId, long requestId, BlockPos turntablePos) {
-        if (!isLatestRequest(sessionId, requestId)) {
+    private static void cancelPendingRequest(PlaybackSessionId key) {
+        VideoResolveRequestOwner<BlockPos> pending = PENDING_REQUEST_BY_SESSION.remove(key);
+        if (pending != null) {
+            pending.cancel();
+        }
+    }
+
+    private static void cancelPendingRequest(String sessionId, ResolveGeneration requestGeneration) {
+        PlaybackSessionId key = sessionKey(sessionId);
+        if (key == null) {
+            return;
+        }
+        cancelPendingRequest(key, requestGeneration);
+    }
+
+    private static void cancelPendingRequest(PlaybackSessionId key, ResolveGeneration requestGeneration) {
+        PENDING_REQUEST_BY_SESSION.computeIfPresent(key, (ignored, pending) -> {
+            if (!pending.requestGeneration().equals(requestGeneration)) {
+                return pending;
+            }
+            pending.cancel();
+            return null;
+        });
+    }
+
+    private static boolean isLatestRequest(String sessionId, ResolveGeneration requestGeneration) {
+        PlaybackSessionId key = sessionKey(sessionId);
+        ResolveGeneration active = key != null ? ACTIVE_REQUEST_BY_SESSION.get(key) : null;
+        return requestGeneration != null && requestGeneration.equals(active);
+    }
+
+    private static boolean isLatestRequestForTurntable(String sessionId, ResolveGeneration requestGeneration,
+            BlockPos turntablePos) {
+        if (!isLatestRequest(sessionId, requestGeneration)) {
             return false;
         }
         if (turntablePos == null) {
             return true;
         }
-        String activeSession = ACTIVE_SESSION_BY_TURNTABLE.get(turntablePos);
-        return sessionId.equals(activeSession);
+        PlaybackSessionId activeSession = ACTIVE_SESSION_BY_TURNTABLE.get(turntablePos);
+        PlaybackSessionId key = sessionKey(sessionId);
+        return key != null && key.equals(activeSession);
     }
 
     private static void invalidateIfNoLiveConsumer(BlockPos turntablePos) {
         if (turntablePos == null) {
             return;
         }
-        String sessionId = ACTIVE_SESSION_BY_TURNTABLE.get(turntablePos);
-        if (sessionId == null || sessionId.isBlank()) {
-            sessionId = LATEST_SESSION_BY_TURNTABLE.get(turntablePos);
+        PlaybackSessionId key = ACTIVE_SESSION_BY_TURNTABLE.get(turntablePos);
+        if (key == null) {
+            key = LATEST_SESSION_BY_TURNTABLE.get(turntablePos);
         }
-        if (sessionId == null || sessionId.isBlank()) {
+        if (key == null) {
             return;
         }
-        PendingVideoRequest pending = PENDING_REQUEST_BY_SESSION.get(sessionId);
+        String sessionId = key.value();
+        VideoResolveRequestOwner<BlockPos> pending = PENDING_REQUEST_BY_SESSION.get(key);
         List<BlockPos> captured = pending != null ? pending.consumerPositions() : List.of();
         LiveConsumers consumers = currentConsumers(turntablePos, sessionId, captured);
         if (consumers.hasAny()) {
@@ -509,15 +597,16 @@ public final class ModernTurntableVideoClient {
 
     static boolean audioGateAllowsVideo(BlockPos turntablePos, String sessionId,
             ClientMediaPreparer.AudioPresence presence) {
-        boolean validSession = turntablePos != null && sessionId != null && !sessionId.isBlank();
+        boolean validSession = turntablePos != null && sessionKey(sessionId) != null;
         return validSession && VideoAudioReadinessPolicy.allowsVideo(presence,
                 presence == ClientMediaPreparer.AudioPresence.PRESENT && isAudioReady(turntablePos, sessionId));
     }
 
     private static void rememberActiveSession(BlockPos turntablePos, String sessionId) {
-        if (turntablePos != null && sessionId != null && !sessionId.isBlank()) {
-            ACTIVE_SESSION_BY_TURNTABLE.put(turntablePos, sessionId);
-            LATEST_SESSION_BY_TURNTABLE.put(turntablePos, sessionId);
+        PlaybackSessionId key = sessionKey(sessionId);
+        if (turntablePos != null && key != null) {
+            ACTIVE_SESSION_BY_TURNTABLE.put(turntablePos, key);
+            LATEST_SESSION_BY_TURNTABLE.put(turntablePos, key);
         }
     }
 
@@ -538,13 +627,19 @@ public final class ModernTurntableVideoClient {
     }
 
     private static boolean isSessionRunningAtQualityCeiling(String sessionId, int requestedQualityCeiling) {
-        Integer activeQualityCeiling = ACTIVE_QUALITY_CEILING_BY_SESSION.get(sessionId);
+        PlaybackSessionId key = sessionKey(sessionId);
+        Integer activeQualityCeiling = key != null ? ACTIVE_QUALITY_CEILING_BY_SESSION.get(key) : null;
         return activeQualityCeiling != null && activeQualityCeiling == requestedQualityCeiling;
     }
 
     private static void startResolved(String cleanRawUrl, BiliApiClient.VideoSelection selection, BlockPos turntablePos,
             List<BlockPos> projectorPositions,
-            int qualityCeiling, PlaybackSync.Metadata sync, long requestNanoTime, long requestId) {
+            int qualityCeiling, PlaybackSync.Metadata sync, long requestNanoTime,
+            ResolveGeneration requestGeneration) {
+        PlaybackSessionId playbackSessionId = sync.playbackSessionId().orElse(null);
+        if (playbackSessionId == null) {
+            return;
+        }
         try {
             ResolvedVideoStream stream = BiliVideoStreamResolver.resolve(cleanRawUrl, qualityCeiling, DEFAULT_FPS);
             int sourceWidth = stream.sourceWidth();
@@ -552,19 +647,19 @@ public final class ModernTurntableVideoClient {
             int fps = stream.fps();
             Minecraft.getInstance().execute(() -> {
                 LiveConsumers consumers = currentConsumers(turntablePos, sync.sessionId(), projectorPositions);
-                VideoResolveAdmissionPolicy.Decision decision = resolveAdmission(sync.sessionId(), requestId,
+                VideoResolveAdmissionPolicy.Decision decision = resolveAdmission(sync.sessionId(), requestGeneration,
                     turntablePos, consumers);
                 if (decision != VideoResolveAdmissionPolicy.Decision.START) {
-                    dropResolvedResult(sync.sessionId(), requestId, turntablePos, decision);
+                    dropResolvedResult(sync.sessionId(), requestGeneration, turntablePos, decision);
                     return;
                 }
                 // 这里记录的是“本次请求已满足的偏好档位”，不是 B 站实际返回的 qn。
                 // 只有实时准入通过后才能发布，避免最后 consumer 退出后由后台线程复活状态。
-                ACTIVE_QUALITY_CEILING_BY_SESSION.put(sync.sessionId(), qualityCeiling);
+                ACTIVE_QUALITY_CEILING_BY_SESSION.put(playbackSessionId, qualityCeiling);
                 PlaybackSync.Metadata launchSync = currentPlaybackMetadata(turntablePos, sync);
                 long elapsedMillis = normalizedElapsedMillis(launchSync);
                 logDecision(sync.sessionId(), "resolved-start", turntablePos, elapsedMillis, qualityCeiling,
-                        consumers.positions().size(), requestId,
+                        consumers.positions().size(), requestGeneration.value(),
                         "qualityCeiling=" + qualityCeiling + " actualQuality=" + stream.quality() + " title='"
                                 + stream.title() + "' size=" + sourceWidth + "x" + sourceHeight + " fps=" + fps
                                 + " launchTimelineRefreshed=" + (launchSync != sync));
@@ -574,29 +669,29 @@ public final class ModernTurntableVideoClient {
                         consumers.positions(),
                         turntablePos,
                         PREFER_NATIVE, DECODER_OVERRIDE.isBlank() ? null : DECODER_OVERRIDE);
-                PENDING_REQUEST_BY_SESSION.remove(sync.sessionId());
-                    ACTIVE_REQUEST_BY_SESSION.remove(sync.sessionId(), requestId);
+                cancelPendingRequest(sync.sessionId(), requestGeneration);
+                ACTIVE_REQUEST_BY_SESSION.remove(playbackSessionId, requestGeneration);
             });
         } catch (Exception e) {
             Minecraft.getInstance().execute(() -> {
                 LiveConsumers consumers = currentConsumers(turntablePos, sync.sessionId(), projectorPositions);
-                VideoResolveAdmissionPolicy.Decision decision = resolveAdmission(sync.sessionId(), requestId,
+                VideoResolveAdmissionPolicy.Decision decision = resolveAdmission(sync.sessionId(), requestGeneration,
                         turntablePos, consumers);
                 if (decision == VideoResolveAdmissionPolicy.Decision.START) {
-                    PENDING_REQUEST_BY_SESSION.remove(sync.sessionId());
-                    ACTIVE_REQUEST_BY_SESSION.remove(sync.sessionId(), requestId);
+                    cancelPendingRequest(sync.sessionId(), requestGeneration);
+                    ACTIVE_REQUEST_BY_SESSION.remove(playbackSessionId, requestGeneration);
                     VideoBillboardPreview.markPendingFailure(sync.sessionId(), consumers.positions());
                 } else {
-                    dropResolvedResult(sync.sessionId(), requestId, turntablePos, decision);
+                    dropResolvedResult(sync.sessionId(), requestGeneration, turntablePos, decision);
                 }
             });
             throw new IllegalStateException("resolve B站 video stream failed", e);
         }
     }
 
-    private static VideoResolveAdmissionPolicy.Decision resolveAdmission(String sessionId, long requestId,
-            BlockPos turntablePos, LiveConsumers consumers) {
-        boolean latest = isLatestRequestForTurntable(sessionId, requestId, turntablePos);
+    private static VideoResolveAdmissionPolicy.Decision resolveAdmission(String sessionId,
+            ResolveGeneration requestGeneration, BlockPos turntablePos, LiveConsumers consumers) {
+        boolean latest = isLatestRequestForTurntable(sessionId, requestGeneration, turntablePos);
         Minecraft minecraft = Minecraft.getInstance();
         BlockEntity blockEntity = minecraft.level != null && turntablePos != null
                 ? minecraft.level.getBlockEntity(turntablePos) : null;
@@ -608,19 +703,19 @@ public final class ModernTurntableVideoClient {
         return VideoResolveAdmissionPolicy.decide(latest, sameSession, true, consumers.hasAny());
     }
 
-    private static void dropResolvedResult(String sessionId, long requestId, BlockPos turntablePos,
-            VideoResolveAdmissionPolicy.Decision decision) {
+    private static void dropResolvedResult(String sessionId, ResolveGeneration requestGeneration,
+            BlockPos turntablePos, VideoResolveAdmissionPolicy.Decision decision) {
         if (decision == VideoResolveAdmissionPolicy.Decision.DROP_NO_CONSUMER) {
             NO_CONSUMER_RESOLVE_DROPS.incrementAndGet();
         } else {
             STALE_RESOLVE_DROPS.incrementAndGet();
         }
-        if (isLatestRequest(sessionId, requestId)) {
+        if (isLatestRequest(sessionId, requestGeneration)) {
             markSessionRestarting(sessionId);
             VideoBillboardPreview.clearPendingLoading(sessionId);
         }
         logDecision(sessionId, "drop-resolve-" + decision.name().toLowerCase(java.util.Locale.ROOT), turntablePos,
-                0L, 0, 0, requestId, "resolved result failed live admission");
+                0L, 0, 0, requestGeneration.value(), "resolved result failed live admission");
     }
 
     public static VideoLifecycleDiagnostics videoLifecycleDiagnostics() {
@@ -643,7 +738,9 @@ public final class ModernTurntableVideoClient {
                     + " running=" + resources.runningInstances()
                     + " failed=" + resources.failedInstances()
                     + " pendingLoading=" + resources.pendingLoading()
-                    + " pendingFailure=" + resources.pendingFailure(),
+                    + " pendingFailure=" + resources.pendingFailure()
+                    + " closeZombies=" + resources.activeCloseZombies()
+                    + " lateCloseConvergences=" + resources.lateCloseConvergences(),
                 "video refs projector=" + resources.projectorReferences()
                     + " ber=" + resources.berManagedProjectors()
                     + " gui=" + resources.guiConsumers(),
@@ -708,11 +805,12 @@ public final class ModernTurntableVideoClient {
         if (!LOG_SYNC_DECISIONS) {
             return;
         }
-        if (sessionId == null || sessionId.isBlank()) {
+        PlaybackSessionId key = sessionKey(sessionId);
+        if (key == null) {
             return;
         }
         String fingerprint = action + '|' + quality + '|' + projectorCount + '|' + requestId + '|' + reason;
-        String previous = LAST_DECISION_BY_SESSION.put(sessionId, fingerprint);
+        String previous = LAST_DECISION_BY_SESSION.put(key, fingerprint);
         if (fingerprint.equals(previous)) {
             return;
         }
@@ -722,11 +820,8 @@ public final class ModernTurntableVideoClient {
                 reason);
     }
 
-    private record PendingVideoRequest(long elapsedMillis, int qualityCeiling, long requestId,
-            List<BlockPos> consumerPositions) {
-        private boolean matches(long requestedElapsedMillis, int requestedQualityCeiling) {
-            return qualityCeiling == requestedQualityCeiling;
-        }
+    private static PlaybackSessionId sessionKey(String sessionId) {
+        return PlaybackSessionId.parse(sessionId).orElse(null);
     }
 
     private record LiveConsumers(List<BlockPos> positions, boolean holographic, boolean gui) {

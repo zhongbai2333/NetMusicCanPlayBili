@@ -5,6 +5,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.Collection;
+import java.util.Objects;
 
 /**
  * 视频播放锚点抽象。
@@ -23,7 +24,30 @@ interface VideoPlaybackAnchor {
 
     boolean isWithinAudioRange(Minecraft minecraft, Collection<BlockPos> fallbackProjectors, double rangeSqr);
 
+    /** Stable key used to serialize physical decoder replacement for one source. */
+    default Object replacementOwnerKey() {
+        return this;
+    }
+
     static VideoPlaybackAnchor turntable(BlockPos turntablePos, String sessionId, long totalMillis) {
         return new TurntableVideoPlaybackAnchor(turntablePos, sessionId, totalMillis);
+    }
+
+    record TurntableOwnerKey(BlockPos pos) {
+        public TurntableOwnerKey {
+            pos = Objects.requireNonNull(pos, "pos").immutable();
+        }
+    }
+
+    record PreviewOwnerKey(java.util.UUID sourceId) {
+        public PreviewOwnerKey {
+            Objects.requireNonNull(sourceId, "sourceId");
+        }
+    }
+
+    record LiveOwnerKey(BlockPos pos) {
+        public LiveOwnerKey {
+            pos = Objects.requireNonNull(pos, "pos").immutable();
+        }
     }
 }

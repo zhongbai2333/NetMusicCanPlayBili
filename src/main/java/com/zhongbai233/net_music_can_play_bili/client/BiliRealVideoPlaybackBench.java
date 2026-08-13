@@ -4,6 +4,7 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoPipelineProperties;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 import org.slf4j.Logger;
@@ -21,6 +22,17 @@ import java.util.function.Consumer;
 public final class BiliRealVideoPlaybackBench {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final AtomicBoolean started = new AtomicBoolean(false);
+    private static volatile RunSnapshot runSnapshot = new RunSnapshot(RunState.IDLE, "", 0, 0, "not started");
+
+    public enum RunState {
+        IDLE,
+        RUNNING,
+        SUCCEEDED,
+        FAILED
+    }
+
+    public record RunSnapshot(RunState state, String videoId, int decodedStages, int decodedFrames, String detail) {
+    }
 
     private static final boolean BENCH_FEATURES_ENABLED = VideoFeatureFlags.benchFeaturesEnabled();
     private static final boolean ENABLED = VideoFeatureFlags.advancedBoolean("ncpb.video.real_bench", false);
@@ -74,10 +86,12 @@ public final class BiliRealVideoPlaybackBench {
         if (!started.compareAndSet(false, true)) {
             return true;
         }
+        markRunning();
 
         CompletableFuture.runAsync(BiliRealVideoPlaybackBench::runBench)
                 .orTimeout(180, TimeUnit.SECONDS)
                 .exceptionally(e -> {
+                    markFailed("timeout/failure: " + e);
                     LOGGER.error("真实视频播放 Bench 超时/失败", e);
                     return null;
                 });
@@ -88,9 +102,11 @@ public final class BiliRealVideoPlaybackBench {
         if (!started.compareAndSet(false, true)) {
             return false;
         }
+        markRunning();
         CompletableFuture.runAsync(() -> runBench(ignoreSlowFrames, true, BiliRealVideoPlaybackBench::chat))
                 .orTimeout(180, TimeUnit.SECONDS)
                 .exceptionally(e -> {
+                    markFailed("command timeout/failure: " + e);
                     LOGGER.error("真实视频播放 Bench 命令超时/失败", e);
                     chat("B站真实解析Bench失败/超时，详细错误见 latest.log");
                     return null;
@@ -121,6 +137,7 @@ public final class BiliRealVideoPlaybackBench {
 
         BiliApiClient.VideoId vid = BiliApiClient.extractVideoId(VIDEO_ID);
         if (vid == null) {
+            markFailed("invalid video id");
             LOGGER.warn("真实视频 Bench 的 B站视频 ID 无效: {}", VIDEO_ID);
             report(reporter, "B站真实解析Bench失败：视频 ID 无效 " + VIDEO_ID);
             return;
@@ -135,6 +152,7 @@ public final class BiliRealVideoPlaybackBench {
                     System.currentTimeMillis() - startMs);
             report(reporter, "B站真实解析Bench视频：" + info.displayTitle() + "，duration=" + info.duration() + "s");
         } catch (Exception e) {
+            markFailed("video info failed: " + e);
             LOGGER.error("真实视频 Bench 获取视频信息失败", e);
             report(reporter, "B站真实解析Bench获取视频信息失败，详见 latest.log");
             return;
@@ -143,11 +161,18 @@ public final class BiliRealVideoPlaybackBench {
         StageResult lastUsableResult = null;
         StageResult highestPlayableResult = null;
         StageResult demoResult = null;
+        int decodedStages = 0;
+        int decodedFrames = 0;
         for (int quality : QUALITY_STEPS) {
             report(reporter, "B站真实解析Bench阶段：" + BiliApiClient.qualityLabel(quality));
             StageResult result = runQualityStage(vid, info.cid(), quality, reporter);
             if (result == null) {
                 continue;
+            }
+            if (result.frames() > 0) {
+                decodedStages++;
+                decodedFrames += result.frames();
+                markProgress(decodedStages, decodedFrames, "decoded " + BiliApiClient.qualityLabel(quality));
             }
             logResult(result);
             report(reporter, "B站真实解析Bench结果 " + BiliApiClient.qualityLabel(quality)
@@ -197,6 +222,39 @@ public final class BiliRealVideoPlaybackBench {
         LOGGER.info("  真实 B站视频播放 Bench 结束");
         LOGGER.info("══════════════════════════════════════════");
         report(reporter, "B站真实解析Bench结束，详细报告见 latest.log");
+        if (decodedStages > 0 && decodedFrames > 0) {
+            markSucceeded(decodedStages, decodedFrames);
+        } else {
+            markFailed("no decoded video frames");
+        }
+    }
+
+    public static RunSnapshot snapshot() {
+        return runSnapshot;
+    }
+
+    private static void markRunning() {
+        runSnapshot = new RunSnapshot(RunState.RUNNING, VIDEO_ID, 0, 0, "resolving video");
+    }
+
+    private static synchronized void markProgress(int decodedStages, int decodedFrames, String detail) {
+        if (runSnapshot.state() == RunState.RUNNING) {
+            runSnapshot = new RunSnapshot(RunState.RUNNING, VIDEO_ID, decodedStages, decodedFrames, detail);
+        }
+    }
+
+    private static synchronized void markSucceeded(int decodedStages, int decodedFrames) {
+        if (runSnapshot.state() == RunState.RUNNING) {
+            runSnapshot = new RunSnapshot(RunState.SUCCEEDED, VIDEO_ID, decodedStages, decodedFrames,
+                    "real DASH decode completed");
+        }
+    }
+
+    private static synchronized void markFailed(String detail) {
+        if (runSnapshot.state() != RunState.SUCCEEDED) {
+            runSnapshot = new RunSnapshot(RunState.FAILED, VIDEO_ID, runSnapshot.decodedStages(),
+                    runSnapshot.decodedFrames(), detail != null ? detail : "unknown failure");
+        }
     }
 
     private static StageResult runQualityStage(BiliApiClient.VideoId vid, long cid, int quality,
@@ -475,7 +533,7 @@ public final class BiliRealVideoPlaybackBench {
     }
 
     private static boolean isNv12UvRg8Enabled() {
-        return Boolean.parseBoolean(System.getProperty("ncpb.video.nv12.uv_rg8", "true"));
+        return VideoPipelineProperties.nv12UvRg8Enabled();
     }
 
     private static int outputFpsFor(BiliApiClient.VideoStream stream) {
@@ -583,7 +641,7 @@ public final class BiliRealVideoPlaybackBench {
     }
 
     private static String decoderOverrideFor(BiliApiClient.VideoStream stream) {
-        String configured = System.getProperty("ncpb.video.ffmpeg.decoder", "").trim();
+        String configured = VideoFeatureProperties.ffmpegDecoder();
         if (configured.isBlank()) {
             return null;
         }

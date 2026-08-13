@@ -4,6 +4,7 @@ import com.zhongbai233.net_music_can_play_bili.item.PadItem;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadDocument;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadTriggerMode;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadTriggerPoint;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -54,8 +55,9 @@ public final class PadDeviceHolderTracker {
 
     public static void invalidate(UUID deviceId) {
         if (deviceId != null) {
-            LAST_SENT.keySet().removeIf(key -> deviceId.equals(key.deviceId()));
-            LAST_FORCED_SYNC.keySet().removeIf(key -> deviceId.equals(key.deviceId()));
+            PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+            LAST_SENT.keySet().removeIf(key -> sourceId.equals(key.sourceId()));
+            LAST_FORCED_SYNC.keySet().removeIf(key -> sourceId.equals(key.sourceId()));
         }
     }
 
@@ -72,7 +74,7 @@ public final class PadDeviceHolderTracker {
         }
         UUID deviceId = PadItem.getOrCreateDeviceId(stack);
         PadDocument document = PadDocumentStore.getOrCreate(level, deviceId, stack).copyWithLocked(PadItem.readLocked(stack));
-        HolderKey key = new HolderKey(player.getUUID(), deviceId);
+        HolderKey key = new HolderKey(player.getUUID(), PlaybackSourceId.of(deviceId));
         if (!active.add(key)) {
             return;
         }
@@ -132,6 +134,6 @@ public final class PadDeviceHolderTracker {
         return nearest;
     }
 
-    private record HolderKey(UUID playerId, UUID deviceId) {
+    private record HolderKey(UUID playerId, PlaybackSourceId sourceId) {
     }
 }

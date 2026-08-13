@@ -12,6 +12,18 @@ on:
       - "gradle/**"
       - "gradlew"
       - "gradlew.bat"
+      - "tools/verify_native_runtime.py"
+      - "tools/test_verify_native_runtime.py"
+      - "tools/verify_native_av1_smoke.py"
+      - "tools/test_verify_native_av1_smoke.py"
+      - "tools/verify_native_av1_device_matrix.py"
+      - "tools/test_verify_native_av1_device_matrix.py"
+      - "tools/verify_native_architectures.py"
+      - "tools/test_verify_native_architectures.py"
+      - "tools/prepare_native_bundle.py"
+      - "tools/test_prepare_native_bundle.py"
+      - "tools/native_av1_smoke/**"
+      - "native-patches/**"
       - ".github/workflows/build-release.yml"
   workflow_dispatch:
 
@@ -26,6 +38,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-runtime-smoke:
+    name: Native runtime smoke (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: macos-x86_64
+            runner: macos-15-intel
+          - platform: macos-arm64
+            runner: macos-15
+          - platform: windows-x86_64
+            runner: windows-2025
+          - platform: windows-arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Linux runtime dependencies
+        if: startsWith(matrix.platform, 'linux-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libva2 libva-drm2 libdrm2
+
+      - name: Load bundle and verify JNI exports
+        run: python tools/verify_native_runtime.py --platform "${{ matrix.platform }}"
+
   build:
     name: Build mod jar
     runs-on: ubuntu-latest
@@ -61,6 +113,11 @@ jobs:
           distribution: temurin
           java-version: '25'
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
 
@@ -68,27 +125,25 @@ jobs:
         shell: bash
         run: chmod +x ./gradlew
 
+      - name: Test native bundle tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/test_prepare_native_bundle.py -v
+          python tools/test_verify_native_runtime.py -v
+          python tools/test_verify_native_av1_smoke.py -v
+          python tools/test_verify_native_av1_device_matrix.py -v
+          python tools/test_verify_native_architectures.py -v
+          python tools/verify_native_architectures.py
+
       - name: Verify AV1 native release bundle
         if: github.ref_type == 'tag'
         shell: bash
         run: |
           set -euo pipefail
-          platforms=(
-            linux-arm64 linux-x86_64
-            macos-arm64 macos-x86_64
-            windows-arm64 windows-x86_64
-          )
-          for platform in "${platforms[@]}"; do
-            license="src/main/resources/native/${platform}/FFmpeg-LGPL-2.1.txt"
-            if [[ ! -s "${license}" ]]; then
-              echo "Missing FFmpeg license from rebuilt AV1 bundle: ${license}" >&2
-              exit 1
-            fi
-          done
-          if ! grep -Fxq -- '- Release: `media-min-v38`' src/main/resources/native/README.md; then
-            echo 'native/README.md must identify the verified media-min-v38 bundle' >&2
-            exit 1
-          fi
+          # The Gradle gate derives the exact v48 hardware-only schema from
+          # native/README.md. Extra software-decoder/runtime files fail closed.
+          ./gradlew verifyEmbeddedNativeBundle --stacktrace
 
       - name: Build with Gradle
         shell: bash
@@ -122,7 +177,7 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, native-runtime-smoke]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -149,6 +204,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           result-encoding: string
           script: |
+            const fs = require('fs');
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const tag = context.ref.replace('refs/tags/', '');
@@ -227,6 +283,9 @@ jobs:
             if (!hasEntries) {
               body += "- No labeled closed issues were found for this release window.\n\n";
             }
+
+            const mediaNotice = fs.readFileSync('docs/release-native-capabilities.md', 'utf8').trim();
+            body += `${mediaNotice}\n\n`;
 
             if (compareUrl) {
               body += `**Full Changelog**: ${compareUrl}\n`;

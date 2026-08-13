@@ -12,9 +12,9 @@ import java.nio.ByteBuffer;
  */
 final class VideoFrameUploader {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final String PIXEL_MODE = System.getProperty("ncpb.video.pixel.mode", "normal");
-    private static final boolean FAST_NATIVE_UPLOAD = Boolean.parseBoolean(
-            System.getProperty("ncpb.video.fast_native_upload", "true"));
+    private static final VideoPipelineProperties.Upload PROPERTIES = VideoPipelineProperties.upload();
+    private static final String PIXEL_MODE = PROPERTIES.pixelMode();
+    private static final boolean FAST_NATIVE_UPLOAD = PROPERTIES.fastNativeUploadEnabled();
 
     private VideoFrameUploader() {
     }

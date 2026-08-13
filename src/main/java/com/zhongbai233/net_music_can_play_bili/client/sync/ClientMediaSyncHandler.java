@@ -1,8 +1,10 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRegistry.ActivePlayback;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import net.minecraft.client.Minecraft;
 
+import java.util.Optional;
 import java.util.UUID;
 
 /** Shared client-side synchronized media packet handler. */
@@ -26,7 +28,8 @@ public final class ClientMediaSyncHandler {
             policy.onIgnoredCannotHear(payload, sourceId);
             return;
         }
-        if (payload.playUrl().isBlank() || payload.sessionId().isBlank()) {
+        Optional<PlaybackSessionId> playbackSessionId = payload.playbackSessionId();
+        if (payload.playUrl() == null || payload.playUrl().isBlank() || playbackSessionId.isEmpty()) {
             return;
         }
 
@@ -34,13 +37,15 @@ public final class ClientMediaSyncHandler {
                 .from(payload);
         ActivePlayback previous = ClientMediaPlaybackRegistry.get(sourceId);
         policy.beforeRegisterPlayback(payload, sourceId);
-        if (previous != null && payload.sessionId().equals(previous.sessionId())) {
+        if (previous != null && playbackSessionId.equals(previous.playbackSessionId())) {
+            PlaybackSessionId retainedSessionId = playbackSessionId.orElseThrow();
             ActivePlayback updated = previous.withServerElapsed(Math.max(0L, payload.elapsedMillis()),
                     Math.max(0L, payload.durationSeconds()) * 1000L)
                     .withSourceLocation(sourceLocation)
                     .withHeadphoneRouted(payload.headphoneRouted());
             ClientMediaPlaybackRegistry.put(sourceId, updated);
             policy.updateVolume(sourceId, payload.volumePerMille() / 1000.0F);
+            ClientMediaRetryHandler.onSessionRefreshed(sourceId, retainedSessionId);
             if (policy.shouldRebuildSound(sourceId, payload)) {
                 policy.onRebuildSound(payload, sourceId);
                 policy.preparePlayback(payload, sourceId);
@@ -48,7 +53,11 @@ public final class ClientMediaSyncHandler {
             return;
         }
 
+        PlaybackSessionId acceptedSessionId = playbackSessionId.orElseThrow();
         ClientMediaPlaybackRegistry.put(sourceId, ClientMediaPlaybackRegistry.createFromSync(payload));
+        ClientMediaRetryHandler.onSessionAccepted(sourceId, acceptedSessionId);
+        ClientMediaPrepareLauncher.onSessionAccepted(sourceId, acceptedSessionId);
+        ClientMediaSoundRegistry.onSessionAccepted(sourceId, acceptedSessionId);
         policy.afterRegisterPlayback(payload, sourceId);
         policy.preparePlayback(payload, sourceId);
     }
@@ -64,7 +73,9 @@ public final class ClientMediaSyncHandler {
             return;
         }
         ActivePlayback previous = ClientMediaPlaybackRegistry.get(payload.sourceId());
-        if (previous == null || payload.sessionId() == null || !payload.sessionId().equals(previous.sessionId())) {
+        Optional<PlaybackSessionId> playbackSessionId = payload.playbackSessionId();
+        if (previous == null || playbackSessionId.isEmpty()
+                || !playbackSessionId.equals(previous.playbackSessionId())) {
             return;
         }
         ClientMediaPlaybackRegistry.put(payload.sourceId(),

@@ -3,7 +3,6 @@ package com.zhongbai233.net_music_can_play_bili.gui;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliLoginManager;
-import com.zhongbai233.net_music_can_play_bili.bili.BiliWbiSigner;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
@@ -12,11 +11,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import org.slf4j.Logger;
 
-import java.io.InputStream;
-import java.net.URI;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
+import java.io.ByteArrayInputStream;
 
 /**
  * B站二维码登录屏幕——AE2 OreUI 风格深色半透明弹窗。
@@ -60,18 +55,12 @@ public class BiliQrLoginScreen extends Screen {
     }
 
     private void loadQrImage(String qrContentUrl, int generation) {
-        String encodedUrl = java.net.URLEncoder.encode(qrContentUrl, java.nio.charset.StandardCharsets.UTF_8);
-        String qrImageUrl = "https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=" + encodedUrl;
-
-        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+        loginManager.loadQrImage(qrContentUrl).thenApply(bytes -> {
+            if (bytes == null) {
+                return null;
+            }
             try {
-                HttpRequest req = HttpRequest.newBuilder(URI.create(qrImageUrl))
-                        .header("User-Agent", "Mozilla/5.0")
-                        .timeout(Duration.ofSeconds(10))
-                        .GET().build();
-                HttpResponse<InputStream> resp = BiliWbiSigner.HTTP
-                        .send(req, HttpResponse.BodyHandlers.ofInputStream());
-                try (InputStream in = resp.body()) {
+                try (ByteArrayInputStream in = new ByteArrayInputStream(bytes)) {
                     NativeImage image = NativeImage.read(in);
                     LOGGER.debug("二维码图片加载成功: {}x{}", image.getWidth(), image.getHeight());
                     return image;
@@ -130,7 +119,11 @@ public class BiliQrLoginScreen extends Screen {
 
         pollTick++;
         if (pollTick % 40 == 0) {
+            int generation = loadGeneration;
             loginManager.poll().thenAccept(state -> {
+                if (!isCurrent(generation)) {
+                    return;
+                }
                 switch (state) {
                     case PENDING -> statusText = "请用 B站APP 扫描二维码";
                     case SCANNED -> statusText = "已扫描，请在手机上确认登录";
@@ -207,6 +200,7 @@ public class BiliQrLoginScreen extends Screen {
     public void removed() {
         removed = true;
         loadGeneration++;
+        loginManager.close();
         cleanupTexture();
     }
 

@@ -6,8 +6,9 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
 import com.mojang.blaze3d.ProjectionType;
-import com.zhongbai233.net_music_can_play_bili.editor.core.camera.CameraFrame;
-import com.zhongbai233.net_music_can_play_bili.editor.core.camera.EditorCameraMode;
+import com.zhongbai233.scene_editor.core.camera.CameraFrame;
+import com.zhongbai233.scene_editor.core.camera.EditorCameraMode;
+import com.zhongbai233.scene_editor.core.math.EditorTransform;
 import com.zhongbai233.net_music_can_play_bili.link.HolographicScreenSettings;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
 import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainPreviewFrame;
@@ -94,6 +95,7 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
                 if (failure instanceof Error fatal) {
                     throw fatal;
                 }
+                TerrainPreviewRenderDiagnostics.recordFailure();
                 LOGGER.warn("PIP holographic preview failed; skipping this frame", failure);
             }
         } finally {
@@ -278,6 +280,56 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
         drawUnknownTerrain(poseStack, frame);
         bufferSource.endBatch();
         terrainGpuCache.updateAndRender(frame, poseStack.last().pose(), state);
+        submitTerrainBlockEntities(poseStack, state, frame);
+    }
+
+    private static void submitTerrainBlockEntities(PoseStack poseStack,
+            HolographicPreviewPipRenderState state, TerrainPreviewFrame frame) {
+        if (frame.blockEntities().isEmpty()) {
+            return;
+        }
+        Minecraft minecraft = Minecraft.getInstance();
+        FeatureRenderDispatcher features = minecraft.gameRenderer.getFeatureRenderDispatcher();
+        SubmitNodeStorage nodes = features.getSubmitNodeStorage();
+        CameraRenderState camera = terrainCamera(state);
+        var dispatcher = minecraft.getBlockEntityRenderDispatcher();
+        for (var preview : frame.blockEntities()) {
+            poseStack.pushPose();
+            poseStack.translate(preview.worldPos().getX() - frame.originX() - 0.5F,
+                    preview.worldPos().getY() - frame.originY(),
+                    preview.worldPos().getZ() - frame.originZ() - 0.5F);
+            try {
+                dispatcher.submit(preview.renderState(), poseStack, nodes, camera);
+                TerrainPreviewRenderDiagnostics.recordBlockEntitySubmission();
+            } catch (Throwable incompatibleRenderer) {
+                if (incompatibleRenderer instanceof VirtualMachineError fatal) {
+                    throw fatal;
+                }
+                LOGGER.debug("Skipping incompatible terrain block-entity renderer at {}",
+                        preview.worldPos(), incompatibleRenderer);
+            } finally {
+                poseStack.popPose();
+            }
+        }
+        features.renderAllFeatures();
+    }
+
+    private static CameraRenderState terrainCamera(HolographicPreviewPipRenderState state) {
+        CameraRenderState camera = new CameraRenderState();
+        CameraFrame frame = state.cameraFrame();
+        if (frame == null) {
+            camera.initialized = true;
+            return camera;
+        }
+        Matrix4f inverseView = new Matrix4f(frame.matrices().view()).invert();
+        Vector3f position = inverseView.getTranslation(new Vector3f());
+        camera.pos = new net.minecraft.world.phys.Vec3(position.x, position.y, position.z);
+        camera.blockPos = net.minecraft.core.BlockPos.containing(camera.pos);
+        camera.orientation = inverseView.getNormalizedRotation(new Quaternionf());
+        camera.projectionMatrix = new Matrix4f(frame.matrices().projection());
+        camera.viewRotationMatrix = new Matrix4f(frame.matrices().view());
+        camera.initialized = true;
+        return camera;
     }
 
     private static void drawTerrainBounds(PoseStack poseStack, TerrainPreviewFrame frame) {
@@ -350,8 +402,9 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
     private void drawGizmo(PoseStack poseStack, HolographicPreviewPipRenderState state) {
         int index = selectedIndex(state);
         poseStack.pushPose();
-        poseStack.translate(screenOffsetX(state, index), 1.55F + screenOffsetY(state, index),
-                screenDistance(state, index));
+        poseStack.translate(screenOffsetX(state, index) + screenPivotX(state, index),
+                1.55F + screenOffsetY(state, index) + screenPivotY(state, index),
+                screenDistance(state, index) + screenPivotZ(state, index));
         if (state.localSpace()) {
             poseStack.mulPose(Axis.YP.rotationDegrees(screenYaw(state, index)));
             poseStack.mulPose(Axis.XP.rotationDegrees(screenPitch(state, index)));
@@ -521,11 +574,8 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
     private void drawHolographicScreen(PoseStack poseStack, HolographicPreviewPipRenderState state, int index,
             boolean selected) {
         poseStack.pushPose();
-        poseStack.translate(screenOffsetX(state, index), 1.55F + screenOffsetY(state, index),
-                screenDistance(state, index));
-        poseStack.mulPose(Axis.YP.rotationDegrees(screenYaw(state, index)));
-        poseStack.mulPose(Axis.XP.rotationDegrees(screenPitch(state, index)));
-        poseStack.mulPose(Axis.ZP.rotationDegrees(screenRoll(state, index)));
+        poseStack.translate(0.0F, 1.55F, 0.0F);
+        poseStack.mulPose(screenTransform(state, index, 1.0F));
 
         float halfH = screenHeight(state, index) * 0.5F;
         float halfW = halfH * screenAspect(state, index);
@@ -651,11 +701,8 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
     private void drawHolographicScreenFrontOnly(PoseStack poseStack, HolographicPreviewPipRenderState state, int index,
             boolean selected) {
         poseStack.pushPose();
-        poseStack.translate(screenOffsetX(state, index), 1.55F - screenOffsetY(state, index),
-                screenDistance(state, index));
-        poseStack.mulPose(Axis.YP.rotationDegrees(screenYaw(state, index)));
-        poseStack.mulPose(Axis.XP.rotationDegrees(screenPitch(state, index)));
-        poseStack.mulPose(Axis.ZP.rotationDegrees(screenRoll(state, index)));
+        poseStack.translate(0.0F, 1.55F, 0.0F);
+        poseStack.mulPose(screenTransform(state, index, -1.0F));
 
         float halfH = screenHeight(state, index) * 0.5F;
         float halfW = halfH * screenAspect(state, index);
@@ -705,6 +752,51 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
 
     private static float screenPitch(HolographicPreviewPipRenderState state, int index) {
         return valueAt(state.screenPitches(), index, 0.0F);
+    }
+
+    private static float screenScaleX(HolographicPreviewPipRenderState state, int index) {
+        return valueAt(state.screenScaleXs(), index, 1.0F);
+    }
+
+    private static float screenScaleY(HolographicPreviewPipRenderState state, int index) {
+        return valueAt(state.screenScaleYs(), index, 1.0F);
+    }
+
+    private static float screenScaleZ(HolographicPreviewPipRenderState state, int index) {
+        return valueAt(state.screenScaleZs(), index, 1.0F);
+    }
+
+    private static float screenPivotX(HolographicPreviewPipRenderState state, int index) {
+        return valueAt(state.screenPivotXs(), index, 0.0F);
+    }
+
+    private static float screenPivotY(HolographicPreviewPipRenderState state, int index) {
+        return valueAt(state.screenPivotYs(), index, 0.0F);
+    }
+
+    private static float screenPivotZ(HolographicPreviewPipRenderState state, int index) {
+        return valueAt(state.screenPivotZs(), index, 0.0F);
+    }
+
+    private static float screenSkewXByY(HolographicPreviewPipRenderState state, int index) {
+        return valueAt(state.screenSkewXByYs(), index, 0.0F);
+    }
+
+    private static float screenSkewYByX(HolographicPreviewPipRenderState state, int index) {
+        return valueAt(state.screenSkewYByXs(), index, 0.0F);
+    }
+
+    private static Matrix4f screenTransform(HolographicPreviewPipRenderState state, int index,
+            float offsetYSign) {
+        return EditorTransform.fromEulerDegrees(
+                new Vector3f(screenOffsetX(state, index), offsetYSign * screenOffsetY(state, index),
+                        screenDistance(state, index)),
+                screenYaw(state, index), screenPitch(state, index), screenRoll(state, index),
+                new Vector3f(screenScaleX(state, index), screenScaleY(state, index),
+                        screenScaleZ(state, index)),
+                new Vector3f(screenPivotX(state, index), screenPivotY(state, index),
+                        screenPivotZ(state, index)),
+                screenSkewXByY(state, index), screenSkewYByX(state, index)).matrix();
     }
 
     private static int elementType(HolographicPreviewPipRenderState state, int index) {

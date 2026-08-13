@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.media.sync;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
+import java.util.Optional;
 import java.util.UUID;
 
 public final class PlaybackSync {
@@ -21,18 +22,29 @@ public final class PlaybackSync {
         return withSync(value, sessionId, elapsedMillis, 0L);
     }
 
+    /** @param elapsedMillis 已播放毫秒数（精确到 tick: 50ms） */
+    public static String withSync(String value, PlaybackSessionId sessionId, long elapsedMillis) {
+        return withSync(value, sessionId, elapsedMillis, 0L);
+    }
+
     /**
      * @param elapsedMillis 已播放毫秒数（精确到 tick: 50ms）
      * @param totalMillis   歌曲总时长毫秒数；用于 HTTP/MP3 Range seek 的字节偏移估算
      */
     public static String withSync(String value, String sessionId, long elapsedMillis, long totalMillis) {
-        if (value == null || value.isBlank() || sessionId == null || sessionId.isBlank()) {
+        return PlaybackSessionId.parse(sessionId)
+                .map(parsed -> withSync(value, parsed, elapsedMillis, totalMillis))
+                .orElse(value);
+    }
+
+    public static String withSync(String value, PlaybackSessionId sessionId, long elapsedMillis, long totalMillis) {
+        if (value == null || value.isBlank() || sessionId == null) {
             return value;
         }
         String clean = strip(value);
         long elapsed = Math.max(0L, elapsedMillis);
         long total = Math.max(0L, totalMillis);
-        String sync = clean + "#" + SESSION_KEY + sessionId + "&" + ELAPSED_MS_KEY + elapsed;
+        String sync = clean + "#" + SESSION_KEY + sessionId.value() + "&" + ELAPSED_MS_KEY + elapsed;
         return total > 0L ? sync + "&" + TOTAL_MS_KEY + total : sync;
     }
 
@@ -55,27 +67,53 @@ public final class PlaybackSync {
     }
 
     public static String withRequestToken(String value, String requestToken) {
-        if (value == null || value.isBlank() || requestToken == null || requestToken.isBlank()) {
+        return MediaRequestToken.parse(requestToken)
+                .map(token -> withRequestToken(value, token))
+                .orElse(value);
+    }
+
+    public static String withRequestToken(String value, MediaRequestToken requestToken) {
+        if (value == null || value.isBlank() || requestToken == null) {
             return value;
         }
         String separator = value.indexOf('#') >= 0 ? "&" : "#";
-        return value + separator + REQUEST_KEY + requestToken;
+        return value + separator + REQUEST_KEY + requestToken.value();
     }
 
     public static String parseRequestToken(String value) {
+        return parseMediaRequestToken(value).map(MediaRequestToken::value).orElse("");
+    }
+
+    public static Optional<MediaRequestToken> parseMediaRequestToken(String value) {
         if (value == null) {
-            return "";
+            return Optional.empty();
         }
         int hash = value.indexOf('#');
         if (hash < 0 || hash == value.length() - 1) {
-            return "";
+            return Optional.empty();
         }
         for (String part : value.substring(hash + 1).split("&")) {
             if (part.startsWith(REQUEST_KEY)) {
-                return part.substring(REQUEST_KEY.length());
+                return MediaRequestToken.parse(part.substring(REQUEST_KEY.length()));
             }
         }
-        return "";
+        return Optional.empty();
+    }
+
+    public static Optional<PlaybackSessionId> parsePlaybackSessionId(String value) {
+        if (value == null) {
+            return Optional.empty();
+        }
+        int hash = value.indexOf('#');
+        if (hash < 0 || hash == value.length() - 1) {
+            return Optional.empty();
+        }
+        for (String part : value.substring(hash + 1).split("&")) {
+            if (part.startsWith(SESSION_KEY)) {
+                return PlaybackSessionId.parse(part.substring(SESSION_KEY.length()));
+            }
+        }
+        return Optional.empty();
     }
 
     public static MinecartAnchor parseMinecartAnchor(String value) {
@@ -114,12 +152,12 @@ public final class PlaybackSync {
         if (hash < 0 || hash == value.length() - 1) {
             return Metadata.empty();
         }
-        String sessionId = "";
+        PlaybackSessionId sessionId = null;
         long elapsedMillis = 0L;
         long totalMillis = 0L;
         for (String part : value.substring(hash + 1).split("&")) {
             if (part.startsWith(SESSION_KEY)) {
-                sessionId = part.substring(SESSION_KEY.length());
+                sessionId = PlaybackSessionId.parse(part.substring(SESSION_KEY.length())).orElse(null);
             } else if (part.startsWith(ELAPSED_MS_KEY)) {
                 try {
                     elapsedMillis = Math.max(0L, Long.parseLong(part.substring(ELAPSED_MS_KEY.length())));
@@ -134,7 +172,7 @@ public final class PlaybackSync {
                 }
             }
         }
-        return sessionId.isBlank() ? Metadata.empty() : new Metadata(sessionId, elapsedMillis, totalMillis);
+        return sessionId == null ? Metadata.empty() : new Metadata(sessionId.value(), elapsedMillis, totalMillis);
     }
 
     public static String strip(String value) {
@@ -160,12 +198,20 @@ public final class PlaybackSync {
     }
 
     public record Metadata(String sessionId, long elapsedMillis, long totalMillis) {
+        public Metadata {
+            sessionId = PlaybackSessionId.parse(sessionId).map(PlaybackSessionId::value).orElse("");
+        }
+
         static Metadata empty() {
             return new Metadata("", 0L, 0L);
         }
 
         public boolean hasSession() {
             return !sessionId.isBlank();
+        }
+
+        public Optional<PlaybackSessionId> playbackSessionId() {
+            return PlaybackSessionId.parse(sessionId);
         }
 
         public int elapsedSeconds() {

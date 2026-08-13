@@ -1,9 +1,11 @@
 package com.zhongbai233.net_music_can_play_bili.client.audio;
 
-import com.mojang.logging.LogUtils;
-import org.slf4j.Logger;
+import com.zhongbai233.net_music_can_play_bili.media.stream.AudioStreamProperties;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 
 import java.net.URL;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -17,19 +19,25 @@ import java.util.concurrent.atomic.AtomicLong;
  * </p>
  */
 public final class SyncedStreamRecoveryRegistry {
-    private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int MAX_ATTEMPTS = Integer.getInteger("ncpb.bili.media.stream_recovery.max_attempts", 3);
-    private static final long MIN_INTERVAL_MILLIS = Long.getLong("ncpb.bili.media.stream_recovery.min_interval_ms",
-            1_000L);
+    private static final System.Logger LOGGER = System.getLogger(SyncedStreamRecoveryRegistry.class.getName());
+    private static final AudioStreamProperties.Recovery PROPERTIES = AudioStreamProperties.recovery();
+    private static final int MAX_ATTEMPTS = PROPERTIES.maxAttempts();
+    private static final long MIN_INTERVAL_MILLIS = PROPERTIES.minIntervalMillis();
 
-    private static final ConcurrentHashMap<String, Entry> ENTRIES = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<PlaybackSessionId, Entry> ENTRIES = new ConcurrentHashMap<>();
     private static final AtomicLong GENERATIONS = new AtomicLong();
 
     private SyncedStreamRecoveryRegistry() {
     }
 
     public static Registration register(String sessionId, RecoveryHandler handler) {
-        if (sessionId == null || sessionId.isBlank() || handler == null) {
+        return PlaybackSessionId.parse(sessionId)
+                .map(parsed -> register(parsed, handler))
+                .orElse(Registration.NONE);
+    }
+
+    public static Registration register(PlaybackSessionId sessionId, RecoveryHandler handler) {
+        if (sessionId == null || handler == null) {
             return Registration.NONE;
         }
         long generation = GENERATIONS.incrementAndGet();
@@ -40,17 +48,15 @@ public final class SyncedStreamRecoveryRegistry {
     }
 
     public static void unregister(String sessionId) {
-        if (sessionId != null && !sessionId.isBlank()) {
-            ENTRIES.remove(sessionId);
-        }
+        PlaybackSessionId.parse(sessionId).ifPresent(ENTRIES::remove);
     }
 
     public static void unregister(Registration registration) {
         if (registration == null || registration == Registration.NONE) {
             return;
         }
-        ENTRIES.computeIfPresent(registration.sessionId(),
-                (ignored, entry) -> entry.generation() == registration.generation() ? null : entry);
+        registration.playbackSessionId().ifPresent(sessionId -> ENTRIES.computeIfPresent(sessionId,
+                (ignored, entry) -> entry.generation() == registration.generation() ? null : entry));
     }
 
     public static void clear() {
@@ -58,7 +64,13 @@ public final class SyncedStreamRecoveryRegistry {
     }
 
     public static boolean reportFailure(String sessionId, URL failedUrl, Throwable error) {
-        if (sessionId == null || sessionId.isBlank()) {
+        return PlaybackSessionId.parse(sessionId)
+                .map(parsed -> reportFailure(parsed, failedUrl, error))
+                .orElse(false);
+    }
+
+    public static boolean reportFailure(PlaybackSessionId sessionId, URL failedUrl, Throwable error) {
+        if (sessionId == null) {
             return false;
         }
         Entry entry = ENTRIES.get(sessionId);
@@ -67,37 +79,52 @@ public final class SyncedStreamRecoveryRegistry {
         }
         long now = System.currentTimeMillis();
         if (now - entry.lastAttemptMillis() < MIN_INTERVAL_MILLIS) {
-            LOGGER.debug("忽略过密的媒体流恢复请求: session={} reason={}", sessionId,
+            LOGGER.log(System.Logger.Level.DEBUG, "忽略过密的媒体流恢复请求: session={0} reason={1}", sessionId,
                     error != null ? error.toString() : "unknown");
             return true;
         }
         int attempt = entry.attempts().incrementAndGet();
         if (attempt > Math.max(0, MAX_ATTEMPTS)) {
-            LOGGER.warn("媒体流自动恢复次数耗尽: session={} attempts={} lastError={}", sessionId, attempt - 1,
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "媒体流自动恢复次数耗尽: session={0} attempts={1} lastError={2}", sessionId, attempt - 1,
                     error != null ? error.toString() : "unknown");
             ENTRIES.remove(sessionId, entry);
             return false;
         }
         Entry attemptedEntry = entry.withLastAttemptMillis(now);
         if (!ENTRIES.replace(sessionId, entry, attemptedEntry)) {
-            LOGGER.debug("媒体流恢复处理器已由新播放代接管: session={} attempt={}", sessionId, attempt);
+            LOGGER.log(System.Logger.Level.DEBUG,
+                    "媒体流恢复处理器已由新播放代接管: session={0} attempt={1}", sessionId, attempt);
             return true;
         }
         try {
             boolean scheduled = attemptedEntry.handler().recover(
                     new RecoveryRequest(sessionId, failedUrl, error, attempt));
             if (!scheduled) {
-                LOGGER.warn("媒体流恢复处理器拒绝恢复: session={} attempt={} reason={}", sessionId, attempt,
+                LOGGER.log(System.Logger.Level.WARNING,
+                        "媒体流恢复处理器拒绝恢复: session={0} attempt={1} reason={2}", sessionId, attempt,
                         error != null ? error.toString() : "unknown");
             }
             return scheduled;
         } catch (RuntimeException e) {
-            LOGGER.warn("媒体流恢复处理器异常: session={} attempt={}", sessionId, attempt, e);
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "媒体流恢复处理器异常: session=" + sessionId + " attempt=" + attempt, e);
             return false;
         }
     }
 
-    public record RecoveryRequest(String sessionId, URL failedUrl, Throwable error, int attempt) {
+    public record RecoveryRequest(PlaybackSessionId playbackSessionId, URL failedUrl, Throwable error, int attempt) {
+        public RecoveryRequest {
+            playbackSessionId = Objects.requireNonNull(playbackSessionId, "playbackSessionId");
+        }
+
+        public RecoveryRequest(String sessionId, URL failedUrl, Throwable error, int attempt) {
+            this(PlaybackSessionId.of(sessionId), failedUrl, error, attempt);
+        }
+
+        public String sessionId() {
+            return playbackSessionId.value();
+        }
     }
 
     @FunctionalInterface
@@ -105,8 +132,24 @@ public final class SyncedStreamRecoveryRegistry {
         boolean recover(RecoveryRequest request);
     }
 
-    public record Registration(String sessionId, long generation) {
-        private static final Registration NONE = new Registration("", 0L);
+    public record Registration(Optional<PlaybackSessionId> playbackSessionId, long generation) {
+        public Registration {
+            playbackSessionId = playbackSessionId != null ? playbackSessionId : Optional.empty();
+        }
+
+        public Registration(String sessionId, long generation) {
+            this(PlaybackSessionId.parse(sessionId), generation);
+        }
+
+        public Registration(PlaybackSessionId sessionId, long generation) {
+            this(Optional.ofNullable(sessionId), generation);
+        }
+
+        public String sessionId() {
+            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+        }
+
+        private static final Registration NONE = new Registration(Optional.empty(), 0L);
     }
 
     private record Entry(RecoveryHandler handler, AtomicInteger attempts, long lastAttemptMillis, long generation) {

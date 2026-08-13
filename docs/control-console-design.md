@@ -91,6 +91,11 @@ ConsoleSourceRef
 
 地形分为 `UNKNOWN / NEAR / MID / FAR`。客户端不得因预览加载新区块。世界读取在客户端主线程按预算完成，后台只消费不可变快照，渲染线程只上传和释放 GPU 资源。
 
+NEAR 保留当前资源包的原版模型、流体、AO 与光照；MID/FAR 分别以 4³/8³ 单元选择确定性的代表材质并只生成外露面，
+不能退回分类线框充当产品远景。世界/模组 tint 和方块实体 renderer 只能在客户端主线程提取为不可变颜色或
+`BlockEntityRenderState`，后台 compiler 不得访问活动 `ClientLevel`。透明层保留 quad sort state，在 PIP 相机变化时只更新
+索引顺序，不重复捕获世界或重建顶点。未加载区域始终为 UNKNOWN 线框，任何预览路径都不得强载 chunk。
+
 ### 参数检查器
 
 选中元素时显示变换和类型专属参数；未选中时显示中控台名称、绑定源、hardRange、权限、schema/revision、元素统计和资源摘要。输入必须显示单位、范围、重置入口和拒绝原因。
@@ -156,7 +161,7 @@ ScreenSettings
 
 ```text
 SubtitleSettings
-  source: LYRICS | TRANSLATION | LIVE_TITLE | PLAYBACK_STATUS | CUSTOM_TEXT
+  source: LYRICS | TRANSLATION | AI_CC | LIVE_TITLE | LIVE_ROOM | LIVE_STATUS | CUSTOM_TEXT
   fontScale: float
   maxWidth: float
   alignment: LEFT | CENTER | RIGHT
@@ -166,7 +171,9 @@ SubtitleSettings
   customText: String?
 ```
 
-歌词与翻译读取统一播放时钟，不允许每个字幕独立累计 tick。
+歌词、翻译和 B站 AI CC 读取统一播放时钟，不允许每个字幕独立累计 tick。AI CC 以绑定源和
+`PlaybackSessionId` 为共享所有权；同一会话的多个中控台字幕/歌词投影仪只发起一次请求，最后一个消费者退出
+会取消精确任务。AI 轨不可用或失败时依次降级到既有人工歌词和固定文本，旧会话的迟到结果不能覆盖新会话。
 
 ### 音源
 

@@ -12,9 +12,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class Fmp4ToMp4Converter {
-    private static final Logger LOGGER = LogUtils.getLogger();
-
     private Fmp4ToMp4Converter() {
+    }
+
+    private static Logger logger() {
+        return LoggerHolder.INSTANCE;
     }
 
     private static final int TRUN_DATA_OFFSET = 0x000001;
@@ -79,7 +81,7 @@ public final class Fmp4ToMp4Converter {
             }
         }
         if (asc == null) {
-            LOGGER.warn("AAC ASC 提取失败，回退到默认 ASC (48000Hz 立体声)。低品质流可能产生噪音。");
+            logger().warn("AAC ASC 提取失败，回退到默认 ASC (48000Hz 立体声)。低品质流可能产生噪音。");
             asc = DEFAULT_ASC;
         }
         ByteArrayOutputStream raw = new ByteArrayOutputStream();
@@ -89,7 +91,7 @@ public final class Fmp4ToMp4Converter {
         byte[] audioData = full;
         int[] sizes = allSizes.stream().mapToInt(i -> i).toArray();
         int[] durs = allDurs.stream().mapToInt(i -> i).toArray();
-        LOGGER.debug("[Fmp4ToAdts] MP4转换: {}帧, {}B AAC", sizes.length, audioData.length);
+        logger().debug("[Fmp4ToAdts] MP4转换: {}帧, {}B AAC", sizes.length, audioData.length);
         return buildStandardMp4(asc, sizes, durs, audioData, audioTimescale);
     }
 
@@ -684,6 +686,7 @@ public final class Fmp4ToMp4Converter {
     private static void parseTrun(byte[] cd, ParseResult r, int defaultSampleSize) {
         if (cd.length < 8)
             return;
+        int version = cd[0] & 0xFF;
         int flags = ((cd[1] & 0xFF) << 16) | ((cd[2] & 0xFF) << 8) | (cd[3] & 0xFF);
         ByteBuffer trun = ByteBuffer.wrap(cd).order(ByteOrder.BIG_ENDIAN);
         int pos = 4;
@@ -714,7 +717,10 @@ public final class Fmp4ToMp4Converter {
                 if (hsf && pos + 4 <= cd.length)
                     pos += 4;
                 if (hct && pos + 4 <= cd.length) {
-                    r.sampleCompositionOffsets[ti + i] = trun.getInt(pos);
+                    int rawOffset = trun.getInt(pos);
+                    r.sampleCompositionOffsets[ti + i] = version == 0
+                            ? rawOffset & 0xFFFF_FFFFL
+                            : rawOffset;
                     pos += 4;
                 }
             }
@@ -729,7 +735,10 @@ public final class Fmp4ToMp4Converter {
                 if (hsf && pos + 4 <= cd.length)
                     pos += 4;
                 if (hct && pos + 4 <= cd.length) {
-                    r.sampleCompositionOffsets[ti + i] = trun.getInt(pos);
+                    int rawOffset = trun.getInt(pos);
+                    r.sampleCompositionOffsets[ti + i] = version == 0
+                            ? rawOffset & 0xFFFF_FFFFL
+                            : rawOffset;
                     pos += 4;
                 }
             }
@@ -976,7 +985,7 @@ public final class Fmp4ToMp4Converter {
                 if (r.asc != null) {
                     AudioFormat af = ascToAudioFormat(r.asc);
                     if (af != null) {
-                        LOGGER.debug("AAC ASC 提取成功: {}Hz/{}ch", af.getSampleRate(), af.getChannels());
+                        logger().debug("AAC ASC 提取成功: {}Hz/{}ch", af.getSampleRate(), af.getChannels());
                     }
                     return;
                 }
@@ -1161,5 +1170,9 @@ public final class Fmp4ToMp4Converter {
 
     public record SampleTable(int[] sampleSizes, long[] ptsNanos) {
         public static final SampleTable EMPTY = new SampleTable(new int[0], new long[0]);
+    }
+
+    private static final class LoggerHolder {
+        private static final Logger INSTANCE = LogUtils.getLogger();
     }
 }

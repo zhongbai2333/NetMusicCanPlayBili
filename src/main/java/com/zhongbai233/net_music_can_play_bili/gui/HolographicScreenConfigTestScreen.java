@@ -24,25 +24,30 @@ import org.lwjgl.glfw.GLFW;
 
 import com.zhongbai233.net_music_can_play_bili.client.renderer.gui.HolographicPreviewPipRenderState;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ControlConsoleBlockEntity;
-import com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleDocument;
-import com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleElement;
-import com.zhongbai233.net_music_can_play_bili.editor.core.camera.CameraFrame;
-import com.zhongbai233.net_music_can_play_bili.editor.core.camera.CameraMatrices;
-import com.zhongbai233.net_music_can_play_bili.editor.core.camera.EditorCameraController;
-import com.zhongbai233.net_music_can_play_bili.editor.core.camera.EditorCameraMode;
-import com.zhongbai233.net_music_can_play_bili.editor.core.camera.EditorMouseDragPolicy;
-import com.zhongbai233.net_music_can_play_bili.editor.core.camera.EditorCameraState;
-import com.zhongbai233.net_music_can_play_bili.editor.core.camera.StandardCameraView;
-import com.zhongbai233.net_music_can_play_bili.editor.core.projection.EditorProjection;
-import com.zhongbai233.net_music_can_play_bili.editor.core.projection.EditorViewport;
-import com.zhongbai233.net_music_can_play_bili.editor.core.projection.PickingRay;
-import com.zhongbai233.net_music_can_play_bili.editor.core.projection.ProjectedPoint;
-import com.zhongbai233.net_music_can_play_bili.editor.core.media.SubtitleLayout;
-import com.zhongbai233.net_music_can_play_bili.editor.core.selection.BlankClickSelectionPolicy;
-import com.zhongbai233.net_music_can_play_bili.editor.core.gizmo.GizmoConstraint;
-import com.zhongbai233.net_music_can_play_bili.editor.core.gizmo.GizmoDragMath;
-import com.zhongbai233.net_music_can_play_bili.editor.core.command.CommandStack;
-import com.zhongbai233.net_music_can_play_bili.editor.core.transaction.DragTransaction;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElement;
+import com.zhongbai233.scene_editor.core.camera.CameraFrame;
+import com.zhongbai233.scene_editor.core.camera.CameraMatrices;
+import com.zhongbai233.scene_editor.core.camera.EditorCameraController;
+import com.zhongbai233.scene_editor.core.camera.EditorCameraMode;
+import com.zhongbai233.scene_editor.core.camera.EditorMouseDragPolicy;
+import com.zhongbai233.scene_editor.core.camera.EditorCameraState;
+import com.zhongbai233.scene_editor.core.camera.StandardCameraView;
+import com.zhongbai233.scene_editor.core.projection.EditorProjection;
+import com.zhongbai233.scene_editor.core.projection.EditorViewport;
+import com.zhongbai233.scene_editor.core.projection.PickingRay;
+import com.zhongbai233.scene_editor.core.projection.ProjectedPoint;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.SubtitleLayout;
+import com.zhongbai233.scene_editor.core.selection.BlankClickSelectionPolicy;
+import com.zhongbai233.scene_editor.core.gizmo.GizmoConstraint;
+import com.zhongbai233.scene_editor.core.gizmo.GizmoDragMath;
+import com.zhongbai233.scene_editor.core.gizmo.GizmoCoordinateSpace;
+import com.zhongbai233.scene_editor.core.gizmo.GizmoTransformMath;
+import com.zhongbai233.scene_editor.core.math.EditorTransform;
+import com.zhongbai233.scene_editor.core.command.CommandStack;
+import com.zhongbai233.scene_editor.core.command.StateReplacementCommand;
+import com.zhongbai233.scene_editor.core.transaction.DragTransaction;
+import com.zhongbai233.scene_editor.minecraft.input.MinecraftEditorInput;
 import com.zhongbai233.net_music_can_play_bili.item.HolographicGlassesItem;
 import com.zhongbai233.net_music_can_play_bili.link.EquippedMediaItems;
 import com.zhongbai233.net_music_can_play_bili.link.HolographicGlassesAbility;
@@ -111,6 +116,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
     private final Level controlConsoleLevel;
     private final Player controlConsolePlayer;
     private EditTool activeTool = EditTool.MOVE;
+    private GizmoCoordinateSpace coordinateSpace = GizmoCoordinateSpace.LOCAL;
     private DragMode dragMode = DragMode.NONE;
     private GizmoHandle activeHandle = GizmoHandle.NONE;
 
@@ -141,10 +147,11 @@ public class HolographicScreenConfigTestScreen extends Screen {
     private boolean flyUp;
     private boolean flyFast;
     private GizmoDragSession gizmoDragSession;
-    private final CommandStack<ScreenEditState> editHistory = new CommandStack<>(128);
-    private DragTransaction<ScreenEditState> gizmoTransaction;
+    private final CommandStack<EditorSceneState> editHistory = new CommandStack<>(128);
+    private DragTransaction<EditorSceneState> gizmoTransaction;
 
     private boolean showNumericPanel;
+    private boolean showTransformInspector = true;
     private EditBox numericDistanceBox;
     private EditBox numericOffsetXBox;
     private EditBox numericOffsetYBox;
@@ -153,6 +160,14 @@ public class HolographicScreenConfigTestScreen extends Screen {
     private EditBox numericRollBox;
     private EditBox numericYawBox;
     private EditBox numericPitchBox;
+    private EditBox numericScaleXBox;
+    private EditBox numericScaleYBox;
+    private EditBox numericScaleZBox;
+    private EditBox numericPivotXBox;
+    private EditBox numericPivotYBox;
+    private EditBox numericPivotZBox;
+    private EditBox numericSkewXByYBox;
+    private EditBox numericSkewYByXBox;
     private EditBox elementTextBox;
     private EditBox elementTextScaleBox;
     private EditBox elementVolumeBox;
@@ -167,6 +182,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
     private ControlConsoleDocument consoleAccessRollback;
     private ControlConsoleDocument consoleDraft;
     private boolean consoleElementsLoaded;
+    private boolean roamingHistoryPending;
     private long consoleAutosaveTick;
     private int consoleSavedFingerprint;
     private int consolePendingFingerprint;
@@ -174,6 +190,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
     private boolean consoleAutosaveFingerprintInitialized;
     private UUID consolePendingOperation;
     private boolean consoleSaveConflict;
+    private ControlConsoleDocument consoleConflictAuthoritative;
     private String consoleSaveStatus = "";
     private boolean worldRoamingTransitionPending;
     private boolean transferLeaseToRoaming;
@@ -244,6 +261,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
         }
         screens.clear();
         consoleElementsLoaded = true;
+        roamingHistoryPending = true;
         for (ControlConsoleRoamingSession.RoamingElement element : elements) {
             ElementType type;
             try {
@@ -272,6 +290,14 @@ public class HolographicScreenConfigTestScreen extends Screen {
             restored.wrap = element.wrap();
             restored.enabled = element.enabled();
             restored.locked = element.locked();
+            restored.scaleX = element.scaleX();
+            restored.scaleY = element.scaleY();
+            restored.scaleZ = element.scaleZ();
+            restored.pivotX = element.pivotX();
+            restored.pivotY = element.pivotY();
+            restored.pivotZ = element.pivotZ();
+            restored.skewXByY = element.skewXByY();
+            restored.skewYByX = element.skewYByX();
             screens.add(restored);
         }
     }
@@ -298,10 +324,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
         ControlConsoleDocument authoritative = controlConsoleDocument();
         if (authoritative != null && consoleDraft != null && !consoleSaveConflict
             && authoritative.revision() > consoleDraft.revision()) {
-            consoleDraft = authoritative;
-            consoleAccessModeDraft = authoritative.accessMode();
-            consoleAccessRollback = null;
-            loadConsoleElements(authoritative);
+            installAuthoritativeConsoleDocument(authoritative, "已同步服务器版本");
             init();
         }
         if (controlConsoleMode) {
@@ -379,6 +402,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
         consolePendingOperation = null;
         switch (result.status()) {
             case APPLIED, DUPLICATE -> {
+                consoleConflictAuthoritative = null;
                 consoleDraft = consoleDraft.withRevision(result.revision());
                 consoleSaveStatus = consoleAccessRollback != null ? "权限设置已保存" : "已自动保存";
                 consoleSavedFingerprint = consolePendingFingerprint;
@@ -387,17 +411,20 @@ public class HolographicScreenConfigTestScreen extends Screen {
             }
             case CONFLICT -> {
                 restoreAccessRollback();
+                consoleConflictAuthoritative = result.authoritativeDocument();
                 consoleSaveConflict = true;
-                consoleSaveStatus = "版本冲突：本地修改未覆盖服务器版本";
+                consoleSaveStatus = "版本冲突：已收到服务器版本，本地修改未覆盖";
                 init();
             }
             case READ_ONLY -> {
+                consoleConflictAuthoritative = null;
                 restoreAccessRollback();
                 consoleSaveConflict = true;
                 consoleSaveStatus = "文档版本过新：当前版本仅允许只读查看";
                 init();
             }
             case REJECTED -> {
+                consoleConflictAuthoritative = null;
                 restoreAccessRollback();
                 consoleSaveStatus = "保存被服务器拒绝";
                 init();
@@ -414,22 +441,28 @@ public class HolographicScreenConfigTestScreen extends Screen {
     }
 
     private void reloadAuthoritativeConsoleDocument() {
-        ControlConsoleDocument authoritative = controlConsoleDocument();
+        ControlConsoleDocument authoritative = consoleConflictAuthoritative != null
+                ? consoleConflictAuthoritative : controlConsoleDocument();
         if (authoritative == null) {
             return;
         }
+        installAuthoritativeConsoleDocument(authoritative, "已重新加载服务器版本");
+        init();
+    }
+
+    private void installAuthoritativeConsoleDocument(ControlConsoleDocument authoritative, String status) {
         consoleDraft = authoritative;
         consoleAccessModeDraft = authoritative.accessMode();
         consoleAccessRollback = null;
+        consoleConflictAuthoritative = null;
         consoleSaveConflict = false;
-        consoleSaveStatus = "已重新加载服务器版本";
+        consoleSaveStatus = status;
         consolePendingOperation = null;
         consoleAutosaveTick = 0L;
-        consoleSavedFingerprint = consoleDraftFingerprint(authoritative);
+        consoleSavedFingerprint = documentFingerprint(authoritative);
         consoleObservedFingerprint = consoleSavedFingerprint;
         consoleAutosaveFingerprintInitialized = true;
         loadConsoleElements(authoritative);
-        init();
     }
 
     private boolean validControlConsoleHost() {
@@ -513,7 +546,9 @@ public class HolographicScreenConfigTestScreen extends Screen {
                     screen.pitch, screen.roll, screen.contentMode, screen.text, screen.followLyrics,
                     screen.showTranslation, screen.textScale, screen.color, screen.volume, screen.channelIndex,
                     screen.maxDistance, screen.autoMixJoc, screen.translationColor, screen.backgroundColor,
-                    screen.alignment, screen.maxWidth, screen.wrap, screen.enabled, screen.locked));
+                    screen.alignment, screen.maxWidth, screen.wrap, screen.enabled, screen.locked,
+                    screen.scaleX, screen.scaleY, screen.scaleZ, screen.pivotX, screen.pivotY, screen.pivotZ,
+                    screen.skewXByY, screen.skewYByX));
         }
         return List.copyOf(snapshot);
     }
@@ -570,7 +605,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
         }
 
         int iconY = 4;
-        int buttonCount = controlConsoleMode ? 5 : 4;
+        int buttonCount = controlConsoleMode ? 6 : 5;
         int startX = width - 8 - (ICON_W * buttonCount + ICON_GAP * (buttonCount - 1));
         int x = startX;
         addRenderableWidget(new BlackGoldButton(x, iconY, ICON_W, ICON_H,
@@ -581,6 +616,13 @@ public class HolographicScreenConfigTestScreen extends Screen {
         x += ICON_W + ICON_GAP;
         addRenderableWidget(new BlackGoldButton(x, iconY, ICON_W, ICON_H,
                 Component.literal("\u21F2"), btn -> activeTool = EditTool.SCALE, GOLD));
+        x += ICON_W + ICON_GAP;
+        addRenderableWidget(new BlackGoldButton(x, iconY, ICON_W, ICON_H,
+                Component.literal(coordinateSpace == GizmoCoordinateSpace.LOCAL ? "本" : "世"), btn -> {
+                    coordinateSpace = coordinateSpace == GizmoCoordinateSpace.LOCAL
+                            ? GizmoCoordinateSpace.WORLD : GizmoCoordinateSpace.LOCAL;
+                    btn.setMessage(Component.literal(coordinateSpace == GizmoCoordinateSpace.LOCAL ? "本" : "世"));
+                }, GOLD));
         x += ICON_W + ICON_GAP;
         if (controlConsoleMode) {
             addRenderableWidget(new BlackGoldButton(x, iconY, ICON_W, ICON_H,
@@ -633,84 +675,120 @@ public class HolographicScreenConfigTestScreen extends Screen {
         int y = 112;
         int boxW = 54;
         numericDistanceBox = addUnboundedInspectorBox(leftX, y, boxW, "距离", screen().distance, false,
-            v -> screen().distance = v);
+            v -> editSelected("设置距离", selected -> selected.distance = v));
         numericOffsetXBox = addUnboundedInspectorBox(rightX, y, boxW, "位置X", screen().offsetX, false,
-            v -> screen().offsetX = v);
+            v -> editSelected("设置位置 X", selected -> selected.offsetX = v));
         numericOffsetYBox = addUnboundedInspectorBox(leftX, y + 22, boxW, "位置Y", screen().offsetY, false,
-            v -> screen().offsetY = v);
+            v -> editSelected("设置位置 Y", selected -> selected.offsetY = v));
         numericHeightBox = addUnboundedInspectorBox(rightX, y + 22, boxW, "高度", screen().height, true,
-            v -> screen().height = v);
+            v -> editSelected("设置高度", selected -> selected.height = v));
         numericAspectBox = addUnboundedInspectorBox(leftX, y + 44, boxW, "比例", screen().aspect, true,
-            v -> screen().aspect = v);
+            v -> editSelected("设置宽高比", selected -> selected.aspect = v));
         numericYawBox = addUnboundedInspectorBox(rightX, y + 44, boxW, "Yaw", screen().yaw, false,
-            v -> screen().yaw = v);
+            v -> editSelected("设置 Yaw", selected -> selected.yaw = v));
         numericPitchBox = addUnboundedInspectorBox(leftX, y + 66, boxW, "Pitch", screen().pitch, false,
-            v -> screen().pitch = v);
+            v -> editSelected("设置 Pitch", selected -> selected.pitch = v));
         numericRollBox = addUnboundedInspectorBox(rightX, y + 66, boxW, "Roll", screen().roll, false,
-            v -> screen().roll = v);
+            v -> editSelected("设置 Roll", selected -> selected.roll = v));
         boolean editable = selectedElementEditable();
         for (EditBox box : List.of(numericDistanceBox, numericOffsetXBox, numericOffsetYBox,
                 numericHeightBox, numericAspectBox, numericYawBox, numericPitchBox, numericRollBox)) {
             box.active = editable;
         }
         PreviewScreenSpec selected = screen();
-        addRenderableWidget(new BlackGoldButton(panelX + 78, y - 18, 132, 18,
-                Component.literal(selected.locked ? "🔒 已锁定（点击解锁）" : "🔓 未锁定（点击锁定）"), button -> {
-                    selected.locked = !selected.locked;
+        addRenderableWidget(new BlackGoldButton(panelX + 12, y - 18, 58, 18,
+                Component.literal(showTransformInspector ? "查看内容" : "高级变换"), button -> {
+                    showTransformInspector = !showTransformInspector;
                     init();
                 }, GOLD_DIM));
-        addElementContentWidgets(panelX + 78, y + 94, screen());
+        addRenderableWidget(new BlackGoldButton(panelX + 78, y - 18, 132, 18,
+                Component.literal(selected.locked ? "🔒 已锁定（点击解锁）" : "🔓 未锁定（点击锁定）"), button -> {
+                    edit("切换元素锁定", () -> selected.locked = !selected.locked);
+                    init();
+                }, GOLD_DIM));
+        if (showTransformInspector) {
+            numericScaleXBox = addInspectorBox(leftX, y + 94, 0, boxW, "缩放X", screen().scaleX,
+                    ControlConsoleElement.MIN_SCALE, ControlConsoleElement.MAX_SCALE,
+                    v -> editSelected("设置缩放 X", item -> item.scaleX = v));
+            numericScaleYBox = addInspectorBox(rightX, y + 94, 0, boxW, "缩放Y", screen().scaleY,
+                    ControlConsoleElement.MIN_SCALE, ControlConsoleElement.MAX_SCALE,
+                    v -> editSelected("设置缩放 Y", item -> item.scaleY = v));
+            numericScaleZBox = addInspectorBox(leftX, y + 116, 0, boxW, "缩放Z", screen().scaleZ,
+                    ControlConsoleElement.MIN_SCALE, ControlConsoleElement.MAX_SCALE,
+                    v -> editSelected("设置缩放 Z", item -> item.scaleZ = v));
+            numericPivotXBox = addUnboundedInspectorBox(rightX, y + 116, boxW, "枢轴X", screen().pivotX, false,
+                    v -> editSelected("设置枢轴 X", item -> item.pivotX = v));
+            numericPivotYBox = addUnboundedInspectorBox(leftX, y + 138, boxW, "枢轴Y", screen().pivotY, false,
+                    v -> editSelected("设置枢轴 Y", item -> item.pivotY = v));
+            numericPivotZBox = addUnboundedInspectorBox(rightX, y + 138, boxW, "枢轴Z", screen().pivotZ, false,
+                    v -> editSelected("设置枢轴 Z", item -> item.pivotZ = v));
+            numericSkewXByYBox = addInspectorBox(leftX, y + 160, 0, boxW, "X←Y", screen().skewXByY,
+                    ControlConsoleElement.MIN_SKEW, ControlConsoleElement.MAX_SKEW,
+                    v -> editSelected("设置 X←Y 剪切", item -> item.skewXByY = v));
+            numericSkewYByXBox = addInspectorBox(rightX, y + 160, 0, boxW, "Y←X", screen().skewYByX,
+                    ControlConsoleElement.MIN_SKEW, ControlConsoleElement.MAX_SKEW,
+                    v -> editSelected("设置 Y←X 剪切", item -> item.skewYByX = v));
+            for (EditBox box : List.of(numericScaleXBox, numericScaleYBox, numericScaleZBox,
+                    numericPivotXBox, numericPivotYBox, numericPivotZBox, numericSkewXByYBox,
+                    numericSkewYByXBox)) {
+                box.active = editable && screen().type != ElementType.AUDIO;
+            }
+        } else {
+            addElementContentWidgets(panelX + 78, y + 94, screen());
+        }
     }
 
         private void addElementContentWidgets(int x, int y, PreviewScreenSpec selected) {
         if (selected.type == ElementType.SUBTITLE) {
             elementTextBox = addConsoleTextBox(x, y, 132, selected.text,
-                value -> { if (!selected.locked) selected.text = value; });
+                value -> editSelected("设置字幕文本", item -> item.text = value));
             elementTextBox.active = !selected.locked;
             BlackGoldButton lyricsButton = new BlackGoldButton(x, y + 22, 64, 18,
                 Component.literal(selected.followLyrics ? "歌词：开" : "歌词：关"),
-                button -> { if (!selected.locked) { selected.followLyrics = !selected.followLyrics; init(); } }, GOLD_DIM);
+                button -> { editSelected("切换歌词跟随", item -> item.followLyrics = !item.followLyrics); init(); }, GOLD_DIM);
             lyricsButton.active = !selected.locked;
             addRenderableWidget(lyricsButton);
             BlackGoldButton translationButton = new BlackGoldButton(x + 68, y + 22, 64, 18,
                 Component.literal(selected.showTranslation ? "翻译：开" : "翻译：关"),
-                button -> { if (!selected.locked) { selected.showTranslation = !selected.showTranslation; init(); } }, GOLD_DIM);
+                button -> { editSelected("切换字幕翻译", item -> item.showTranslation = !item.showTranslation); init(); }, GOLD_DIM);
             translationButton.active = !selected.locked;
             addRenderableWidget(translationButton);
             BlackGoldButton modeButton = new BlackGoldButton(x, y + 66, 64, 18,
                 Component.literal(subtitleModeLabel(selected.contentMode)), button -> {
-                    if (!selected.locked) { cycleSubtitleMode(selected); init(); }
+                    editSelected("切换字幕模式", HolographicScreenConfigTestScreen::cycleSubtitleMode); init();
                 }, GOLD_DIM);
             BlackGoldButton trackButton = new BlackGoldButton(x + 68, y + 66, 64, 18,
                 Component.literal(subtitleTrackLabel(selected.contentMode)), button -> {
-                    if (!selected.locked && SubtitleLayout.isScrollingMode(selected.contentMode)) {
-                        selected.contentMode = SubtitleLayout.toggleScrollingTrack(selected.contentMode);
-                        selected.followLyrics = true;
-                        init();
-                    }
+                    editSelected("切换字幕轨道", item -> {
+                        if (SubtitleLayout.isScrollingMode(item.contentMode)) {
+                            item.contentMode = SubtitleLayout.toggleScrollingTrack(item.contentMode);
+                            item.followLyrics = true;
+                        }
+                    });
+                    init();
                 }, GOLD_DIM);
             modeButton.active = !selected.locked;
             trackButton.active = !selected.locked && SubtitleLayout.isScrollingMode(selected.contentMode);
             addRenderableWidget(modeButton);
             addRenderableWidget(trackButton);
             elementTextScaleBox = addUnboundedInspectorBox(x, y + 44, 54, "字号", selected.textScale, true,
-                value -> { if (!selected.locked) selected.textScale = value; });
+                value -> editSelected("设置字幕字号", item -> item.textScale = value));
             elementTextScaleBox.active = !selected.locked;
                 elementColorBox = addColorBox(x, y + 88, 64, selected.color,
-                    value -> { if (!selected.locked) selected.color = value; });
+                    value -> editSelected("设置字幕颜色", item -> item.color = value));
                 elementTranslationColorBox = addColorBox(x + 68, y + 88, 64, selected.translationColor,
-                    value -> { if (!selected.locked) selected.translationColor = value; });
+                    value -> editSelected("设置翻译颜色", item -> item.translationColor = value));
                 elementBackgroundColorBox = addColorBox(x, y + 110, 64, selected.backgroundColor,
-                    value -> { if (!selected.locked) selected.backgroundColor = value; });
+                    value -> editSelected("设置字幕背景", item -> item.backgroundColor = value));
                 elementMaxWidthBox = addUnboundedInspectorBox(x + 68, y + 110, 64, "宽度", selected.maxWidth,
-                    false, value -> { if (!selected.locked && value >= 0.0F) selected.maxWidth = value; });
+                    false, value -> editSelected("设置字幕宽度", item -> { if (value >= 0.0F) item.maxWidth = value; }));
                 BlackGoldButton alignmentButton = new BlackGoldButton(x, y + 132, 64, 18,
                     Component.literal(alignmentLabel(selected.alignment)), button -> {
-                    if (!selected.locked) { selected.alignment = nextAlignment(selected.alignment); init(); }
+                    editSelected("切换字幕对齐", item -> item.alignment = nextAlignment(item.alignment)); init();
                     }, GOLD_DIM);
                 BlackGoldButton wrapButton = new BlackGoldButton(x + 68, y + 132, 64, 18,
                     Component.literal(selected.wrap ? "换行：开" : "换行：关"), button -> {
-                    if (!selected.locked) { selected.wrap = !selected.wrap; init(); }
+                    editSelected("切换字幕换行", item -> item.wrap = !item.wrap); init();
                     }, GOLD_DIM);
                 alignmentButton.active = wrapButton.active = !selected.locked;
                 elementColorBox.active = elementTranslationColorBox.active = elementBackgroundColorBox.active
@@ -719,50 +797,48 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 addRenderableWidget(wrapButton);
         } else if (selected.type == ElementType.AUDIO) {
             elementVolumeBox = addInspectorBox(x, y, 48, 54, "音量", selected.volume,
-                    0.0F, 1.0F, value -> { if (!selected.locked) selected.volume = value; });
+                    0.0F, 1.0F, value -> editSelected("设置音源音量", item -> item.volume = value));
             BlackGoldButton channelButton = new BlackGoldButton(x + 62, y, 70, 18,
-                Component.literal("声道：" + com.zhongbai233.net_music_can_play_bili.editor.core.media
+                Component.literal("声道：" + com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media
                     .ControlConsoleMediaSettings.audioChannelLabel(selected.channelIndex)), button -> {
-                    if (!selected.locked) {
-                        selected.channelIndex = com.zhongbai233.net_music_can_play_bili.editor.core.media
-                            .ControlConsoleMediaSettings.nextAudioChannel(selected.channelIndex);
-                        init();
-                    }
+                    editSelected("切换音源声道", item -> item.channelIndex =
+                            com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleMediaSettings
+                                    .nextAudioChannel(item.channelIndex));
+                    init();
                 }, GOLD_DIM);
             elementMaxDistanceBox = addUnboundedInspectorBox(x, y + 22, 54, "距离", selected.maxDistance, true,
-                value -> { if (!selected.locked) selected.maxDistance = value; });
+                value -> editSelected("设置音源距离", item -> item.maxDistance = value));
             elementVolumeBox.active = elementMaxDistanceBox.active = channelButton.active = !selected.locked;
             addRenderableWidget(channelButton);
             BlackGoldButton audioEnabledButton = new BlackGoldButton(x + 62, y + 22, 70, 18,
                 Component.literal(selected.enabled ? "音源：开" : "音源：关"),
-                button -> { if (!selected.locked) { selected.enabled = !selected.enabled; init(); } }, GOLD_DIM);
+                button -> { editSelected("切换音源", item -> item.enabled = !item.enabled); init(); }, GOLD_DIM);
             audioEnabledButton.active = !selected.locked;
             addRenderableWidget(audioEnabledButton);
             BlackGoldButton autoMixButton = new BlackGoldButton(x, y + 44, 132, 18,
                 Component.literal(selected.autoMixJoc ? "自动混合：开" : "自动混合：关"),
-                button -> { if (!selected.locked) { selected.autoMixJoc = !selected.autoMixJoc; init(); } }, GOLD_DIM);
+                button -> { editSelected("切换自动混合", item -> item.autoMixJoc = !item.autoMixJoc); init(); }, GOLD_DIM);
             autoMixButton.active = !selected.locked;
             addRenderableWidget(autoMixButton);
         } else {
             BlackGoldButton sourceButton = new BlackGoldButton(x, y, 64, 18,
                 Component.literal("视频：绑定源"), button -> {
-                    if (!selected.locked) { selected.contentMode = "SOURCE"; init(); }
+                    editSelected("设置屏幕来源", item -> item.contentMode = "SOURCE"); init();
                 }, GOLD_DIM);
             sourceButton.active = !selected.locked;
             addRenderableWidget(sourceButton);
             BlackGoldButton screenEnabledButton = new BlackGoldButton(x + 68, y, 64, 18,
                 Component.literal(selected.enabled ? "屏幕：开" : "屏幕：关"),
-                button -> { if (!selected.locked) { selected.enabled = !selected.enabled; init(); } }, GOLD_DIM);
+                button -> { editSelected("切换屏幕", item -> item.enabled = !item.enabled); init(); }, GOLD_DIM);
             screenEnabledButton.active = !selected.locked;
             addRenderableWidget(screenEnabledButton);
             BlackGoldButton qualityButton = new BlackGoldButton(x, y + 22, 132, 18,
-                Component.literal("画质：" + com.zhongbai233.net_music_can_play_bili.editor.core.media
+                Component.literal("画质：" + com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media
                     .ControlConsoleMediaSettings.videoQualityLabel(selected.channelIndex)), button -> {
-                    if (!selected.locked) {
-                        selected.channelIndex = com.zhongbai233.net_music_can_play_bili.editor.core.media
-                            .ControlConsoleMediaSettings.nextVideoQualityIndex(selected.channelIndex);
-                        init();
-                    }
+                    editSelected("切换屏幕画质", item -> item.channelIndex =
+                            com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleMediaSettings
+                                    .nextVideoQualityIndex(item.channelIndex));
+                    init();
                 }, GOLD_DIM);
             qualityButton.active = !selected.locked;
             addRenderableWidget(qualityButton);
@@ -806,6 +882,10 @@ public class HolographicScreenConfigTestScreen extends Screen {
         return switch (mode) {
             case "FIXED" -> "模式：固定";
             case "SCROLL_MAIN", "SCROLL_TRANSLATION" -> "模式：滚动";
+            case "AI_SUBTITLE" -> "模式：AI字幕";
+            case "LIVE_TITLE" -> "模式：直播标题";
+            case "LIVE_ROOM" -> "模式：房间信息";
+            case "LIVE_STATUS" -> "模式：直播状态";
             default -> "模式：静态";
         };
         }
@@ -820,7 +900,9 @@ public class HolographicScreenConfigTestScreen extends Screen {
 
         private static void cycleSubtitleMode(PreviewScreenSpec selected) {
         selected.contentMode = SubtitleLayout.nextDisplayMode(selected.contentMode);
-        if ("FIXED".equals(selected.contentMode)) {
+        if ("FIXED".equals(selected.contentMode)
+                || com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.LiveSubtitleMetadata
+                        .isLiveMode(selected.contentMode)) {
             selected.followLyrics = false;
         } else {
             selected.followLyrics = true;
@@ -1011,6 +1093,18 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 consoleObservedFingerprint = consoleSavedFingerprint;
                 consoleAutosaveFingerprintInitialized = true;
             }
+            if (roamingHistoryPending) {
+                roamingHistoryPending = false;
+                ConsoleProperties properties = new ConsoleProperties(consoleDraft.displayName(),
+                        consoleDraft.hardRangeX(), consoleDraft.hardRangeY(), consoleDraft.hardRangeZ());
+                EditorSceneState before = new EditorSceneState(
+                        consoleDraft.elements().stream().map(HolographicScreenConfigTestScreen::snapshot).toList(),
+                        -1, properties);
+                EditorSceneState after = snapshotScene();
+                if (!before.equals(after)) {
+                    editHistory.execute(before, new StateReplacementCommand<>(before, after, "世界漫游编辑"));
+                }
+            }
         }
         return consoleDraft != null ? consoleDraft : document;
     }
@@ -1053,6 +1147,14 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 restored.wrap = element.wrap();
                 restored.enabled = element.enabled();
                 restored.locked = element.locked();
+                restored.scaleX = element.scaleX();
+                restored.scaleY = element.scaleY();
+                restored.scaleZ = element.scaleZ();
+                restored.pivotX = element.pivotX();
+                restored.pivotY = element.pivotY();
+                restored.pivotZ = element.pivotZ();
+                restored.skewXByY = element.skewXByY();
+                restored.skewYByX = element.skewYByX();
             screens.add(restored);
         }
         consoleElementsLoaded = true;
@@ -1067,10 +1169,10 @@ public class HolographicScreenConfigTestScreen extends Screen {
             return;
         }
         try {
-                consoleDraft = new ControlConsoleDocument(base.schemaVersion(), base.consoleId(), base.revision(),
-                    base.ownerId(), base.accessMode(), base.trustedPlayerIds(), name,
-                    base.sourceDimension(), base.sourceKind(), base.sourceX(), base.sourceY(), base.sourceZ(), rangeX, rangeY, rangeZ,
-                    base.elements());
+            edit("设置中控台属性", () -> consoleDraft = new ControlConsoleDocument(base.schemaVersion(),
+                    base.consoleId(), base.revision(), base.ownerId(), base.accessMode(), base.trustedPlayerIds(), name,
+                    base.sourceDimension(), base.sourceKind(), base.sourceX(), base.sourceY(), base.sourceZ(),
+                    rangeX, rangeY, rangeZ, consoleElementsSnapshot()));
         } catch (IllegalArgumentException ignored) {
         }
     }
@@ -1088,7 +1190,9 @@ public class HolographicScreenConfigTestScreen extends Screen {
                     screen.contentMode, screen.text, screen.followLyrics, screen.showTranslation,
                     screen.textScale, screen.color, screen.volume, screen.channelIndex, screen.maxDistance,
                     screen.autoMixJoc, screen.translationColor, screen.backgroundColor, screen.alignment,
-                    screen.maxWidth, screen.wrap, screen.enabled, screen.locked));
+                    screen.maxWidth, screen.wrap, screen.enabled, screen.locked,
+                    screen.scaleX, screen.scaleY, screen.scaleZ, screen.pivotX, screen.pivotY, screen.pivotZ,
+                    screen.skewXByY, screen.skewYByX));
         }
         return List.copyOf(elements);
     }
@@ -1152,9 +1256,11 @@ public class HolographicScreenConfigTestScreen extends Screen {
             if (selected == null || selected.locked || !canAddConsoleElement()) {
                 return;
             }
-            PreviewScreenSpec duplicate = selected.copyWithName(nextElementName(selected.type));
-            screens.add(duplicate);
-            selectElement(screens.size() - 1);
+            edit("复制元素", () -> {
+                PreviewScreenSpec duplicate = selected.copyWithName(nextElementName(selected.type));
+                screens.add(duplicate);
+                selectElement(screens.size() - 1);
+            });
             init();
         }, GOLD_DIM);
         PreviewScreenSpec selectedForCopy = selectedScreenOrNull();
@@ -1180,8 +1286,10 @@ public class HolographicScreenConfigTestScreen extends Screen {
         if (!canAddConsoleElement()) {
             return;
         }
-        screens.add(PreviewScreenSpec.defaultsWithName(type, nextElementName(type)));
-        selectElement(screens.size() - 1);
+        edit("添加" + type.displayName, () -> {
+            screens.add(PreviewScreenSpec.defaultsWithName(type, nextElementName(type)));
+            selectElement(screens.size() - 1);
+        });
         init();
     }
 
@@ -1190,10 +1298,12 @@ public class HolographicScreenConfigTestScreen extends Screen {
         if (selected == null || selected.locked) {
             return;
         }
-        int removedIndex = selectedScreen;
-        screens.remove(removedIndex);
-        selectedScreen = screens.isEmpty() ? -1 : Math.min(removedIndex, screens.size() - 1);
-        consoleElementScroll = Math.min(consoleElementScroll, Math.max(0, screens.size() - 1));
+        edit("删除元素", () -> {
+            int removedIndex = selectedScreen;
+            screens.remove(removedIndex);
+            selectedScreen = screens.isEmpty() ? -1 : Math.min(removedIndex, screens.size() - 1);
+            consoleElementScroll = Math.min(consoleElementScroll, Math.max(0, screens.size() - 1));
+        });
         clearFlyKeys();
         init();
     }
@@ -1222,6 +1332,14 @@ public class HolographicScreenConfigTestScreen extends Screen {
         numericRollBox = null;
         numericYawBox = null;
         numericPitchBox = null;
+        numericScaleXBox = null;
+        numericScaleYBox = null;
+        numericScaleZBox = null;
+        numericPivotXBox = null;
+        numericPivotYBox = null;
+        numericPivotZBox = null;
+        numericSkewXByYBox = null;
+        numericSkewYByXBox = null;
         elementColorBox = null;
         elementTranslationColorBox = null;
         elementBackgroundColorBox = null;
@@ -1272,14 +1390,27 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 case AUDIO -> "空间音频元素";
             };
             g.text(font, Component.literal(typeHint), x, 68, TEXT_DIM);
-            g.text(font, Component.literal("位置 / 尺寸 / 三轴旋转"), x, 82, TEXT_DIM);
+            g.text(font, Component.literal("位置 / 尺寸 / 旋转 / 高级变换"), x, 82, TEXT_DIM);
             String[][] labels = { { "距离", "位置X" }, { "位置Y", "高度" },
                     { "比例", "Yaw" }, { "Pitch", "Roll" } };
             for (int row = 0; row < labels.length; row++) {
                 g.text(font, Component.literal(labels[row][0]), rightX + 12, 117 + row * 22, TEXT_SECONDARY);
                 g.text(font, Component.literal(labels[row][1]), rightX + 122, 117 + row * 22, TEXT_SECONDARY);
             }
-            g.text(font, Component.literal("元素内容"), x, 194, TEXT_DIM);
+            if (showTransformInspector) {
+                String[][] advancedLabels = { { "缩放X", "缩放Y" }, { "缩放Z", "枢轴X" },
+                        { "枢轴Y", "枢轴Z" }, { "X←Y", "Y←X" } };
+                for (int row = 0; row < advancedLabels.length; row++) {
+                    g.text(font, Component.literal(advancedLabels[row][0]), rightX + 12, 211 + row * 22,
+                            TEXT_SECONDARY);
+                    g.text(font, Component.literal(advancedLabels[row][1]), rightX + 122, 211 + row * 22,
+                            TEXT_SECONDARY);
+                }
+                g.text(font, Component.literal(screen.type == ElementType.AUDIO
+                        ? "音源首版忽略 scale / pivot / skew" : "完整仿射变换"), x, 288, TEXT_DIM);
+            } else {
+                g.text(font, Component.literal("元素内容"), x, 194, TEXT_DIM);
+            }
         } else if (document != null) {
             g.text(font, Component.literal("中控台 / Console"), x, 34, TEXT_SECONDARY);
             g.text(font, Component.literal("名称"), x, 67, TEXT_SECONDARY);
@@ -1337,7 +1468,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
     }
 
     private void drawEditorHud(GuiGraphicsExtractor g) {
-        int buttonCount = controlConsoleMode ? 5 : 4;
+        int buttonCount = controlConsoleMode ? 6 : 5;
         int barW = (ICON_W + ICON_GAP) * buttonCount - ICON_GAP + 6;
         int barX = width - barW - 4;
         g.fillGradient(barX, 2, barX + barW + 2, ICON_H + 6, 0xD0080A0D, 0xD0111318);
@@ -1351,9 +1482,9 @@ public class HolographicScreenConfigTestScreen extends Screen {
         PreviewScreenSpec screen = selectedScreenOrNull();
         String toolTip = navigationMode() ? "漫游：WASD 移动 · Space/C 升降 · Shift 加速 · V 世界漫游"
             : switch (activeTool) {
-            case MOVE -> "移动：拖动轴 · 空白处旋转视角 · 右键平移视角";
-            case ROTATE -> "旋转：拖动圆环 · 空白处旋转视角 · 右键平移视角";
-            case SCALE -> "缩放：拖动轴 · 空白处旋转视角 · 右键平移视角";
+            case MOVE -> "移动（" + coordinateSpaceLabel() + "）：拖动轴 · 空白处旋转视角 · 右键平移视角";
+            case ROTATE -> "旋转（" + coordinateSpaceLabel() + "）：拖动圆环 · 空白处旋转视角 · 右键平移视角";
+            case SCALE -> "缩放（" + coordinateSpaceLabel() + "）：拖动轴 · 空白处旋转视角 · 右键平移视角";
         };
         int hudX = controlConsoleMode ? previewX() + 10 : 10;
         int hudWidth = controlConsoleMode ? Math.max(0, previewW() - 20) : Math.max(0, width - 20);
@@ -1543,6 +1674,14 @@ public class HolographicScreenConfigTestScreen extends Screen {
         float[] yaws = new float[screens.size()];
         float[] pitches = new float[screens.size()];
         float[] rolls = new float[screens.size()];
+        float[] scaleXs = new float[screens.size()];
+        float[] scaleYs = new float[screens.size()];
+        float[] scaleZs = new float[screens.size()];
+        float[] pivotXs = new float[screens.size()];
+        float[] pivotYs = new float[screens.size()];
+        float[] pivotZs = new float[screens.size()];
+        float[] skewXByYs = new float[screens.size()];
+        float[] skewYByXs = new float[screens.size()];
         int[] elementTypes = new int[screens.size()];
         for (int i = 0; i < screens.size(); i++) {
             PreviewScreenSpec spec = screens.get(i);
@@ -1554,6 +1693,14 @@ public class HolographicScreenConfigTestScreen extends Screen {
             yaws[i] = spec.yaw;
             pitches[i] = spec.pitch;
             rolls[i] = spec.roll;
+            scaleXs[i] = spec.scaleX;
+            scaleYs[i] = spec.scaleY;
+            scaleZs[i] = spec.scaleZ;
+            pivotXs[i] = spec.pivotX;
+            pivotYs[i] = spec.pivotY;
+            pivotZs[i] = spec.pivotZ;
+            skewXByYs[i] = spec.skewXByY;
+            skewYByXs[i] = spec.skewYByX;
             elementTypes[i] = spec.type.ordinal();
         }
         GuiRenderState guiState = ((GuiGraphicsExtractorAccessor) g).net_music_can_play_bili$guiRenderState();
@@ -1578,9 +1725,11 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 new Vector3f(0.0F, 0.0F, 0.0F), 1.0F, DEFAULT_PREVIEW_YAW, DEFAULT_PREVIEW_PITCH,
                 firstPersonPreview, fov,
                 playerHovered && !controlConsoleMode, selectedScreen, distances, offsetXs, offsetYs, heights, aspects,
-                yaws, pitches, rolls, elementTypes,
+                yaws, pitches, rolls, elementTypes, scaleXs, scaleYs, scaleZs,
+                pivotXs, pivotYs, pivotZs, skewXByYs, skewYByXs,
                 encodedGizmoTool, selectedHandle,
-                activeTool != EditTool.MOVE, controlConsoleMode, controlConsoleMode && controlConsolePos != null,
+                coordinateSpace == GizmoCoordinateSpace.LOCAL, controlConsoleMode,
+                controlConsoleMode && controlConsolePos != null,
                 controlConsolePos != null ? controlConsolePos.getX() : 0,
                 controlConsolePos != null ? controlConsolePos.getY() : 0,
                 controlConsolePos != null ? controlConsolePos.getZ() : 0,
@@ -1643,8 +1792,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
                     dragMode = DragMode.CAMERA;
                     activeHandle = GizmoHandle.NONE;
                 } else {
-                    gizmoTransaction = new DragTransaction<>(
-                            new ScreenEditState(selectedScreen, gizmoDragSession.start), "拖动全息屏幕");
+                    gizmoTransaction = new DragTransaction<>(snapshotScene(), "拖动场景元素");
                 }
             }
             previewClickX = event.x();
@@ -1696,8 +1844,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 clearFlyKeys();
             }
             if (dragMode == DragMode.GIZMO && gizmoTransaction != null) {
-                int index = gizmoDragSession != null ? gizmoDragSession.screenIndex : selectedScreen;
-                ScreenEditState current = new ScreenEditState(index, snapshot(screens.get(index)));
+                EditorSceneState current = snapshotScene();
                 gizmoTransaction.update(ignored -> current);
                 gizmoTransaction.commit(editHistory);
             }
@@ -1727,21 +1874,21 @@ public class HolographicScreenConfigTestScreen extends Screen {
             return true;
         }
         if (event.hasControlDown() && event.key() == GLFW.GLFW_KEY_Z) {
-            ScreenEditState current = currentEditState();
+            EditorSceneState current = currentEditState();
             if (current != null) {
-                applyEditState(editHistory.undo(current));
+                applySceneState(editHistory.undo(current));
             }
             return true;
         }
         if (event.hasControlDown() && event.key() == GLFW.GLFW_KEY_Y) {
-            ScreenEditState current = currentEditState();
+            EditorSceneState current = currentEditState();
             if (current != null) {
-                applyEditState(editHistory.redo(current));
+                applySceneState(editHistory.redo(current));
             }
             return true;
         }
         if (!navigationMode()) {
-            StandardCameraView standardView = standardViewForKey(event.key());
+            StandardCameraView standardView = MinecraftEditorInput.standardView(event.key()).orElse(null);
             if (standardView != null) {
                 setPreviewCamera(cameraController.standardView(previewCamera, standardView, EDITOR_WORLD_UP));
                 return true;
@@ -1771,32 +1918,18 @@ public class HolographicScreenConfigTestScreen extends Screen {
     }
 
     private boolean setFlyKey(int key, boolean pressed) {
-        if (navigationMode()) {
-            switch (key) {
-                case GLFW.GLFW_KEY_W -> flyForward = pressed;
-                case GLFW.GLFW_KEY_S -> flyBackward = pressed;
-                case GLFW.GLFW_KEY_A -> flyLeft = pressed;
-                case GLFW.GLFW_KEY_D -> flyRight = pressed;
-                case GLFW.GLFW_KEY_C -> flyDown = pressed;
-                case GLFW.GLFW_KEY_SPACE -> flyUp = pressed;
-                case GLFW.GLFW_KEY_LEFT_SHIFT, GLFW.GLFW_KEY_RIGHT_SHIFT -> flyFast = pressed;
-                default -> {
-                    return false;
-                }
-            }
-            return true;
+        MinecraftEditorInput.FlyControl control = MinecraftEditorInput.flyControl(key, navigationMode()).orElse(null);
+        if (control == null) {
+            return false;
         }
-        switch (key) {
-            case GLFW.GLFW_KEY_W -> flyUp = pressed;
-            case GLFW.GLFW_KEY_S -> flyDown = pressed;
-            case GLFW.GLFW_KEY_A -> flyLeft = pressed;
-            case GLFW.GLFW_KEY_D -> flyRight = pressed;
-            case GLFW.GLFW_KEY_Q -> flyForward = pressed;
-            case GLFW.GLFW_KEY_E -> flyBackward = pressed;
-            case GLFW.GLFW_KEY_LEFT_SHIFT, GLFW.GLFW_KEY_RIGHT_SHIFT -> flyFast = pressed;
-            default -> {
-                return false;
-            }
+        switch (control) {
+            case FORWARD -> flyForward = pressed;
+            case BACKWARD -> flyBackward = pressed;
+            case LEFT -> flyLeft = pressed;
+            case RIGHT -> flyRight = pressed;
+            case DOWN -> flyDown = pressed;
+            case UP -> flyUp = pressed;
+            case FAST -> flyFast = pressed;
         }
         return true;
     }
@@ -1899,27 +2032,30 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 if (session.handle.isRotationRing()) {
                     float delta = GizmoDragMath.rotationDeltaDegrees(session.origin, session.axis,
                             session.startHit, currentHit);
-                    switch (session.handle) {
-                        case RING_X -> screen.pitch = finiteOrPrevious(session.start.pitch + delta, screen.pitch);
-                        case RING_Y -> screen.yaw = finiteOrPrevious(session.start.yaw + delta, screen.yaw);
-                        case RING_Z -> screen.roll = finiteOrPrevious(session.start.roll + delta, screen.roll);
-                        default -> { }
-                    }
+                    int axisIndex = session.handle == GizmoHandle.RING_X ? 0
+                            : session.handle == GizmoHandle.RING_Y ? 1 : 2;
+                    applyTransform(screen, GizmoTransformMath.rotate(transform(session.start), axisIndex,
+                            delta, coordinateSpace));
                 }
             }
             case SCALE -> {
-                float startWidth = session.start.height * session.start.aspect;
+                float factor;
                 if (session.handle == GizmoHandle.X) {
-                    float width = startWidth + (float) axisDelta;
-                    screen.aspect = positiveFiniteOrPrevious(width / session.start.height, screen.aspect);
-                } else if (session.handle == GizmoHandle.Y || session.handle == GizmoHandle.CENTER) {
+                    factor = 1.0F + (float) axisDelta;
+                    applyScaledTransform(screen, session.start, 0, factor);
+                } else if (session.handle == GizmoHandle.Y) {
+                    factor = 1.0F + (float) axisDelta;
+                    applyScaledTransform(screen, session.start, 1, factor);
+                } else if (session.handle == GizmoHandle.Z) {
+                    factor = 1.0F + (float) axisDelta;
+                    applyScaledTransform(screen, session.start, 2, factor);
+                } else if (session.handle == GizmoHandle.CENTER) {
                     double delta = session.handle == GizmoHandle.CENTER
                             ? worldDelta.dot(session.localY) : axisDelta;
-                    screen.height = positiveFiniteOrPrevious(session.start.height + (float) delta, screen.height);
-                    screen.aspect = positiveFiniteOrPrevious(startWidth / screen.height, screen.aspect);
-                } else if (session.handle == GizmoHandle.Z) {
-                    screen.height = positiveFiniteOrPrevious(
-                            session.start.height + (float) (axisDelta * 0.7D), screen.height);
+                    factor = 1.0F + (float) delta;
+                    screen.scaleX = boundedScale(session.start.scaleX * factor, screen.scaleX);
+                    screen.scaleY = boundedScale(session.start.scaleY * factor, screen.scaleY);
+                    screen.scaleZ = boundedScale(session.start.scaleZ * factor, screen.scaleZ);
                 }
             }
         }
@@ -1933,6 +2069,42 @@ public class HolographicScreenConfigTestScreen extends Screen {
         return Float.isFinite(candidate) && candidate > 0.0F ? candidate : previous;
     }
 
+    private static float boundedScale(float candidate, float previous) {
+        return Float.isFinite(candidate)
+                ? Math.clamp(candidate, ControlConsoleElement.MIN_SCALE, ControlConsoleElement.MAX_SCALE)
+                : previous;
+    }
+
+    private void applyScaledTransform(PreviewScreenSpec screen, ScreenSnapshot start, int axisIndex,
+            float factor) {
+        GizmoTransformMath.scale(transform(start), axisIndex, factor, coordinateSpace,
+                ControlConsoleElement.MIN_SCALE, ControlConsoleElement.MAX_SCALE,
+                ControlConsoleElement.MAX_SKEW).ifPresent(value -> applyTransform(screen, value));
+    }
+
+    private static EditorTransform transform(ScreenSnapshot value) {
+        return EditorTransform.fromEulerDegrees(new Vector3f(value.offsetX, value.offsetY, value.distance),
+                value.yaw, value.pitch, value.roll, new Vector3f(value.scaleX, value.scaleY, value.scaleZ),
+                new Vector3f(value.pivotX, value.pivotY, value.pivotZ), value.skewXByY, value.skewYByX);
+    }
+
+    private static void applyTransform(PreviewScreenSpec screen, EditorTransform value) {
+        Vector3f scale = value.scale();
+        Vector3f pivot = value.pivot();
+        Vector3f euler = value.rotation().getEulerAnglesYXZ(new Vector3f());
+        screen.pitch = (float) Math.toDegrees(euler.x);
+        screen.yaw = (float) Math.toDegrees(euler.y);
+        screen.roll = (float) Math.toDegrees(euler.z);
+        screen.scaleX = scale.x;
+        screen.scaleY = scale.y;
+        screen.scaleZ = scale.z;
+        screen.pivotX = pivot.x;
+        screen.pivotY = pivot.y;
+        screen.pivotZ = pivot.z;
+        screen.skewXByY = value.skewXByY();
+        screen.skewYByX = value.skewYByX();
+    }
+
     private static float saturatedPositiveFloat(double value) {
         return value >= Float.MAX_VALUE ? Float.MAX_VALUE : (float) value;
     }
@@ -1944,20 +2116,21 @@ public class HolographicScreenConfigTestScreen extends Screen {
             return null;
         }
         ScreenSnapshot start = snapshot(screen);
-        Vector3d origin = new Vector3d(screen.offsetX, 1.55D + screen.offsetY, screen.distance);
+        Vector3d origin = new Vector3d(screen.offsetX + screen.pivotX,
+                1.55D + screen.offsetY + screen.pivotY, screen.distance + screen.pivotZ);
         Quaternionf rotation = new Quaternionf().rotateYXZ((float) Math.toRadians(screen.yaw),
             (float) Math.toRadians(screen.pitch), (float) Math.toRadians(screen.roll));
         Vector3d localX = new Vector3d(rotation.transform(new Vector3f(1.0F, 0.0F, 0.0F)));
         Vector3d localY = new Vector3d(rotation.transform(new Vector3f(0.0F, 1.0F, 0.0F)));
         Vector3d localZ = new Vector3d(rotation.transform(new Vector3f(0.0F, 0.0F, 1.0F)));
-        boolean worldSpaceMove = activeTool == EditTool.MOVE;
+        boolean worldSpace = coordinateSpace == GizmoCoordinateSpace.WORLD;
         Vector3d axis = switch (handle) {
-            case X -> worldSpaceMove ? new Vector3d(1.0D, 0.0D, 0.0D) : localX;
-            case Y -> worldSpaceMove ? new Vector3d(0.0D, 1.0D, 0.0D) : localY;
-            case Z -> worldSpaceMove ? new Vector3d(0.0D, 0.0D, 1.0D) : localZ;
-            case RING_X -> localX;
-            case RING_Y -> localY;
-            case RING_Z -> localZ;
+            case X -> worldSpace ? new Vector3d(1.0D, 0.0D, 0.0D) : localX;
+            case Y -> worldSpace ? new Vector3d(0.0D, 1.0D, 0.0D) : localY;
+            case Z -> worldSpace ? new Vector3d(0.0D, 0.0D, 1.0D) : localZ;
+            case RING_X -> worldSpace ? new Vector3d(1.0D, 0.0D, 0.0D) : localX;
+            case RING_Y -> worldSpace ? new Vector3d(0.0D, 1.0D, 0.0D) : localY;
+            case RING_Z -> worldSpace ? new Vector3d(0.0D, 0.0D, 1.0D) : localZ;
             default -> null;
         };
         GizmoConstraint constraint;
@@ -1990,37 +2163,77 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 start, origin, localY, axis, constraint, constraintVector, startHit);
     }
 
-    private ScreenEditState currentEditState() {
-        if (selectedScreen < 0) {
-            return null;
-        }
-        return new ScreenEditState(selectedScreen, snapshot(screen()));
+    private EditorSceneState currentEditState() {
+        return snapshotScene();
     }
 
-    private void applyEditState(ScreenEditState state) {
-        if (state == null || state.screenIndex < 0 || state.screenIndex >= screens.size()) {
+    private EditorSceneState snapshotScene() {
+        return new EditorSceneState(screens.stream().map(HolographicScreenConfigTestScreen::snapshot).toList(),
+                selectedScreen, consoleDraft == null ? null : new ConsoleProperties(consoleDraft.displayName(),
+                        consoleDraft.hardRangeX(), consoleDraft.hardRangeY(), consoleDraft.hardRangeZ()));
+    }
+
+    private void applySceneState(EditorSceneState state) {
+        if (state == null) {
             return;
         }
-        selectElement(state.screenIndex);
-        PreviewScreenSpec target = screens.get(selectedScreen);
-        if (target.locked) {
-            return;
+        screens.clear();
+        state.screens.forEach(value -> screens.add(PreviewScreenSpec.fromSnapshot(value)));
+        selectedScreen = screens.isEmpty() ? -1 : Math.clamp(state.selectedScreen, -1, screens.size() - 1);
+        if (state.consoleProperties != null && consoleDraft != null) {
+            ConsoleProperties value = state.consoleProperties;
+            consoleDraft = new ControlConsoleDocument(consoleDraft.schemaVersion(), consoleDraft.consoleId(),
+                    consoleDraft.revision(), consoleDraft.ownerId(), consoleDraft.accessMode(),
+                    consoleDraft.trustedPlayerIds(), value.displayName, consoleDraft.sourceDimension(),
+                    consoleDraft.sourceKind(), consoleDraft.sourceX(), consoleDraft.sourceY(), consoleDraft.sourceZ(),
+                    value.hardRangeX, value.hardRangeY, value.hardRangeZ, consoleElementsSnapshot());
         }
-        ScreenSnapshot value = state.snapshot;
-        target.distance = value.distance;
-        target.offsetX = value.offsetX;
-        target.offsetY = value.offsetY;
-        target.height = value.height;
-        target.aspect = value.aspect;
-        target.yaw = value.yaw;
-        target.pitch = value.pitch;
-        target.roll = value.roll;
         syncNumericEditBoxes();
+        init();
+    }
+
+    private void edit(String description, Runnable mutation) {
+        EditorSceneState before = snapshotScene();
+        mutation.run();
+        EditorSceneState after = snapshotScene();
+        if (!before.equals(after)) {
+            editHistory.execute(before, new StateReplacementCommand<>(before, after, description));
+        }
+    }
+
+    private void editSelected(String description, java.util.function.Consumer<PreviewScreenSpec> mutation) {
+        edit(description, () -> {
+            PreviewScreenSpec selected = selectedScreenOrNull();
+            if (selected != null && !selected.locked) {
+                mutation.accept(selected);
+            }
+        });
     }
 
     private static ScreenSnapshot snapshot(PreviewScreenSpec screen) {
-        return new ScreenSnapshot(screen.distance, screen.offsetX, screen.offsetY, screen.height, screen.aspect,
-            screen.yaw, screen.pitch, screen.roll);
+        return new ScreenSnapshot(screen.elementId, screen.type, screen.name, screen.distance, screen.offsetX,
+                screen.offsetY, screen.height, screen.aspect, screen.yaw, screen.pitch, screen.roll,
+                screen.scaleX, screen.scaleY, screen.scaleZ, screen.pivotX, screen.pivotY, screen.pivotZ,
+                screen.skewXByY, screen.skewYByX, screen.contentMode, screen.text, screen.followLyrics,
+                screen.showTranslation, screen.textScale, screen.color, screen.volume, screen.channelIndex,
+                screen.maxDistance, screen.autoMixJoc, screen.translationColor, screen.backgroundColor,
+                screen.alignment, screen.maxWidth, screen.wrap, screen.enabled, screen.locked);
+    }
+
+    private static ScreenSnapshot snapshot(ControlConsoleElement element) {
+        ElementType type = switch (element.type()) {
+            case SCREEN -> ElementType.SCREEN;
+            case SUBTITLE -> ElementType.SUBTITLE;
+            case AUDIO -> ElementType.AUDIO;
+        };
+        return new ScreenSnapshot(element.elementId(), type, element.name(), element.distance(), element.offsetX(),
+                element.offsetY(), element.height(), element.aspect(), element.yaw(), element.pitch(), element.roll(),
+                element.scaleX(), element.scaleY(), element.scaleZ(), element.pivotX(), element.pivotY(),
+                element.pivotZ(), element.skewXByY(), element.skewYByX(), element.contentMode(), element.text(),
+                element.followLyrics(), element.showTranslation(), element.textScale(), element.color(),
+                element.volume(), element.channelIndex(), element.maxDistance(), element.autoMixJoc(),
+                element.translationColor(), element.backgroundColor(), element.alignment(), element.maxWidth(),
+                element.wrap(), element.enabled(), element.locked());
     }
 
     private void presetRight() {
@@ -2032,6 +2245,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
         screen.height = HolographicScreenSettings.DEFAULT_HEIGHT;
         screen.aspect = HolographicScreenSettings.DEFAULT_ASPECT;
         screen.roll = HolographicScreenSettings.DEFAULT_ROLL;
+        resetAdvancedTransform(screen);
     }
 
     private void presetLeft() {
@@ -2043,6 +2257,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
         screen.height = HolographicScreenSettings.DEFAULT_HEIGHT;
         screen.aspect = HolographicScreenSettings.DEFAULT_ASPECT;
         screen.roll = HolographicScreenSettings.DEFAULT_ROLL;
+        resetAdvancedTransform(screen);
     }
 
     private void presetCinema() {
@@ -2054,6 +2269,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
         screen.height = 1.8F;
         screen.aspect = HolographicScreenSettings.DEFAULT_ASPECT;
         screen.roll = HolographicScreenSettings.DEFAULT_ROLL;
+        resetAdvancedTransform(screen);
     }
 
     private void resetDefaults() {
@@ -2065,10 +2281,22 @@ public class HolographicScreenConfigTestScreen extends Screen {
         screen.height = HolographicScreenSettings.DEFAULT_HEIGHT;
         screen.aspect = HolographicScreenSettings.DEFAULT_ASPECT;
         screen.roll = HolographicScreenSettings.DEFAULT_ROLL;
+        resetAdvancedTransform(screen);
         firstPersonPreview = false;
         previewScale = DEFAULT_PREVIEW_SCALE;
         setPreviewCamera(legacyOrbitCamera(DEFAULT_PREVIEW_YAW, DEFAULT_PREVIEW_PITCH,
             ORBIT_DEFAULT_CAMERA_DISTANCE, new Vector3d(0.0D, ORBIT_TARGET_Y, 0.0D)));
+    }
+
+    private static void resetAdvancedTransform(PreviewScreenSpec screen) {
+        screen.scaleX = 1.0F;
+        screen.scaleY = 1.0F;
+        screen.scaleZ = 1.0F;
+        screen.pivotX = 0.0F;
+        screen.pivotY = 0.0F;
+        screen.pivotZ = 0.0F;
+        screen.skewXByY = 0.0F;
+        screen.skewYByX = 0.0F;
     }
 
     private boolean inPreview(double mouseX, double mouseY) {
@@ -2089,16 +2317,16 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 return new GizmoProjection(hidden, hidden, hidden, hidden, new GizmoPoint[0],
                     new GizmoPoint[0], new GizmoPoint[0]);
         }
-        double centerX = screen.offsetX;
-        double centerY = 1.55D + screen.offsetY;
-        double centerZ = screen.distance;
+        double centerX = screen.offsetX + screen.pivotX;
+        double centerY = 1.55D + screen.offsetY + screen.pivotY;
+        double centerZ = screen.distance + screen.pivotZ;
         Quaternionf rotation = screenRotation(screen);
-        boolean worldSpaceMove = activeTool == EditTool.MOVE;
-        Vector3f xDirection = worldSpaceMove ? new Vector3f(1.0F, 0.0F, 0.0F)
+        boolean worldSpace = coordinateSpace == GizmoCoordinateSpace.WORLD;
+        Vector3f xDirection = worldSpace ? new Vector3f(1.0F, 0.0F, 0.0F)
             : rotation.transform(new Vector3f(1.0F, 0.0F, 0.0F));
-        Vector3f yDirection = worldSpaceMove ? new Vector3f(0.0F, 1.0F, 0.0F)
+        Vector3f yDirection = worldSpace ? new Vector3f(0.0F, 1.0F, 0.0F)
             : rotation.transform(new Vector3f(0.0F, 1.0F, 0.0F));
-        Vector3f zDirection = worldSpaceMove ? new Vector3f(0.0F, 0.0F, 1.0F)
+        Vector3f zDirection = worldSpace ? new Vector3f(0.0F, 0.0F, 1.0F)
             : rotation.transform(new Vector3f(0.0F, 0.0F, 1.0F));
 
         GizmoPoint center = projectGizmoPoint(centerX, centerY, centerZ, cameraFrame);
@@ -2156,12 +2384,10 @@ public class HolographicScreenConfigTestScreen extends Screen {
         double nearestDistance = nearest.distance;
         for (int i = 0; i < screens.size(); i++) {
             PreviewScreenSpec screen = screens.get(i);
-            Vector3d center = new Vector3d(screen.offsetX, 1.55D + screen.offsetY, screen.distance);
-            Quaternionf rotation = screenRotation(screen);
-            Vector3d xAxis = new Vector3d(rotation.transform(new Vector3f(1.0F, 0.0F, 0.0F)));
-            Vector3d yAxis = new Vector3d(rotation.transform(new Vector3f(0.0F, 1.0F, 0.0F)));
             double halfHeight = screen.height * 0.5D;
-            var intersection = ray.intersectRectangle(center, xAxis, yAxis,
+            Matrix4f transform = new Matrix4f().translation(0.0F, 1.55F, 0.0F)
+                    .mul(previewTransform(screen).matrix());
+            var intersection = ray.intersectTransformedRectangle(transform,
                     halfHeight * screen.aspect, halfHeight);
             if (intersection.isPresent()) {
                 double distance = intersection.orElseThrow().distance();
@@ -2178,6 +2404,14 @@ public class HolographicScreenConfigTestScreen extends Screen {
     private static Quaternionf screenRotation(PreviewScreenSpec screen) {
         return new Quaternionf().rotateYXZ((float) Math.toRadians(screen.yaw),
                 (float) Math.toRadians(screen.pitch), (float) Math.toRadians(screen.roll));
+    }
+
+    private static EditorTransform previewTransform(PreviewScreenSpec screen) {
+        return EditorTransform.fromEulerDegrees(new Vector3f(screen.offsetX, screen.offsetY, screen.distance),
+                screen.yaw, screen.pitch, screen.roll,
+                new Vector3f(screen.scaleX, screen.scaleY, screen.scaleZ),
+                new Vector3f(screen.pivotX, screen.pivotY, screen.pivotZ),
+                screen.skewXByY, screen.skewYByX);
     }
 
     private GizmoHandle gizmoHandleAt(double mouseX, double mouseY, int x, int y, int w, int h,
@@ -2291,17 +2525,17 @@ public class HolographicScreenConfigTestScreen extends Screen {
         int presetX1 = px + 6 + cellW * 3 + 6;
         addRenderableWidget(new BlackGoldButton(presetX1, row1y, pbtnW, pbtnH,
                 Component.literal("右窗"), btn -> {
-                    presetRight();
+                    edit("右窗预设", this::presetRight);
                     syncNumericEditBoxes();
                 }, GOLD));
         addRenderableWidget(new BlackGoldButton(presetX1 + pbtnW + pbtnGap, row1y, pbtnW, pbtnH,
                 Component.literal("左窗"), btn -> {
-                    presetLeft();
+                    edit("左窗预设", this::presetLeft);
                     syncNumericEditBoxes();
                 }, GOLD));
         addRenderableWidget(new BlackGoldButton(presetX1 + (pbtnW + pbtnGap) * 2, row1y, pbtnW, pbtnH,
                 Component.literal("影院"), btn -> {
-                    presetCinema();
+                    edit("影院预设", this::presetCinema);
                     syncNumericEditBoxes();
                 }, GOLD));
 
@@ -2327,7 +2561,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 }, GOLD));
         addRenderableWidget(new BlackGoldButton(presetX1 + (pbtnW + pbtnGap) * 2, row2y, pbtnW, pbtnH,
                 Component.literal("重置"), btn -> {
-                    resetDefaults();
+                    edit("重置元素", this::resetDefaults);
                     syncNumericEditBoxes();
                 }, GOLD));
     }
@@ -2345,10 +2579,11 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 if (controlConsoleMode) {
                     boolean positive = "高度".equals(label) || "比例".equals(label);
                     if (Float.isFinite(parsed) && (!positive || parsed > 0.0F)) {
-                        onApply.accept(parsed);
+                        edit("设置" + label, () -> onApply.accept(parsed));
                     }
                 } else {
-                    onApply.accept(HolographicScreenSettings.clamp(parsed, min, max));
+                    float clamped = HolographicScreenSettings.clamp(parsed, min, max);
+                    edit("设置" + label, () -> onApply.accept(clamped));
                 }
             } catch (NumberFormatException ignored) {
             }
@@ -2357,7 +2592,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
         int rstX = px + labelW + boxW + 6;
         addRenderableWidget(new BlackGoldButton(rstX, y, rstW, rowH,
                 Component.literal("\u21BA"), btn -> {
-                    onApply.accept(defaultVal);
+                    edit("重置" + label, () -> onApply.accept(defaultVal));
                     box.setValue(fmt(defaultVal));
                 }, GOLD));
         return box;
@@ -2386,6 +2621,14 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 numericPitchBox.setValue(fmt(screen.pitch));
             if (numericRollBox != null)
                 numericRollBox.setValue(fmt(screen.roll));
+            if (numericScaleXBox != null) numericScaleXBox.setValue(fmt(screen.scaleX));
+            if (numericScaleYBox != null) numericScaleYBox.setValue(fmt(screen.scaleY));
+            if (numericScaleZBox != null) numericScaleZBox.setValue(fmt(screen.scaleZ));
+            if (numericPivotXBox != null) numericPivotXBox.setValue(fmt(screen.pivotX));
+            if (numericPivotYBox != null) numericPivotYBox.setValue(fmt(screen.pivotY));
+            if (numericPivotZBox != null) numericPivotZBox.setValue(fmt(screen.pivotZ));
+            if (numericSkewXByYBox != null) numericSkewXByYBox.setValue(fmt(screen.skewXByY));
+            if (numericSkewYByXBox != null) numericSkewYByXBox.setValue(fmt(screen.skewYByX));
         } finally {
             syncingNumericEditBoxes = false;
         }
@@ -2513,18 +2756,6 @@ public class HolographicScreenConfigTestScreen extends Screen {
         syncLegacyPreviewScale();
     }
 
-    private static StandardCameraView standardViewForKey(int key) {
-        return switch (key) {
-            case GLFW.GLFW_KEY_1, GLFW.GLFW_KEY_KP_1 -> StandardCameraView.FRONT;
-            case GLFW.GLFW_KEY_2, GLFW.GLFW_KEY_KP_2 -> StandardCameraView.BACK;
-            case GLFW.GLFW_KEY_3, GLFW.GLFW_KEY_KP_3 -> StandardCameraView.LEFT;
-            case GLFW.GLFW_KEY_4, GLFW.GLFW_KEY_KP_4 -> StandardCameraView.RIGHT;
-            case GLFW.GLFW_KEY_5, GLFW.GLFW_KEY_KP_5 -> StandardCameraView.TOP;
-            case GLFW.GLFW_KEY_6, GLFW.GLFW_KEY_KP_6 -> StandardCameraView.BOTTOM;
-            default -> null;
-        };
-    }
-
     private EditorViewport currentPreviewViewport() {
         return new EditorViewport(previewX() + 1, previewY() + 26, Math.max(1, previewW() - 2),
                 Math.max(1, previewH() - 54));
@@ -2564,11 +2795,25 @@ public class HolographicScreenConfigTestScreen extends Screen {
             GizmoPoint[] ringX, GizmoPoint[] ringY, GizmoPoint[] ringZ) {
     }
 
-        private record ScreenSnapshot(float distance, float offsetX, float offsetY, float height, float aspect,
-            float yaw, float pitch, float roll) {
+        private record ScreenSnapshot(UUID elementId, ElementType type, String name,
+            float distance, float offsetX, float offsetY, float height, float aspect,
+            float yaw, float pitch, float roll, float scaleX, float scaleY, float scaleZ,
+            float pivotX, float pivotY, float pivotZ, float skewXByY, float skewYByX,
+            String contentMode, String text, boolean followLyrics, boolean showTranslation,
+            float textScale, int color, float volume, int channelIndex, float maxDistance, boolean autoMixJoc,
+            int translationColor, int backgroundColor, ControlConsoleElement.Alignment alignment,
+            float maxWidth, boolean wrap, boolean enabled, boolean locked) {
     }
 
-        private record ScreenEditState(int screenIndex, ScreenSnapshot snapshot) {
+        private record ConsoleProperties(String displayName, double hardRangeX, double hardRangeY,
+                double hardRangeZ) {
+        }
+
+        private record EditorSceneState(List<ScreenSnapshot> screens, int selectedScreen,
+                ConsoleProperties consoleProperties) {
+            private EditorSceneState {
+                screens = List.copyOf(screens);
+            }
         }
 
             private record OrientationAxis(double screenX, double screenY, double depth, String label, int color,
@@ -2617,6 +2862,10 @@ public class HolographicScreenConfigTestScreen extends Screen {
         MOVE,
         ROTATE,
         SCALE
+    }
+
+    private String coordinateSpaceLabel() {
+        return coordinateSpace == GizmoCoordinateSpace.LOCAL ? "本地" : "世界";
     }
 
     private enum DragMode {
@@ -2675,6 +2924,14 @@ public class HolographicScreenConfigTestScreen extends Screen {
         private float yaw;
         private float pitch;
         private float roll;
+        private float scaleX;
+        private float scaleY;
+        private float scaleZ;
+        private float pivotX;
+        private float pivotY;
+        private float pivotZ;
+        private float skewXByY;
+        private float skewYByX;
         private String contentMode;
         private String text;
         private boolean followLyrics;
@@ -2711,6 +2968,9 @@ public class HolographicScreenConfigTestScreen extends Screen {
             this.yaw = 0.0F;
             this.pitch = 0.0F;
             this.roll = roll;
+            this.scaleX = 1.0F;
+            this.scaleY = 1.0F;
+            this.scaleZ = 1.0F;
             this.contentMode = type == ElementType.SCREEN ? "SOURCE" : type == ElementType.SUBTITLE ? "LYRICS" : "SOURCE";
             this.text = "";
             this.followLyrics = type == ElementType.SUBTITLE;
@@ -2744,11 +3004,52 @@ public class HolographicScreenConfigTestScreen extends Screen {
                     config.height(), config.aspect(), config.roll());
         }
 
+        private static PreviewScreenSpec fromSnapshot(ScreenSnapshot value) {
+            PreviewScreenSpec screen = new PreviewScreenSpec(value.elementId, value.type, value.name,
+                    value.distance, value.offsetX, value.offsetY, value.height, value.aspect, value.roll);
+            screen.yaw = value.yaw;
+            screen.pitch = value.pitch;
+            screen.scaleX = value.scaleX;
+            screen.scaleY = value.scaleY;
+            screen.scaleZ = value.scaleZ;
+            screen.pivotX = value.pivotX;
+            screen.pivotY = value.pivotY;
+            screen.pivotZ = value.pivotZ;
+            screen.skewXByY = value.skewXByY;
+            screen.skewYByX = value.skewYByX;
+            screen.contentMode = value.contentMode;
+            screen.text = value.text;
+            screen.followLyrics = value.followLyrics;
+            screen.showTranslation = value.showTranslation;
+            screen.textScale = value.textScale;
+            screen.color = value.color;
+            screen.volume = value.volume;
+            screen.channelIndex = value.channelIndex;
+            screen.maxDistance = value.maxDistance;
+            screen.autoMixJoc = value.autoMixJoc;
+            screen.translationColor = value.translationColor;
+            screen.backgroundColor = value.backgroundColor;
+            screen.alignment = value.alignment;
+            screen.maxWidth = value.maxWidth;
+            screen.wrap = value.wrap;
+            screen.enabled = value.enabled;
+            screen.locked = value.locked;
+            return screen;
+        }
+
         private PreviewScreenSpec copyWithName(String copyName) {
                     PreviewScreenSpec copy = new PreviewScreenSpec(UUID.randomUUID(), type, copyName, distance, offsetX, offsetY, height, aspect,
                     roll);
             copy.yaw = yaw;
             copy.pitch = pitch;
+            copy.scaleX = scaleX;
+            copy.scaleY = scaleY;
+            copy.scaleZ = scaleZ;
+            copy.pivotX = pivotX;
+            copy.pivotY = pivotY;
+            copy.pivotZ = pivotZ;
+            copy.skewXByY = skewXByY;
+            copy.skewYByX = skewYByX;
             copy.contentMode = contentMode;
             copy.text = text;
             copy.followLyrics = followLyrics;

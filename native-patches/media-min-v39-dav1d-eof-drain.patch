@@ -1,5 +1,5 @@
 diff --git a/.github/workflows/build.yml b/.github/workflows/build.yml
-index 438fadef1c..cb4b292b63 100644
+index 438fadef1c..9778dc9c9f 100644
 --- a/.github/workflows/build.yml
 +++ b/.github/workflows/build.yml
 @@ -22,8 +22,9 @@ jobs:
@@ -352,7 +352,53 @@ index 438fadef1c..cb4b292b63 100644
                shell: bash
  
              # ── Bundle Windows runtime dependencies ──
-@@ -679,6 +821,7 @@ jobs:
+@@ -587,6 +729,45 @@ jobs:
+                   done
+               shell: msys2 {0}
+ 
++            - name: Record FFmpeg runtime identity
++              run: |
++                  set -euo pipefail
++                  python3 - <<'PY'
++                  import ctypes
++                  import os
++                  import pathlib
++                  import re
++                  import sys
++
++                  target = "${{ matrix.target }}"
++                  dll_directory = None
++                  if os.name == "nt":
++                      libdir = pathlib.Path("install/bin").resolve()
++                      if hasattr(os, "add_dll_directory"):
++                          dll_directory = os.add_dll_directory(str(libdir))
++                      matches = sorted(libdir.glob("avutil-*.dll"))
++                  elif sys.platform == "darwin":
++                      libdir = pathlib.Path("install/lib").resolve()
++                      matches = sorted(libdir.glob("libavutil.*.dylib"))
++                  else:
++                      libdir = pathlib.Path("install/lib").resolve()
++                      matches = sorted(libdir.glob("libavutil.so.*"))
++                  if not matches:
++                      raise RuntimeError(f"Missing libavutil runtime in {libdir}")
++
++                  avutil = ctypes.CDLL(str(matches[0]), mode=getattr(ctypes, "RTLD_GLOBAL", 0))
++                  avutil.av_version_info.restype = ctypes.c_char_p
++                  raw = avutil.av_version_info()
++                  version = raw.decode("utf-8") if raw else ""
++                  if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", version):
++                      raise RuntimeError(f"Invalid av_version_info result: {version!r}")
++                  pathlib.Path(f"ffmpeg-runtime-{target}.txt").write_text(
++                      version + "\n", encoding="utf-8"
++                  )
++                  print(f"Recorded {target} FFmpeg runtime identity: {version}")
++                  PY
++              shell: msys2 {0}
++
+             # ── Windows dependency audit ──
+             - name: Audit Windows DLL dependencies
+               if: runner.os == 'Windows'
+@@ -679,6 +860,7 @@ jobs:
                        for name in imported:
                            print(f"  {name}")
                        forbidden = sorted(name for name in imported if name.lower() in FORBIDDEN)
@@ -360,7 +406,7 @@ index 438fadef1c..cb4b292b63 100644
                        if forbidden:
                            bad.append((dll, forbidden))
                        for name in imported:
-@@ -769,6 +912,7 @@ jobs:
+@@ -769,6 +951,7 @@ jobs:
                        (swscale, "sws_scale"),
                        (eac3_jni, "Java_com_zhongbai233_net_1music_1can_1play_1bili_media_codec_Eac3Jni_decoderOpen"),
                        (video_jni, "Java_com_zhongbai233_net_1music_1can_1play_1bili_media_codec_VideoJni_getNativeMemoryStats"),
@@ -368,7 +414,7 @@ index 438fadef1c..cb4b292b63 100644
                    )
                    for library, symbol in required:
                        getattr(library, symbol)
-@@ -854,6 +998,7 @@ jobs:
+@@ -854,6 +1037,7 @@ jobs:
                    # Keep the license next to every independently downloadable
                    # native bundle, not only in the consuming mod JAR.
                    cp COPYING.LGPLv2.1 dist/${{ matrix.target }}/FFmpeg-LGPL-2.1.txt
@@ -376,7 +422,7 @@ index 438fadef1c..cb4b292b63 100644
  
                    tar czf ffmpeg-media-${{ matrix.target }}.tar.gz -C dist ${{ matrix.target }}
                shell: msys2 {0}
-@@ -865,21 +1010,45 @@ jobs:
+@@ -865,21 +1049,60 @@ jobs:
                    name: ffmpeg-media-${{ matrix.target }}
                    path: ffmpeg-media-${{ matrix.target }}.tar.gz
  
@@ -386,6 +432,14 @@ index 438fadef1c..cb4b292b63 100644
 +              with:
 +                  name: ffmpeg-abi-${{ matrix.target }}
 +                  path: glibc-floor-${{ matrix.target }}.txt
++                  if-no-files-found: error
++                  retention-days: 7
++
++            - name: Upload FFmpeg runtime identity metadata
++              uses: actions/upload-artifact@v4
++              with:
++                  name: ffmpeg-runtime-${{ matrix.target }}
++                  path: ffmpeg-runtime-${{ matrix.target }}.txt
 +                  if-no-files-found: error
 +                  retention-days: 7
 +
@@ -420,10 +474,17 @@ index 438fadef1c..cb4b292b63 100644
 +                  path: abi-artifacts
 +                  merge-multiple: true
 +
++            - name: Download FFmpeg runtime identity metadata
++              uses: actions/download-artifact@v4
++              with:
++                  pattern: ffmpeg-runtime-*
++                  path: runtime-artifacts
++                  merge-multiple: true
++
              - name: Prepare corresponding source materials
                run: |
                    set -euo pipefail
-@@ -895,13 +1064,41 @@ jobs:
+@@ -895,13 +1118,70 @@ jobs:
                      --prefix="ffmpeg-media-source-${GITHUB_REF_NAME}/" \
                      --output="release-assets/ffmpeg-media-source-${GITHUB_REF_NAME}.tar.gz" \
                      HEAD
@@ -447,7 +508,30 @@ index 438fadef1c..cb4b292b63 100644
 +                    printf '%s\n' "$floor"
 +                  }
 +
-+                  ffmpeg_runtime_version="$(sh ffbuild/version.sh .)"
++                  read_runtime_version() {
++                    platform="$1"
++                    metadata="runtime-artifacts/ffmpeg-runtime-$platform.txt"
++                    if [ ! -s "$metadata" ]; then
++                      echo "Missing FFmpeg runtime metadata for $platform: $metadata" >&2
++                      exit 1
++                    fi
++                    # pathlib writes CRLF on Windows runners. Normalize only CR;
++                    # command substitution removes the single trailing LF.
++                    version="$(tr -d '\r' < "$metadata")"
++                    if ! [[ "$version" =~ ^[-A-Za-z0-9._+]+$ ]]; then
++                      echo "Invalid FFmpeg runtime metadata for $platform: $version" >&2
++                      exit 1
++                    fi
++                    printf '%s\n' "$version"
++                  }
++
++                  ffmpeg_source_version="$(sh ffbuild/version.sh .)"
++                  ffmpeg_runtime_version_linux_arm64="$(read_runtime_version linux-arm64)"
++                  ffmpeg_runtime_version_linux_x86_64="$(read_runtime_version linux-x86_64)"
++                  ffmpeg_runtime_version_macos_arm64="$(read_runtime_version macos-arm64)"
++                  ffmpeg_runtime_version_macos_x86_64="$(read_runtime_version macos-x86_64)"
++                  ffmpeg_runtime_version_windows_arm64="$(read_runtime_version windows-arm64)"
++                  ffmpeg_runtime_version_windows_x86_64="$(read_runtime_version windows-x86_64)"
 +                  linux_arm64_glibc_floor="$(read_glibc_floor linux-arm64)"
 +                  linux_x86_64_glibc_floor="$(read_glibc_floor linux-x86_64)"
  
@@ -455,7 +539,13 @@ index 438fadef1c..cb4b292b63 100644
                      echo "release_tag=${GITHUB_REF_NAME}"
                      echo "source_commit=$(git rev-parse HEAD)"
                      echo "upstream_base=${upstream_base}"
-+                    echo "ffmpeg_runtime_version=${ffmpeg_runtime_version}"
++                    echo "ffmpeg_source_version=${ffmpeg_source_version}"
++                    echo "ffmpeg_runtime_version_linux_arm64=${ffmpeg_runtime_version_linux_arm64}"
++                    echo "ffmpeg_runtime_version_linux_x86_64=${ffmpeg_runtime_version_linux_x86_64}"
++                    echo "ffmpeg_runtime_version_macos_arm64=${ffmpeg_runtime_version_macos_arm64}"
++                    echo "ffmpeg_runtime_version_macos_x86_64=${ffmpeg_runtime_version_macos_x86_64}"
++                    echo "ffmpeg_runtime_version_windows_arm64=${ffmpeg_runtime_version_windows_arm64}"
++                    echo "ffmpeg_runtime_version_windows_x86_64=${ffmpeg_runtime_version_windows_x86_64}"
 +                    echo "dav1d_version=1.5.4"
 +                    echo "dav1d_commit=54706fc6bc0cdecab7e9593974a4039cc038fca7"
 +                    echo "linux_arm64_glibc_floor=${linux_arm64_glibc_floor}"

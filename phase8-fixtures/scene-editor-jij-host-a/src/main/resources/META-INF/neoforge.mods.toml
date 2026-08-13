@@ -1,0 +1,23 @@
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "MIT"
+
+[[mods]]
+modId = "scene_editor_jij_host_a"
+version = "${file.jarVersion}"
+displayName = "Scene Editor JiJ Host A"
+description = '''Phase 8 fixture mod embedding scene-editor-core.'''
+
+[[dependencies.scene_editor_jij_host_a]]
+modId = "neoforge"
+type = "required"
+versionRange = "[26,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.scene_editor_jij_host_a]]
+modId = "minecraft"
+type = "required"
+versionRange = "[26.1.2,27)"
+ordering = "NONE"
+side = "BOTH"

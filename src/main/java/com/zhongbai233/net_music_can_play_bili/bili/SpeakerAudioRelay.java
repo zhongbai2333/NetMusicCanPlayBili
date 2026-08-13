@@ -27,6 +27,7 @@ public class SpeakerAudioRelay {
     private volatile float maxDistance = AudioUtils.MAX_AUDIBLE_DISTANCE;
     private volatile float[] speakerPos;
     private volatile boolean handlerStarted;
+    private volatile boolean paused;
     private int pendingFed = 0;
     private long totalSamplesFed = 0L;
     private int sampleRate = 48000;
@@ -111,6 +112,7 @@ public class SpeakerAudioRelay {
                 return;
             }
             spatialAudio = next;
+            next.setPaused(paused);
             pendingFed = 0;
             totalSamplesFed = 0L;
             started = false;
@@ -165,6 +167,14 @@ public class SpeakerAudioRelay {
         } else if (pendingFed >= MIN_PUMP_PENDING)
             sa.pumpQueuedAudio();
         PlaybackLatencyBench.markAudioConsumed(this, kind(), sa.getConsumedSamples(), sampleRate);
+    }
+
+    public void setPaused(boolean paused) {
+        this.paused = paused;
+        OpenALSpatialAudio sa = spatialAudio;
+        if (sa != null) {
+            sa.setPaused(paused);
+        }
     }
 
     /** 音响是否已度过初始静音期，正在输出真实音频 */

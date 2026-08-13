@@ -5,6 +5,7 @@ import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.github.tartaricacid.netmusic.client.audio.NetMusicAudioStream;
 import com.github.tartaricacid.netmusic.init.InitSounds;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.resources.sounds.AbstractTickableSoundInstance;
 import net.minecraft.client.resources.sounds.Sound;
@@ -15,6 +16,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Util;
 
 import java.net.URL;
+import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -33,7 +35,7 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
     protected final URL songUrl;
     protected final int tickTimes;
     protected final LyricRecord lyricRecord;
-    protected final String sessionId;
+    private final PlaybackSessionId playbackSessionId;
     protected final long startOffsetMillis;
     protected int tick;
 
@@ -43,8 +45,22 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
         this.songUrl = songUrl;
         this.tickTimes = Math.max(1, timeSecond) * 20;
         this.lyricRecord = lyricRecord;
-        this.sessionId = sessionId != null ? sessionId : "";
+        this.playbackSessionId = PlaybackSessionId.parse(sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("synced media sound requires a valid session id"));
         this.startOffsetMillis = Math.max(0L, startOffsetMillis);
+    }
+
+    /** Typed session identity for internal sound lifecycle code; callers use the string facade below. */
+    protected final PlaybackSessionId playbackSessionId() {
+        return playbackSessionId;
+    }
+
+    public final Optional<PlaybackSessionId> playbackSession() {
+        return Optional.of(playbackSessionId);
+    }
+
+    public final String sessionId() {
+        return playbackSessionId.value();
     }
 
     @Override

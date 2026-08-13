@@ -5,6 +5,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.ClientDisplayProperties;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.RenderVertexUtils;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
@@ -30,8 +31,7 @@ import java.util.UUID;
 /** 佩戴全息眼镜时，在玩家视线前方提交一块跟随玩家移动的世界空间视频屏幕。 */
 @EventBusSubscriber(modid = NetMusicCanPlayBili.MODID, value = Dist.CLIENT)
 public final class HolographicGlassesWorldScreenRenderer {
-    private static final boolean ENABLED = Boolean.parseBoolean(
-            System.getProperty("ncpb.holographic_glasses.screen.enabled", "true"));
+    private static final boolean ENABLED = ClientDisplayProperties.holographicWorldScreenEnabled();
 
     private HolographicGlassesWorldScreenRenderer() {
     }

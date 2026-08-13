@@ -28,25 +28,40 @@ class TerrainPreviewFrameTest {
                 List.of(), 256L));
         var removed = new HashSet<TerrainSectionKey>();
         removed.add(new TerrainSectionKey(1, 4, 0));
+        var blockEntities = mutableListWithOpaqueElement();
 
         TerrainPreviewFrame frame = new TerrainPreviewFrame(3L, 0, 64, 0, 0.5D, 64.5D, 0.5D,
                 new TerrainBounds(-128, 0, -128, 127, 255, 127), overview, List.of(), meshes, fullDetail,
-                Set.of(new TerrainSectionKey(0, 4, 0)), removed, 2, 1);
+                Set.of(new TerrainSectionKey(0, 4, 0)), removed, blockEntities, 2, 1);
         overview.clear();
         meshes.clear();
         fullDetail.clear();
         removed.clear();
+        blockEntities.clear();
 
         assertEquals(1, frame.overviewCells().size());
         assertEquals(1, frame.highDetailMeshes().size());
         assertEquals(1, frame.fullDetailSections().size());
         assertEquals(1, frame.removedSections().size());
+        assertEquals(1, frame.blockEntities().size());
         assertThrows(UnsupportedOperationException.class, () -> frame.overviewCells().clear());
         assertThrows(UnsupportedOperationException.class, () -> frame.wireframeSegments().clear());
         assertThrows(UnsupportedOperationException.class, () -> frame.highDetailMeshes().clear());
         assertThrows(UnsupportedOperationException.class, () -> frame.fullDetailSections().clear());
         assertThrows(UnsupportedOperationException.class, () -> frame.fullDetailSectionKeys().clear());
         assertThrows(UnsupportedOperationException.class, () -> frame.removedSections().clear());
+        assertThrows(UnsupportedOperationException.class, () -> frame.blockEntities().clear());
+    }
+
+    /**
+     * The ordinary JUnit classpath deliberately excludes Minecraft client classes.  The frame only promises to
+     * defensively copy the list here, so an opaque element is sufficient to exercise that collection boundary.
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static List<TerrainBlockEntityPreview> mutableListWithOpaqueElement() {
+        List list = new ArrayList<>();
+        list.add(new Object());
+        return (List<TerrainBlockEntityPreview>) list;
     }
 
     @Test

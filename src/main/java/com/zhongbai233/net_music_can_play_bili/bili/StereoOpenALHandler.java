@@ -14,15 +14,14 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 立体声音频的 OpenAL 空间播放器
  * 将解码后的 float32 PCM 送入 2 声道 OpenAL 管线，复用 Dolby 链路的空间定位能力
  */
 public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_bili.client.audio.AudioOutputHandle {
-    private static final boolean MUTE_MAIN_WHEN_RELAYS_CONNECTED = Boolean.parseBoolean(
-            System.getProperty("ncpb.bili.audio.relay.mute_main_when_connected",
-                    System.getProperty("ncpb.bili.audio.relay.mute_main_when_started", "true")));
+        private static final boolean MUTE_MAIN_WHEN_RELAYS_CONNECTED = AudioRelayProperties.muteMainWhenConnected();
 
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int SAMPLES_PER_BLOCK = 256;
@@ -30,6 +29,9 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     private static final int PREBUFFER_BLOCKS = 96;
     private static final int MAX_BLOCKS_PER_TICK = 64;
     private static final AudioSyncPolicy SYNC_POLICY = AudioSyncPolicy.fromSystemProperties();
+    private static final AtomicLong INSTANCES_CREATED = new AtomicLong();
+    private static final AtomicLong CLEANUPS_STARTED = new AtomicLong();
+    private static final AtomicLong CLEANUPS_COMPLETED = new AtomicLong();
     private static final float[][] BED_POSITIONS = {
             { -0.5f, 0, 0.866f }, { 0.5f, 0, 0.866f },
     };
@@ -42,6 +44,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     private volatile boolean closed;
     private final AtomicBoolean cleanupStarted = new AtomicBoolean();
     private volatile boolean started;
+    private volatile boolean paused;
     private long totalSamplesFed;
     private volatile long totalInputSamples;
     private volatile long discardInputUntilSample;
@@ -62,13 +65,27 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     private volatile float lastAudioLevel;
     private volatile long lastAudioLevelNanos;
     private volatile boolean consoleRouteSuppressed;
+    private static final long FIRST_PCM_QUALITY_SAMPLES = 4_096L;
+    private final PcmQualityWindow firstPcmWindow = new PcmQualityWindow(FIRST_PCM_QUALITY_SAMPLES);
+    private final AudiblePcmQualityWindow firstAudiblePcmWindow =
+            new AudiblePcmQualityWindow(FIRST_PCM_QUALITY_SAMPLES, 0.001F);
+    private volatile PcmQuality firstPcmQuality = PcmQuality.EMPTY;
+    private volatile PcmQuality firstAudiblePcmQuality = PcmQuality.EMPTY;
 
     /** 音响转发目标列表 */
     private final java.util.concurrent.CopyOnWriteArrayList<SpeakerAudioRelay> relays = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     public StereoOpenALHandler() {
+        INSTANCES_CREATED.incrementAndGet();
         worker = NetMusicThreadFactory.daemonThread("StereoOpenALWorker", this::workerLoop);
         worker.start();
+    }
+
+    /** Records a bounded scalar window of initial decoded PCM without retaining the PCM arrays. */
+    public PcmQuality observeFirstPcm(float[][] planar) {
+        firstPcmQuality = firstPcmWindow.observe(planar);
+        firstAudiblePcmQuality = firstAudiblePcmWindow.observe(planar);
+        return firstPcmQuality;
     }
 
     /** 将解码后的立体声 float32 PCM 拆成固定 256-sample block 入队，避免 FLAC 可变块长影响播放速度 */
@@ -193,7 +210,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
             boolean followLocalPlayerFront, boolean muteWorldRelays) {
         if (closed || !initialized)
             return;
-        if (net.minecraft.client.Minecraft.getInstance().isPaused())
+        if (paused)
             return;
         if (!started) {
             if (pcmQueue.size() < PREBUFFER_BLOCKS)
@@ -398,6 +415,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     public void addRelay(SpeakerAudioRelay relay) {
         if (relay != null && !relays.contains(relay)) {
             relay.setSampleRate(sampleRate); // 注入正确采样率（如 44100Hz AAC/FLAC），避免 relay 用错误速率播放
+            relay.setPaused(paused);
             if (started) {
                 relay.setHandlerStarted(true); // 已开始播放时新 relay 立即获得启动信号
             }
@@ -469,23 +487,40 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
         this.sampleRate = sr > 0 ? sr : 48000;
     }
 
+    @Override
+    public void setPaused(boolean paused) {
+        this.paused = paused;
+        OpenALSpatialAudio sa = spatialAudio;
+        if (sa != null) {
+            sa.setPaused(paused);
+        }
+        for (SpeakerAudioRelay relay : relays) {
+            relay.setPaused(paused);
+        }
+    }
+
     public void cleanup() {
         if (!cleanupStarted.compareAndSet(false, true)) {
             return;
         }
-        hardStopOutput();
-        closed = true;
-        pcmQueue.clear();
-        pendingBlock = new float[2][SAMPLES_PER_BLOCK];
-        pendingSamples = 0;
-        LifecycleClose.interruptAndJoin(worker);
-        if (spatialAudio != null) {
-            spatialAudio.cleanup();
-            spatialAudio = null;
+        CLEANUPS_STARTED.incrementAndGet();
+        try {
+            hardStopOutput();
+            closed = true;
+            pcmQueue.clear();
+            pendingBlock = new float[2][SAMPLES_PER_BLOCK];
+            pendingSamples = 0;
+            LifecycleClose.interruptAndJoin(worker);
+            if (spatialAudio != null) {
+                spatialAudio.cleanup();
+                spatialAudio = null;
+            }
+            relays.clear();
+            initialized = false;
+            LOGGER.debug("StereoOpenALHandler closed ({} blocks)", frameCount);
+        } finally {
+            CLEANUPS_COMPLETED.incrementAndGet();
         }
-        relays.clear();
-        initialized = false;
-        LOGGER.debug("StereoOpenALHandler closed ({} blocks)", frameCount);
     }
 
     public void hardStopOutput() {
@@ -562,6 +597,130 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
                 userVolume, audioLevel()));
     }
 
+    /** Read-only scalar state used by diagnostics and integrated-client verification. */
+    public DiagnosticSnapshot snapshot() {
+        return new DiagnosticSnapshot(initialized, started, closed, cleanupStarted.get(), sampleRate,
+                pcmQueue.size(), pcmQueueHighWater, pendingSamples, frameCount, totalInputSamples,
+                getPositionMillis(), getFedPositionMillis(), getOutputDelayMillis(), paused, firstPcmQuality,
+                firstAudiblePcmQuality);
+    }
+
+    public static LifecycleSnapshot lifecycleSnapshot() {
+        long created = INSTANCES_CREATED.get();
+        long completed = CLEANUPS_COMPLETED.get();
+        return new LifecycleSnapshot(created, CLEANUPS_STARTED.get(), completed, Math.max(0L, created - completed));
+    }
+
+    public record DiagnosticSnapshot(boolean initialized, boolean started, boolean closed, boolean cleanupStarted,
+            int sampleRate, int queuedBlocks, int queueHighWater, int pendingSamples, int decodedBlocks,
+            long inputSamples, long positionMillis, long fedPositionMillis, long outputDelayMillis, boolean paused,
+            PcmQuality firstPcm, PcmQuality firstAudiblePcm) {
+        public DiagnosticSnapshot {
+            firstPcm = firstPcm != null ? firstPcm : PcmQuality.EMPTY;
+            firstAudiblePcm = firstAudiblePcm != null ? firstAudiblePcm : PcmQuality.EMPTY;
+        }
+    }
+
+    public record LifecycleSnapshot(long instancesCreated, long cleanupsStarted, long cleanupsCompleted,
+            long activeInstances) {
+    }
+
+    public record PcmQuality(long samples, float peak, double rms, double clippedRatio) {
+        private static final PcmQuality EMPTY = new PcmQuality(0L, 0.0F, 0.0D, 0.0D);
+
+        public static PcmQuality measure(float[][] planar) {
+            double sumSquares = 0.0D;
+            float peak = 0.0F;
+            long samples = 0L;
+            long clipped = 0L;
+            if (planar != null) {
+                for (float[] channel : planar) {
+                    if (channel == null) {
+                        continue;
+                    }
+                    for (float sample : channel) {
+                        if (!Float.isFinite(sample)) {
+                            continue;
+                        }
+                        float absolute = Math.abs(sample);
+                        peak = Math.max(peak, absolute);
+                        sumSquares += sample * sample;
+                        samples++;
+                        if (absolute >= 0.999F) {
+                            clipped++;
+                        }
+                    }
+                }
+            }
+            double rms = samples > 0L ? Math.sqrt(sumSquares / samples) : 0.0D;
+            double clippedRatio = samples > 0L ? clipped / (double) samples : 0.0D;
+            return new PcmQuality(samples, peak, rms, clippedRatio);
+        }
+    }
+
+    static final class PcmQualityWindow {
+        private final long maximumSamples;
+        private long samples;
+        private float peak;
+        private double sumSquares;
+        private long clipped;
+
+        PcmQualityWindow(long maximumSamples) {
+            this.maximumSamples = Math.max(1L, maximumSamples);
+        }
+
+        synchronized PcmQuality observe(float[][] planar) {
+            if (planar != null && samples < maximumSamples) {
+                outer: for (float[] channel : planar) {
+                    if (channel == null) {
+                        continue;
+                    }
+                    for (float sample : channel) {
+                        if (!Float.isFinite(sample)) {
+                            continue;
+                        }
+                        float absolute = Math.abs(sample);
+                        peak = Math.max(peak, absolute);
+                        sumSquares += sample * sample;
+                        samples++;
+                        if (absolute >= 0.999F) {
+                            clipped++;
+                        }
+                        if (samples >= maximumSamples) {
+                            break outer;
+                        }
+                    }
+                }
+            }
+            double rms = samples > 0L ? Math.sqrt(sumSquares / samples) : 0.0D;
+            double clippedRatio = samples > 0L ? clipped / (double) samples : 0.0D;
+            return new PcmQuality(samples, peak, rms, clippedRatio);
+        }
+    }
+
+    /** Skips codec priming/intentional leading silence, then captures one bounded audible PCM window. */
+    static final class AudiblePcmQualityWindow {
+        private final PcmQualityWindow delegate;
+        private final float startPeak;
+        private boolean started;
+
+        AudiblePcmQualityWindow(long maximumSamples, float startPeak) {
+            this.delegate = new PcmQualityWindow(maximumSamples);
+            this.startPeak = Math.max(0.0F, startPeak);
+        }
+
+        synchronized PcmQuality observe(float[][] planar) {
+            if (!started) {
+                PcmQuality candidate = PcmQuality.measure(planar);
+                if (candidate.peak() < startPeak) {
+                    return PcmQuality.EMPTY;
+                }
+                started = true;
+            }
+            return delegate.observe(planar);
+        }
+    }
+
     private static float spatialGainForDistance(float d, float volume) {
         return AudioUtils.spatialGainForDistance(d, volume);
     }
@@ -590,6 +749,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
                     spatialAudio = null;
                     continue;
                 }
+                next.setPaused(paused);
                 spatialAudio = next;
                 initialized = true;
                 LOGGER.debug("Stereo OpenAL 初始化: 2 声道立体声");

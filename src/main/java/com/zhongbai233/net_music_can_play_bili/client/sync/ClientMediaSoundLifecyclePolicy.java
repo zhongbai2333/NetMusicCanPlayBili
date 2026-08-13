@@ -9,6 +9,16 @@ import java.util.UUID;
 public interface ClientMediaSoundLifecyclePolicy {
     void registerSound(UUID deviceId, String sessionId, ClientMediaSoundHandle sound);
 
+    /**
+     * Admission-aware registration used by asynchronously constructed sounds.
+     * Existing policies retain their legacy behavior unless they override this
+     * method with an exact registry result.
+     */
+    default boolean tryRegisterSound(UUID deviceId, String sessionId, ClientMediaSoundHandle sound) {
+        registerSound(deviceId, sessionId, sound);
+        return true;
+    }
+
     boolean recoverAfterStreamFailure(UUID deviceId, String sessionId, Throwable error);
 
     void onCompleted(UUID deviceId, String sessionId);

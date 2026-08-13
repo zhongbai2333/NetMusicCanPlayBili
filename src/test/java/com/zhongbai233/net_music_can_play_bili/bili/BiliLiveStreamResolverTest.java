@@ -109,6 +109,24 @@ class BiliLiveStreamResolverTest {
         assertFalse(BiliLiveStreamResolver.isValidRoomId("12345678901234567"));
     }
 
+    @Test
+    void parsesAndBoundsLiveRoomMetadata() throws Exception {
+        JsonObject root = parse("""
+                {"code":0,"data":{"room_id":7734200,"title":"  赛事直播  ",
+                 "parent_area_name":"赛事","area_name":"游戏赛事",
+                 "live_time":"2026-08-12 16:43:22"}}
+                """);
+
+        BiliLiveStreamResolver.LiveMetadata metadata =
+                BiliLiveStreamResolver.parseRoomMetadata(root, "6");
+
+        assertEquals("7734200", metadata.roomId());
+        assertEquals("赛事直播", metadata.title());
+        assertEquals("赛事", metadata.parentAreaName());
+        assertEquals("游戏赛事", metadata.areaName());
+        assertEquals("2026-08-12 16:43:22", metadata.liveTime());
+    }
+
     private static JsonObject playInfo() {
         return parse("""
                 {

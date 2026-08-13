@@ -2,11 +2,14 @@ package com.zhongbai233.net_music_can_play_bili.network;
 
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -17,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * MP4 ItemStack 仍保留自身队列作为物品内容，以便原版提示和容器交互使用；本存储追踪同步副本用于播放和自动切歌。
  */
 public final class MP4DeviceStateStore {
-    private static final Map<UUID, DeviceEntry> RUNTIME = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, DeviceEntry> RUNTIME = new ConcurrentHashMap<>();
 
     private MP4DeviceStateStore() {
     }
@@ -26,23 +29,26 @@ public final class MP4DeviceStateStore {
         if (deviceId == null) {
             return DeviceEntry.EMPTY;
         }
-        DeviceEntry runtime = RUNTIME.get(deviceId);
+        PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+        DeviceEntry runtime = RUNTIME.get(sourceId);
         if (runtime != null) {
             return runtime;
         }
         DeviceEntry saved = level != null ? MP4PlaybackSavedData.get(level).device(deviceId).orElse(null) : null;
         if (saved != null) {
             DeviceEntry restored = withStackQueue(saved, stack).normalized();
-            RUNTIME.put(deviceId, restored);
+            RUNTIME.put(sourceId, restored);
             return restored;
         }
         DeviceEntry created = fromStackContents(stack).normalized();
-        RUNTIME.put(deviceId, created);
+        RUNTIME.put(sourceId, created);
         return created;
     }
 
     public static DeviceEntry get(UUID deviceId) {
-        return deviceId == null ? DeviceEntry.EMPTY : RUNTIME.getOrDefault(deviceId, DeviceEntry.EMPTY);
+        return deviceId == null
+                ? DeviceEntry.EMPTY
+                : RUNTIME.getOrDefault(PlaybackSourceId.of(deviceId), DeviceEntry.EMPTY);
     }
 
     public static void update(ServerLevel level, UUID deviceId, DeviceEntry entry) {
@@ -50,7 +56,7 @@ public final class MP4DeviceStateStore {
             return;
         }
         DeviceEntry normalized = entry.withUpdatedGameTime(nextUpdatedGameTime(level, deviceId, entry)).normalized();
-        RUNTIME.put(deviceId, normalized);
+        RUNTIME.put(PlaybackSourceId.of(deviceId), normalized);
         if (level != null) {
             MP4PlaybackSavedData.get(level).putDevice(deviceId, normalized);
         }
@@ -62,7 +68,7 @@ public final class MP4DeviceStateStore {
         if (level != null) {
             base = Math.max(base, level.getGameTime());
         }
-        DeviceEntry current = RUNTIME.get(deviceId);
+        DeviceEntry current = RUNTIME.get(PlaybackSourceId.of(deviceId));
         if (current != null) {
             base = Math.max(base, current.updatedGameTime() + 1L);
         }
@@ -109,6 +115,13 @@ public final class MP4DeviceStateStore {
 
     public static void recordPlayback(ServerLevel level, UUID deviceId, int queueIndex, long elapsedMillis,
             int durationSeconds, int volumePerMille, String sessionId, boolean playing) {
+        recordPlayback(level, deviceId, queueIndex, elapsedMillis, durationSeconds, volumePerMille,
+                PlaybackSessionId.parse(sessionId), playing);
+    }
+
+    public static void recordPlayback(ServerLevel level, UUID deviceId, int queueIndex, long elapsedMillis,
+            int durationSeconds, int volumePerMille, Optional<PlaybackSessionId> playbackSessionId,
+            boolean playing) {
         DeviceEntry current = getOrCreate(level, deviceId, ItemStack.EMPTY);
         MP4Item.State old = current.state();
         int progress = progressPerMille(elapsedMillis, durationSeconds, old.progressPerMille());
@@ -117,7 +130,7 @@ public final class MP4DeviceStateStore {
                 old.repeatMode(), old.playlistOpen(), old.lyricsEnabled(), old.subtitleMode(),
                 old.subtitleAiEnabled(), progress, old.rotationHintShown());
         update(level, deviceId, new DeviceEntry(state, current.queue(), Math.max(0L, elapsedMillis),
-                Math.max(0, durationSeconds), sessionId == null ? "" : sessionId));
+                Math.max(0, durationSeconds), playbackSessionId));
     }
 
     public static void flush(ServerLevel level) {
@@ -125,14 +138,14 @@ public final class MP4DeviceStateStore {
             return;
         }
         MP4PlaybackSavedData data = MP4PlaybackSavedData.get(level);
-        RUNTIME.forEach(data::putDevice);
+        RUNTIME.forEach((sourceId, entry) -> data.putDevice(sourceId.value(), entry));
     }
 
     private static DeviceEntry fromStackContents(ItemStack stack) {
         if (stack.isEmpty() || !(stack.getItem() instanceof MP4Item)) {
             return DeviceEntry.EMPTY;
         }
-        return new DeviceEntry(MP4Item.State.DEFAULT, MP4Item.readQueue(stack), 0L, 0, "", 0L);
+        return new DeviceEntry(MP4Item.State.DEFAULT, MP4Item.readQueue(stack), 0L, 0, Optional.empty(), 0L);
     }
 
     private static DeviceEntry withStackQueue(DeviceEntry entry, ItemStack stack) {
@@ -144,7 +157,7 @@ public final class MP4DeviceStateStore {
             return entry;
         }
         return new DeviceEntry(entry.state(), queue, entry.elapsedMillis(), entry.durationSeconds(),
-                entry.sessionId(), entry.updatedGameTime());
+                entry.playbackSessionId(), entry.updatedGameTime());
     }
 
     private static int progressPerMille(long elapsedMillis, int durationSeconds, int fallback) {
@@ -161,12 +174,31 @@ public final class MP4DeviceStateStore {
     }
 
     public record DeviceEntry(MP4Item.State state, List<ItemStack> queue, long elapsedMillis, int durationSeconds,
-            String sessionId, long updatedGameTime) {
-        public static final DeviceEntry EMPTY = new DeviceEntry(MP4Item.State.DEFAULT, List.of(), 0L, 0, "", 0L);
+            Optional<PlaybackSessionId> playbackSessionId, long updatedGameTime) {
+        public static final DeviceEntry EMPTY = new DeviceEntry(MP4Item.State.DEFAULT, List.of(), 0L, 0,
+                Optional.empty(), 0L);
+
+        public DeviceEntry {
+            playbackSessionId = playbackSessionId != null ? playbackSessionId : Optional.empty();
+        }
+
+        public DeviceEntry(MP4Item.State state, List<ItemStack> queue, long elapsedMillis, int durationSeconds,
+                String sessionId, long updatedGameTime) {
+            this(state, queue, elapsedMillis, durationSeconds, PlaybackSessionId.parse(sessionId), updatedGameTime);
+        }
 
         public DeviceEntry(MP4Item.State state, List<ItemStack> queue, long elapsedMillis, int durationSeconds,
                 String sessionId) {
             this(state, queue, elapsedMillis, durationSeconds, sessionId, 0L);
+        }
+
+        public DeviceEntry(MP4Item.State state, List<ItemStack> queue, long elapsedMillis, int durationSeconds,
+                Optional<PlaybackSessionId> playbackSessionId) {
+            this(state, queue, elapsedMillis, durationSeconds, playbackSessionId, 0L);
+        }
+
+        public String sessionId() {
+            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
         }
 
         public DeviceEntry normalized() {
@@ -197,21 +229,24 @@ public final class MP4DeviceStateStore {
             int duration = Math.max(0, durationSeconds);
             long maxElapsed = duration > 0 ? Math.max(0L, duration * 1000L - 50L) : Long.MAX_VALUE;
             return new DeviceEntry(normalizedState, cleanQueue, Math.max(0L, Math.min(maxElapsed, elapsedMillis)),
-                    duration, sessionId == null ? "" : sessionId, Math.max(0L, updatedGameTime));
+                    duration, playbackSessionId, Math.max(0L, updatedGameTime));
         }
 
         public DeviceEntry withState(MP4Item.State newState) {
-            return new DeviceEntry(newState, queue, elapsedMillis, durationSeconds, sessionId, updatedGameTime)
+            return new DeviceEntry(newState, queue, elapsedMillis, durationSeconds, playbackSessionId,
+                    updatedGameTime)
                     .normalized();
         }
 
         public DeviceEntry withQueue(List<ItemStack> newQueue) {
-            return new DeviceEntry(state, newQueue, elapsedMillis, durationSeconds, sessionId, updatedGameTime)
+            return new DeviceEntry(state, newQueue, elapsedMillis, durationSeconds, playbackSessionId,
+                    updatedGameTime)
                     .normalized();
         }
 
         public DeviceEntry withUpdatedGameTime(long newUpdatedGameTime) {
-            return new DeviceEntry(state, queue, elapsedMillis, durationSeconds, sessionId, newUpdatedGameTime)
+            return new DeviceEntry(state, queue, elapsedMillis, durationSeconds, playbackSessionId,
+                    newUpdatedGameTime)
                     .normalized();
         }
 

@@ -1,32 +1,34 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTimelineView;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.Collection;
+import java.util.Optional;
 import java.util.UUID;
 
 /** 审核 GUI 预览专用锚点：视频直接跟随同一条公共媒体音频时间线。 */
 final class PreviewVideoPlaybackAnchor implements VideoPlaybackAnchor {
     private final UUID sourceId;
-    private final String sessionId;
+    private final PlaybackSessionId playbackSessionId;
     private final long startOffsetMillis;
     private final long totalMillis;
 
     PreviewVideoPlaybackAnchor(UUID sourceId, String sessionId, long startOffsetMillis, long totalMillis) {
         this.sourceId = sourceId;
-        this.sessionId = sessionId != null ? sessionId : "";
+        this.playbackSessionId = PlaybackSessionId.of(sessionId);
         this.startOffsetMillis = Math.max(0L, startOffsetMillis);
         this.totalMillis = Math.max(0L, totalMillis);
     }
 
     @Override
     public MediaVideoTimeline timeline() {
-        ClientMediaTimelineView view = ClientMediaTimelineView.forMediaOwner(sourceId, sessionId, startOffsetMillis,
-                totalMillis);
-        if (!sessionId.equals(view.sessionId()) || !view.hasTimeline()) {
+        ClientMediaTimelineView view = ClientMediaTimelineView.forMediaOwner(sourceId, sessionId(),
+                startOffsetMillis, totalMillis);
+        if (!sessionId().equals(view.sessionId()) || !view.hasTimeline()) {
             return MediaVideoTimeline.EMPTY;
         }
         if (!view.started()) {
@@ -50,6 +52,19 @@ final class PreviewVideoPlaybackAnchor implements VideoPlaybackAnchor {
     @Override
     public boolean isWithinAudioRange(Minecraft minecraft, Collection<BlockPos> fallbackProjectors, double rangeSqr) {
         return minecraft != null && minecraft.player != null;
+    }
+
+    @Override
+    public Object replacementOwnerKey() {
+        return new VideoPlaybackAnchor.PreviewOwnerKey(sourceId);
+    }
+
+    PlaybackSessionId playbackSessionId() {
+        return playbackSessionId;
+    }
+
+    private String sessionId() {
+        return playbackSessionId.value();
     }
 
     private final class SnapshotTimeline implements MediaVideoTimeline {
@@ -85,8 +100,8 @@ final class PreviewVideoPlaybackAnchor implements VideoPlaybackAnchor {
         }
 
         @Override
-        public String sessionId() {
-            return sessionId;
+        public Optional<PlaybackSessionId> playbackSessionId() {
+            return Optional.of(PreviewVideoPlaybackAnchor.this.playbackSessionId);
         }
     }
 
@@ -117,8 +132,8 @@ final class PreviewVideoPlaybackAnchor implements VideoPlaybackAnchor {
         }
 
         @Override
-        public String sessionId() {
-            return sessionId;
+        public Optional<PlaybackSessionId> playbackSessionId() {
+            return Optional.of(PreviewVideoPlaybackAnchor.this.playbackSessionId);
         }
     }
 }

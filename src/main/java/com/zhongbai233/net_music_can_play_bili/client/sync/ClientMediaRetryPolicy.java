@@ -9,6 +9,17 @@ public interface ClientMediaRetryPolicy {
     void scheduleRetry(UUID deviceId, String sessionId, ClientMediaPlaybackRegistry.ActivePlayback active,
             Throwable error);
 
+    /**
+     * Admission-aware retry dispatch. Existing policies keep their legacy
+     * behavior; policies that can reject a command before sending should return
+     * that exact result.
+     */
+    default boolean tryScheduleRetry(UUID deviceId, String sessionId,
+            ClientMediaPlaybackRegistry.ActivePlayback active, Throwable error) {
+        scheduleRetry(deviceId, sessionId, active, error);
+        return true;
+    }
+
     default void onRetryScheduled(UUID deviceId, String sessionId, ClientMediaPlaybackRegistry.ActivePlayback active,
             Throwable error) {
     }

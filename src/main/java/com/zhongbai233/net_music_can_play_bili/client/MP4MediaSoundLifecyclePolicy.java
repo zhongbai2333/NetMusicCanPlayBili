@@ -21,6 +21,11 @@ final class MP4MediaSoundLifecyclePolicy implements ClientMediaSoundLifecyclePol
     }
 
     @Override
+    public boolean tryRegisterSound(UUID deviceId, String sessionId, ClientMediaSoundHandle sound) {
+        return ClientMediaSoundRegistry.tryRegister(deviceId, sessionId, sound);
+    }
+
+    @Override
     public boolean recoverAfterStreamFailure(UUID deviceId, String sessionId, Throwable error) {
         return ClientMediaRetryHandler.retryAfterStreamFailure(deviceId, sessionId, error,
                 Mp4ClientMediaRetryPolicy.INSTANCE);

@@ -6,6 +6,7 @@ import com.zhongbai233.net_music_can_play_bili.client.PlaybackLatencyBench;
 import com.zhongbai233.net_music_can_play_bili.media.audio.OpenALSpatialAudio;
 import com.zhongbai233.net_music_can_play_bili.media.codec.*;
 import com.zhongbai233.net_music_can_play_bili.media.sync.AudioSyncPolicy;
+import com.zhongbai233.net_music_can_play_bili.media.stream.AudioStreamProperties;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.LifecycleClose;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 
@@ -30,15 +31,12 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
     private static final boolean ENABLE_JOC_OBJECTS = true;
     private static final double EC3_FRAMES_PER_SECOND = 48000.0 / 1536.0;
     private static final int MAX_FRAMES_PER_TICK = 8;
-    private static final int PREBUFFER_FRAMES = Integer.getInteger("ncpb.bili.audio.openal.dolby_prebuffer_frames", 8);
-    private static final boolean MUTE_MAIN_WHEN_RELAYS_CONNECTED = Boolean.parseBoolean(
-            System.getProperty("ncpb.bili.audio.relay.mute_main_when_connected",
-                    System.getProperty("ncpb.bili.audio.relay.mute_main_when_started", "true")));
+    private static final AudioStreamProperties.Dolby PROPERTIES = AudioStreamProperties.dolby();
+    private static final int PREBUFFER_FRAMES = PROPERTIES.prebufferFrames();
+    private static final boolean MUTE_MAIN_WHEN_RELAYS_CONNECTED = AudioRelayProperties.muteMainWhenConnected();
     private static final AudioSyncPolicy SYNC_POLICY = AudioSyncPolicy.fromSystemProperties();
-    private static final int RAW_QUEUE_CAPACITY = Math.max(32,
-            Integer.getInteger("ncpb.bili.audio.dolby.raw_queue_capacity", 128));
-    private static final int PROCESSED_QUEUE_CAPACITY = Math.max(PREBUFFER_FRAMES,
-            Integer.getInteger("ncpb.bili.audio.dolby.processed_queue_capacity", 64));
+    private static final int RAW_QUEUE_CAPACITY = PROPERTIES.rawQueueCapacity();
+    private static final int PROCESSED_QUEUE_CAPACITY = PROPERTIES.processedQueueCapacity();
 
     private final BlockingQueue<byte[]> rawQueue = new LinkedBlockingQueue<>(RAW_QUEUE_CAPACITY);
     private final BlockingQueue<ProcessedFrame> processedQueue = new LinkedBlockingQueue<>(PROCESSED_QUEUE_CAPACITY);
@@ -49,6 +47,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
     private volatile boolean closed;
     private final AtomicBoolean cleanupStarted = new AtomicBoolean();
     private boolean playbackStarted;
+    private volatile boolean paused;
     private long lastFrameFeedNanos;
     private double frameBudget;
 
@@ -128,7 +127,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
             boolean followLocalPlayerFront, boolean muteWorldRelays) {
         if (closed)
             return;
-        if (net.minecraft.client.Minecraft.getInstance().isPaused())
+        if (paused)
             return;
         if (targetRelativeTicks == Long.MIN_VALUE) {
             return;
@@ -310,6 +309,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
     public void addRelay(SpeakerAudioRelay relay) {
         if (relay != null && !relays.contains(relay)) {
             relay.setSampleRate(48000); // EC-3 Dolby 固定 48kHz，显式设置以防 relay 默认值被意外覆盖
+            relay.setPaused(paused);
             if (playbackStarted) {
                 relay.setHandlerStarted(true); // 已开始播放时新 relay 立即获得启动信号
             }
@@ -403,6 +403,18 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         relays.clear();
         initialized = false;
         LOGGER.debug("DolbyAudioHandler closed ({} frames)", frameCount);
+    }
+
+    @Override
+    public void setPaused(boolean paused) {
+        this.paused = paused;
+        OpenALSpatialAudio sa = spatialAudio;
+        if (sa != null) {
+            sa.setPaused(paused);
+        }
+        for (SpeakerAudioRelay relay : relays) {
+            relay.setPaused(paused);
+        }
     }
 
     public void hardStopOutput() {
@@ -588,6 +600,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
                 initialized = false;
                 return FeedResult.DROP;
             }
+            next.setPaused(paused);
             spatialAudio = next;
             PlaybackLatencyBench.markAudioOpenAlInitialized(this, "dolby", 48000);
             numBedChannels = chs;

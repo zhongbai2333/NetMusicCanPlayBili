@@ -6,6 +6,7 @@ import com.zhongbai233.net_music_can_play_bili.client.renderer.video.Nv12Texture
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoYuvTextureSet;
 import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldVideoFrame;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.resources.Identifier;
 
 import java.util.Map;
@@ -14,8 +15,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /** MP4 手持视频层按设备隔离的 NV12 纹理上传器。 */
 final class MP4Nv12VideoLayer implements AutoCloseable {
-    private static final Map<UUID, MP4Nv12VideoLayer> LAYERS = new ConcurrentHashMap<>();
-    private static final Map<UUID, MP4Nv12VideoLayer> HANDHELD_LAYERS = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, MP4Nv12VideoLayer> LAYERS = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, MP4Nv12VideoLayer> HANDHELD_LAYERS = new ConcurrentHashMap<>();
 
     private final Identifier yTextureId;
     private final Identifier uvTextureId;
@@ -40,14 +41,16 @@ final class MP4Nv12VideoLayer implements AutoCloseable {
         if (deviceId == null) {
             throw new IllegalArgumentException("MP4 video layer requires a device id");
         }
-        return LAYERS.computeIfAbsent(deviceId, MP4Nv12VideoLayer::new);
+        return LAYERS.computeIfAbsent(PlaybackSourceId.of(deviceId),
+                sourceId -> new MP4Nv12VideoLayer(sourceId.value()));
     }
 
     static MP4Nv12VideoLayer forHandheldDevice(UUID deviceId) {
         if (deviceId == null) {
             throw new IllegalArgumentException("MP4 handheld video layer requires a device id");
         }
-        return HANDHELD_LAYERS.computeIfAbsent(deviceId, id -> new MP4Nv12VideoLayer(id, "pad_video"));
+        return HANDHELD_LAYERS.computeIfAbsent(PlaybackSourceId.of(deviceId),
+                sourceId -> new MP4Nv12VideoLayer(sourceId.value(), "pad_video"));
     }
 
     static void releaseAll() {
@@ -65,7 +68,7 @@ final class MP4Nv12VideoLayer implements AutoCloseable {
         if (deviceId == null) {
             return;
         }
-        MP4Nv12VideoLayer layer = LAYERS.remove(deviceId);
+        MP4Nv12VideoLayer layer = LAYERS.remove(PlaybackSourceId.of(deviceId));
         if (layer != null) {
             layer.close();
         }
@@ -75,7 +78,7 @@ final class MP4Nv12VideoLayer implements AutoCloseable {
         if (deviceId == null) {
             return;
         }
-        MP4Nv12VideoLayer layer = HANDHELD_LAYERS.remove(deviceId);
+        MP4Nv12VideoLayer layer = HANDHELD_LAYERS.remove(PlaybackSourceId.of(deviceId));
         if (layer != null) {
             layer.close();
         }

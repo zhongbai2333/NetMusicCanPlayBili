@@ -4,6 +4,7 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockE
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoFallbackReason;
 import com.zhongbai233.net_music_can_play_bili.network.VideoProjectorConfigPacket;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -171,6 +172,19 @@ public class VideoProjectorScreen extends BlackGoldScreen {
             playbackInfo = "当前播放：无";
         }
         g.centeredText(font, Component.literal(playbackInfo), cx, iy + 12, TEXT_DIM);
+        if (status.active() && status.actualQuality() > 0) {
+            String backend = status.backend().length() > 18
+                    ? status.backend().substring(0, 18) + "…" : status.backend();
+            String fallback = status.fallbackReason().isBlank() ? ""
+                    : " · " + fallbackLabel(status.fallbackReason());
+            String actualInfo = "请求Q" + status.requestedQuality() + " → 实际Q" + status.actualQuality()
+                    + " · " + status.codecLabel() + " · " + backend + fallback;
+            g.centeredText(font, Component.literal(actualInfo), cx, iy + 24, TEXT_DIM);
+        }
+    }
+
+    private static String fallbackLabel(String reason) {
+        return VideoFallbackReason.userLabel(reason);
     }
 
     private void drawLabels(GuiGraphicsExtractor g, int bx, int by) {

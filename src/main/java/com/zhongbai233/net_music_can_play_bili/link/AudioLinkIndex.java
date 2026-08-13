@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.link;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
@@ -18,10 +19,10 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class AudioLinkIndex {
     private static final Map<ResourceKey<Level>, Map<BlockPos, Set<BlockPos>>> SPEAKERS_BY_TURNTABLE = new ConcurrentHashMap<>();
     private static final Map<ResourceKey<Level>, Map<BlockPos, Set<BlockPos>>> VIDEO_PROJECTORS_BY_TURNTABLE = new ConcurrentHashMap<>();
-    private static final Map<UUID, Set<UUID>> HEADPHONE_PLAYERS_BY_MP4 = new ConcurrentHashMap<>();
-    private static final Map<UUID, UUID> MP4_BY_HEADPHONE_PLAYER = new ConcurrentHashMap<>();
-    private static final Map<UUID, Set<UUID>> HEADPHONE_OWNERS_BY_MP4 = new ConcurrentHashMap<>();
-    private static final Map<UUID, Set<UUID>> MP4S_BY_HEADPHONE_OWNER = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, Set<UUID>> HEADPHONE_PLAYERS_BY_MP4 = new ConcurrentHashMap<>();
+    private static final Map<UUID, PlaybackSourceId> MP4_BY_HEADPHONE_PLAYER = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, Set<UUID>> HEADPHONE_OWNERS_BY_MP4 = new ConcurrentHashMap<>();
+    private static final Map<UUID, Set<PlaybackSourceId>> MP4S_BY_HEADPHONE_OWNER = new ConcurrentHashMap<>();
 
     private AudioLinkIndex() {
     }
@@ -107,10 +108,10 @@ public final class AudioLinkIndex {
             return;
         }
         UUID playerId = player.getUUID();
-        Set<UUID> linkedMp4s = linkedMediaDevices(player);
-        Set<UUID> previousLinks = MP4S_BY_HEADPHONE_OWNER.get(playerId);
+        Set<PlaybackSourceId> linkedMp4s = linkedMediaDevices(player);
+        Set<PlaybackSourceId> previousLinks = MP4S_BY_HEADPHONE_OWNER.get(playerId);
         if (previousLinks != null) {
-            for (UUID previous : previousLinks) {
+            for (PlaybackSourceId previous : previousLinks) {
                 if (!linkedMp4s.contains(previous)) {
                     removeHeadphoneOwner(playerId, previous);
                 }
@@ -120,14 +121,14 @@ public final class AudioLinkIndex {
             MP4S_BY_HEADPHONE_OWNER.remove(playerId);
         } else {
             MP4S_BY_HEADPHONE_OWNER.put(playerId, Set.copyOf(linkedMp4s));
-            for (UUID linkedMp4 : linkedMp4s) {
+            for (PlaybackSourceId linkedMp4 : linkedMp4s) {
                 HEADPHONE_OWNERS_BY_MP4.computeIfAbsent(linkedMp4, ignored -> ConcurrentHashMap.newKeySet())
                         .add(playerId);
             }
         }
 
-        UUID linkedMp4 = linkedMediaDevice(player);
-        UUID previous = MP4_BY_HEADPHONE_PLAYER.get(playerId);
+        PlaybackSourceId linkedMp4 = linkedMediaDevice(player);
+        PlaybackSourceId previous = MP4_BY_HEADPHONE_PLAYER.get(playerId);
         if (previous != null && !previous.equals(linkedMp4)) {
             removeHeadphonePlayer(playerId, previous);
         }
@@ -140,18 +141,21 @@ public final class AudioLinkIndex {
     }
 
     public static Set<UUID> headphonePlayersForMp4(UUID deviceId) {
-        Set<UUID> players = deviceId != null ? HEADPHONE_PLAYERS_BY_MP4.get(deviceId) : null;
+        Set<UUID> players = deviceId != null
+                ? HEADPHONE_PLAYERS_BY_MP4.get(PlaybackSourceId.of(deviceId))
+                : null;
         return players != null ? Set.copyOf(players) : Collections.emptySet();
     }
 
     public static Set<UUID> removeHeadphonePlayersForMp4(UUID deviceId) {
-        Set<UUID> players = deviceId != null ? HEADPHONE_PLAYERS_BY_MP4.remove(deviceId) : null;
+        PlaybackSourceId sourceId = deviceId != null ? PlaybackSourceId.of(deviceId) : null;
+        Set<UUID> players = sourceId != null ? HEADPHONE_PLAYERS_BY_MP4.remove(sourceId) : null;
         if (players == null || players.isEmpty()) {
             return Collections.emptySet();
         }
         Set<UUID> snapshot = Set.copyOf(players);
         for (UUID playerId : snapshot) {
-            MP4_BY_HEADPHONE_PLAYER.remove(playerId, deviceId);
+            MP4_BY_HEADPHONE_PLAYER.remove(playerId, sourceId);
         }
         return snapshot;
     }
@@ -160,7 +164,7 @@ public final class AudioLinkIndex {
         if (deviceId == null) {
             return false;
         }
-        Set<UUID> owners = HEADPHONE_OWNERS_BY_MP4.get(deviceId);
+        Set<UUID> owners = HEADPHONE_OWNERS_BY_MP4.get(PlaybackSourceId.of(deviceId));
         return owners != null && !owners.isEmpty();
     }
 
@@ -171,17 +175,17 @@ public final class AudioLinkIndex {
     }
 
     public static void removeHeadphonePlayer(UUID playerId) {
-        UUID previous = playerId != null ? MP4_BY_HEADPHONE_PLAYER.remove(playerId) : null;
+        PlaybackSourceId previous = playerId != null ? MP4_BY_HEADPHONE_PLAYER.remove(playerId) : null;
         if (previous != null) {
             removeHeadphonePlayer(playerId, previous);
         }
     }
 
     public static void removeHeadphoneOwner(UUID playerId) {
-        Set<UUID> previous = playerId != null ? MP4S_BY_HEADPHONE_OWNER.remove(playerId) : null;
+        Set<PlaybackSourceId> previous = playerId != null ? MP4S_BY_HEADPHONE_OWNER.remove(playerId) : null;
         if (previous != null) {
-            for (UUID deviceId : previous) {
-                removeHeadphoneOwner(playerId, deviceId);
+            for (PlaybackSourceId sourceId : previous) {
+                removeHeadphoneOwner(playerId, sourceId);
             }
         }
     }
@@ -195,44 +199,45 @@ public final class AudioLinkIndex {
         MP4S_BY_HEADPHONE_OWNER.clear();
     }
 
-    private static void removeHeadphonePlayer(UUID playerId, UUID deviceId) {
-        if (playerId == null || deviceId == null) {
+    private static void removeHeadphonePlayer(UUID playerId, PlaybackSourceId sourceId) {
+        if (playerId == null || sourceId == null) {
             return;
         }
-        Set<UUID> players = HEADPHONE_PLAYERS_BY_MP4.get(deviceId);
+        Set<UUID> players = HEADPHONE_PLAYERS_BY_MP4.get(sourceId);
         if (players == null) {
             return;
         }
         players.remove(playerId);
         if (players.isEmpty()) {
-            HEADPHONE_PLAYERS_BY_MP4.remove(deviceId, players);
+            HEADPHONE_PLAYERS_BY_MP4.remove(sourceId, players);
         }
     }
 
-    private static void removeHeadphoneOwner(UUID playerId, UUID deviceId) {
-        if (playerId == null || deviceId == null) {
+    private static void removeHeadphoneOwner(UUID playerId, PlaybackSourceId sourceId) {
+        if (playerId == null || sourceId == null) {
             return;
         }
-        Set<UUID> owners = HEADPHONE_OWNERS_BY_MP4.get(deviceId);
+        Set<UUID> owners = HEADPHONE_OWNERS_BY_MP4.get(sourceId);
         if (owners == null) {
             return;
         }
         owners.remove(playerId);
         if (owners.isEmpty()) {
-            HEADPHONE_OWNERS_BY_MP4.remove(deviceId, owners);
+            HEADPHONE_OWNERS_BY_MP4.remove(sourceId, owners);
         }
     }
 
-    private static UUID linkedMediaDevice(ServerPlayer player) {
+    private static PlaybackSourceId linkedMediaDevice(ServerPlayer player) {
         ItemStack head = EquippedMediaItems.firstHeadphones(player);
         if (!HeadphoneAbility.has(head)) {
             return null;
         }
-        return AudioLinkData.readHeadphoneMediaDevice(head);
+        UUID deviceId = AudioLinkData.readHeadphoneMediaDevice(head);
+        return deviceId != null ? PlaybackSourceId.of(deviceId) : null;
     }
 
-    private static Set<UUID> linkedMediaDevices(ServerPlayer player) {
-        Set<UUID> deviceIds = new HashSet<>();
+    private static Set<PlaybackSourceId> linkedMediaDevices(ServerPlayer player) {
+        Set<PlaybackSourceId> deviceIds = new HashSet<>();
         EquippedMediaItems.forEachEquipped(player, stack -> addLinkedMediaDevice(deviceIds, stack));
         ItemStack carried = player.containerMenu != null ? player.containerMenu.getCarried() : ItemStack.EMPTY;
         addLinkedMediaDevice(deviceIds, carried);
@@ -243,13 +248,13 @@ public final class AudioLinkIndex {
         return deviceIds;
     }
 
-    private static void addLinkedMediaDevice(Set<UUID> deviceIds, ItemStack stack) {
+    private static void addLinkedMediaDevice(Set<PlaybackSourceId> deviceIds, ItemStack stack) {
         if (!HeadphoneAbility.has(stack)) {
             return;
         }
         UUID deviceId = AudioLinkData.readHeadphoneMediaDevice(stack);
         if (deviceId != null) {
-            deviceIds.add(deviceId);
+            deviceIds.add(PlaybackSourceId.of(deviceId));
         }
     }
 }

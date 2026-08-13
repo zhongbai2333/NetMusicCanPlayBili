@@ -1,19 +1,23 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.Collection;
+import java.util.Optional;
 
 final class TurntableVideoPlaybackAnchor implements VideoPlaybackAnchor {
     private final BlockPos turntablePos;
+    private final Optional<PlaybackSessionId> playbackSessionId;
     private final MediaVideoTimeline timeline;
 
     TurntableVideoPlaybackAnchor(BlockPos turntablePos, String sessionId, long totalMillis) {
         this.turntablePos = turntablePos != null ? turntablePos.immutable() : null;
+        this.playbackSessionId = PlaybackSessionId.parse(sessionId);
         this.timeline = this.turntablePos != null
-                ? new TurntableMediaVideoTimeline(this.turntablePos, sessionId, totalMillis)
+                ? new TurntableMediaVideoTimeline(this.turntablePos, playbackSessionId, totalMillis)
                 : MediaVideoTimeline.EMPTY;
     }
 
@@ -56,6 +60,13 @@ final class TurntableVideoPlaybackAnchor implements VideoPlaybackAnchor {
         return false;
     }
 
+    @Override
+    public Object replacementOwnerKey() {
+        return turntablePos != null
+                ? new VideoPlaybackAnchor.TurntableOwnerKey(turntablePos)
+                : playbackSessionId.<Object>map(value -> value).orElse(this);
+    }
+
     private static double distanceSqr(Vec3 a, Vec3 b) {
         double dx = a.x - b.x;
         double dy = a.y - b.y;
@@ -63,8 +74,17 @@ final class TurntableVideoPlaybackAnchor implements VideoPlaybackAnchor {
         return dx * dx + dy * dy + dz * dz;
     }
 
-    private record TurntableMediaVideoTimeline(BlockPos turntablePos, String sessionId, long totalMillis)
+    Optional<PlaybackSessionId> playbackSessionId() {
+        return playbackSessionId;
+    }
+
+    private record TurntableMediaVideoTimeline(BlockPos turntablePos,
+            Optional<PlaybackSessionId> playbackSessionId, long totalMillis)
             implements MediaVideoTimeline {
+        private TurntableMediaVideoTimeline {
+            playbackSessionId = playbackSessionId != null ? playbackSessionId : Optional.empty();
+        }
+
         @Override
         public long mediaMillis() {
             return com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackClock.mediaMillis(turntablePos);
@@ -86,9 +106,5 @@ final class TurntableVideoPlaybackAnchor implements VideoPlaybackAnchor {
                     absoluteStartMillis);
         }
 
-        @Override
-        public String sessionId() {
-            return sessionId != null ? sessionId : "";
-        }
     }
 }

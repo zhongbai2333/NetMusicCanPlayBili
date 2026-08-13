@@ -1,0 +1,67 @@
+{
+  "eight_k_av1_with_lower_h264": {
+    "response": {
+      "code": 0,
+      "data": {
+        "dash": {
+          "video": [
+            {"id": 127, "codecid": 13, "width": 7680, "height": 4320, "frameRate": "60", "codecs": "av01.0.17M.08", "baseUrl": "https://8k-av1.example.test/video.m4s"},
+            {"id": 120, "codecid": 13, "width": 3840, "height": 2160, "frameRate": "60", "codecs": "av01.0.13M.08", "base_url": "https://4k-av1.example.test/video.m4s"},
+            {"id": 80, "codecid": 7, "width": 1920, "height": 1080, "frameRate": "30", "codecs": "avc1.640028", "baseUrl": "https://1080-h264.example.test/video.m4s"}
+          ]
+        }
+      }
+    }
+  },
+  "same_quality_mixed_codecs": {
+    "response": {
+      "code": 0,
+      "data": {
+        "dash": {
+          "video": [
+            {
+              "id": 120, "codecid": 13, "width": 3840, "height": 2160, "frameRate": "60", "codecs": "av01.0.13M.08",
+              "baseUrl": "https://av1-primary.example.test/video.m4s",
+              "backupUrl": ["https://av1-backup.example.test/video.m4s"],
+              "segment_base": {"initialization": "0-999", "index_range": "1000-1999"}
+            },
+            {
+              "id": 120, "codecid": 7, "width": 3840, "height": 2160, "frameRate": "60", "codecs": "avc1.640033",
+              "base_url": "https://h264-primary.example.test/video.m4s",
+              "backup_url": ["https://h264-backup.example.test/video.m4s"],
+              "segment_base": {"initialization": "2000-2999", "index_range": "3000-3999"}
+            },
+            {"id": 120, "codecid": 12, "width": 3840, "height": 2160, "frameRate": "60", "codecs": "hev1.1.6.L120", "baseUrl": "https://hevc.example.test/video.m4s"}
+          ]
+        }
+      }
+    }
+  },
+  "h264_without_av1": {
+    "response": {
+      "code": 0,
+      "data": {"dash": {"video": [
+        {"id": 116, "codecid": 7, "width": 1920, "height": 1080, "frameRate": "60", "codecs": "avc1.64002a", "baseUrl": "https://h264-only.example.test/video.m4s"}
+      ]}}
+    }
+  },
+  "hevc_only": {
+    "response": {
+      "code": 0,
+      "data": {"dash": {"video": [
+        {"id": 120, "codecid": 12, "width": 3840, "height": 2160, "frameRate": "60", "codecs": "hev1.1.6.L120", "baseUrl": "https://hevc-only.example.test/video.m4s"}
+      ]}}
+    }
+  },
+  "special_quality_filter": {
+    "response": {
+      "code": 0,
+      "data": {"dash": {"video": [
+        {"id": 125, "codecid": 13, "width": 3840, "height": 2160, "frameRate": "60", "codecs": "av01.0.13M.10", "baseUrl": "https://hdr-av1.example.test/video.m4s"},
+        {"id": 126, "codecid": 13, "width": 3840, "height": 2160, "frameRate": "60", "codecs": "av01.0.13M.10", "baseUrl": "https://dolby-av1.example.test/video.m4s"},
+        {"id": 120, "codecid": 13, "width": 3840, "height": 2160, "frameRate": "60", "codecs": "av01.0.13M.08", "baseUrl": "https://standard-av1.example.test/video.m4s"},
+        {"id": 116, "codecid": 7, "width": 1920, "height": 1080, "frameRate": "60", "codecs": "avc1.64002a", "baseUrl": "https://standard-h264.example.test/video.m4s"}
+      ]}}
+    }
+  }
+}

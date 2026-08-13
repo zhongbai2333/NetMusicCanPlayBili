@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.client;
 
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoPipelineProperties;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 import net.neoforged.api.distmarker.Dist;
@@ -550,7 +551,7 @@ public final class VideoRenderStressBench {
         }
 
         private static boolean isNv12UvRg8Enabled() {
-            return Boolean.parseBoolean(System.getProperty("ncpb.video.nv12.uv_rg8", "true"));
+            return VideoPipelineProperties.nv12UvRg8Enabled();
         }
     }
 

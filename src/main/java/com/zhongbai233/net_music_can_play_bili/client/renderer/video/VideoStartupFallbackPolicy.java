@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.VideoCandidate;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.DecodeMode;
 
 import java.util.List;
 
@@ -51,6 +52,19 @@ final class VideoStartupFallbackPolicy {
                 withinLimit.stream().filter(candidate -> candidate.codecId() == 7),
                 withinLimit.stream().filter(candidate -> candidate.codecId() != 7))
                 .toList();
+    }
+
+    static boolean requiresBoundedFirstFrameProbe(VideoCandidate candidate) {
+        return candidate != null && candidate.codecId() == 13
+                && candidate.decodeMode() == DecodeMode.HARDWARE_REQUIRED;
+    }
+
+    /** A sustained AV1 fallback is terminal for that codec within the session. */
+    static List<VideoCandidate> lockedH264Candidates(List<VideoCandidate> candidates) {
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+        return candidates.stream().filter(candidate -> candidate.codecId() == 7).toList();
     }
 
     record DecodeSize(int width, int height) {

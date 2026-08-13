@@ -1,11 +1,15 @@
 pluginManagement {
     repositories {
-        // ModBench 当前发布到本地 Maven。默认构建不会应用插件；需要 Bench 时先在
-        // ../BenchMod 执行 publishToMavenLocal，再传入 -PenableModBench=true。
-        mavenLocal {
+        if (providers.gradleProperty('ncpbLocalModBench').map { it.toBoolean() }.orElse(false).get()) {
+            mavenLocal {
+                content { includeGroup 'com.github.zhongbai2333.BenchMod' }
+            }
+        }
+        // ModBench 通过 JitPack 的不可变 tag 发布；日常构建仍默认不应用插件。
+        maven {
+            url = 'https://jitpack.io'
             content {
-                includeGroup 'com.zhongbai233.bench'
-                includeGroup 'com.zhongbai233.minecraft-bench'
+                includeGroup 'com.github.zhongbai2333.BenchMod'
             }
         }
         gradlePluginPortal()
@@ -14,9 +18,25 @@ pluginManagement {
     plugins {
         id 'com.zhongbai233.minecraft-bench' version providers.gradleProperty('modbench_version').get()
     }
+    resolutionStrategy {
+        eachPlugin {
+            if (requested.id.id == 'com.zhongbai233.minecraft-bench') {
+                useModule("com.github.zhongbai2333.BenchMod:bench-gradle-plugin:${requested.version}")
+            }
+        }
+    }
 }
 
 plugins {
     // Gradle 9 使用 1.0.0+；daemon JVM 标准会让 wrapper 和 IDE 自动选择 Java 25。
     id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
 }
+
+rootProject.name = 'net-music-can-play-bili'
+
+include 'scene-editor-core'
+include 'scene-editor-minecraft'
+include 'scene-editor-jij-host-a'
+include 'scene-editor-jij-host-b'
+project(':scene-editor-jij-host-a').projectDir = file('phase8-fixtures/scene-editor-jij-host-a')
+project(':scene-editor-jij-host-b').projectDir = file('phase8-fixtures/scene-editor-jij-host-b')

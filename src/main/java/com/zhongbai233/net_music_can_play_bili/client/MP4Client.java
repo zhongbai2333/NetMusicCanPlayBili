@@ -6,6 +6,7 @@ import com.zhongbai233.net_music_can_play_bili.network.MP4EnsureDeviceIdPacket;
 import com.zhongbai233.net_music_can_play_bili.network.MP4EnsureInventoryDeviceIdPacket;
 import com.zhongbai233.net_music_can_play_bili.network.MP4StatePacket;
 import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackControlPacket;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
@@ -19,12 +20,12 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class MP4Client {
     private static final int FAST_SYNC_INTERVAL_TICKS = 10;
     private static final long PENDING_SELECTION_CONFIRM_MILLIS = 1500L;
-    private static final Map<UUID, MP4Item.State> DEVICE_STATES = new ConcurrentHashMap<>();
-    private static final Map<UUID, Long> DEVICE_STATE_TIMES = new ConcurrentHashMap<>();
-    private static final Map<UUID, List<ItemStack>> DEVICE_QUEUES = new ConcurrentHashMap<>();
-    private static final Map<UUID, Boolean> DEVICE_HEADPHONE_LINKS = new ConcurrentHashMap<>();
-    private static final Map<UUID, PendingSelection> PENDING_SELECTIONS = new ConcurrentHashMap<>();
-    private static final Map<UUID, PendingStateSync> PENDING_STATE_SYNCS = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, MP4Item.State> DEVICE_STATES = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, Long> DEVICE_STATE_TIMES = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, List<ItemStack>> DEVICE_QUEUES = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, Boolean> DEVICE_HEADPHONE_LINKS = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, PendingSelection> PENDING_SELECTIONS = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, PendingStateSync> PENDING_STATE_SYNCS = new ConcurrentHashMap<>();
     private static long localStateSequence;
     private static int ensureCooldownTicks;
     private static int fastSyncTicks;
@@ -61,7 +62,7 @@ public final class MP4Client {
                 continue;
             }
             UUID deviceId = MP4Item.readDeviceId(stack);
-            if (deviceId != null && DEVICE_STATES.containsKey(deviceId)) {
+            if (deviceId != null && DEVICE_STATES.containsKey(PlaybackSourceId.of(deviceId))) {
                 continue;
             }
             minecraft.getConnection().send(new MP4EnsureInventoryDeviceIdPacket(slot));
@@ -76,7 +77,7 @@ public final class MP4Client {
             return false;
         }
         UUID deviceId = MP4Item.readDeviceId(stack);
-        if (deviceId != null && DEVICE_STATES.containsKey(deviceId)) {
+        if (deviceId != null && DEVICE_STATES.containsKey(PlaybackSourceId.of(deviceId))) {
             return false;
         }
         minecraft.getConnection().send(new MP4EnsureDeviceIdPacket(hand));
@@ -177,16 +178,17 @@ public final class MP4Client {
 
     private static boolean acceptServerConfig(UUID deviceId, MP4Item.State state, long updatedGameTime,
             boolean headphoneLinked, List<ItemStack> queue) {
+        PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
         long safeTime = Math.max(0L, updatedGameTime);
-        long currentTime = DEVICE_STATE_TIMES.getOrDefault(deviceId, -1L);
+        long currentTime = DEVICE_STATE_TIMES.getOrDefault(sourceId, -1L);
         if (safeTime < currentTime) {
             return false;
         }
         state = preservePendingSelection(deviceId, state, queue);
-        DEVICE_STATES.put(deviceId, state);
-        DEVICE_STATE_TIMES.put(deviceId, safeTime);
-        DEVICE_QUEUES.put(deviceId, cleanQueue(queue));
-        DEVICE_HEADPHONE_LINKS.put(deviceId, headphoneLinked);
+        DEVICE_STATES.put(sourceId, state);
+        DEVICE_STATE_TIMES.put(sourceId, safeTime);
+        DEVICE_QUEUES.put(sourceId, cleanQueue(queue));
+        DEVICE_HEADPHONE_LINKS.put(sourceId, headphoneLinked);
         return true;
     }
 
@@ -196,24 +198,25 @@ public final class MP4Client {
             return;
         }
         cacheLocalState(deviceId, state, stack);
-        PENDING_STATE_SYNCS.put(deviceId,
+        PENDING_STATE_SYNCS.put(PlaybackSourceId.of(deviceId),
                 new PendingStateSync(state, System.currentTimeMillis(), ++localStateSequence));
         focusedStateSyncRequested = true;
     }
 
     private static MP4Item.State preservePendingSelection(UUID deviceId, MP4Item.State state, List<ItemStack> queue) {
-        PendingSelection pending = PENDING_SELECTIONS.get(deviceId);
+        PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+        PendingSelection pending = PENDING_SELECTIONS.get(sourceId);
         if (pending == null) {
             return state;
         }
         if (System.currentTimeMillis() - pending.createdAtMillis() > PENDING_SELECTION_CONFIRM_MILLIS) {
-            PENDING_SELECTIONS.remove(deviceId);
+            PENDING_SELECTIONS.remove(sourceId);
             return state;
         }
         int queueSize = queue == null || queue.isEmpty() ? Math.max(1, state.selectedQueueIndex() + 1) : queue.size();
         int selected = Math.max(0, Math.min(queueSize - 1, pending.selectedQueueIndex()));
         if (state.selectedQueueIndex() == selected) {
-            PENDING_SELECTIONS.remove(deviceId);
+            PENDING_SELECTIONS.remove(sourceId);
             return state;
         }
         return new MP4Item.State(state.playing(), state.shuffle(), state.videoEnabled(), state.landscape(),
@@ -238,7 +241,9 @@ public final class MP4Client {
             return MP4Item.State.DEFAULT;
         }
         UUID deviceId = MP4Item.readDeviceId(stack);
-        MP4Item.State baseState = deviceId != null ? DEVICE_STATES.get(deviceId) : null;
+        MP4Item.State baseState = deviceId != null
+                ? DEVICE_STATES.get(PlaybackSourceId.of(deviceId))
+                : null;
         if (baseState == null) {
             baseState = MP4Item.State.DEFAULT;
         }
@@ -247,7 +252,7 @@ public final class MP4Client {
 
     public static MP4Item.State cachedStateFor(ItemStack stack) {
         UUID deviceId = MP4Item.readDeviceId(stack);
-        MP4Item.State state = deviceId != null ? DEVICE_STATES.get(deviceId) : null;
+        MP4Item.State state = deviceId != null ? DEVICE_STATES.get(PlaybackSourceId.of(deviceId)) : null;
         return state != null ? state : MP4Item.State.DEFAULT;
     }
 
@@ -265,17 +270,19 @@ public final class MP4Client {
                 old.repeatMode(), old.playlistOpen(), old.lyricsEnabled(), old.subtitleMode(),
                 old.subtitleAiEnabled(), progressPerMille, old.rotationHintShown());
         markStackStateDirty(stack, state);
-        PENDING_SELECTIONS.put(deviceId, new PendingSelection(selected, System.currentTimeMillis()));
+        PENDING_SELECTIONS.put(PlaybackSourceId.of(deviceId),
+                new PendingSelection(selected, System.currentTimeMillis()));
     }
 
     public static List<ItemStack> cachedQueueFor(ItemStack stack) {
         UUID deviceId = MP4Item.readDeviceId(stack);
-        List<ItemStack> queue = deviceId != null ? DEVICE_QUEUES.get(deviceId) : null;
+        List<ItemStack> queue = deviceId != null ? DEVICE_QUEUES.get(PlaybackSourceId.of(deviceId)) : null;
         return queue != null ? queue : MP4Item.readQueue(stack);
     }
 
     public static boolean headphoneLinked(UUID deviceId) {
-        return deviceId != null && DEVICE_HEADPHONE_LINKS.getOrDefault(deviceId, false);
+        return deviceId != null
+                && DEVICE_HEADPHONE_LINKS.getOrDefault(PlaybackSourceId.of(deviceId), false);
     }
 
     private static List<ItemStack> queueForHeldRender(ItemStack stack) {
@@ -284,9 +291,10 @@ public final class MP4Client {
 
     public static void cacheFocusedState(UUID deviceId) {
         if (deviceId != null) {
-            DEVICE_STATES.put(deviceId, MP4FocusState.save());
-            DEVICE_STATE_TIMES.putIfAbsent(deviceId, 0L);
-            DEVICE_QUEUES.putIfAbsent(deviceId, MP4Item.readQueue(stackForActiveDevice()));
+            PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+            DEVICE_STATES.put(sourceId, MP4FocusState.save());
+            DEVICE_STATE_TIMES.putIfAbsent(sourceId, 0L);
+            DEVICE_QUEUES.putIfAbsent(sourceId, MP4Item.readQueue(stackForActiveDevice()));
         }
     }
 
@@ -335,10 +343,11 @@ public final class MP4Client {
         ItemStack stack = minecraft.player.getItemInHand(MP4FocusState.hand());
         UUID deviceId = MP4Item.readDeviceId(stack);
         if (deviceId != null) {
-            DEVICE_STATES.put(deviceId, MP4FocusState.save());
-            DEVICE_STATE_TIMES.putIfAbsent(deviceId, 0L);
-            DEVICE_QUEUES.putIfAbsent(deviceId, MP4Item.readQueue(stack));
-            PENDING_STATE_SYNCS.put(deviceId,
+            PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+            DEVICE_STATES.put(sourceId, MP4FocusState.save());
+            DEVICE_STATE_TIMES.putIfAbsent(sourceId, 0L);
+            DEVICE_QUEUES.putIfAbsent(sourceId, MP4Item.readQueue(stack));
+            PENDING_STATE_SYNCS.put(sourceId,
                     new PendingStateSync(MP4FocusState.save(), System.currentTimeMillis(), ++localStateSequence));
         }
     }
@@ -390,9 +399,10 @@ public final class MP4Client {
             focusedStateSyncRequested = false;
             return;
         }
-        for (Map.Entry<UUID, PendingStateSync> entry : new ArrayList<>(PENDING_STATE_SYNCS.entrySet())) {
-            UUID deviceId = entry.getKey();
-            PendingStateSync pending = PENDING_STATE_SYNCS.remove(deviceId);
+        for (Map.Entry<PlaybackSourceId, PendingStateSync> entry : new ArrayList<>(PENDING_STATE_SYNCS.entrySet())) {
+            PlaybackSourceId sourceId = entry.getKey();
+            UUID deviceId = sourceId.value();
+            PendingStateSync pending = PENDING_STATE_SYNCS.remove(sourceId);
             if (pending == null) {
                 continue;
             }
@@ -426,18 +436,19 @@ public final class MP4Client {
                 : ItemStack.EMPTY);
         addDeviceId(present, minecraft.player.getMainHandItem());
         MP4DeviceStacks.addHotbarAndOffhandDeviceIds(minecraft.player, present);
-        DEVICE_STATES.keySet().removeIf(deviceId -> !present.contains(deviceId));
-        DEVICE_STATE_TIMES.keySet().removeIf(deviceId -> !present.contains(deviceId));
-        DEVICE_QUEUES.keySet().removeIf(deviceId -> !present.contains(deviceId));
-        DEVICE_HEADPHONE_LINKS.keySet().removeIf(deviceId -> !present.contains(deviceId));
-        PENDING_SELECTIONS.keySet().removeIf(deviceId -> !present.contains(deviceId));
-        PENDING_STATE_SYNCS.keySet().removeIf(deviceId -> !present.contains(deviceId));
+        DEVICE_STATES.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
+        DEVICE_STATE_TIMES.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
+        DEVICE_QUEUES.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
+        DEVICE_HEADPHONE_LINKS.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
+        PENDING_SELECTIONS.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
+        PENDING_STATE_SYNCS.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
     }
 
     private static void cacheLocalState(UUID deviceId, MP4Item.State state, ItemStack stack) {
-        DEVICE_STATES.put(deviceId, state);
-        DEVICE_STATE_TIMES.putIfAbsent(deviceId, 0L);
-        DEVICE_QUEUES.putIfAbsent(deviceId, MP4Item.readQueue(stack));
+        PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+        DEVICE_STATES.put(sourceId, state);
+        DEVICE_STATE_TIMES.putIfAbsent(sourceId, 0L);
+        DEVICE_QUEUES.putIfAbsent(sourceId, MP4Item.readQueue(stack));
     }
 
     private static void addDeviceId(java.util.Set<UUID> deviceIds, ItemStack stack) {

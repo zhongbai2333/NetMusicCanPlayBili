@@ -6,6 +6,7 @@ import com.zhongbai233.net_music_can_play_bili.item.pad.PadMediaEntry;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadMapSettings;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadTriggerMode;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadTriggerPoint;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -57,7 +58,7 @@ public record PadStatePacket(UUID deviceId, PadDocument document, long clientUpd
         if (!PadItem.isPad(stack) || PadItem.readLocked(stack)) {
             return;
         }
-        SyncKey syncKey = new SyncKey(player.getUUID(), payload.deviceId());
+        SyncKey syncKey = new SyncKey(player.getUUID(), PlaybackSourceId.of(payload.deviceId()));
         SyncVersion incoming = new SyncVersion(payload.clientUpdatedAtMillis(), payload.clientSequence());
         SyncVersion previous = LAST_CLIENT_SYNCS.get(syncKey);
         if (previous != null && incoming.compareTo(previous) < 0) {
@@ -152,7 +153,7 @@ public record PadStatePacket(UUID deviceId, PadDocument document, long clientUpd
         return timeCompare != 0 ? timeCompare : Long.compare(left.sequence(), right.sequence());
     }
 
-    private record SyncKey(UUID playerId, UUID deviceId) {
+    private record SyncKey(UUID playerId, PlaybackSourceId sourceId) {
     }
 
     private record SyncVersion(long updatedAtMillis, long sequence) implements Comparable<SyncVersion> {

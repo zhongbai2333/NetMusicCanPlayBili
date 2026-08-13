@@ -3,8 +3,10 @@ package com.zhongbai233.net_music_can_play_bili.bili;
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 import com.zhongbai233.net_music_can_play_bili.media.audio.PcmStartupSeekPolicy;
 import com.zhongbai233.net_music_can_play_bili.media.sync.AudioStartupSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.MediaRequestToken;
 import com.zhongbai233.net_music_can_play_bili.media.sync.OneShotRequestRegistry;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackRequest;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 
@@ -28,6 +30,7 @@ import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRangeClient;
 import com.zhongbai233.net_music_can_play_bili.media.stream.BlockingAudioPipe;
 import com.zhongbai233.net_music_can_play_bili.media.stream.CdnUrlFallbacks;
 import com.zhongbai233.net_music_can_play_bili.media.stream.CdnHealthTracker;
+import com.zhongbai233.net_music_can_play_bili.media.stream.AudioStreamProperties;
 import com.zhongbai233.net_music_can_play_bili.client.audio.SyncedStreamRecoveryRegistry;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.LifecycleClose;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
@@ -50,6 +53,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpResponse;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -65,9 +69,9 @@ import java.util.UUID;
 
 public class HttpAudioStreamHandler implements IAudioStreamHandler {
     private static final Logger LOGGER = LogUtils.getLogger();
+    private static final AudioStreamProperties.Http PROPERTIES = AudioStreamProperties.http();
     private static final int PIPE_BUFFER_SIZE = 4 * 1024 * 1024;
-    private static final int FORMAT_WAIT_SECONDS = Math.max(15,
-            Integer.getInteger("ncpb.bili.media.format_wait_seconds", 30));
+    private static final int FORMAT_WAIT_SECONDS = PROPERTIES.formatWaitSeconds();
     private static final long WORKER_JOIN_TIMEOUT_MILLIS = 2_000L;
     private static final int MP3_SYNC_SCAN_BYTES = 512 * 1024;
     private static final int FMP4_INIT_PROBE_BYTES = 4 * 1024 * 1024;
@@ -80,12 +84,9 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     private static final long FMP4_SEEK_PREROLL_BYTES = 256 * 1024L;
     private static final long REQUEST_TTL_MILLIS = TimeUnit.MINUTES.toMillis(10);
     private static final long SEGMENT_BASE_TTL_MILLIS = TimeUnit.MINUTES.toMillis(30);
-    private static final int RANGE_RACE_MAX_CANDIDATES = Math.max(1,
-            Integer.getInteger("ncpb.bili.audio.range_race.max_candidates", 1));
-    private static final long RANGE_RACE_TIMEOUT_MILLIS = Math.max(250L,
-            Long.getLong("ncpb.bili.audio.range_race.timeout_ms", 2_500L));
-    private static final int MAX_SEGMENT_BASE_ENTRIES = Integer.getInteger(
-            "bili.audio.segment_base_cache.max_entries", 512);
+    private static final int RANGE_RACE_MAX_CANDIDATES = PROPERTIES.rangeRaceMaxCandidates();
+    private static final long RANGE_RACE_TIMEOUT_MILLIS = PROPERTIES.rangeRaceTimeoutMillis();
+    private static final int MAX_SEGMENT_BASE_ENTRIES = PROPERTIES.segmentBaseCacheMaxEntries();
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NEVER)
             .connectTimeout(java.time.Duration.ofSeconds(10))
@@ -110,24 +111,25 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     /** 注册一次性强类型播放请求，返回带 opaque token 的播放 URL。 */
     public static RegisteredRequest registerRequest(PlaybackRequest request) {
         if (request == null || request.mediaUrl().isBlank()) {
-            return new RegisteredRequest("", "");
+            return new RegisteredRequest("", Optional.empty());
         }
-        closeStaleModernStreams(request.pos(), request.sessionId(), request.minecartUuid());
+        closeStaleModernStreams(request.pos(), request.playbackSessionId(), request.minecartUuid());
         long expiresAt = System.currentTimeMillis() + REQUEST_TTL_MILLIS;
-        String token = REQUESTS.register(request, expiresAt);
-        return new RegisteredRequest(PlaybackSync.withRequestToken(request.mediaUrl(), token), token);
+        MediaRequestToken token = REQUESTS.registerToken(request, expiresAt);
+        return new RegisteredRequest(PlaybackSync.withRequestToken(request.mediaUrl(), token), Optional.of(token));
     }
 
     public static void cancelRequest(String requestToken) {
-        if (requestToken != null && !requestToken.isBlank()) {
-            REQUESTS.cancel(requestToken);
-        }
+        MediaRequestToken.parse(requestToken).ifPresent(HttpAudioStreamHandler::cancelRequest);
+    }
+
+    public static void cancelRequest(MediaRequestToken requestToken) {
+        REQUESTS.cancelToken(requestToken);
     }
 
     /** 供其他 handler（如直播）消费自己 URL 上携带的一次性播放请求。 */
     public static PlaybackRequest consumeRegisteredRequest(String url) {
-        String requestToken = PlaybackSync.parseRequestToken(url);
-        return requestToken.isBlank() ? null : REQUESTS.consume(requestToken);
+        return PlaybackSync.parseMediaRequestToken(url).map(REQUESTS::consumeToken).orElse(null);
     }
 
     public static void closeModernStreams() {
@@ -214,7 +216,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         worker.start();
         ActiveStreamControl streamControl = null;
         if (modernTurntable && request != null) {
-            streamControl = new ActiveStreamControl(url, request.pos(), request.sessionId(),
+            streamControl = new ActiveStreamControl(url, request.pos(), request.playbackSessionId(),
                     request.minecartUuid(), closed,
                     bodyRef, worker, fallbackPipe, pipelineRef, formatReady);
         }
@@ -283,8 +285,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     }
 
     private static PlaybackRequest consumeRequest(URL url) {
-        String requestToken = PlaybackSync.parseRequestToken(url.toString());
-        return requestToken.isBlank() ? null : REQUESTS.consume(requestToken);
+        return PlaybackSync.parseMediaRequestToken(url.toString()).map(REQUESTS::consumeToken).orElse(null);
     }
 
     private static float startOffsetSeconds(PlaybackRequest request) {
@@ -1038,10 +1039,11 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
 
     private static boolean reportRecoverableStreamFailure(URL url, PlaybackRequest request, Throwable error,
             long decoded, long mdatBytes) {
-        if (request == null || request.sessionId().isBlank()) {
+        if (request == null || request.playbackSessionId().isEmpty()) {
             return false;
         }
-        boolean scheduled = SyncedStreamRecoveryRegistry.reportFailure(request.sessionId(), url, error);
+        boolean scheduled = SyncedStreamRecoveryRegistry.reportFailure(
+                request.playbackSessionId().orElseThrow(), url, error);
         if (scheduled) {
             LOGGER.warn("音频流播放中断，已安排自动续播: session={} decoded={} mdatBytes={} host={} reason={}",
                     request.sessionId(), decoded, mdatBytes, url.getHost(),
@@ -1251,8 +1253,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     }
 
     private static boolean hasRequestContext(URL url) {
-        String requestToken = PlaybackSync.parseRequestToken(url.toString());
-        return !requestToken.isBlank() && REQUESTS.contains(requestToken);
+        return PlaybackSync.parseMediaRequestToken(url.toString()).map(REQUESTS::containsToken).orElse(false);
     }
 
     private static boolean isBiliCdnHost(URL url) {
@@ -1268,7 +1269,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     private static final class ActiveStreamControl {
         private final URL url;
         private final BlockPos pos;
-        private final String sessionId;
+        private final Optional<PlaybackSessionId> playbackSessionId;
         private final UUID minecartUuid;
         private final AtomicBoolean closed;
         private final AtomicReference<InputStream> bodyRef;
@@ -1277,12 +1278,13 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         private final AtomicReference<AudioDecodePipeline> pipelineRef;
         private final CountDownLatch formatReady;
 
-        private ActiveStreamControl(URL url, BlockPos pos, String sessionId, UUID minecartUuid, AtomicBoolean closed,
+        private ActiveStreamControl(URL url, BlockPos pos, Optional<PlaybackSessionId> playbackSessionId,
+                UUID minecartUuid, AtomicBoolean closed,
                 AtomicReference<InputStream> bodyRef, Thread worker, BlockingAudioPipe fallbackPipe,
                 AtomicReference<AudioDecodePipeline> pipelineRef, CountDownLatch formatReady) {
             this.url = url;
             this.pos = AudioUtils.copyPos(pos);
-            this.sessionId = sessionId != null ? sessionId : "";
+            this.playbackSessionId = playbackSessionId != null ? playbackSessionId : Optional.empty();
             this.minecartUuid = minecartUuid;
             this.closed = closed;
             this.bodyRef = bodyRef;
@@ -1306,16 +1308,19 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         }
     }
 
-    private static void closeStaleModernStreams(BlockPos pos, String sessionId, UUID minecartUuid) {
-        if ((pos == null && minecartUuid == null) || sessionId == null || sessionId.isBlank()) {
+    private static void closeStaleModernStreams(BlockPos pos, Optional<PlaybackSessionId> playbackSessionId,
+            UUID minecartUuid) {
+        if ((pos == null && minecartUuid == null) || playbackSessionId == null || playbackSessionId.isEmpty()) {
             return;
         }
+        PlaybackSessionId currentSessionId = playbackSessionId.orElseThrow();
         for (ActiveStreamControl control : ACTIVE_MODERN_STREAMS) {
             boolean sameSource = minecartUuid != null
                     ? minecartUuid.equals(control.minecartUuid)
                     : control.minecartUuid == null && control.pos != null && control.pos.equals(pos);
-            if (sameSource && !sessionId.equals(control.sessionId)) {
-                LOGGER.debug("关闭旧现代音频流: pos={} oldSession={} newSession={}", pos, control.sessionId, sessionId);
+            if (sameSource && !playbackSessionId.equals(control.playbackSessionId)) {
+                LOGGER.debug("关闭旧现代音频流: pos={} oldSession={} newSession={}", pos,
+                        control.playbackSessionId.map(PlaybackSessionId::value).orElse(""), currentSessionId);
                 control.close();
             }
         }
@@ -1365,7 +1370,11 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             long createdAtMillis) {
     }
 
-    public record RegisteredRequest(String url, String requestToken) {
+    public record RegisteredRequest(String url, Optional<MediaRequestToken> requestToken) {
+        public RegisteredRequest {
+            url = url == null ? "" : url;
+            requestToken = requestToken == null ? Optional.empty() : requestToken;
+        }
     }
 
     @Override

@@ -1,7 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
 import com.zhongbai233.net_music_can_play_bili.blockentity.ControlConsoleBlockEntity;
-import com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleDocument;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -91,9 +91,10 @@ public record ControlConsoleAccessPacket(BlockPos pos, UUID leaseId, UUID operat
         }
         ControlConsoleBlockEntity.ReplaceResult result = console.replaceAccessControl(player,
                 payload.operationId(), payload.expectedRevision(), payload.accessMode(), payload.trustedPlayerIds());
+        ControlConsoleConfigResultPacket.Status status = ControlConsoleConfigResultPacket.fromReplaceResult(result);
         PacketDistributor.sendToPlayer(player, new ControlConsoleConfigResultPacket(payload.pos(),
-                payload.operationId(), console.documentRevision(),
-                ControlConsoleConfigResultPacket.fromReplaceResult(result)));
+                payload.operationId(), console.documentRevision(), status,
+                status == ControlConsoleConfigResultPacket.Status.CONFLICT ? console.document() : null));
     }
 
     private static void reject(ControlConsoleAccessPacket payload, IPayloadContext context, long revision) {

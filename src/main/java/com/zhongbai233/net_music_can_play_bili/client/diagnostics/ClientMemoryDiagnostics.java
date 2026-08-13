@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.client.diagnostics;
 
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
+import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryProperties;
 import com.zhongbai233.net_music_can_play_bili.media.codec.VideoNativeDecoder;
 import com.zhongbai233.net_music_can_play_bili.media.codec.VideoNativeDecoder.NativeMemoryStats;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker.Category;
@@ -19,8 +20,7 @@ import java.util.Locale;
 public final class ClientMemoryDiagnostics {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final boolean ENABLED = MemoryResourceTracker.enabled();
-    private static final long REPORT_INTERVAL_NANOS = Math.max(1_000L,
-            Long.getLong("ncpb.memory.report_interval_ms", 5_000L)) * 1_000_000L;
+    private static final long REPORT_INTERVAL_NANOS = MemoryProperties.reportIntervalNanos();
     private static volatile long nextReportNanoTime;
 
     private ClientMemoryDiagnostics() {
@@ -34,7 +34,7 @@ public final class ClientMemoryDiagnostics {
         if (now < nextReportNanoTime) {
             return;
         }
-        nextReportNanoTime = now + REPORT_INTERVAL_NANOS;
+        nextReportNanoTime = saturatedAdd(now, REPORT_INTERVAL_NANOS);
         report("periodic");
     }
 
@@ -119,6 +119,13 @@ public final class ClientMemoryDiagnostics {
             return "n/a";
         }
         return String.format(Locale.ROOT, "%.1fMiB", bytes / 1_048_576.0D);
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        if (right > 0L && left > Long.MAX_VALUE - right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     private record BufferUsage(long count, long memoryUsed, long capacity) {

@@ -4,6 +4,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /** 每玩家独立的中控台媒体消费租约；不同玩家不会互相排斥。 */
 public final class ControlConsoleConsumerLeaseRegistry {
@@ -61,6 +63,17 @@ public final class ControlConsoleConsumerLeaseRegistry {
 
     public static synchronized void clear() {
         LEASES.clear();
+    }
+
+    /** Read-only system-test/diagnostic view of active consumers for one exact console. */
+    public static synchronized Set<UUID> activePlayers(String dimension, long packedPos, long nowMillis) {
+        Objects.requireNonNull(dimension, "dimension");
+        return LEASES.entrySet().stream()
+                .filter(entry -> entry.getKey().dimension().equals(dimension)
+                        && entry.getKey().packedPos() == packedPos
+                        && entry.getValue().expiresAtMillis() > nowMillis)
+                .map(entry -> entry.getKey().playerId())
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     private static long expiresAt(long nowMillis) {

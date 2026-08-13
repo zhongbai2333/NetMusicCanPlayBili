@@ -1,11 +1,15 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
 import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,46 +29,55 @@ import java.util.function.BiFunction;
  * </p>
  */
 public final class ClientMediaPlaybackRegistry {
-    private static final Map<UUID, ActivePlayback> ACTIVE = new ConcurrentHashMap<>();
-    private static final Set<String> STARTED_AUDIO_SESSIONS = ConcurrentHashMap.newKeySet();
+    private static final Map<PlaybackSourceId, ActivePlayback> ACTIVE = new ConcurrentHashMap<>();
+    private static final Set<SourceSessionKey> STARTED_AUDIO_SESSIONS = ConcurrentHashMap.newKeySet();
 
     private ClientMediaPlaybackRegistry() {
     }
 
     public static ActivePlayback get(UUID sourceId) {
-        return sourceId != null ? ACTIVE.get(sourceId) : null;
+        return sourceId != null ? ACTIVE.get(PlaybackSourceId.of(sourceId)) : null;
     }
 
     public static void put(UUID sourceId, ActivePlayback playback) {
         if (sourceId != null && playback != null) {
-            ACTIVE.put(sourceId, playback);
+            ACTIVE.put(PlaybackSourceId.of(sourceId), playback);
         }
     }
 
     public static boolean contains(UUID sourceId) {
-        return sourceId != null && ACTIVE.containsKey(sourceId);
+        return sourceId != null && ACTIVE.containsKey(PlaybackSourceId.of(sourceId));
     }
 
     public static void computeIfPresent(UUID sourceId, BiFunction<UUID, ActivePlayback, ActivePlayback> remapper) {
         if (sourceId != null && remapper != null) {
-            ACTIVE.computeIfPresent(sourceId, remapper);
+            ACTIVE.computeIfPresent(PlaybackSourceId.of(sourceId),
+                    (key, active) -> remapper.apply(key.value(), active));
         }
     }
 
     public static void remove(UUID sourceId) {
         if (sourceId != null) {
-            ACTIVE.remove(sourceId);
+            ACTIVE.remove(PlaybackSourceId.of(sourceId));
             removeAudioStartedForSource(sourceId);
             ClientMediaTimelineView.forget(sourceId);
         }
     }
 
     public static void finish(UUID sourceId, String sessionId) {
-        if (sourceId == null || sessionId == null || sessionId.isBlank()) {
+        PlaybackSessionId.parse(sessionId).ifPresent(parsedSessionId -> finish(sourceId, parsedSessionId));
+    }
+
+    public static void finish(UUID sourceId, PlaybackSessionId sessionId) {
+        if (sourceId == null || sessionId == null) {
             return;
         }
-        ACTIVE.computeIfPresent(sourceId, (ignored, active) -> sessionId.equals(active.sessionId()) ? null : active);
-        STARTED_AUDIO_SESSIONS.remove(sessionKey(sourceId, sessionId));
+        PlaybackSourceId parsedSourceId = PlaybackSourceId.of(sourceId);
+        ACTIVE.computeIfPresent(parsedSourceId,
+                (ignored, active) -> active.playbackSessionId().filter(sessionId::equals).isPresent()
+                        ? null
+                        : active);
+        STARTED_AUDIO_SESSIONS.remove(new SourceSessionKey(parsedSourceId, sessionId));
         ClientMediaTimelineView.forget(sourceId);
     }
 
@@ -72,8 +85,15 @@ public final class ClientMediaPlaybackRegistry {
         if (sourceId == null || sessionId == null || sessionId.isBlank()) {
             return;
         }
+        PlaybackSessionId.parse(sessionId).ifPresent(parsedSessionId -> finishSession(sourceId, parsedSessionId));
+    }
+
+    public static void finishSession(UUID sourceId, PlaybackSessionId sessionId) {
+        if (sourceId == null || sessionId == null) {
+            return;
+        }
         finish(sourceId, sessionId);
-        ClientMediaSoundRegistry.finish(sourceId, sessionId);
+        ClientMediaSoundRegistry.finishAndDiscard(sourceId, sessionId);
     }
 
     public static void updateLyric(UUID sourceId, String sessionId, LyricRecord record, int lyricTick) {
@@ -82,7 +102,7 @@ public final class ClientMediaPlaybackRegistry {
         }
         String current = currentLineAt(record.getLyrics(), lyricTick);
         String translated = currentLineAt(record.getTransLyrics(), lyricTick);
-        ACTIVE.computeIfPresent(sourceId,
+        ACTIVE.computeIfPresent(PlaybackSourceId.of(sourceId),
                 (ignored, active) -> active.withLyrics(record, current, translated));
     }
 
@@ -96,43 +116,57 @@ public final class ClientMediaPlaybackRegistry {
         if (sourceId == null || sessionId == null || sessionId.isBlank()) {
             return true;
         }
-        ActivePlayback active = ACTIVE.get(sourceId);
-        return active != null && sessionId.equals(active.sessionId());
+        return PlaybackSessionId.parse(sessionId).map(parsedSessionId -> isCurrent(sourceId, parsedSessionId))
+                .orElse(false);
+    }
+
+    public static boolean isCurrent(UUID sourceId, PlaybackSessionId sessionId) {
+        if (sourceId == null || sessionId == null) {
+            return false;
+        }
+        ActivePlayback active = ACTIVE.get(PlaybackSourceId.of(sourceId));
+        return active != null && active.playbackSessionId().filter(sessionId::equals).isPresent();
     }
 
     public static boolean markAudioStarted(UUID sourceId, String sessionId, long startOffsetMillis, long totalMillis) {
-        if (sourceId == null || sessionId == null || sessionId.isBlank() || !isCurrent(sourceId, sessionId)) {
+        PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (sourceId == null || parsedSessionId == null) {
             return false;
         }
-        if (!STARTED_AUDIO_SESSIONS.add(sessionKey(sourceId, sessionId))) {
+        PlaybackSourceId parsedSourceId = PlaybackSourceId.of(sourceId);
+        ActivePlayback current = ACTIVE.get(parsedSourceId);
+        if (current == null || !current.playbackSessionId().filter(parsedSessionId::equals).isPresent()) {
             return false;
         }
-        ACTIVE.computeIfPresent(sourceId, (ignored, active) -> active.reanchoredAtSoundStart(
+        if (!STARTED_AUDIO_SESSIONS.add(new SourceSessionKey(parsedSourceId, parsedSessionId))) {
+            return false;
+        }
+        ACTIVE.computeIfPresent(parsedSourceId, (ignored, active) -> active.reanchoredAtSoundStart(
                 Math.max(0L, startOffsetMillis), Math.max(0L, totalMillis)));
         return true;
     }
 
     public static boolean hasAudioStarted(UUID sourceId, String sessionId) {
-        return sourceId != null && sessionId != null
-                && STARTED_AUDIO_SESSIONS.contains(sessionKey(sourceId, sessionId));
+        PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        return sourceId != null && parsedSessionId != null
+                && STARTED_AUDIO_SESSIONS.contains(
+                        new SourceSessionKey(PlaybackSourceId.of(sourceId), parsedSessionId));
     }
 
     public static void removeAudioStartedForSource(UUID sourceId) {
         if (sourceId != null) {
-            STARTED_AUDIO_SESSIONS.removeIf(key -> key.startsWith(sourceId + ":"));
+            PlaybackSourceId parsedSourceId = PlaybackSourceId.of(sourceId);
+            STARTED_AUDIO_SESSIONS.removeIf(key -> key.sourceId().equals(parsedSourceId));
         }
     }
 
     public static ActivePlayback createFromSync(ClientMediaSyncPayload payload) {
-        return new ActivePlayback(payload.sessionId(), payload.queueIndex(), payload.songName(), payload.rawUrl(),
-                MediaTimelineClock.start(payload.sessionId(), Math.max(0L, payload.elapsedMillis()),
+        Optional<PlaybackSessionId> playbackSessionId = payload.playbackSessionId();
+        return new ActivePlayback(playbackSessionId, payload.queueIndex(), payload.songName(), payload.rawUrl(),
+                MediaTimelineClock.start(playbackSessionId, Math.max(0L, payload.elapsedMillis()),
                         Math.max(0L, payload.durationSeconds()) * 1000L),
                 null, "", "", payload.volumePerMille() / 1000.0F, SourceLocation.from(payload),
                 payload.headphoneRouted());
-    }
-
-    private static String sessionKey(UUID sourceId, String sessionId) {
-        return sourceId + ":" + sessionId;
     }
 
     private static String currentLineAt(it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap<String> lyrics, int tick) {
@@ -150,10 +184,33 @@ public final class ClientMediaPlaybackRegistry {
         return line != null ? line : "";
     }
 
-    public record ActivePlayback(String sessionId, int queueIndex, String songName, String rawUrl,
+    private record SourceSessionKey(PlaybackSourceId sourceId, PlaybackSessionId sessionId) {
+        private SourceSessionKey {
+            Objects.requireNonNull(sourceId, "sourceId");
+            Objects.requireNonNull(sessionId, "sessionId");
+        }
+    }
+
+    public record ActivePlayback(Optional<PlaybackSessionId> playbackSessionId, int queueIndex, String songName,
+            String rawUrl,
             MediaTimelineClock timeline,
             LyricRecord lyricRecord, String currentLyric,
             String translatedLyric, float volume, SourceLocation sourceLocation, boolean headphoneRouted) {
+        public ActivePlayback {
+            Objects.requireNonNull(playbackSessionId, "playbackSessionId");
+        }
+
+        public ActivePlayback(String sessionId, int queueIndex, String songName, String rawUrl,
+                MediaTimelineClock timeline, LyricRecord lyricRecord, String currentLyric,
+                String translatedLyric, float volume, SourceLocation sourceLocation, boolean headphoneRouted) {
+            this(PlaybackSessionId.parse(sessionId), queueIndex, songName, rawUrl, timeline, lyricRecord,
+                    currentLyric, translatedLyric, volume, sourceLocation, headphoneRouted);
+        }
+
+        public String sessionId() {
+            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+        }
+
         public long elapsedMillis() {
             return timeline.mediaMillis();
         }
@@ -175,7 +232,7 @@ public final class ClientMediaPlaybackRegistry {
         }
 
         public ActivePlayback withLyrics(LyricRecord record, String current, String translated) {
-            return new ActivePlayback(sessionId, queueIndex, songName, rawUrl, timeline, record,
+            return new ActivePlayback(playbackSessionId, queueIndex, songName, rawUrl, timeline, record,
                     current != null ? current : "",
                     translated != null ? translated : "", volume, sourceLocation, headphoneRouted);
         }
@@ -193,8 +250,8 @@ public final class ClientMediaPlaybackRegistry {
         }
 
         public ActivePlayback withVolume(float newVolume) {
-            return new ActivePlayback(sessionId, queueIndex, songName, rawUrl, timeline, lyricRecord, currentLyric,
-                    translatedLyric, newVolume, sourceLocation, headphoneRouted);
+            return new ActivePlayback(playbackSessionId, queueIndex, songName, rawUrl, timeline, lyricRecord,
+                    currentLyric, translatedLyric, newVolume, sourceLocation, headphoneRouted);
         }
 
         public ActivePlayback withServerElapsed(long serverElapsedMillis, long serverDurationMillis) {
@@ -209,13 +266,13 @@ public final class ClientMediaPlaybackRegistry {
         }
 
         public ActivePlayback withSourceLocation(SourceLocation newSourceLocation) {
-            return new ActivePlayback(sessionId, queueIndex, songName, rawUrl, timeline, lyricRecord, currentLyric,
-                    translatedLyric, volume, newSourceLocation, headphoneRouted);
+            return new ActivePlayback(playbackSessionId, queueIndex, songName, rawUrl, timeline, lyricRecord,
+                    currentLyric, translatedLyric, volume, newSourceLocation, headphoneRouted);
         }
 
         public ActivePlayback withHeadphoneRouted(boolean routed) {
-            return new ActivePlayback(sessionId, queueIndex, songName, rawUrl, timeline, lyricRecord, currentLyric,
-                    translatedLyric, volume, sourceLocation, routed);
+            return new ActivePlayback(playbackSessionId, queueIndex, songName, rawUrl, timeline, lyricRecord,
+                    currentLyric, translatedLyric, volume, sourceLocation, routed);
         }
     }
 

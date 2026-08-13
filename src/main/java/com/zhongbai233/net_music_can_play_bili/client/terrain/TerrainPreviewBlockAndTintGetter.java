@@ -17,6 +17,9 @@ import net.minecraft.world.level.material.FluidState;
 import org.jspecify.annotations.Nullable;
 
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /** 只读 20³ section 邻域模型/tint/light 视图，不持有 Level、chunk、Biome 或注册表对象。 */
 final class TerrainPreviewBlockAndTintGetter implements BlockAndTintGetter {
@@ -26,6 +29,7 @@ final class TerrainPreviewBlockAndTintGetter implements BlockAndTintGetter {
     private final int[] foliageColors = tintArray();
     private final int[] dryFoliageColors = tintArray();
     private final int[] waterColors = tintArray();
+    private final Map<Integer, List<Integer>> tintLayers = new HashMap<>();
     private final TerrainBlockSectionSnapshot snapshot;
 
     TerrainPreviewBlockAndTintGetter(TerrainBlockSectionSnapshot snapshot) {
@@ -36,6 +40,9 @@ final class TerrainPreviewBlockAndTintGetter implements BlockAndTintGetter {
             foliageColors[index] = block.tintColors().color(TerrainTintColors.TintType.FOLIAGE);
             dryFoliageColors[index] = block.tintColors().color(TerrainTintColors.TintType.DRY_FOLIAGE);
             waterColors[index] = block.tintColors().color(TerrainTintColors.TintType.WATER);
+            if (!block.tintLayers().isEmpty()) {
+                tintLayers.put(index, block.tintLayers());
+            }
         }
     }
 
@@ -81,6 +88,17 @@ final class TerrainPreviewBlockAndTintGetter implements BlockAndTintGetter {
             return waterColors[index];
         }
         return -1;
+    }
+
+    int precomputedTint(BlockPos pos, int layer) {
+        int localX = pos.getX() - snapshot.section().minBlockX();
+        int localY = pos.getY() - snapshot.section().minBlockY();
+        int localZ = pos.getZ() - snapshot.section().minBlockZ();
+        if (!inside(localX, localY, localZ) || layer < 0) {
+            return -1;
+        }
+        List<Integer> colors = tintLayers.get(index(localX, localY, localZ));
+        return colors != null && layer < colors.size() ? colors.get(layer) : -1;
     }
 
     @Override

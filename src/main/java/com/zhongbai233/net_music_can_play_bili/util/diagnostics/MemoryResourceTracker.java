@@ -9,10 +9,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * objects.
  */
 public final class MemoryResourceTracker {
-    private static final boolean DIAGNOSTICS_ENABLED = Boolean.parseBoolean(
-            System.getProperty("ncpb.memory.diagnostics", "false"));
-    private static final boolean PROTECTION_ENABLED = Boolean.parseBoolean(
-            System.getProperty("ncpb.memory.protection", "true"));
+    private static final MemoryProperties.Flags PROPERTIES = MemoryProperties.flags();
+    private static final boolean DIAGNOSTICS_ENABLED = PROPERTIES.diagnosticsEnabled();
+    private static final boolean PROTECTION_ENABLED = PROPERTIES.protectionEnabled();
     private static final boolean TRACKING_ENABLED = DIAGNOSTICS_ENABLED || PROTECTION_ENABLED;
 
     public enum Category {

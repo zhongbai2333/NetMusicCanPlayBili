@@ -93,6 +93,15 @@ final class VideoJni {
      */
     static native long getLastFramePtsNanos(long handle);
 
+    /**
+     * Sends the FFmpeg NULL-packet end marker so delayed/reordered frames can
+     * be drained. This is distinct from {@link #flush(long)}, which resets and
+     * discards buffered decode state for a seek.
+     *
+     * @return 0=submitted, 1=decoder must be drained before retry, -1=failure
+     */
+    static native int sendEndOfStream(long handle);
+
     /** 刷新解码器（seek 后调用） */
     static native void flush(long handle);
 

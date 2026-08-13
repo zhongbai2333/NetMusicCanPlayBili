@@ -11,17 +11,14 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 public final class PadMapSampler {
-    public static final int DEFAULT_VIEW_WIDTH = Integer.getInteger("ncpb.pad.map_view_width",
-            Integer.getInteger("ncpb.pad.map_size", 384));
-    public static final int DEFAULT_VIEW_HEIGHT = Integer.getInteger("ncpb.pad.map_view_height",
-            192);
-    public static final int DEFAULT_OVERSCAN = Integer.getInteger("ncpb.pad.map_overscan", 96);
-    public static final int DEFAULT_WIDTH = Integer.getInteger("ncpb.pad.map_width",
-            DEFAULT_VIEW_WIDTH + DEFAULT_OVERSCAN * 2);
-    public static final int DEFAULT_HEIGHT = Integer.getInteger("ncpb.pad.map_height",
-            DEFAULT_VIEW_HEIGHT + DEFAULT_OVERSCAN * 2);
+    private static final PadMapProperties.Layout PROPERTIES = PadMapProperties.layout();
+    public static final int DEFAULT_VIEW_WIDTH = PROPERTIES.viewWidth();
+    public static final int DEFAULT_VIEW_HEIGHT = PROPERTIES.viewHeight();
+    public static final int DEFAULT_OVERSCAN = PROPERTIES.overscan();
+    public static final int DEFAULT_WIDTH = PROPERTIES.width();
+    public static final int DEFAULT_HEIGHT = PROPERTIES.height();
     public static final int DEFAULT_SIZE = DEFAULT_WIDTH;
-    private static final int CELL_SAMPLES = Integer.getInteger("ncpb.pad.map_cell_samples", 5);
+    private static final int CELL_SAMPLES = PROPERTIES.cellSamples();
     /** 屋面下方向下探测室内空腔的深度。 */
     private static final int INTERIOR_SCAN_DEPTH = 12;
     /** 室内地图向上探测顶棚的高度。 */

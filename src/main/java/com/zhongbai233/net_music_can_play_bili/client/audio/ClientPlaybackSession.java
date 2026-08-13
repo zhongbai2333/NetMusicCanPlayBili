@@ -1,7 +1,12 @@
 package com.zhongbai233.net_music_can_play_bili.client.audio;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 /**
  * 一次客户端播放的显式生命周期和 cancellation token。
@@ -21,20 +26,29 @@ public final class ClientPlaybackSession {
         FAILED
     }
 
-    private final String sessionId;
+    private final PlaybackSessionId sessionId;
     private final long expiresAtMillis;
     private final long suppressUntilMillis;
     private final List<Runnable> cancellationActions = new ArrayList<>();
+    private final Map<String, Runnable> replaceableResources = new LinkedHashMap<>();
     private State state = State.PREPARING;
     private boolean cancelled;
 
     ClientPlaybackSession(String sessionId, long expiresAtMillis, long suppressUntilMillis) {
-        this.sessionId = sessionId != null ? sessionId : "";
+        this(PlaybackSessionId.of(sessionId), expiresAtMillis, suppressUntilMillis);
+    }
+
+    ClientPlaybackSession(PlaybackSessionId sessionId, long expiresAtMillis, long suppressUntilMillis) {
+        this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
         this.expiresAtMillis = expiresAtMillis;
         this.suppressUntilMillis = suppressUntilMillis;
     }
 
     public String sessionId() {
+        return sessionId.value();
+    }
+
+    public PlaybackSessionId playbackSessionId() {
         return sessionId;
     }
 
@@ -85,6 +99,32 @@ public final class ClientPlaybackSession {
         }
     }
 
+    /**
+     * 原子替换同一职责槽位的资源。旧资源在替换后立即取消；session 已结束时，新资源立即取消。
+     *
+     * @return 资源是否成功绑定到仍存活的 session
+     */
+    public boolean replaceResource(String slot, Runnable cancellationAction) {
+        if (slot == null || slot.isBlank() || cancellationAction == null) {
+            return false;
+        }
+        Runnable replaced = null;
+        boolean bound;
+        synchronized (this) {
+            bound = !cancelled && !isTerminal();
+            if (bound) {
+                replaced = replaceableResources.put(slot, cancellationAction);
+            }
+        }
+        if (replaced != null) {
+            runSafely(replaced);
+        }
+        if (!bound) {
+            runSafely(cancellationAction);
+        }
+        return bound;
+    }
+
     public boolean cancel() {
         List<Runnable> actions;
         synchronized (this) {
@@ -95,8 +135,11 @@ public final class ClientPlaybackSession {
             if (!isTerminal()) {
                 state = State.STOPPING;
             }
-            actions = List.copyOf(cancellationActions);
+            actions = new ArrayList<>(cancellationActions.size() + replaceableResources.size());
+            actions.addAll(cancellationActions);
+            actions.addAll(replaceableResources.values());
             cancellationActions.clear();
+            replaceableResources.clear();
         }
         actions.forEach(ClientPlaybackSession::runSafely);
         synchronized (this) {

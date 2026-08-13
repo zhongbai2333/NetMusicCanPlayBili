@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.audio;
 
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 
@@ -18,15 +19,16 @@ public final class ModernTurntablePlaybackTracker {
     }
 
     public static boolean tryStart(BlockPos pos, String sessionId, int remainingSeconds) {
-        if (pos == null || sessionId == null || sessionId.isBlank()) {
+        PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (pos == null || parsedSessionId == null) {
             return true;
         }
         long now = System.currentTimeMillis();
         cleanup(now);
         long expiresAt = now + Math.max(1, remainingSeconds) * 1000L + STOP_GRACE_MILLIS;
-        Object key = keyFor(pos, sessionId);
+        Object key = keyFor(pos, parsedSessionId);
         ClientPlaybackSession previous = ACTIVE.get(key);
-        if (previous != null && previous.sessionId().equals(sessionId)) {
+        if (previous != null && previous.playbackSessionId().equals(parsedSessionId)) {
             if (previous.expiresAtMillis() > now) {
                 return false;
             }
@@ -34,11 +36,11 @@ public final class ModernTurntablePlaybackTracker {
                 return false;
             }
         }
-        ClientPlaybackSession next = new ClientPlaybackSession(sessionId, expiresAt,
+        ClientPlaybackSession next = new ClientPlaybackSession(parsedSessionId, expiresAt,
                 now + DUPLICATE_SUPPRESS_MILLIS);
         AtomicReference<ClientPlaybackSession> replaced = new AtomicReference<>();
         ACTIVE.compute(key, (ignored, current) -> {
-            if (current != null && current.sessionId().equals(sessionId)
+            if (current != null && current.playbackSessionId().equals(parsedSessionId)
                     && (current.expiresAtMillis() > now || current.suppressUntilMillis() > now)) {
                 replaced.set(next);
                 return current;
@@ -57,11 +59,12 @@ public final class ModernTurntablePlaybackTracker {
     }
 
     public static void markStreamStarted(BlockPos pos, String sessionId) {
-        if (pos == null || sessionId == null || sessionId.isBlank()) {
+        PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (pos == null || parsedSessionId == null) {
             return;
         }
-        ClientPlaybackSession active = ACTIVE.get(keyFor(pos, sessionId));
-        if (active != null && active.sessionId().equals(sessionId)) {
+        ClientPlaybackSession active = ACTIVE.get(keyFor(pos, parsedSessionId));
+        if (active != null && active.playbackSessionId().equals(parsedSessionId)) {
             active.transitionTo(ClientPlaybackSession.State.PLAYING);
         }
     }
@@ -69,8 +72,11 @@ public final class ModernTurntablePlaybackTracker {
     public static void registerSound(SyncedMediaSound sound, BlockPos pos, String sessionId) {
         if (sound != null) {
             ACTIVE_SOUNDS.put(sound, Boolean.TRUE);
-            ClientPlaybackSession active = ACTIVE.get(keyFor(pos, sessionId));
-            if (active == null || !active.sessionId().equals(sessionId)) {
+            PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+            ClientPlaybackSession active = pos != null && parsedSessionId != null
+                    ? ACTIVE.get(keyFor(pos, parsedSessionId))
+                    : null;
+            if (active == null || !active.playbackSessionId().equals(parsedSessionId)) {
                 stopSound(sound);
                 return;
             }
@@ -98,12 +104,16 @@ public final class ModernTurntablePlaybackTracker {
     }
 
     public static void finish(BlockPos pos, String sessionId) {
-        if (pos == null || sessionId == null || sessionId.isBlank()) {
+        PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (pos == null || parsedSessionId == null) {
             return;
         }
-        Object key = keyFor(pos, sessionId);
+        Object key = keyFor(pos, parsedSessionId);
         ClientPlaybackSession active = ACTIVE.get(key);
-        if (active != null && active.sessionId().equals(sessionId) && ACTIVE.remove(key, active)) {
+        if (active != null
+                && ModernTurntableStopPolicy.decide(parsedSessionId.value(), active.sessionId())
+                        == ModernTurntableStopPolicy.Decision.STOP_EXACT
+                && ACTIVE.remove(key, active)) {
             active.cancel();
         }
     }
@@ -118,24 +128,26 @@ public final class ModernTurntablePlaybackTracker {
     }
 
     public static boolean isCurrent(BlockPos pos, String sessionId) {
-        if (pos == null || sessionId == null || sessionId.isBlank()) {
+        PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (pos == null || parsedSessionId == null) {
             return true;
         }
         long now = System.currentTimeMillis();
         cleanup(now);
-        ClientPlaybackSession active = ACTIVE.get(keyFor(pos, sessionId));
-        return active == null || active.sessionId().equals(sessionId);
+        ClientPlaybackSession active = ACTIVE.get(keyFor(pos, parsedSessionId));
+        return active == null || active.playbackSessionId().equals(parsedSessionId);
     }
 
     /** 指定 session 必须仍被登记且未取消；用于异步任务提交结果前的严格校验。 */
     public static boolean isActiveSession(BlockPos pos, String sessionId) {
-        if (pos == null || sessionId == null || sessionId.isBlank()) {
+        PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (pos == null || parsedSessionId == null) {
             return false;
         }
         long now = System.currentTimeMillis();
         cleanup(now);
-        ClientPlaybackSession active = ACTIVE.get(keyFor(pos, sessionId));
-        return active != null && active.sessionId().equals(sessionId) && !active.isCancelled()
+        ClientPlaybackSession active = ACTIVE.get(keyFor(pos, parsedSessionId));
+        return active != null && active.playbackSessionId().equals(parsedSessionId) && !active.isCancelled()
                 && !active.isTerminal();
     }
 
@@ -154,16 +166,17 @@ public final class ModernTurntablePlaybackTracker {
         }
         long now = System.currentTimeMillis();
         cleanup(now);
-        Object key = sessionHint != null && !sessionHint.isBlank()
-                ? keyFor(pos, sessionHint)
+        PlaybackSessionId parsedHint = PlaybackSessionId.parse(sessionHint).orElse(null);
+        Object key = parsedHint != null
+                ? keyFor(pos, parsedHint)
                 : AudioUtils.copyPos(pos);
         ClientPlaybackSession active = ACTIVE.get(key);
         return active != null ? active.sessionId() : "";
     }
 
     public static void markRecovering(BlockPos pos, String sessionId) {
-        ClientPlaybackSession active = ACTIVE.get(keyFor(pos, sessionId));
-        if (active != null && active.sessionId().equals(sessionId)) {
+        ClientPlaybackSession active = session(pos, sessionId);
+        if (active != null) {
             active.transitionTo(ClientPlaybackSession.State.RECOVERING);
         }
     }
@@ -177,23 +190,33 @@ public final class ModernTurntablePlaybackTracker {
         return true;
     }
 
+    /** 将同一职责的异步资源原子换代；会话已失效时由调用方保留兼容清理策略。 */
+    public static boolean replaceResource(BlockPos pos, String sessionId, String slot, Runnable cancellationAction) {
+        ClientPlaybackSession active = session(pos, sessionId);
+        return active != null && active.replaceResource(slot, cancellationAction);
+    }
+
     static ClientPlaybackSession session(BlockPos pos, String sessionId) {
-        ClientPlaybackSession active = ACTIVE.get(keyFor(pos, sessionId));
-        return active != null && active.sessionId().equals(sessionId) ? active : null;
+        PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (pos == null || parsedSessionId == null) {
+            return null;
+        }
+        ClientPlaybackSession active = ACTIVE.get(keyFor(pos, parsedSessionId));
+        return active != null && active.playbackSessionId().equals(parsedSessionId) ? active : null;
     }
 
     public static void fail(BlockPos pos, String sessionId) {
         ClientPlaybackSession active = session(pos, sessionId);
         if (active != null) {
             active.fail();
-            if (ACTIVE.remove(keyFor(pos, sessionId), active)) {
+            if (ACTIVE.remove(keyFor(pos, active.playbackSessionId()), active)) {
                 active.cancel();
             }
         }
     }
 
-    private static Object keyFor(BlockPos pos, String sessionId) {
-        UUID entityUuid = ClientMinecartAudioAnchors.entityUuid(sessionId);
+    private static Object keyFor(BlockPos pos, PlaybackSessionId sessionId) {
+        UUID entityUuid = ClientMinecartAudioAnchors.entityUuid(sessionId.value());
         return entityUuid != null ? entityUuid : AudioUtils.copyPos(pos);
     }
 

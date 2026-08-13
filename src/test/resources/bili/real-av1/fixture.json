@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-08-13",
+  "source": {
+    "bvid": "BV1qM4y1w716",
+    "cid": 455439756,
+    "quality": 16,
+    "codecId": 13,
+    "codecs": "av01.0.01M.08.0.110.01.01.01.0",
+    "width": 682,
+    "height": 360,
+    "frameRate": "25",
+    "timescale": 16000
+  },
+  "segmentBase": {
+    "initialization": "0-939",
+    "indexRange": "992-1491"
+  },
+  "resources": {
+    "initIndexFirstFragment": {
+      "file": "init-index-first-fragment.m4s.b64",
+      "sourceRange": "0-117149",
+      "decodedBytes": 117150,
+      "sha256": "39a7b50ce1ca0aae0906f69968d2c24cd9da6a88cd6c456615534969a754c349"
+    },
+    "seekFragment35Seconds": {
+      "file": "seek-fragment-35s.m4s.b64",
+      "sourceRange": "900893-962851",
+      "decodedBytes": 61959,
+      "sha256": "c2abab80f42df19e261375e9b7f67d924da87c07bcad18c5fb6e2b8ccb5bd215"
+    }
+  },
+  "expected": {
+    "sidxReferences": 39,
+    "fragmentDurationTicks": 80000,
+    "firstFragmentSamples": 125,
+    "firstFragmentMdatBytes": 115062,
+    "seekFragmentIndex": 7,
+    "seekFragmentStartSeconds": 35,
+    "seekFragmentSamples": 125,
+    "av1ConfigObuSha256": "6390be5a9f89257f0b1eece5bc850b9cf8cc9f1cefc2f3101841ff6758654b34"
+  }
+}

@@ -1,0 +1,105 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+group = 'com.zhongbai233.sceneeditor'
+version = rootProject.scene_editor_version
+
+def isolatedBuildRoot = rootProject.providers.gradleProperty('ncpbBuildDirectory').orElse('').get().trim()
+if (!isolatedBuildRoot.isEmpty()) {
+    layout.buildDirectory = new File(isolatedBuildRoot, project.name)
+}
+
+base {
+    archivesName = 'scene-editor-core'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(25)
+    withSourcesJar()
+    withJavadocJar()
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    api 'org.joml:joml:1.10.8'
+
+    testImplementation platform('org.junit:junit-bom:5.13.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(Jar).configureEach {
+    manifest {
+        attributes(
+                'Automatic-Module-Name': 'com.zhongbai233.sceneeditor.core',
+                'FMLModType': 'LIBRARY',
+                'Implementation-Title': 'Scene Editor Core',
+                'Implementation-Version': project.version)
+    }
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+tasks.named('javadoc') {
+    options.addStringOption('Xdoclint:none', '-quiet')
+}
+
+configurations.configureEach {
+    resolutionStrategy.eachDependency { details ->
+        def dependencyGroup = details.requested.group ?: ''
+        if (dependencyGroup.startsWith('net.minecraft') || dependencyGroup.startsWith('net.neoforged')
+                || dependencyGroup.startsWith('com.mojang')) {
+            throw new GradleException("scene-editor-core cannot resolve host dependency ${details.requested}")
+        }
+    }
+}
+
+publishing {
+    publications {
+        register('mavenJava', MavenPublication) {
+            artifactId = 'scene-editor-core'
+            from components.java
+            pom {
+                name = 'Scene Editor Core'
+                description = 'Minecraft-independent camera, projection, picking, gizmo and undo/redo core.'
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = 'phase8Verification'
+            url = rootProject.layout.buildDirectory.dir('phase8-maven-repository')
+        }
+    }
+}
+
+tasks.register('verifyNoMinecraftDependencies') {
+    group = 'verification'
+    description = 'Proves the core source and resolved graph contain no Minecraft, NeoForge or host-mod dependencies.'
+    dependsOn tasks.named('compileJava')
+    inputs.files(fileTree('src/main/java') { include '**/*.java' })
+    doLast {
+        def forbiddenSourceTokens = [
+                'net.minecraft', 'net.neoforged', 'com.mojang.blaze3d', 'org.lwjgl',
+                'com.zhongbai233.net_music_can_play_bili'
+        ]
+        def violations = inputs.files.files.findAll { it.name.endsWith('.java') }.collectMany { source ->
+            def text = source.getText('UTF-8')
+            forbiddenSourceTokens.findAll(text::contains).collect { token -> "${source}: ${token}" }
+        }
+        if (!violations.isEmpty()) {
+            throw new GradleException("scene-editor-core is not isolated:\n" + violations.join('\n'))
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('verifyNoMinecraftDependencies')
+}

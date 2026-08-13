@@ -4,6 +4,7 @@ import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.github.tartaricacid.netmusic.client.audio.MusicPlayManager;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
+import com.zhongbai233.net_music_can_play_bili.media.sync.MediaRequestToken;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackRequest;
 import net.minecraft.core.BlockPos;
@@ -13,6 +14,7 @@ import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.BiFunction;
 
@@ -93,9 +95,13 @@ public final class SyncedMediaPlaybackLauncher {
         return true;
     }
 
-    public record LaunchResult(String playUrl, LyricRecord lyricRecord, String requestToken) {
+    public record LaunchResult(String playUrl, LyricRecord lyricRecord, Optional<MediaRequestToken> requestToken) {
+        public LaunchResult {
+            requestToken = requestToken == null ? Optional.empty() : requestToken;
+        }
+
         public LaunchResult(String playUrl, LyricRecord lyricRecord) {
-            this(playUrl, lyricRecord, "");
+            this(playUrl, lyricRecord, Optional.empty());
         }
     }
 }

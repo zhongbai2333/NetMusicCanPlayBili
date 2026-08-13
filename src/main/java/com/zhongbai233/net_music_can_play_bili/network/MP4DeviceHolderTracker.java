@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.network;
 
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -45,7 +46,8 @@ public final class MP4DeviceHolderTracker {
 
     public static void invalidate(UUID deviceId) {
         if (deviceId != null) {
-            LAST_SENT.keySet().removeIf(key -> deviceId.equals(key.deviceId()));
+            PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+            LAST_SENT.keySet().removeIf(key -> sourceId.equals(key.sourceId()));
         }
     }
 
@@ -64,7 +66,7 @@ public final class MP4DeviceHolderTracker {
         MP4DeviceStateStore.syncQueueCopy(level, deviceId, stack);
         MP4DeviceStateStore.DeviceEntry entry = MP4DeviceStateStore.getOrCreate(level, deviceId, stack);
         boolean headphoneLinked = AudioLinkIndex.hasHeadphoneLinkedToMp4(deviceId);
-        HolderKey key = new HolderKey(player.getUUID(), deviceId);
+        HolderKey key = new HolderKey(player.getUUID(), PlaybackSourceId.of(deviceId));
         active.add(key);
         int fingerprint = fingerprint(entry, headphoneLinked);
         long gameTime = level.getGameTime();
@@ -92,6 +94,6 @@ public final class MP4DeviceHolderTracker {
         return hash;
     }
 
-    private record HolderKey(UUID playerId, UUID deviceId) {
+    private record HolderKey(UUID playerId, PlaybackSourceId sourceId) {
     }
 }

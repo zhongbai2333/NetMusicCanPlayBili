@@ -13,15 +13,20 @@ import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
+import com.zhongbai233.net_music_can_play_bili.client.sync.LiveRoomMetadataRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientAiSubtitleRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackClock;
-import com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleDocument;
-import com.zhongbai233.net_music_can_play_bili.editor.core.document.ControlConsoleElement;
-import com.zhongbai233.net_music_can_play_bili.editor.core.media.TimedTextResolver;
-import com.zhongbai233.net_music_can_play_bili.editor.core.media.ControlConsoleVideoStatePolicy;
-import com.zhongbai233.net_music_can_play_bili.editor.core.media.ControlConsoleExitFade;
-import com.zhongbai233.net_music_can_play_bili.editor.core.media.ControlConsoleExitPolicy;
-import com.zhongbai233.net_music_can_play_bili.editor.core.media.ControlConsoleRangeGate;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElement;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.LiveSubtitleMetadata;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.AiSubtitleText;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.TimedTextResolver;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleVideoStatePolicy;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleExitFade;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleExitPolicy;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleRangeGate;
 import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -41,6 +46,7 @@ import org.slf4j.Logger;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import net.neoforged.neoforge.client.network.ClientPacketDistributor;
@@ -49,7 +55,7 @@ import net.neoforged.neoforge.client.network.ClientPacketDistributor;
 public final class ControlConsoleRenderer
         implements BlockEntityRenderer<ControlConsoleBlockEntity, ControlConsoleRenderer.State> {
     private static final Logger LOGGER = LogUtils.getLogger();
-        private static final float TEXT_SCALE = com.zhongbai233.net_music_can_play_bili.editor.core.media
+        private static final float TEXT_SCALE = com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media
             .SubtitleLayout.WORLD_TEXT_SCALE;
     private static final int FULL_BRIGHT = 0x00F000F0;
     private static final Map<BlockPos, Set<BlockPos>> CONSOLE_AUDIO_KEYS = new ConcurrentHashMap<>();
@@ -57,8 +63,8 @@ public final class ControlConsoleRenderer
     private static final Map<BlockPos, ConsumerState> CONSUMERS = new ConcurrentHashMap<>();
     private static final long CONSUMER_LEASE_MILLIS = 3_000L;
     private static final long CONSUMER_RENEW_MILLIS = 1_000L;
-        private static final long VIDEO_HEALTH_CHECK_MILLIS = Long.getLong(
-            "ncpb.control_console.video_health_check_ms", 1_000L);
+    private static final long VIDEO_HEALTH_CHECK_MILLIS =
+            ClientDisplayProperties.controlConsoleVideoHealthCheckMillis();
     private final Font font;
 
     public ControlConsoleRenderer(BlockEntityRendererProvider.Context context) {
@@ -103,13 +109,16 @@ public final class ControlConsoleRenderer
             : null;
         state.videoState = video != null ? video.state() : ControlConsoleVideoStatePolicy.State.IDLE;
         state.frame = video != null ? video.frame() : VideoBillboardPreview.ProjectorFrameSnapshot.empty();
-        state.sessionId = video != null ? video.sessionId() : null;
+        state.playbackSessionId = video != null
+                ? PlaybackSessionId.parse(video.sessionId()) : Optional.empty();
         state.currentLyric = "";
         state.translatedLyric = "";
         state.lyrics = null;
         state.transLyrics = null;
         state.lyricTick = -1;
         state.lyricVisualTick = -1.0F;
+        state.liveMetadata = sourceSnapshot.liveMetadata();
+        state.aiLyric = sourceSnapshot.aiLyric();
         if (sourceSnapshot.lyric() != null) {
                 var lyric = sourceSnapshot.lyric();
                 int lyricTick = sourceSnapshot.lyricTick();
@@ -131,8 +140,9 @@ public final class ControlConsoleRenderer
         }
         if ((state.videoState == ControlConsoleVideoStatePolicy.State.ACTIVE
             || state.videoState == ControlConsoleVideoStatePolicy.State.BUFFERING)
-            && state.sessionId != null) {
-            VideoBillboardPreview.markProjectorSubmittedByBer(state.sessionId, state.consolePos);
+            && state.playbackSessionId.isPresent()) {
+            VideoBillboardPreview.markProjectorSubmittedByBer(
+                    state.playbackSessionId.orElseThrow(), state.consolePos);
         }
         for (ControlConsoleElement element : state.elements) {
             if (!element.enabled()) {
@@ -141,18 +151,15 @@ public final class ControlConsoleRenderer
             float halfHeight = element.height() * 0.5F;
             float halfWidth = halfHeight * element.aspect();
             poseStack.pushPose();
-            poseStack.translate(0.5D + element.offsetX(), 1.55D + element.offsetY(),
-                    0.5D + element.distance());
-            poseStack.mulPose(new org.joml.Quaternionf().rotateYXZ(
-                    (float) Math.toRadians(element.yaw()), (float) Math.toRadians(element.pitch()),
-                    (float) Math.toRadians(element.roll())));
+            poseStack.translate(0.5D, 1.55D, 0.5D);
+            poseStack.mulPose(element.editorTransform().matrix());
             Matrix4f pose = new Matrix4f(poseStack.last().pose());
             if (element.type() == ControlConsoleElement.Type.SCREEN) {
                 if (!state.hideVideoForPrivacy
                         && state.videoState == ControlConsoleVideoStatePolicy.State.ACTIVE
-                        && state.sessionId != null) {
-                    VideoBillboardPreview.captureProjectorImmediatePose(state.sessionId, state.consolePos, pose,
-                            halfHeight, state.exitGain);
+                        && state.playbackSessionId.isPresent()) {
+                    VideoBillboardPreview.captureProjectorImmediatePose(
+                            state.playbackSessionId.orElseThrow(), state.consolePos, pose, halfHeight, state.exitGain);
                 }
                 if (state.hideVideoForPrivacy && state.frame.hasFrame()
                         && state.frame.width() > 0 && state.frame.height() > 0) {
@@ -173,6 +180,18 @@ public final class ControlConsoleRenderer
     private void submitSubtitle(State state, ControlConsoleElement element, PoseStack poseStack,
             SubmitNodeCollector collector) {
         String mode = element.contentMode();
+        if ("AI_SUBTITLE".equals(mode)) {
+            submitAiSubtitle(state, element, poseStack, collector);
+            return;
+        }
+        if (LiveSubtitleMetadata.isLiveMode(mode)) {
+            String metadataText = LiveSubtitleMetadata.text(mode, state.liveMetadata);
+            if (!metadataText.isBlank()) {
+                submitSubtitleFace(metadataText, "", element, poseStack, collector, false, state.exitGain);
+                submitSubtitleFace(metadataText, "", element, poseStack, collector, true, state.exitGain);
+            }
+            return;
+        }
         boolean scrolling = "SCROLL_MAIN".equals(mode) || "SCROLL_TRANSLATION".equals(mode);
         if (scrolling && state.lyricTick >= 0) {
             Int2ObjectSortedMap<String> track = "SCROLL_TRANSLATION".equals(mode)
@@ -191,6 +210,22 @@ public final class ControlConsoleRenderer
         }
         String translated = element.followLyrics() && element.showTranslation() ? state.translatedLyric : "";
         if ((current == null || current.isBlank()) && (translated == null || translated.isBlank())) {
+            return;
+        }
+        submitSubtitleFace(current, translated, element, poseStack, collector, false, state.exitGain);
+        submitSubtitleFace(current, translated, element, poseStack, collector, true, state.exitGain);
+    }
+
+    private void submitAiSubtitle(State state, ControlConsoleElement element, PoseStack poseStack,
+            SubmitNodeCollector collector) {
+        AiSubtitleText.Lines lines = AiSubtitleText.resolve(
+                state.aiLyric != null ? tick -> lineAt(state.aiLyric.getLyrics(), tick) : null,
+                state.aiLyric != null ? tick -> lineAt(state.aiLyric.getTransLyrics(), tick) : null,
+                state.currentLyric, state.translatedLyric, state.lyricTick,
+                element.showTranslation(), element.text());
+        String current = lines.primary();
+        String translated = lines.translation();
+        if (current.isBlank() && translated.isBlank()) {
             return;
         }
         submitSubtitleFace(current, translated, element, poseStack, collector, false, state.exitGain);
@@ -223,7 +258,7 @@ public final class ControlConsoleRenderer
         lines.addAll(window.future());
         for (int i = 0; i < lines.size(); i++) {
             float distance = (i - center) + (1.0F - window.progress());
-                float size = com.zhongbai233.net_music_can_play_bili.editor.core.media.SubtitleLayout
+                float size = com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.SubtitleLayout
                     .scrollLineScale(distance);
                 float eased = (1.0F - size) / 0.44F;
                 int baseColor = "SCROLL_TRANSLATION".equals(element.contentMode())
@@ -252,7 +287,7 @@ public final class ControlConsoleRenderer
     }
 
     private static int multiplyAlpha(int color, float opacity) {
-        return com.zhongbai233.net_music_can_play_bili.editor.core.media.SubtitleLayout
+        return com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.SubtitleLayout
             .multiplyAlpha(color, opacity);
     }
 
@@ -284,7 +319,7 @@ public final class ControlConsoleRenderer
 
     private void submitTextLines(PoseStack poseStack, SubmitNodeCollector collector, Component text,
             float y, int color, int backgroundColor, float opacity, ControlConsoleElement element) {
-        int splitWidth = com.zhongbai233.net_music_can_play_bili.editor.core.media.SubtitleLayout
+        int splitWidth = com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.SubtitleLayout
                 .splitWidth(element.maxWidth(), element.wrap());
         List<FormattedCharSequence> lines = splitWidth == Integer.MAX_VALUE
                 ? List.of(text.getVisualOrderText()) : font.split(text, splitWidth);
@@ -293,7 +328,7 @@ public final class ControlConsoleRenderer
         float lineY = y;
         for (FormattedCharSequence visual : lines) {
             int width = font.width(visual);
-            float x = com.zhongbai233.net_music_can_play_bili.editor.core.media.SubtitleLayout
+            float x = com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.SubtitleLayout
                     .x(element.alignment(), width);
             collector.submitText(poseStack, x, lineY, visual, false, Font.DisplayMode.NORMAL,
                     FULL_BRIGHT, lineColor, background, 0);
@@ -321,17 +356,37 @@ public final class ControlConsoleRenderer
         double maxY = saturatedAdd(centerY, renderRangeY);
         double maxZ = saturatedAdd(centerZ, renderRangeZ);
         for (ControlConsoleElement element : document.elements()) {
-            double radius = Math.hypot(element.height() * element.aspect() * 0.5D,
-                    element.height() * 0.5D);
-            double elementX = centerX + element.offsetX();
-            double elementY = pos.getY() + 1.55D + element.offsetY();
-            double elementZ = centerZ + element.distance();
-            minX = Math.min(minX, elementX - radius);
-            minY = Math.min(minY, elementY - radius);
-            minZ = Math.min(minZ, elementZ - radius);
-            maxX = Math.max(maxX, elementX + radius);
-            maxY = Math.max(maxY, elementY + radius);
-            maxZ = Math.max(maxZ, elementZ + radius);
+            Matrix4f transform = element.editorTransform().matrix();
+            if (element.type() == ControlConsoleElement.Type.AUDIO) {
+                org.joml.Vector3f point = transform.transformPosition(new org.joml.Vector3f());
+                double worldX = centerX + point.x;
+                double worldY = pos.getY() + 1.55D + point.y;
+                double worldZ = centerZ + point.z;
+                minX = Math.min(minX, worldX);
+                minY = Math.min(minY, worldY);
+                minZ = Math.min(minZ, worldZ);
+                maxX = Math.max(maxX, worldX);
+                maxY = Math.max(maxY, worldY);
+                maxZ = Math.max(maxZ, worldZ);
+                continue;
+            }
+            float halfHeight = element.height() * 0.5F;
+            float halfWidth = halfHeight * element.aspect();
+            for (int ySign : new int[] { -1, 1 }) {
+                for (int xSign : new int[] { -1, 1 }) {
+                    org.joml.Vector3f corner = transform.transformPosition(
+                            new org.joml.Vector3f(xSign * halfWidth, ySign * halfHeight, 0.0F));
+                    double worldX = centerX + corner.x;
+                    double worldY = pos.getY() + 1.55D + corner.y;
+                    double worldZ = centerZ + corner.z;
+                    minX = Math.min(minX, worldX);
+                    minY = Math.min(minY, worldY);
+                    minZ = Math.min(minZ, worldZ);
+                    maxX = Math.max(maxX, worldX);
+                    maxY = Math.max(maxY, worldY);
+                    maxZ = Math.max(maxZ, worldZ);
+                }
+            }
         }
         return new AABB(minX, minY, minZ, maxX, maxY, maxZ);
     }
@@ -366,7 +421,14 @@ public final class ControlConsoleRenderer
         var source = level.getBlockEntity(sourcePos);
         if (document.sourceKind() == ControlConsoleDocument.SourceKind.LIVE_STREAMER
                 && source instanceof LiveStreamerBlockEntity live) {
-            return new SourceSnapshot(live.isPlaying(), live.isPlaying(), null, -1, -1.0F);
+            var cached = LiveRoomMetadataRegistry.snapshot(
+                    new LiveRoomMetadataRegistry.SourceKey(sourcePos.getX(), sourcePos.getY(), sourcePos.getZ()),
+                    live.getRoomId()).orElse(null);
+            LiveSubtitleMetadata.Metadata metadata = LiveSubtitleMetadata.resolve(live.getRoomId(),
+                    cached != null ? cached.title() : "", cached != null ? cached.parentAreaName() : "",
+                    cached != null ? cached.areaName() : "", cached != null ? cached.liveStatus() : -1,
+                    live.isPlaying(), live.isWaitingForLive());
+            return new SourceSnapshot(live.isPlaying(), live.isPlaying(), null, null, -1, -1.0F, metadata);
         }
         if (document.sourceKind() == ControlConsoleDocument.SourceKind.TURNTABLE
                 && source instanceof ModernTurntableBlockEntity turntable) {
@@ -374,9 +436,13 @@ public final class ControlConsoleRenderer
             if (lyricTick < 0) lyricTick = turntable.getClientLyricTick();
             long visualMillis = PlaybackClock.visualMillis(sourcePos);
             float lyricVisualTick = visualMillis >= 0L ? visualMillis / 50.0F : lyricTick;
+            PlaybackSessionId sessionId = turntable.getPlaybackSyncMetadata(level.getGameTime())
+                    .playbackSessionId().orElse(null);
+            var aiSnapshot = ClientAiSubtitleRegistry.snapshot(sourcePos, sessionId);
             return new SourceSnapshot(turntable.isPlaying(),
                     BiliVideoStreamResolver.selectionOrNull(turntable.getRawUrl()) != null,
-                    turntable.getClientLyricRecord(), lyricTick, lyricVisualTick);
+                    turntable.getClientLyricRecord(), aiSnapshot.ready() ? aiSnapshot.lyricRecord() : null,
+                    lyricTick, lyricVisualTick, LiveSubtitleMetadata.EMPTY);
         }
         return SourceSnapshot.EMPTY;
     }
@@ -485,6 +551,15 @@ public final class ControlConsoleRenderer
         return state != null && (state.active || state.fadingOut);
     }
 
+    /** Read-only client diagnostic used by commands and physical-client system tests. */
+    public static ConsumerLeaseDiagnostic consumerLeaseDiagnostic(BlockPos consolePos) {
+        ConsumerState state = CONSUMERS.get(consolePos);
+        return state == null ? ConsumerLeaseDiagnostic.ABSENT
+                : new ConsumerLeaseDiagnostic(true, state.active, state.fadingOut,
+                        state.leaseId != null && state.leaseExpiresAtMillis > System.currentTimeMillis(),
+                        state.consumerGeneration);
+    }
+
     private static float consumerExitGain(BlockPos consolePos) {
         ConsumerState state = CONSUMERS.get(consolePos);
         if (state == null) {
@@ -495,10 +570,10 @@ public final class ControlConsoleRenderer
             return state.fadeBaseGain * ControlConsoleExitFade.gain(state.fadeStartedNanos, now);
         }
         float envelope = state.entering
-                ? com.zhongbai233.net_music_can_play_bili.editor.core.media.ControlConsoleEntryFade.gain(
+                ? com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleEntryFade.gain(
                         state.entryStartedNanos, now)
                 : 1.0F;
-        return com.zhongbai233.net_music_can_play_bili.editor.core.media.ControlConsoleConsumerGain
+        return com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleConsumerGain
             .combine(state.lastRangeGain, envelope);
     }
 
@@ -541,7 +616,7 @@ public final class ControlConsoleRenderer
         double playerZ = minecraft.player.getZ();
         boolean positionDiscontinuous = ControlConsoleExitPolicy.positionDiscontinuous(runtime.playerX,
             runtime.playerY, runtime.playerZ, playerX, playerY, playerZ);
-        var result = com.zhongbai233.net_music_can_play_bili.editor.core.media.ControlConsoleRangeGate.evaluate(
+        var result = com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleRangeGate.evaluate(
             runtime.active, playerX - centerX, playerY - centerY,
             playerZ - centerZ, document.hardRangeX(), document.hardRangeY(),
                 document.hardRangeZ());
@@ -581,9 +656,10 @@ public final class ControlConsoleRenderer
             if (runtime.active) {
                 beginBurstExit(consolePos, runtime);
                 tickBurstExit(consolePos, runtime);
-            } else {
-                deactivateConsumer(consolePos);
             }
+            // A first acquisition is asynchronous. Keep the loaded consumer and its generation
+            // alive until GRANTED/REJECTED arrives; removing it here turns a valid GRANTED into a
+            // stale response that immediately releases the server lease.
             return;
         }
         if (runtime.sourcePos != null && (!runtime.sourcePos.equals(source)
@@ -602,7 +678,7 @@ public final class ControlConsoleRenderer
             playerX - centerX, playerY - centerY, playerZ - centerZ,
             document, result.gain());
         float entryGain = runtime.entering
-            ? com.zhongbai233.net_music_can_play_bili.editor.core.media.ControlConsoleEntryFade.gain(
+            ? com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleEntryFade.gain(
                 runtime.entryStartedNanos, System.nanoTime())
             : 1.0F;
         if (entryGain >= 1.0F) {
@@ -620,12 +696,13 @@ public final class ControlConsoleRenderer
         runtime.sourceKind = document.sourceKind();
         int videoQualityCeiling = document.elements().stream()
             .filter(element -> element.enabled() && element.type() == ControlConsoleElement.Type.SCREEN)
-            .mapToInt(element -> com.zhongbai233.net_music_can_play_bili.editor.core.media
+            .mapToInt(element -> com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media
                 .ControlConsoleMediaSettings.videoQualityCeiling(element.channelIndex()))
             .max()
-            .orElse(com.zhongbai233.net_music_can_play_bili.editor.core.media
+            .orElse(com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media
                 .ControlConsoleMediaSettings.videoQualityCeiling(0));
         if (document.sourceKind() == ControlConsoleDocument.SourceKind.LIVE_STREAMER) {
+            ClientAiSubtitleRegistry.release(consolePos);
             LiveStreamerVideoClient.registerControlConsoleConsumer(source, consolePos, videoQualityCeiling);
         } else {
             ModernTurntableVideoClient.registerControlConsoleConsumer(source, consolePos, videoQualityCeiling);
@@ -634,10 +711,29 @@ public final class ControlConsoleRenderer
                     && minecraft.level.getBlockEntity(source) instanceof ModernTurntableBlockEntity turntable) {
                 // 激活边沿立即恢复；稳态低频确认使首次恢复碰到 pending/decoder 竞态时仍能自愈。
                 ModernTurntableVideoClient.syncFromTurntableIfPossible(turntable);
-                runtime.nextVideoHealthCheckMillis = now + Math.max(100L, VIDEO_HEALTH_CHECK_MILLIS);
+                runtime.nextVideoHealthCheckMillis = now + VIDEO_HEALTH_CHECK_MILLIS;
             }
+            reconcileAiSubtitleConsumer(consolePos, source, document, minecraft);
         }
         registerAudioForConsole(consolePos, source, document.elements(), result.gain() * entryGain);
+    }
+
+    private static void reconcileAiSubtitleConsumer(BlockPos consolePos, BlockPos source,
+            ControlConsoleDocument document, Minecraft minecraft) {
+        boolean requested = document.elements().stream().anyMatch(element -> element.enabled()
+                && element.type() == ControlConsoleElement.Type.SUBTITLE
+                && "AI_SUBTITLE".equals(element.contentMode()));
+        if (!requested || minecraft.level == null
+                || !(minecraft.level.getBlockEntity(source) instanceof ModernTurntableBlockEntity turntable)
+                || !turntable.isPlaying()
+                || BiliVideoStreamResolver.selectionOrNull(turntable.getRawUrl()) == null) {
+            ClientAiSubtitleRegistry.release(consolePos);
+            return;
+        }
+        PlaybackSessionId sessionId = turntable.getPlaybackSyncMetadata(minecraft.level.getGameTime())
+                .playbackSessionId().orElse(null);
+        ClientAiSubtitleRegistry.acquire(consolePos, source, sessionId, turntable.getRawUrl(),
+                turntable.getSongName());
     }
 
     private static void logRangeTransition(BlockPos consolePos, ConsumerState runtime, String status,
@@ -662,6 +758,7 @@ public final class ControlConsoleRenderer
     }
 
     private static void deactivateConsumer(BlockPos consolePos) {
+        ClientAiSubtitleRegistry.release(consolePos);
         ModernTurntableVideoClient.unregisterControlConsoleConsumer(consolePos);
         LiveStreamerVideoClient.unregisterControlConsoleConsumer(consolePos);
         VideoBillboardPreview.detachControlConsoleConsumer(consolePos);
@@ -684,6 +781,8 @@ public final class ControlConsoleRenderer
             return;
         }
         releaseConsumerLease(consolePos, runtime);
+        // Fade may consume only already-owned short text state; it must not keep an AI HTTP request alive.
+        ClientAiSubtitleRegistry.release(consolePos);
         runtime.active = false;
         runtime.entering = false;
         runtime.entryStartedNanos = 0L;
@@ -772,15 +871,17 @@ public final class ControlConsoleRenderer
         private boolean sourcePlaying;
         private boolean videoExpected;
         private ControlConsoleVideoStatePolicy.State videoState = ControlConsoleVideoStatePolicy.State.IDLE;
-        private String sessionId;
+        private Optional<PlaybackSessionId> playbackSessionId = Optional.empty();
         private java.util.List<ControlConsoleElement> elements = java.util.List.of();
         private VideoBillboardPreview.ProjectorFrameSnapshot frame = VideoBillboardPreview.ProjectorFrameSnapshot.empty();
         private String currentLyric = "";
         private String translatedLyric = "";
         private Int2ObjectSortedMap<String> lyrics;
         private Int2ObjectSortedMap<String> transLyrics;
+        private com.github.tartaricacid.netmusic.api.lyric.LyricRecord aiLyric;
         private int lyricTick = -1;
         private float lyricVisualTick = -1.0F;
+        private LiveSubtitleMetadata.Metadata liveMetadata = LiveSubtitleMetadata.EMPTY;
         private boolean consumerActive;
         private boolean hideVideoForPrivacy;
         private boolean irisCompatibilityMode;
@@ -816,9 +917,19 @@ public final class ControlConsoleRenderer
         }
     }
 
+    public record ConsumerLeaseDiagnostic(boolean registered, boolean active, boolean fadingOut,
+            boolean leasePresent, long generation) {
+        private static final ConsumerLeaseDiagnostic ABSENT = new ConsumerLeaseDiagnostic(
+                false, false, false, false, -1L);
+    }
+
     private record SourceSnapshot(boolean playing, boolean videoExpected,
-            com.github.tartaricacid.netmusic.api.lyric.LyricRecord lyric, int lyricTick, float lyricVisualTick) {
-        private static final SourceSnapshot EMPTY = new SourceSnapshot(false, false, null, -1, -1.0F);
+            com.github.tartaricacid.netmusic.api.lyric.LyricRecord lyric,
+            com.github.tartaricacid.netmusic.api.lyric.LyricRecord aiLyric,
+            int lyricTick, float lyricVisualTick,
+            LiveSubtitleMetadata.Metadata liveMetadata) {
+        private static final SourceSnapshot EMPTY = new SourceSnapshot(false, false, null, null, -1, -1.0F,
+                LiveSubtitleMetadata.EMPTY);
     }
 
     private static String lineAt(it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap<String> lines, int tick) {

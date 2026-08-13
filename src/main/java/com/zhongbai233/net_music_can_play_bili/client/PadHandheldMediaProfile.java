@@ -14,7 +14,7 @@ import java.util.UUID;
 public final class PadHandheldMediaProfile implements HandheldMediaDeviceProfile {
     public static final PadHandheldMediaProfile INSTANCE = new PadHandheldMediaProfile();
     public static final HandheldMediaScreenSpec SCREEN = new HandheldMediaScreenSpec(448, 256,
-            Integer.getInteger("ncpb.pad.offscreen_scale", Integer.getInteger("ncpb.mp4.offscreen_scale", 2)));
+            PadRenderProperties.offscreen().scale());
 
     private PadHandheldMediaProfile() {
     }

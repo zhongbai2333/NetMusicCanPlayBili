@@ -141,9 +141,7 @@ public class VideoNativeDecoder implements AutoCloseable {
     }
 
     public synchronized boolean isHardwareAccelerated() {
-        return open && !actualHwaccel.startsWith("cpu")
-                && !actualHwaccel.startsWith("unknown")
-                && !"none".equalsIgnoreCase(actualHwaccel);
+        return open && VideoHardwareBackendPolicy.isHardwareBackend(actualHwaccel);
     }
 
     private boolean isHwaccelRequested() {
@@ -206,6 +204,29 @@ public class VideoNativeDecoder implements AutoCloseable {
             return VideoJni.getLastFramePtsNanos(handle);
         } catch (UnsatisfiedLinkError oldNative) {
             return -1L;
+        }
+    }
+
+    /**
+     * Starts the FFmpeg EOF drain. Old v38 bundles do not expose this symbol;
+     * callers can preserve their old behavior when this method returns false.
+     */
+    public synchronized boolean sendEndOfStream() {
+        if (!open || handle == 0) {
+            return false;
+        }
+        try {
+            int status = VideoJni.sendEndOfStream(handle);
+            if (status == 0) {
+                return true;
+            }
+            if (status == 1) {
+                throw new IllegalStateException("native EOF marker requires another receive drain");
+            }
+            throw new IllegalStateException("native EOF marker failed: codecId=" + codecId
+                    + ", hwaccel=" + actualHwaccel);
+        } catch (UnsatisfiedLinkError oldNative) {
+            return false;
         }
     }
 
@@ -421,8 +442,16 @@ public class VideoNativeDecoder implements AutoCloseable {
     public synchronized void close() {
         open = false;
         if (handle != 0) {
-            VideoJni.close(handle);
-            handle = 0;
+            long closingHandle = handle;
+            try {
+                VideoJni.close(closingHandle);
+                handle = 0;
+            } catch (RuntimeException | Error error) {
+                // Preserve the handle so a supervised retry can attempt the JNI
+                // close again. Never report physical convergence while non-zero.
+                handle = closingHandle;
+                throw error;
+            }
         }
     }
 

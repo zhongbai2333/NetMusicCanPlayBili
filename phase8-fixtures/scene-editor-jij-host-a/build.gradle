@@ -1,0 +1,56 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.141'
+}
+
+group = 'com.zhongbai233.sceneeditor.fixture'
+version = '1.0.0'
+
+def isolatedBuildRoot = rootProject.providers.gradleProperty('ncpbBuildDirectory').orElse('').get().trim()
+if (!isolatedBuildRoot.isEmpty()) {
+    layout.buildDirectory = new File(isolatedBuildRoot, project.name)
+}
+
+base {
+    archivesName = 'scene-editor-jij-host-a'
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+neoForge {
+    version = rootProject.neo_version
+    mods {
+        scene_editor_jij_host_a {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
+dependencies {
+    implementation project(':scene-editor-core')
+    jarJar project(':scene-editor-core')
+}
+
+tasks.withType(Jar).configureEach {
+    manifest {
+        attributes('Implementation-Version': project.version)
+    }
+}
+
+tasks.named('jarJar') {
+    inputs.property('sceneEditorSupportedRange', '[1.0.0-beta.1,2.0.0)')
+    doLast {
+        def metadataFile = new File(outputs.files.singleFile, 'META-INF/jarjar/metadata.json')
+        def metadata = new groovy.json.JsonSlurper().parse(metadataFile)
+        def descriptors = metadata.jars.findAll { descriptor ->
+            descriptor.identifier.group == 'com.zhongbai233.sceneeditor'
+                    && descriptor.identifier.artifact == 'scene-editor-core'
+        }
+        if (descriptors.size() != 1) {
+            throw new GradleException("Expected one scene-editor-core descriptor, got ${descriptors}")
+        }
+        descriptors[0].version.range = '[1.0.0-beta.1,2.0.0)'
+        metadataFile.setText(groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(metadata)) + '\n',
+                'UTF-8')
+    }
+}

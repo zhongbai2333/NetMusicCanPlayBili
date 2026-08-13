@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.server;
 
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.PadDiagnosticsProperties;
 import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapSampler;
 import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapTileKind;
 import net.minecraft.core.BlockPos;
@@ -18,7 +19,7 @@ import org.slf4j.Logger;
  */
 public final class PadMapSamplerServerSelfTest {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final boolean ENABLED = Boolean.getBoolean("ncpb.pad.map.server_self_test");
+    private static final boolean ENABLED = PadDiagnosticsProperties.mapServerSelfTestEnabled();
     private static boolean ran;
 
     private PadMapSamplerServerSelfTest() {

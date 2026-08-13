@@ -10,6 +10,10 @@ build
 # Compiled class output
 bin
 
+# Python tool caches
+__pycache__/
+*.py[cod]
+
 # IDE
 .vscode/
 .project

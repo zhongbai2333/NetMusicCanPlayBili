@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.media.stream;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+
 import java.util.ArrayDeque;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -22,11 +24,10 @@ public final class LiveVideoSampleBus {
     /** {@code openDecoder} 用来识别直播总线的伪 URL 前缀。 */
     public static final String BUS_URL_PREFIX = "ncpb-live-bus:";
 
-    private static final int DEFAULT_CAPACITY = Math.max(32,
-            Integer.getInteger("ncpb.bili.live.video.bus_capacity", 256));
-    private static final ConcurrentHashMap<String, LiveVideoSampleBus> REGISTRY = new ConcurrentHashMap<>();
+    private static final int DEFAULT_CAPACITY = AudioStreamProperties.liveVideoBusCapacity();
+    private static final ConcurrentHashMap<PlaybackSessionId, LiveVideoSampleBus> REGISTRY = new ConcurrentHashMap<>();
 
-    private final String key;
+    private final PlaybackSessionId playbackSessionId;
     private final int capacity;
     private final ArrayDeque<VideoSample> samples = new ArrayDeque<>();
     private final Object lock = new Object();
@@ -43,13 +44,17 @@ public final class LiveVideoSampleBus {
     public record VideoSample(byte[] data, long ptsNanos, boolean keyframe, byte[] avcConfig) {
     }
 
-    private LiveVideoSampleBus(String key, int capacity) {
-        this.key = key;
+    private LiveVideoSampleBus(PlaybackSessionId playbackSessionId, int capacity) {
+        this.playbackSessionId = playbackSessionId;
         this.capacity = Math.max(8, capacity);
     }
 
     public static String busUrl(String key) {
-        return BUS_URL_PREFIX + key;
+        return busUrl(PlaybackSessionId.of(key));
+    }
+
+    public static String busUrl(PlaybackSessionId sessionId) {
+        return BUS_URL_PREFIX + sessionId.value();
     }
 
     public static boolean isBusUrl(String url) {
@@ -62,8 +67,12 @@ public final class LiveVideoSampleBus {
 
     /** 写端注册；同 key 的旧总线会被关闭替换。 */
     public static LiveVideoSampleBus register(String key) {
-        LiveVideoSampleBus bus = new LiveVideoSampleBus(key, DEFAULT_CAPACITY);
-        LiveVideoSampleBus previous = REGISTRY.put(key, bus);
+        return register(PlaybackSessionId.of(key));
+    }
+
+    public static LiveVideoSampleBus register(PlaybackSessionId sessionId) {
+        LiveVideoSampleBus bus = new LiveVideoSampleBus(sessionId, DEFAULT_CAPACITY);
+        LiveVideoSampleBus previous = REGISTRY.put(sessionId, bus);
         if (previous != null) {
             previous.close();
         }
@@ -71,11 +80,19 @@ public final class LiveVideoSampleBus {
     }
 
     public static LiveVideoSampleBus find(String key) {
-        return key == null || key.isBlank() ? null : REGISTRY.get(key);
+        return PlaybackSessionId.parse(key).map(REGISTRY::get).orElse(null);
+    }
+
+    public static LiveVideoSampleBus find(PlaybackSessionId sessionId) {
+        return sessionId != null ? REGISTRY.get(sessionId) : null;
     }
 
     public String key() {
-        return key;
+        return playbackSessionId.value();
+    }
+
+    public PlaybackSessionId playbackSessionId() {
+        return playbackSessionId;
     }
 
     public boolean isClosed() {
@@ -189,7 +206,7 @@ public final class LiveVideoSampleBus {
             samples.clear();
             lock.notifyAll();
         }
-        REGISTRY.remove(key, this);
+        REGISTRY.remove(playbackSessionId, this);
     }
 
     /** 丢队头样本直到下一个关键帧成为队头；没有关键帧则清空。 */

@@ -1,5 +1,9 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+
+import java.util.Optional;
+
 /**
  * 视频播放使用的媒体时间线抽象。
  *
@@ -20,7 +24,11 @@ interface MediaVideoTimeline {
 
     long totalMillis();
 
-    String sessionId();
+    Optional<PlaybackSessionId> playbackSessionId();
+
+    default String sessionId() {
+        return playbackSessionId().map(PlaybackSessionId::value).orElse("");
+    }
 
     MediaVideoTimeline EMPTY = new MediaVideoTimeline() {
         @Override
@@ -49,8 +57,8 @@ interface MediaVideoTimeline {
         }
 
         @Override
-        public String sessionId() {
-            return "";
+        public Optional<PlaybackSessionId> playbackSessionId() {
+            return Optional.empty();
         }
     };
 }

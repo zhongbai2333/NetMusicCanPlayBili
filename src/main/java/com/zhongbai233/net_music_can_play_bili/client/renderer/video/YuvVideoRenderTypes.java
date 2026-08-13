@@ -13,7 +13,6 @@ import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.resources.Identifier;
 import net.neoforged.neoforge.client.event.RegisterRenderPipelinesEvent;
 
-import java.util.Locale;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -36,8 +35,7 @@ public final class YuvVideoRenderTypes {
             "core/nv12_entity");
     private static final Identifier TEXTURED_PROBE_FRAGMENT_SHADER = Identifier.fromNamespaceAndPath(
             NetMusicCanPlayBili.MODID, "core/yuv420p_textured_probe_entity");
-    private static final String YUV_SHADER_DEBUG = System.getProperty("ncpb.video.yuv.shader_debug", "")
-            .trim().toUpperCase(Locale.ROOT);
+    private static final String YUV_SHADER_DEBUG = VideoPipelineProperties.yuv().shaderDebug();
         private static final boolean YUV_NO_DEPTH_WRITE = VideoYuvRenderPolicy.disableDepthWrite();
 
     static final RenderPipeline YUV420P_ENTITY = buildYuv420pEntityPipeline();
@@ -51,13 +49,19 @@ public final class YuvVideoRenderTypes {
             .build();
 
         private static final int MAX_RGBA_ENTITY_CACHE_ENTRIES = 64;
-        private static final Map<Identifier, RenderType> RGBA_ENTITY_CACHE = Collections.synchronizedMap(
+        private static final Map<Identifier, RenderType> RGBA_ENTITY_CACHE = newRgbaRenderTypeCache();
+        private static final Map<Identifier, RenderType> RGBA_TRANSLUCENT_ENTITY_CACHE = newRgbaRenderTypeCache();
+        private static final Map<Identifier, RenderType> RGBA_EMISSIVE_ENTITY_CACHE = newRgbaRenderTypeCache();
+
+        private static Map<Identifier, RenderType> newRgbaRenderTypeCache() {
+                return Collections.synchronizedMap(
                         new LinkedHashMap<>(MAX_RGBA_ENTITY_CACHE_ENTRIES, 0.75F, true) {
                                 @Override
                                 protected boolean removeEldestEntry(Map.Entry<Identifier, RenderType> eldest) {
                                         return size() > MAX_RGBA_ENTITY_CACHE_ENTRIES;
                                 }
                         });
+        }
 
     private YuvVideoRenderTypes() {
     }
@@ -172,7 +176,7 @@ public final class YuvVideoRenderTypes {
                         .createRenderSetup());
     }
 
-    public static RenderType videoRgbaEntity(Identifier texture) {
+        public static RenderType videoRgbaEntity(Identifier texture) {
         synchronized (RGBA_ENTITY_CACHE) {
             return RGBA_ENTITY_CACHE.computeIfAbsent(texture, key -> {
                 LOGGER.debug("创建视频 RGBA Iris 兼容 RenderType: texture={}, pipeline=ENTITY_SOLID, samplers=Sampler0/1/2, lightmap=off",
@@ -182,14 +186,40 @@ public final class YuvVideoRenderTypes {
                 }
     }
 
+        /**
+         * Shaderpack-safe translucent RGBA surface.  Iris may replace the vanilla entity
+         * program with one that validates all three conventional sampler slots, so the
+         * render setup must carry the same complete binding set as the YUV/RGBA video path.
+         */
+        public static RenderType videoRgbaTranslucentEntity(Identifier texture) {
+                synchronized (RGBA_TRANSLUCENT_ENTITY_CACHE) {
+                        return RGBA_TRANSLUCENT_ENTITY_CACHE.computeIfAbsent(texture,
+                                        key -> videoRgbaEntity("bili_video_rgba_translucent_entity",
+                                                        RenderPipelines.ENTITY_TRANSLUCENT, key));
+                }
+        }
+
+        /** Full-bright translucent variant used by loading, idle and privacy overlays. */
+        public static RenderType videoRgbaEmissiveEntity(Identifier texture) {
+                synchronized (RGBA_EMISSIVE_ENTITY_CACHE) {
+                        return RGBA_EMISSIVE_ENTITY_CACHE.computeIfAbsent(texture,
+                                        key -> videoRgbaEntity("bili_video_rgba_emissive_entity",
+                                                        RenderPipelines.ENTITY_TRANSLUCENT_EMISSIVE, key));
+                }
+        }
+
         public static RenderType padVideoRgbaEntity(Identifier texture) {
                 return videoRgbaEntity("ncpb_pad_video_rgba_entity", texture);
         }
 
         private static RenderType videoRgbaEntity(String name, Identifier texture) {
+                return videoRgbaEntity(name, RenderPipelines.ENTITY_SOLID, texture);
+        }
+
+        private static RenderType videoRgbaEntity(String name, RenderPipeline pipeline, Identifier texture) {
                 return RenderType.create(
                                 name,
-                                RenderSetup.builder(RenderPipelines.ENTITY_SOLID)
+                                RenderSetup.builder(pipeline)
                                                 .withTexture("Sampler0", texture)
                                                 // 绑定占位 sampler，避免 Iris 校验 Sampler1/2 时失败。
                                                 .withTexture("Sampler1", texture)

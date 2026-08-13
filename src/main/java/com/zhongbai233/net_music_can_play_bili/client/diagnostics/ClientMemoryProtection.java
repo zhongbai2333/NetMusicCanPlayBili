@@ -6,6 +6,7 @@ import com.zhongbai233.net_music_can_play_bili.media.codec.VideoNativeDecoder.Na
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker.Category;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker.Usage;
+import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryProperties;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
@@ -14,20 +15,13 @@ import org.slf4j.Logger;
 /** Low-frequency guard against runaway media-native and GPU resource growth. */
 public final class ClientMemoryProtection {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final long MIB = 1_048_576L;
-    private static final boolean ENABLED = Boolean.parseBoolean(
-            System.getProperty("ncpb.memory.protection", "true"));
-    private static final long SAMPLE_INTERVAL_NANOS = Math.max(500L,
-            Long.getLong("ncpb.memory.protection.sample_interval_ms", 2_000L)) * 1_000_000L;
+    private static final MemoryProperties.Protection PROPERTIES = MemoryProperties.protection();
+    private static final boolean ENABLED = PROPERTIES.enabled();
+    private static final long SAMPLE_INTERVAL_NANOS = PROPERTIES.sampleIntervalNanos();
     private static final MemoryCircuitBreaker BREAKER = new MemoryCircuitBreaker(new MemoryCircuitBreaker.Limits(
-            mibProperty("ncpb.memory.protection.owned_native_mib", 512L),
-            mibProperty("ncpb.memory.protection.gpu_pbo_mib", 512L),
-            mibProperty("ncpb.memory.protection.ffmpeg_mib", 1_024L),
-            mibProperty("ncpb.memory.protection.d3d11_logical_mib", 2_048L),
-            Long.getLong("ncpb.memory.protection.d3d11_surfaces", 256L),
-            Integer.getInteger("ncpb.memory.protection.consecutive_samples", 15),
-            Math.max(5_000L, Long.getLong("ncpb.memory.protection.cooldown_ms", 60_000L)) * 1_000_000L,
-            doubleProperty("ncpb.memory.protection.recovery_ratio", 0.65D)));
+            PROPERTIES.ownedNativeBytes(), PROPERTIES.gpuPboBytes(), PROPERTIES.ffmpegBytes(),
+            PROPERTIES.d3d11LogicalBytes(), PROPERTIES.d3d11Surfaces(), PROPERTIES.consecutiveSamples(),
+            PROPERTIES.cooldownNanos(), PROPERTIES.recoveryRatio()));
 
     private static volatile long nextSampleNanos;
 
@@ -42,7 +36,7 @@ public final class ClientMemoryProtection {
         if (now < nextSampleNanos) {
             return;
         }
-        nextSampleNanos = now + SAMPLE_INTERVAL_NANOS;
+        nextSampleNanos = saturatedAdd(now, SAMPLE_INTERVAL_NANOS);
         MemoryCircuitBreaker.Evaluation evaluation = BREAKER.evaluate(now, sample());
         if (evaluation.tripped()) {
             trip(evaluation.reason(), emergencyCleanup);
@@ -101,19 +95,6 @@ public final class ClientMemoryProtection {
                 minecraft.player.sendSystemMessage(Component.literal(message).withStyle(color));
             }
         });
-    }
-
-    private static long mibProperty(String key, long fallbackMiB) {
-        long mib = Math.max(0L, Long.getLong(key, fallbackMiB));
-        return mib > Long.MAX_VALUE / MIB ? Long.MAX_VALUE : mib * MIB;
-    }
-
-    private static double doubleProperty(String key, double fallback) {
-        try {
-            return Double.parseDouble(System.getProperty(key, Double.toString(fallback)));
-        } catch (NumberFormatException ignored) {
-            return fallback;
-        }
     }
 
     private static long saturatedAdd(long left, long right) {

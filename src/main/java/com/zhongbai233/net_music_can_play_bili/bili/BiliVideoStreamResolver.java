@@ -41,7 +41,8 @@ public final class BiliVideoStreamResolver {
         BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(selection.videoId(), selection.page());
         BiliApiClient.VideoStreamPlan plan = BiliApiClient.getVideoStreamPlan(selection.videoId(), info.cid(),
                 qualityCeiling);
-        BiliApiClient.VideoStream stream = plan.preferred();
+        BiliApiClient.PlannedVideoCandidate selected = plan.candidateOrder().get(0);
+        BiliApiClient.VideoStream stream = selected.stream();
         String title = info.displayTitle() != null && !info.displayTitle().isBlank() ? info.displayTitle()
                 : fallbackTitle;
         LyricRecord subtitle = includeSubtitle
@@ -56,19 +57,24 @@ public final class BiliVideoStreamResolver {
                 stream.quality(),
                 title,
                 subtitle,
-                stream.codecId() == BiliApiClient.CODEC_AV1 ? DecodeMode.HARDWARE_REQUIRED : DecodeMode.AUTO,
+                decodeMode(selected.decodePreference()),
                 buildCandidates(plan, fallbackFps));
     }
 
-    private static java.util.List<VideoCandidate> buildCandidates(BiliApiClient.VideoStreamPlan plan,
+    static java.util.List<VideoCandidate> buildCandidates(BiliApiClient.VideoStreamPlan plan,
             int fallbackFps) {
         java.util.List<VideoCandidate> candidates = new java.util.ArrayList<>();
-        plan.av1Candidates().forEach(stream -> candidates.add(toCandidate(stream, fallbackFps,
-                DecodeMode.HARDWARE_REQUIRED)));
-        plan.h264Candidates().forEach(stream -> candidates.add(toCandidate(stream, fallbackFps, DecodeMode.AUTO)));
-        plan.softwareAv1Candidates().forEach(stream -> candidates.add(toCandidate(stream, fallbackFps,
-                DecodeMode.SOFTWARE_ONLY)));
+        plan.candidateOrder().forEach(candidate -> candidates.add(toCandidate(
+                candidate.stream(), fallbackFps, decodeMode(candidate.decodePreference()))));
         return java.util.List.copyOf(candidates);
+    }
+
+    private static DecodeMode decodeMode(BiliApiClient.VideoDecodePreference preference) {
+        return switch (preference) {
+            case HARDWARE_REQUIRED -> DecodeMode.HARDWARE_REQUIRED;
+            case AUTO -> DecodeMode.AUTO;
+            case SOFTWARE_ONLY -> DecodeMode.SOFTWARE_ONLY;
+        };
     }
 
     private static VideoCandidate toCandidate(BiliApiClient.VideoStream stream, int fallbackFps, DecodeMode mode) {

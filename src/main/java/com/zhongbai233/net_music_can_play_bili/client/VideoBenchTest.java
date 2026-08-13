@@ -19,6 +19,7 @@ public final class VideoBenchTest {
 
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final boolean BENCH_FEATURES_ENABLED = VideoFeatureFlags.benchFeaturesEnabled();
+    private static final boolean REAL_BENCH_MANAGED = VideoFeatureProperties.realBenchManaged();
     private static final AtomicBoolean hasRun = new AtomicBoolean(false);
     private static final int TARGET_W = 854;
     private static final int TARGET_H = 480;
@@ -41,7 +42,7 @@ public final class VideoBenchTest {
         if (mc.level == null || mc.player == null)
             return;
 
-        if (BiliRealVideoPlaybackBench.tryStart()) {
+        if (!REAL_BENCH_MANAGED && BiliRealVideoPlaybackBench.tryStart()) {
             return;
         }
 

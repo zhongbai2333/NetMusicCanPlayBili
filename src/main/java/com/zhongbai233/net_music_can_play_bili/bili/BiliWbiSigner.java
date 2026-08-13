@@ -13,6 +13,9 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.locks.ReentrantLock;
+import com.zhongbai233.net_music_can_play_bili.media.stream.CancellableHttpRequestScope;
+import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRequestCloseDiagnostics;
 
 /**
  * B站 WBI 签名
@@ -33,7 +36,7 @@ public final class BiliWbiSigner {
 
     private static volatile String cachedKey;
     private static volatile long keyExpiresAt;
-    private static final Object LOCK = new Object();
+    private static final ReentrantLock LOCK = new ReentrantLock();
 
     private BiliWbiSigner() {
     }
@@ -46,7 +49,9 @@ public final class BiliWbiSigner {
         if (cachedKey != null && now < keyExpiresAt) {
             return cachedKey;
         }
-        synchronized (LOCK) {
+        LOCK.lockInterruptibly();
+        try {
+            now = System.currentTimeMillis();
             if (cachedKey != null && now < keyExpiresAt) {
                 return cachedKey;
             }
@@ -58,7 +63,9 @@ public final class BiliWbiSigner {
             BiliRequestHeaders.applyWebApiHeaders(builder);
             HttpRequest request = builder.build();
 
-            HttpResponse<String> resp = HTTP.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            HttpResponse<String> resp = CancellableHttpRequestScope.sendOneBlocking(HTTP, request,
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8),
+                    HttpRequestCloseDiagnostics.global(), "bili-api-wbi-nav");
             if (resp.statusCode() != 200) {
                 throw new RuntimeException("B站 nav 接口返回 HTTP " + resp.statusCode());
             }
@@ -80,6 +87,8 @@ public final class BiliWbiSigner {
             cachedKey = key.substring(0, 32);
             keyExpiresAt = System.currentTimeMillis() + 30 * 60 * 1000L;
             return cachedKey;
+        } finally {
+            LOCK.unlock();
         }
     }
 

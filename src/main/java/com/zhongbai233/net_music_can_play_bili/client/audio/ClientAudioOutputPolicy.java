@@ -1,13 +1,14 @@
 package com.zhongbai233.net_music_can_play_bili.client.audio;
 
 import com.zhongbai233.net_music_can_play_bili.blockentity.PlaybackAudioSource;
+import com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackRuntimeProperties;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 
 /** 输出设备之外的世界状态、会话有效性和 pacing 策略。 */
 final class ClientAudioOutputPolicy {
-    private static final long AUDIO_SYNC_AHEAD_TOLERANCE_TICKS = Long.getLong(
-            "bili.audio.openal.ahead_tolerance_ticks", 0L);
+    private static final long AUDIO_SYNC_AHEAD_TOLERANCE_TICKS =
+            PlaybackRuntimeProperties.audioSyncAheadToleranceTicks();
 
     private ClientAudioOutputPolicy() {
     }

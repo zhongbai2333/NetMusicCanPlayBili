@@ -17,6 +17,7 @@ import org.slf4j.Logger;
 
 import java.net.URL;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Shared synchronized client media sound used by MP4, Pad, and future media
@@ -30,7 +31,7 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
     private final ClientMediaSoundLifecyclePolicy lifecyclePolicy;
     private final String debugName;
     private float mediaVolume;
-    private boolean finished;
+    private final AtomicBoolean finished = new AtomicBoolean();
     private final SyncedStreamRecoveryRegistry.Registration recoveryRegistration;
 
     public ClientMediaMovingSound(UUID sourceId, URL songUrl, int timeSecond, LyricRecord lyricRecord,
@@ -45,15 +46,21 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
         this.mediaVolume = Math.max(0.0F, Math.min(1.0F, volume));
         updatePositionAndAttenuation();
         LOGGER.trace("{} 声音实例创建: source={} session={} headphoneRouted={} volume={} gain={} attenuation={}",
-                this.debugName, sourceId, this.sessionId, headphoneRouted, this.mediaVolume, volume, attenuation);
-        this.lifecyclePolicy.registerSound(sourceId, this.sessionId, this);
-        recoveryRegistration = SyncedStreamRecoveryRegistry.register(this.sessionId,
-                request -> this.lifecyclePolicy.recoverAfterStreamFailure(sourceId, this.sessionId, request.error()));
-    }
-
-    @Override
-    public String sessionId() {
-        return sessionId;
+                this.debugName, sourceId, sessionId(), headphoneRouted, this.mediaVolume, volume, attenuation);
+        recoveryRegistration = SyncedStreamRecoveryRegistry.register(playbackSessionId(),
+                request -> this.lifecyclePolicy.recoverAfterStreamFailure(sourceId, sessionId(), request.error()));
+        boolean accepted = false;
+        try {
+            accepted = this.lifecyclePolicy.tryRegisterSound(sourceId, sessionId(), this);
+        } finally {
+            if (!accepted) {
+                discardWithoutFinishing();
+            }
+        }
+        if (!accepted) {
+            LOGGER.trace("{} 声音实例因会话已换代而拒绝: source={} session={}", this.debugName, sourceId,
+                    sessionId());
+        }
     }
 
     @Override
@@ -68,8 +75,9 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
 
     @Override
     public void discardWithoutFinishing() {
-        finished = true;
-        SyncedStreamRecoveryRegistry.unregister(recoveryRegistration);
+        if (finished.compareAndSet(false, true)) {
+            SyncedStreamRecoveryRegistry.unregister(recoveryRegistration);
+        }
         stop();
     }
 
@@ -81,11 +89,11 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
 
     @Override
     public void tick() {
-        if (ClientMediaRetryHandler.isPending(sourceId, sessionId)) {
+        if (ClientMediaRetryHandler.isPending(sourceId, playbackSessionId())) {
             stop();
             return;
         }
-        if (!ClientMediaPlayback.isCurrent(sourceId, sessionId)) {
+        if (!ClientMediaPlayback.isCurrent(sourceId, sessionId())) {
             stopAndFinish();
             return;
         }
@@ -102,26 +110,26 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
         if (tick == 1) {
             LOGGER.trace(
                     "{} 声音实例首 tick: source={} session={} headphoneRouted={} volume={} attenuation={} pos=({}, {}, {})",
-                    debugName, sourceId, sessionId, headphoneRouted, volume, attenuation, x, y, z);
+                    debugName, sourceId, sessionId(), headphoneRouted, volume, attenuation, x, y, z);
         }
-        long elapsedMillis = ClientMediaPlayback.elapsedMillis(sourceId, sessionId, startOffsetMillis + tick * 50L);
+        long elapsedMillis = ClientMediaPlayback.elapsedMillis(sourceId, sessionId(), startOffsetMillis + tick * 50L);
         int lyricTick = (int) Math.min(Integer.MAX_VALUE,
                 Math.max(0L, Math.round(Math.max(0L, elapsedMillis) / 50.0D)));
         if (totalMillis > 0L && lyricTick > tickTimes + 50) {
-            lifecyclePolicy.onCompleted(sourceId, sessionId);
+            lifecyclePolicy.onCompleted(sourceId, sessionId());
             stopAndFinish();
             return;
         }
         updatePositionAndAttenuation();
         if (lyricRecord != null) {
             lyricRecord.updateCurrentLine(lyricTick);
-            ClientMediaPlaybackRegistry.updateLyric(sourceId, sessionId, lyricRecord, lyricTick);
+            ClientMediaPlaybackRegistry.updateLyric(sourceId, sessionId(), lyricRecord, lyricTick);
         }
     }
 
     @Override
     protected void onStreamFailure(Exception error) {
-        boolean retryScheduled = lifecyclePolicy.recoverAfterStreamFailure(sourceId, sessionId, error);
+        boolean retryScheduled = lifecyclePolicy.recoverAfterStreamFailure(sourceId, sessionId(), error);
         if (!retryScheduled) {
             finishSession();
         }
@@ -130,14 +138,14 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
     @Override
     protected void onStreamStarting() {
         LOGGER.trace("{} 声音流开始创建: source={} session={} headphoneRouted={} urlHost={}",
-                debugName, sourceId, sessionId, headphoneRouted, songUrl.getHost());
+                debugName, sourceId, sessionId(), headphoneRouted, songUrl.getHost());
     }
 
     @Override
     protected void onStreamReady() {
-        ClientMediaPlayback.markAudioStarted(sourceId, sessionId, startOffsetMillis, totalMillis);
+        ClientMediaPlayback.markAudioStarted(sourceId, sessionId(), startOffsetMillis, totalMillis);
         LOGGER.trace("{} 声音流已就绪: source={} session={} headphoneRouted={} offset={}ms urlHost={}",
-                debugName, sourceId, sessionId, headphoneRouted, startOffsetMillis, songUrl.getHost());
+                debugName, sourceId, sessionId(), headphoneRouted, startOffsetMillis, songUrl.getHost());
     }
 
     @Override
@@ -164,10 +172,9 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
 
     @Override
     protected void finishSession() {
-        if (!finished) {
-            finished = true;
+        if (finished.compareAndSet(false, true)) {
             SyncedStreamRecoveryRegistry.unregister(recoveryRegistration);
-            lifecyclePolicy.finish(sourceId, sessionId);
+            lifecyclePolicy.finish(sourceId, sessionId());
         }
     }
 }

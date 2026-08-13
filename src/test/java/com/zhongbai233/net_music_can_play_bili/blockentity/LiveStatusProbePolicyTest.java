@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.blockentity;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.ResolveGeneration;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -22,10 +23,12 @@ class LiveStatusProbePolicyTest {
 
     @Test
     void rejectsResultsAfterStopOrRoomGenerationChange() {
-        assertTrue(LiveStatusProbePolicy.acceptsResult(true, 3L, 3L, 8L, 8L, "123", "123"));
-        assertFalse(LiveStatusProbePolicy.acceptsResult(false, 3L, 3L, 8L, 8L, "123", "123"));
-        assertFalse(LiveStatusProbePolicy.acceptsResult(true, 4L, 3L, 8L, 8L, "123", "123"));
-        assertFalse(LiveStatusProbePolicy.acceptsResult(true, 3L, 3L, 9L, 8L, "123", "123"));
-        assertFalse(LiveStatusProbePolicy.acceptsResult(true, 3L, 3L, 8L, 8L, "456", "123"));
+        ResolveGeneration current = ResolveGeneration.of(3L);
+        assertTrue(LiveStatusProbePolicy.acceptsResult(true, current, current, 8L, 8L, "123", "123"));
+        assertFalse(LiveStatusProbePolicy.acceptsResult(false, current, current, 8L, 8L, "123", "123"));
+        assertFalse(LiveStatusProbePolicy.acceptsResult(true, ResolveGeneration.of(4L), current,
+                8L, 8L, "123", "123"));
+        assertFalse(LiveStatusProbePolicy.acceptsResult(true, current, current, 9L, 8L, "123", "123"));
+        assertFalse(LiveStatusProbePolicy.acceptsResult(true, current, current, 8L, 8L, "456", "123"));
     }
 }
