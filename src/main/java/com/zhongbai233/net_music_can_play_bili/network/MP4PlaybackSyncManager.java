@@ -26,7 +26,6 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.item.ItemTossEvent;
@@ -56,8 +55,9 @@ public final class MP4PlaybackSyncManager {
             new MP4PlaybackSourceSessionRegistry<>();
     private static final MP4ResolveIntentRegistry RESOLVE_INTENTS = new MP4ResolveIntentRegistry();
     private static final MP4PlaybackRetryAdmission<Session> RETRY_ADMISSION =
-            new MP4PlaybackRetryAdmission<>(SESSION_REGISTRY, RESOLVE_INTENTS, Session::playbackSessionId,
-                    Session::queueIndex, Session::rawUrl);
+            new MP4PlaybackRetryAdmission<>(SESSION_REGISTRY, RESOLVE_INTENTS,
+                    session -> session.playbackSessionId(), session -> session.queueIndex(),
+                    session -> session.rawUrl());
     private static final MP4PlaybackProgressPersistence PROGRESS_PERSISTENCE =
             new MP4PlaybackProgressPersistence();
     private static final MP4PlaybackAudienceBroadcaster AUDIENCE_BROADCASTER =

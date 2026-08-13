@@ -26,6 +26,7 @@ import org.slf4j.Logger;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CancellationException;
@@ -309,8 +310,9 @@ public final class ModernTurntableVideoClient {
         PlaybackSessionId existingForTurntableKey = immutableTurntablePos != null
                 ? ACTIVE_SESSION_BY_TURNTABLE.get(immutableTurntablePos)
                 : null;
-        String existingForTurntable = existingForTurntableKey != null ? existingForTurntableKey.value() : null;
-        if (existingForTurntable != null && VideoBillboardPreview.isSessionRunning(existingForTurntable)) {
+        if (existingForTurntableKey != null
+                && VideoBillboardPreview.isSessionRunning(existingForTurntableKey.value())) {
+            String existingForTurntable = existingForTurntableKey.value();
             if (existingForTurntableKey.equals(playbackSessionId)) {
                 VideoBillboardPreview.updateSessionProjectors(existingForTurntable, consumerPositions);
                 if (VideoBillboardPreview.isSessionWaitingForFirstFrame(existingForTurntable)) {
@@ -410,7 +412,8 @@ public final class ModernTurntableVideoClient {
         rememberActiveSession(immutableTurntablePos, sessionId);
         ACTIVE_QUALITY_CEILING_BY_SESSION.put(playbackSessionId, qualityCeiling);
         long requestNanoTime = System.nanoTime();
-        ResolveGeneration requestGeneration = REQUEST_SEQUENCE.updateAndGet(ResolveGeneration::next);
+        ResolveGeneration requestGeneration = REQUEST_SEQUENCE.updateAndGet(
+                current -> Objects.requireNonNull(current, "current generation").next());
         ACTIVE_REQUEST_BY_SESSION.put(playbackSessionId, requestGeneration);
         VideoResolveRequestOwner<BlockPos> pendingRequest = new VideoResolveRequestOwner<>(qualityCeiling,
                 requestGeneration, List.copyOf(consumerPositions));
@@ -488,14 +491,6 @@ public final class ModernTurntableVideoClient {
         ACTIVE_SESSION_IDS.remove(key);
         ACTIVE_QUALITY_CEILING_BY_SESSION.remove(key);
         ACTIVE_REQUEST_BY_SESSION.remove(key);
-        cancelPendingRequest(key);
-    }
-
-    private static void cancelPendingRequest(String sessionId) {
-        PlaybackSessionId key = sessionKey(sessionId);
-        if (key == null) {
-            return;
-        }
         cancelPendingRequest(key);
     }
 

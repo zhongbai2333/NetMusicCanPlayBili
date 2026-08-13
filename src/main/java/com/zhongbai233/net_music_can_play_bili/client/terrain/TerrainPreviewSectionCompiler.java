@@ -136,7 +136,7 @@ public final class TerrainPreviewSectionCompiler {
         } catch (Throwable failure) {
             meshes.values().forEach(mesh -> mesh.close());
             closeStorage(storageByLayer);
-            auxiliaryStorage.forEach(ByteBufferBuilder::close);
+            auxiliaryStorage.forEach(storageBuffer -> storageBuffer.close());
             throw failure;
         } finally {
             BlockModelLighter.clearCache();
@@ -245,7 +245,11 @@ public final class TerrainPreviewSectionCompiler {
         private FrozenTerrainBlockColors(TerrainBlockSectionSnapshot snapshot) {
             Map<net.minecraft.world.level.block.state.BlockState, Integer> layers = new HashMap<>();
             for (TerrainBlockSectionSnapshot.VisibleBlock block : snapshot.blocks()) {
-                layers.merge(block.state(), block.tintLayers().size(), Math::max);
+                int layerCount = block.tintLayers().size();
+                Integer current = layers.get(block.state());
+                if (current == null || layerCount > current.intValue()) {
+                    layers.put(block.state(), layerCount);
+                }
             }
             layers.forEach((state, count) -> {
                 java.util.List<BlockTintSource> values = new java.util.ArrayList<>(count);
@@ -388,7 +392,7 @@ public final class TerrainPreviewSectionCompiler {
             storage.values().forEach(bytes -> bytes.close());
             storage.clear();
             sortStates.clear();
-            auxiliaryStorage.forEach(ByteBufferBuilder::close);
+            auxiliaryStorage.forEach(storageBuffer -> storageBuffer.close());
             auxiliaryStorage.clear();
         }
     }

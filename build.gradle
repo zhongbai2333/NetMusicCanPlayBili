@@ -303,6 +303,10 @@ sourceSets.main.resources { srcDir 'src/generated/resources' }
 // 显式声明测试目录，确保 Gradle/Buildship 在多根工作区中稳定导入测试源码模型。
 sourceSets.test.java.setSrcDirs(['src/test/java'])
 sourceSets.test.resources.setSrcDirs(['src/test/resources'])
+// 云同步可能在 generated source root 中恢复 "NativeBundleCapabilities 2.java" 之类冲突副本。
+// 这类文件不可能是合法编译单元，也不应被 Gradle/Buildship 当成第二份类型定义。
+sourceSets.main.java.exclude '**/* 2.java'
+sourceSets.test.java.exclude '**/* 2.java'
 
 tasks.register("runWithRenderDoc", Exec) {
     def javaExecTask = tasks.withType(JavaExec).named("runClient").get()
@@ -792,7 +796,7 @@ def embeddedNativeRoot = layout.projectDirectory.dir('src/main/resources/native'
 def embeddedNativeManifest = embeddedNativeRoot.file('SHA256SUMS')
 def embeddedNativeReadme = embeddedNativeRoot.file('README.md')
 def embeddedNativeReadmeText = embeddedNativeReadme.asFile.getText('UTF-8')
-def embeddedNativeReleaseMatcher = embeddedNativeReadmeText =~ /(?m)^- Release: `(media-min-v48)`$/
+def embeddedNativeReleaseMatcher = embeddedNativeReadmeText =~ /(?m)^\s*- Release:\s*`(media-min-v48)`\s*$/
 if (embeddedNativeReleaseMatcher.count != 1) {
     throw new GradleException('native/README.md must identify exactly one supported media-min-v48 release')
 }
@@ -805,6 +809,7 @@ if (linuxArm64GlibcMatcher.count != 1 || linuxX8664GlibcMatcher.count != 1) {
 def linuxArm64GlibcFloor = linuxArm64GlibcMatcher[0][1]
 def linuxX8664GlibcFloor = linuxX8664GlibcMatcher[0][1]
 def embeddedNativeLicenses = ['FFmpeg-LGPL-2.1.txt']
+def generatedNativeBundleSourceDirectory = layout.buildDirectory.dir('generated/sources/nativeBundle/java')
 def generateNativeBundleCapabilities = tasks.register('generateNativeBundleCapabilities', Copy) {
     inputs.property('embeddedNativeRelease', embeddedNativeRelease)
     inputs.property('bundledSoftwareAv1Available', false)
@@ -815,7 +820,21 @@ def generateNativeBundleCapabilities = tasks.register('generateNativeBundleCapab
         )
         rename { name -> name.endsWith('.template') ? name.substring(0, name.length() - '.template'.length()) : name }
     }
-    into(layout.buildDirectory.dir('generated/sources/nativeBundle/java'))
+    into(generatedNativeBundleSourceDirectory)
+    doFirst {
+        def generatedRoot = generatedNativeBundleSourceDirectory.get().asFile
+        if (generatedRoot.isDirectory()) {
+            try (def paths = java.nio.file.Files.walk(generatedRoot.toPath())) {
+                paths.filter { path -> path.fileName.toString().endsWith(' 2.java') }.forEach { duplicate ->
+                    try {
+                        java.nio.file.Files.deleteIfExists(duplicate)
+                    } catch (IOException error) {
+                        throw new GradleException("Unable to remove generated conflict copy: ${duplicate}", error)
+                    }
+                }
+            }
+        }
+    }
 }
 sourceSets.main.java.srcDir(generateNativeBundleCapabilities)
 def embeddedNativeFiles = [

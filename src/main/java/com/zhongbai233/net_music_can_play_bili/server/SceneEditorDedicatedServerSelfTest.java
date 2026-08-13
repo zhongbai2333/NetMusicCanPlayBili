@@ -38,7 +38,7 @@ public final class SceneEditorDedicatedServerSelfTest {
             UUID id = UUID.fromString("00000000-0000-0000-0000-000000000008");
             SceneElement element = new ServerElement(id, "server:probe", EditorTransform.identity());
             SceneDocument<SceneElement> document = new SceneDocument<>(List.of(element));
-            if (document.element(id).orElseThrow() != element) {
+            if (!element.equals(document.element(id).orElseThrow())) {
                 throw new IllegalStateException("Scene Editor core API failed on dedicated server");
             }
             if (Boolean.getBoolean("ncpb.scene_editor.jij_dedupe_self_test")) {

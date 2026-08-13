@@ -240,7 +240,7 @@ public final class ModernTurntableTimeline {
         }
 
         public String sessionId() {
-            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+            return playbackSessionId.map(session -> session.value()).orElse("");
         }
     }
 }

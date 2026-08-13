@@ -146,7 +146,7 @@ public final class SyncedStreamRecoveryRegistry {
         }
 
         public String sessionId() {
-            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+            return playbackSessionId.map(session -> session.value()).orElse("");
         }
 
         private static final Registration NONE = new Registration(Optional.empty(), 0L);

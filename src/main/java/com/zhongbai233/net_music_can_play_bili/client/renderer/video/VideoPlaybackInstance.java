@@ -1799,7 +1799,7 @@ final class VideoPlaybackInstance {
 
     VideoBillboardPreview.VideoStatus status() {
         VideoCandidate candidate = activeCandidate;
-        int requestedQuality = candidates.stream().mapToInt(VideoCandidate::quality).max().orElse(0);
+        int requestedQuality = candidates.stream().mapToInt(option -> option.quality()).max().orElse(0);
         return new VideoBillboardPreview.VideoStatus(targetWidth, targetHeight,
                 candidate != null ? candidate.fps() : fps, hasFrame, true,
                 requestedQuality, candidate != null ? candidate.quality() : 0,

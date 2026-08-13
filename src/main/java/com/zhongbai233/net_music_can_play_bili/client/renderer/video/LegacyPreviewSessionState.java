@@ -132,7 +132,7 @@ final class LegacyPreviewSessionState<T, R> {
         }
 
         String sessionId() {
-            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+            return playbackSessionId.map(session -> session.value()).orElse("");
         }
 
         private static <T, R> Snapshot<T, R> empty() {

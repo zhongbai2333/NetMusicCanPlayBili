@@ -119,11 +119,12 @@ public final class VideoBillboardPreview {
             return ProjectorFrameSnapshot.empty();
         }
         VideoYuvTextureSet yuvTextures = LEGACY_TEXTURES.yuv();
-        boolean yuv = shouldRenderYuvFrame() && yuvTextures != null;
-        return new ProjectorFrameSnapshot(true, yuv, TEXTURE_ID, yuv ? yuvTextures.yId() : null,
-                yuv ? yuvTextures.uId() : null, yuv ? yuvTextures.vId() : null,
-                yuv ? yuvTextures.format() : Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, width, height, false,
-                false, 0.0F);
+        if (shouldRenderYuvFrame() && yuvTextures != null) {
+            return new ProjectorFrameSnapshot(true, true, TEXTURE_ID, yuvTextures.yId(), yuvTextures.uId(),
+                    yuvTextures.vId(), yuvTextures.format(), width, height, false, false, 0.0F);
+        }
+        return new ProjectorFrameSnapshot(true, false, TEXTURE_ID, null, null, null,
+                Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA, width, height, false, false, 0.0F);
     }
 
     public static ProjectorFrameSnapshot currentProjectorDisplayFrame(BlockPos projectorPos) {
@@ -249,9 +250,9 @@ public final class VideoBillboardPreview {
     private static final PendingVideoSessionRegistry<BlockPos> PENDING_SESSIONS =
             new PendingVideoSessionRegistry<>();
     private static final VideoResourceDiagnosticsCollector<VideoPlaybackInstance> RESOURCE_DIAGNOSTICS =
-            new VideoResourceDiagnosticsCollector<>(VideoPlaybackInstance::isRunning,
-                    VideoPlaybackInstance::hasTerminalFailure, VideoPlaybackInstance::projectorCount,
-                    VideoPlaybackInstance::hasGuiConsumer);
+            new VideoResourceDiagnosticsCollector<>(instance -> instance.isRunning(),
+                    instance -> instance.hasTerminalFailure(), instance -> instance.projectorCount(),
+                    instance -> instance.hasGuiConsumer());
     private static final LegacyPreviewSessionState<BlockPos, PlaybackRequest> LEGACY_PREVIEW =
             new LegacyPreviewSessionState<>();
     private static final LegacyPreviewWorkerLifecycle<Thread, AutoCloseable> LEGACY_WORKER =
@@ -2362,7 +2363,10 @@ public final class VideoBillboardPreview {
 
         ensurePackedBenchTexture(textureWidth, textureHeight);
         DynamicTexture packedTexture = LEGACY_TEXTURES.packed();
-        NativeImage image = packedTexture != null ? packedTexture.getPixels() : null;
+        if (packedTexture == null) {
+            return false;
+        }
+        NativeImage image = packedTexture.getPixels();
         if (image == null || image.isClosed()) {
             return false;
         }
@@ -2384,7 +2388,10 @@ public final class VideoBillboardPreview {
 
         ensureTexture(frameWidth, frameHeight);
         DynamicTexture rgbaTexture = LEGACY_TEXTURES.rgba();
-        NativeImage image = rgbaTexture != null ? rgbaTexture.getPixels() : null;
+        if (rgbaTexture == null) {
+            return false;
+        }
+        NativeImage image = rgbaTexture.getPixels();
         if (image == null || image.isClosed()) {
             return false;
         }

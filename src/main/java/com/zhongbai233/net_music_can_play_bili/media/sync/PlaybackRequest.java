@@ -49,7 +49,7 @@ public record PlaybackRequest(
     }
 
     public String sessionId() {
-        return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+        return playbackSessionId.map(session -> session.value()).orElse("");
     }
 
     public float startOffsetSeconds() {

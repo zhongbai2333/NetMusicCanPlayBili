@@ -2065,10 +2065,6 @@ public class HolographicScreenConfigTestScreen extends Screen {
         return Float.isFinite(candidate) ? candidate : previous;
     }
 
-    private static float positiveFiniteOrPrevious(float candidate, float previous) {
-        return Float.isFinite(candidate) && candidate > 0.0F ? candidate : previous;
-    }
-
     private static float boundedScale(float candidate, float previous) {
         return Float.isFinite(candidate)
                 ? Math.clamp(candidate, ControlConsoleElement.MIN_SCALE, ControlConsoleElement.MAX_SCALE)

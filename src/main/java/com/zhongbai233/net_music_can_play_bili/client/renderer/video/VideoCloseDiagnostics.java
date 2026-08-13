@@ -219,7 +219,7 @@ public final class VideoCloseDiagnostics {
     }
 
     private static String describeSession(Optional<PlaybackSessionId> sessionId) {
-        String value = sessionId.map(PlaybackSessionId::value).orElse("<none>");
+        String value = sessionId.map(session -> session.value()).orElse("<none>");
         return value.length() <= 48 ? value : value.substring(0, 48);
     }
 

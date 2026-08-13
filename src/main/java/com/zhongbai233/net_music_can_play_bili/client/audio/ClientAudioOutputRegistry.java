@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -63,7 +64,7 @@ public class ClientAudioOutputRegistry {
         }
         Optional<PlaybackSessionId> playbackSessionId = PlaybackSessionId.parse(sessionId);
         BlockPos key = keyFor(pos, ownerId, playbackSessionId);
-        String normalizedSessionId = playbackSessionId.map(PlaybackSessionId::value).orElse("");
+        String normalizedSessionId = playbackSessionId.map(session -> session.value()).orElse("");
         if (!ClientAudioOutputPolicy.isCurrentSession(pos, normalizedSessionId)) {
             handler.hardStopOutput();
             handler.cleanup();
@@ -114,7 +115,7 @@ public class ClientAudioOutputRegistry {
         }
         Optional<PlaybackSessionId> playbackSessionId = PlaybackSessionId.parse(sessionId);
         BlockPos key = keyFor(pos, ownerId, playbackSessionId);
-        String normalizedSessionId = playbackSessionId.map(PlaybackSessionId::value).orElse("");
+        String normalizedSessionId = playbackSessionId.map(session -> session.value()).orElse("");
         if (!ClientAudioOutputPolicy.isCurrentSession(pos, normalizedSessionId)) {
             handler.hardStopOutput();
             handler.cleanup();
@@ -561,10 +562,10 @@ public class ClientAudioOutputRegistry {
                 .filter(candidate -> ownerId.equals(candidate.ownerId()))
                 .filter(candidate -> candidate.kind() == OutputKind.STEREO)
                 .max(Comparator.comparingLong(candidate -> candidate.createdAtMillis()))
-                .map(AudioEntry::output)
+                .map(entry -> Objects.requireNonNull(entry, "audio entry").output())
                 .filter(StereoOpenALHandler.class::isInstance)
-                .map(StereoOpenALHandler.class::cast)
-                .map(StereoOpenALHandler::snapshot);
+                .map(output -> (StereoOpenALHandler) output)
+                .map(handler -> handler.snapshot());
     }
 
     /** Read-only diagnostics for the Stereo output owned by one exact playback session. */
@@ -577,10 +578,10 @@ public class ClientAudioOutputRegistry {
                 .filter(candidate -> candidate.playbackSessionId().filter(sessionId::equals).isPresent())
                 .filter(candidate -> candidate.kind() == OutputKind.STEREO)
                 .max(Comparator.comparingLong(candidate -> candidate.createdAtMillis()))
-                .map(AudioEntry::output)
+                .map(entry -> Objects.requireNonNull(entry, "audio entry").output())
                 .filter(StereoOpenALHandler.class::isInstance)
-                .map(StereoOpenALHandler.class::cast)
-                .map(StereoOpenALHandler::snapshot);
+                .map(output -> (StereoOpenALHandler) output)
+                .map(handler -> handler.snapshot());
     }
 
     /** Read-only diagnostics for the current world-position-owned Stereo output. */
@@ -674,7 +675,7 @@ public class ClientAudioOutputRegistry {
 
         /** 显式语义 accessor，避免调用方把输出 session 与播放命令 session 混淆。 */
         public String audioSessionId() {
-            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+            return playbackSessionId.map(session -> session.value()).orElse("");
         }
 
         /** 保留原 record component 的字符串 accessor 兼容。 */
@@ -848,7 +849,7 @@ public class ClientAudioOutputRegistry {
         }
 
         private String sessionId() {
-            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+            return playbackSessionId.map(session -> session.value()).orElse("");
         }
 
         private void cleanup() {

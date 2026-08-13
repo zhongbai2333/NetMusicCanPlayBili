@@ -630,7 +630,8 @@ public final class TerrainPreviewManager {
             }
             List<TerrainBlockEntityPreview> refreshed = new ArrayList<>(blockEntityPositions.size());
             for (BlockPos pos : blockEntityPositions) {
-                if (refreshed.size() >= MAX_BLOCK_ENTITY_PREVIEWS || !level.hasChunkAt(pos)) {
+                if (refreshed.size() >= MAX_BLOCK_ENTITY_PREVIEWS
+                        || !level.hasChunk(Math.floorDiv(pos.getX(), 16), Math.floorDiv(pos.getZ(), 16))) {
                     continue;
                 }
                 try {

@@ -49,7 +49,7 @@ public record ClientPlaybackCommand(
     }
 
     public String sessionId() {
-        return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+        return playbackSessionId.map(session -> session.value()).orElse("");
     }
 
     public boolean hasSession() {

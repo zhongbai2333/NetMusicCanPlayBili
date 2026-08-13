@@ -1320,7 +1320,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                     : control.minecartUuid == null && control.pos != null && control.pos.equals(pos);
             if (sameSource && !playbackSessionId.equals(control.playbackSessionId)) {
                 LOGGER.debug("关闭旧现代音频流: pos={} oldSession={} newSession={}", pos,
-                        control.playbackSessionId.map(PlaybackSessionId::value).orElse(""), currentSessionId);
+                        control.playbackSessionId.map(session -> session.value()).orElse(""), currentSessionId);
                 control.close();
             }
         }

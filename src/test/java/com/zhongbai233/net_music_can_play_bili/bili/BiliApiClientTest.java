@@ -199,7 +199,7 @@ class BiliApiClientTest {
         assertTrue(plan.softwareAv1Candidates().isEmpty());
         assertEquals(List.of(BiliApiClient.VideoDecodePreference.HARDWARE_REQUIRED),
                 plan.candidateOrder().stream()
-                        .map(BiliApiClient.PlannedVideoCandidate::decodePreference)
+                        .map(candidate -> candidate.decodePreference())
                         .toList());
     }
 
@@ -216,7 +216,7 @@ class BiliApiClientTest {
                 BiliApiClient.VideoDecodePreference.HARDWARE_REQUIRED,
                 BiliApiClient.VideoDecodePreference.HARDWARE_REQUIRED,
                 BiliApiClient.VideoDecodePreference.AUTO),
-                auto.candidateOrder().stream().map(BiliApiClient.PlannedVideoCandidate::decodePreference).toList());
+                auto.candidateOrder().stream().map(candidate -> candidate.decodePreference()).toList());
         assertTrue(auto.softwareAv1Candidates().isEmpty());
 
         BiliApiClient.VideoStreamPlan preferred = BiliApiClient.buildVideoStreamPlan(
@@ -226,29 +226,29 @@ class BiliApiClientTest {
                 BiliApiClient.VideoDecodePreference.HARDWARE_REQUIRED,
                 BiliApiClient.VideoDecodePreference.AUTO),
                 preferred.candidateOrder().stream()
-                        .map(BiliApiClient.PlannedVideoCandidate::decodePreference).toList());
+                        .map(candidate -> candidate.decodePreference()).toList());
         assertTrue(preferred.softwareAv1Candidates().isEmpty());
         assertEquals(List.of(
                 BiliVideoStreamResolver.DecodeMode.HARDWARE_REQUIRED,
                 BiliVideoStreamResolver.DecodeMode.HARDWARE_REQUIRED,
                 BiliVideoStreamResolver.DecodeMode.AUTO),
                 BiliVideoStreamResolver.buildCandidates(preferred, 30).stream()
-                        .map(BiliVideoStreamResolver.VideoCandidate::decodeMode).toList());
+                        .map(candidate -> candidate.decodeMode()).toList());
 
         BiliApiClient.VideoStreamPlan compatibility = BiliApiClient.buildVideoStreamPlan(
                 streams, 120, BiliApiClient.VideoCodecPolicy.COMPATIBILITY);
         assertEquals(List.of(120), compatibility.av1Candidates().stream()
-                .map(BiliApiClient.VideoStream::quality).toList());
+                .map(stream -> stream.quality()).toList());
         assertTrue(compatibility.softwareAv1Candidates().isEmpty());
         assertEquals(List.of(BiliApiClient.CODEC_AV1, BiliApiClient.CODEC_H264),
-                compatibility.fallbackOrder().stream().map(BiliApiClient.VideoStream::codecId).toList());
+                compatibility.fallbackOrder().stream().map(stream -> stream.codecId()).toList());
 
         BiliApiClient.VideoStreamPlan h264 = BiliApiClient.buildVideoStreamPlan(
                 streams, 120, BiliApiClient.VideoCodecPolicy.H264);
         assertTrue(h264.av1Candidates().isEmpty());
         assertTrue(h264.softwareAv1Candidates().isEmpty());
         assertEquals(List.of(BiliApiClient.CODEC_H264),
-                h264.fallbackOrder().stream().map(BiliApiClient.VideoStream::codecId).toList());
+                h264.fallbackOrder().stream().map(stream -> stream.codecId()).toList());
     }
 
     @Test

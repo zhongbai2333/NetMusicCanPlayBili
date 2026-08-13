@@ -907,28 +907,28 @@ public final class MP4HandheldVideoClient {
         }
         if (nativeTermination.isDone()) {
             trackHandheldZombie(session, closeOperation, nativeTermination);
-            throw new HandheldCandidateCloseFailureException(stream, nativeTermination,
+            throw new HandheldCandidateCloseFailureException(stream,
                     "native termination completed exceptionally");
         }
         long remainingNanos = TimeUnit.MILLISECONDS.toNanos(CANDIDATE_CLOSE_TIMEOUT_MILLIS)
                 - Math.max(0L, System.nanoTime() - closeStartedNanos);
         if (remainingNanos <= 0L) {
             trackHandheldZombie(session, closeOperation, nativeTermination);
-            throw new HandheldCandidateCloseTimeoutException(stream, nativeTermination);
+            throw new HandheldCandidateCloseTimeoutException(stream);
         }
         try {
             nativeTermination.get(remainingNanos, TimeUnit.NANOSECONDS);
         } catch (TimeoutException error) {
             trackHandheldZombie(session, closeOperation, nativeTermination);
-            throw new HandheldCandidateCloseTimeoutException(stream, nativeTermination);
+            throw new HandheldCandidateCloseTimeoutException(stream);
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
             trackHandheldZombie(session, closeOperation, nativeTermination);
-            throw new HandheldCandidateCloseFailureException(stream, nativeTermination,
+            throw new HandheldCandidateCloseFailureException(stream,
                     "close barrier interrupted", error);
         } catch (java.util.concurrent.ExecutionException error) {
             trackHandheldZombie(session, closeOperation, nativeTermination);
-            throw new HandheldCandidateCloseFailureException(stream, nativeTermination,
+            throw new HandheldCandidateCloseFailureException(stream,
                     "native termination completed exceptionally", error.getCause());
         }
         if (closeFailure != null) {
@@ -964,29 +964,20 @@ public final class MP4HandheldVideoClient {
     }
 
     private static final class HandheldCandidateCloseTimeoutException extends IOException {
-        private final CompletableFuture<Void> nativeTermination;
-
-        private HandheldCandidateCloseTimeoutException(ResolvedVideoStream stream,
-                CompletableFuture<Void> nativeTermination) {
+        private HandheldCandidateCloseTimeoutException(ResolvedVideoStream stream) {
             super("旧手持视频候选 native worker 未在关闭预算内退出: quality=" + stream.quality()
                     + ", codec=" + stream.codecId());
-            this.nativeTermination = nativeTermination;
         }
     }
 
     private static final class HandheldCandidateCloseFailureException extends IOException {
-        private final CompletableFuture<Void> nativeTermination;
-
-        private HandheldCandidateCloseFailureException(ResolvedVideoStream stream,
-                CompletableFuture<Void> nativeTermination, String reason) {
-            this(stream, nativeTermination, reason, null);
+        private HandheldCandidateCloseFailureException(ResolvedVideoStream stream, String reason) {
+            this(stream, reason, null);
         }
 
-        private HandheldCandidateCloseFailureException(ResolvedVideoStream stream,
-                CompletableFuture<Void> nativeTermination, String reason, Throwable cause) {
+        private HandheldCandidateCloseFailureException(ResolvedVideoStream stream, String reason, Throwable cause) {
             super("旧手持视频候选 native 关闭失败: quality=" + stream.quality()
                     + ", codec=" + stream.codecId() + ", reason=" + reason, cause);
-            this.nativeTermination = nativeTermination;
         }
     }
 
@@ -1050,7 +1041,7 @@ public final class MP4HandheldVideoClient {
         decoder.close();
         if (!HandheldDecoderAdmissionPolicy.completedNormally(termination)) {
             trackHandheldZombie(session, HANDHELD_CLOSE_SEQUENCE.incrementAndGet(), termination);
-            throw new HandheldCandidateCloseFailureException(stream, termination, failureReason);
+            throw new HandheldCandidateCloseFailureException(stream, failureReason);
         }
     }
 
@@ -1464,7 +1455,7 @@ public final class MP4HandheldVideoClient {
         }
 
         String sessionId() {
-            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+            return playbackSessionId.map(session -> session.value()).orElse("");
         }
     }
 
@@ -1497,9 +1488,11 @@ public final class MP4HandheldVideoClient {
             this.owner = Objects.requireNonNull(owner);
             this.key = Objects.requireNonNull(key);
             this.decoderStartOffsetMillis = Math.max(0L, decoderStartOffsetMillis);
-            this.h264CandidateAvailable = candidates != null
-                    && candidates.stream().anyMatch(candidate -> candidate.codecId() == 7);
-            if (h264CandidateAvailable && candidates.stream().noneMatch(candidate -> candidate.codecId() == 13)) {
+            java.util.List<BiliVideoStreamResolver.VideoCandidate> safeCandidates = candidates != null
+                    ? candidates : java.util.List.of();
+            this.h264CandidateAvailable = safeCandidates.stream().anyMatch(candidate -> candidate.codecId() == 7);
+            if (h264CandidateAvailable
+                    && safeCandidates.stream().noneMatch(candidate -> candidate.codecId() == 13)) {
                 fallbackReason = VideoFallbackReason.NO_AV1_STREAM;
             }
         }

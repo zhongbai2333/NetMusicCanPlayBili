@@ -914,7 +914,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private Fmp4RangeSeekSupport.InitSegment readInitSegment() throws IOException {
         HttpRangeClient.CdnResponse response = http.getRange(videoUrl, 0L, FMP4_INIT_PROBE_BYTES - 1L);
         InputStream body = trackInput(response.body());
-        try (TrackedInputLease ignored = new TrackedInputLease(body)) {
+        TrackedInputLease lease = new TrackedInputLease(body);
+        try (lease) {
             int status = response.statusCode();
             if (status != 206 && status != 200) {
                 throw new IOException("HTTP " + status + " while probing fMP4 init segment");
@@ -2223,6 +2224,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             return this;
         }
 
+        @SuppressWarnings("resource") // Ownership of the retained frame is transferred to the caller.
         public DecodedFrame retain() {
             if (closed.get() || !release.tryRetain()) {
                 throw new IllegalStateException("decoded frame is already closed");

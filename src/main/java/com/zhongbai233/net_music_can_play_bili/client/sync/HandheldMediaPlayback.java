@@ -20,7 +20,7 @@ public record HandheldMediaPlayback(Optional<PlaybackSessionId> playbackSessionI
     }
 
     public String sessionId() {
-        return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+        return playbackSessionId.map(session -> session.value()).orElse("");
     }
 
     public boolean hasSession() {

@@ -75,7 +75,8 @@ final class MP4ResolveIntentRegistry {
     }
 
     private ResolveGeneration nextGeneration() {
-        return generations.updateAndGet(ResolveGeneration::next);
+        return generations.updateAndGet(
+                current -> Objects.requireNonNull(current, "current generation").next());
     }
 
     record Intent(ResolveGeneration generation, int queueIndex, String sourceUrl) {

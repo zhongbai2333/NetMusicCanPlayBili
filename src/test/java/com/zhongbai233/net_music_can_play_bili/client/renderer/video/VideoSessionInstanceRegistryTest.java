@@ -75,7 +75,7 @@ class VideoSessionInstanceRegistryTest {
     }
 
     private static VideoSessionInstanceRegistry<TrackedInstance> registry() {
-        return new VideoSessionInstanceRegistry<>(TrackedInstance::dispose);
+        return new VideoSessionInstanceRegistry<>(instance -> instance.dispose());
     }
 
     private static final class TrackedInstance {

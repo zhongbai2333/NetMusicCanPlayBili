@@ -4,7 +4,6 @@ import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.docume
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElement;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleOperation;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleRangeMigration;
-import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.ControlConsoleHostAdapter;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;

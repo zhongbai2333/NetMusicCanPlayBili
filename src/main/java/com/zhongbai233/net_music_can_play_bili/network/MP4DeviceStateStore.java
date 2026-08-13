@@ -198,7 +198,7 @@ public final class MP4DeviceStateStore {
         }
 
         public String sessionId() {
-            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+            return playbackSessionId.map(session -> session.value()).orElse("");
         }
 
         public DeviceEntry normalized() {

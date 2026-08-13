@@ -490,11 +490,6 @@ public final class ControlConsoleRoamingSession {
                 .append(minecraft.options.keySprint.getTranslatedKeyMessage()).append("疾跑");
     }
 
-    private static Vector3f corner(float cx, float cy, float cz, Vector3f xAxis, Vector3f yAxis,
-            float x, float y) {
-        return new Vector3f(cx, cy, cz).fma(x, xAxis).fma(y, yAxis);
-    }
-
     private static Vector3f roamingCorner(Matrix4f transform, Session session, Vec3 cameraPos,
             float x, float y) {
         Vector3f local = transform.transformPosition(new Vector3f(x, y, 0.0F));

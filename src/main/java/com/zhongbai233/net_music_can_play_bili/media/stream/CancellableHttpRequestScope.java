@@ -110,7 +110,7 @@ public final class CancellableHttpRequestScope implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        requests.forEach(this::cancel);
+        requests.forEach((future, operationId) -> cancel(future, operationId.longValue()));
     }
 
     private void cancel(CompletableFuture<?> future, long operationId) {

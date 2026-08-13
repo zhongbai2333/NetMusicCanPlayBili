@@ -24,6 +24,6 @@ record MP4PlaybackRuntimeProgress(int queueIndex, long elapsedMillis, int durati
     }
 
     String sessionId() {
-        return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+        return playbackSessionId.map(session -> session.value()).orElse("");
     }
 }

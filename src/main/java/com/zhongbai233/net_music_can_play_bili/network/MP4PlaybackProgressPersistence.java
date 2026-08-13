@@ -28,7 +28,7 @@ final class MP4PlaybackProgressPersistence {
             return MP4PlaybackProgressPolicy.currentElapsed(snapshot(runtime), null, fallback);
         }
         Long persisted = MP4PlaybackSavedData.get(level).get(deviceId)
-                .map(MP4PlaybackSavedData.Entry::elapsedMillis)
+                .map(entry -> entry.elapsedMillis())
                 .orElse(null);
         return MP4PlaybackProgressPolicy.currentElapsed(null, persisted, fallback);
     }

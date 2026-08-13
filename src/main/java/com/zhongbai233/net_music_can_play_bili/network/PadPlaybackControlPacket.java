@@ -107,8 +107,11 @@ public record PadPlaybackControlPacket(Action action, UUID deviceId, UUID pointI
             return false;
         }
         PadMediaEntry media = document.media(point.mediaId()).orElse(null);
-        ItemMusicCD.SongInfo songInfo = media != null ? ItemMusicCD.getSongInfo(media.disc()) : null;
-        if (songInfo == null || !PadItem.isNetMusicDisc(media.disc())
+        if (media == null || !PadItem.isNetMusicDisc(media.disc())) {
+            return false;
+        }
+        ItemMusicCD.SongInfo songInfo = ItemMusicCD.getSongInfo(media.disc());
+        if (songInfo == null
                 || songInfo.vip && !MusicPlayResolverManager.canResolve(songInfo)
                 || !isPlaybackAllowed(player, songInfo.songUrl)) {
             return false;

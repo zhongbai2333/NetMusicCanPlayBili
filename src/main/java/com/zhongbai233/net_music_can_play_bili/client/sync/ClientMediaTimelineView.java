@@ -52,7 +52,7 @@ public final class ClientMediaTimelineView {
                 : MediaTimelineClock.TimelineSnapshot.EMPTY;
         return forHandheldOwner(ownerId, expected, snapshot,
                 ClientMediaPlaybackRegistry.hasAudioStarted(ownerId,
-                        expected.map(PlaybackSessionId::value).orElse("")),
+                        expected.map(session -> session.value()).orElse("")),
                 fallbackMillis, fallbackTotalMillis);
     }
 
@@ -74,7 +74,7 @@ public final class ClientMediaTimelineView {
         }
         HandheldMediaPlayback playback = profile.playback(ownerId);
         String sessionId = playback != null
-                ? playback.playbackSessionId().map(PlaybackSessionId::value).orElse("")
+                ? playback.playbackSessionId().map(session -> session.value()).orElse("")
                 : "";
         return forHandheldOwner(ownerId, playback, profile.hasStartedSound(ownerId, sessionId), fallbackMillis,
                 fallbackTotalMillis);
@@ -85,10 +85,11 @@ public final class ClientMediaTimelineView {
             long fallbackTotalMillis) {
         long fallback = Math.max(0L, fallbackMillis);
         long fallbackTotal = Math.max(0L, fallbackTotalMillis);
-        PlaybackSessionId expectedSessionId = expected != null ? expected.orElse(null) : null;
-        if (expectedSessionId == null || !expected.equals(snapshot.playbackSessionId())
+        Optional<PlaybackSessionId> normalizedExpected = expected != null ? expected : Optional.empty();
+        PlaybackSessionId expectedSessionId = normalizedExpected.orElse(null);
+        if (expectedSessionId == null || !normalizedExpected.equals(snapshot.playbackSessionId())
                 || snapshot.mediaMillis() < 0L) {
-            return new ClientMediaTimelineView(expected, fallback, fallback, fallback, -1L, fallbackTotal, 0L,
+            return new ClientMediaTimelineView(normalizedExpected, fallback, fallback, fallback, -1L, fallbackTotal, 0L,
                     false, false);
         }
         long total = snapshot.totalMillis() > 0L ? snapshot.totalMillis() : fallbackTotal;
@@ -106,17 +107,17 @@ public final class ClientMediaTimelineView {
             }
             visual = smoothVisual(ownerId, expectedSessionId, media, total);
         } else if (ownerId != null) {
-            VISUAL_STATES.remove(ownerId);
+            VISUAL_STATES.remove(PlaybackSourceId.of(ownerId));
         }
         media = clamp(media, total);
         visual = clamp(visual, total);
         pacing = clamp(pacing, total);
-        return new ClientMediaTimelineView(expected, media, visual, pacing, snapshot.serverMillis(), total,
+        return new ClientMediaTimelineView(normalizedExpected, media, visual, pacing, snapshot.serverMillis(), total,
                 media - snapshot.serverMillis(), started, anchored);
     }
 
     public String sessionId() {
-        return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+        return playbackSessionId.map(session -> session.value()).orElse("");
     }
 
     public Optional<PlaybackSessionId> playbackSessionId() {

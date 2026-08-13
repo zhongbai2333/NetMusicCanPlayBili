@@ -169,7 +169,6 @@ final class ProjectionReplacementGate<K> {
             sessionSlot.retainedHandoff = stableHandoff(sessionSlot.retainedHandoff, closeHandoff);
             sessionSlot.current = null;
         }
-        state.installed = true;
     }
 
     /** Invalidates a never-published intent while preserving all retained physical barriers. */
@@ -464,7 +463,6 @@ final class ProjectionReplacementGate<K> {
         private Decision terminalDecision;
         private Waiter waiter;
         private boolean committed;
-        private boolean installed;
 
         private IntentState(Object ownerKey, String sessionId, long ownerEpoch, long sessionEpoch,
                 CloseHandoff closeHandoff) {

@@ -45,8 +45,8 @@ class VideoResourceDiagnosticsCollectorTest {
     }
 
     private static VideoResourceDiagnosticsCollector<InstanceState> collector() {
-        return new VideoResourceDiagnosticsCollector<>(InstanceState::running, InstanceState::failed,
-                InstanceState::projectorReferences, InstanceState::guiConsumer);
+        return new VideoResourceDiagnosticsCollector<>(state -> state.running(), state -> state.failed(),
+                state -> state.projectorReferences(), state -> state.guiConsumer());
     }
 
     private record InstanceState(boolean running, boolean failed, int projectorReferences, boolean guiConsumer) {

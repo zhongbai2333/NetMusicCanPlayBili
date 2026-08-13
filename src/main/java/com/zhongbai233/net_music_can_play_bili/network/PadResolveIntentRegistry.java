@@ -82,7 +82,8 @@ final class PadResolveIntentRegistry {
     }
 
     private ResolveGeneration nextGeneration() {
-        return generations.updateAndGet(ResolveGeneration::next);
+        return generations.updateAndGet(
+                current -> Objects.requireNonNull(current, "current generation").next());
     }
 
     private static String normalize(String value) {

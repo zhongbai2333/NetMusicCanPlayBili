@@ -376,7 +376,9 @@ public final class BiliApiClient {
         }
 
         public List<VideoStream> fallbackOrder() {
-            return candidateOrder().stream().map(PlannedVideoCandidate::stream).toList();
+            return candidateOrder().stream()
+                    .map(candidate -> Objects.requireNonNull(candidate, "candidate").stream())
+                    .toList();
         }
 
         private static void addCandidates(List<PlannedVideoCandidate> target, List<VideoStream> streams,
@@ -1117,7 +1119,8 @@ public final class BiliApiClient {
         }
         if (preference == SubtitlePreference.HUMAN_OR_AI) {
             // Enabling fallback to AI must not silently replace an uploader-authored subtitle when both exist.
-            candidates.sort(java.util.Comparator.comparing(SubtitleInfo::isAiGenerated));
+            candidates.sort(java.util.Comparator.comparing(
+                    subtitle -> Objects.requireNonNull(subtitle, "subtitle").isAiGenerated()));
         }
         return List.copyOf(candidates);
     }

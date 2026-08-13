@@ -73,7 +73,7 @@ public final class MediaTimelineClock {
     }
 
     public String sessionId() {
-        return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+        return playbackSessionId.map(session -> session.value()).orElse("");
     }
 
     public Optional<PlaybackSessionId> playbackSessionId() {
@@ -244,7 +244,7 @@ public final class MediaTimelineClock {
         }
 
         public String sessionId() {
-            return playbackSessionId.map(PlaybackSessionId::value).orElse("");
+            return playbackSessionId.map(session -> session.value()).orElse("");
         }
     }
 }

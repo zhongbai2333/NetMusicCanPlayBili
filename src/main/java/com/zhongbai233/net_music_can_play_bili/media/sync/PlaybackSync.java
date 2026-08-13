@@ -81,7 +81,7 @@ public final class PlaybackSync {
     }
 
     public static String parseRequestToken(String value) {
-        return parseMediaRequestToken(value).map(MediaRequestToken::value).orElse("");
+        return parseMediaRequestToken(value).map(token -> token.value()).orElse("");
     }
 
     public static Optional<MediaRequestToken> parseMediaRequestToken(String value) {
@@ -199,7 +199,7 @@ public final class PlaybackSync {
 
     public record Metadata(String sessionId, long elapsedMillis, long totalMillis) {
         public Metadata {
-            sessionId = PlaybackSessionId.parse(sessionId).map(PlaybackSessionId::value).orElse("");
+            sessionId = PlaybackSessionId.parse(sessionId).map(parsed -> parsed.value()).orElse("");
         }
 
         static Metadata empty() {

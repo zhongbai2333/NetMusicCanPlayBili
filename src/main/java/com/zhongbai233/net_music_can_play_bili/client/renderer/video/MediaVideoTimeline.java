@@ -27,7 +27,7 @@ interface MediaVideoTimeline {
     Optional<PlaybackSessionId> playbackSessionId();
 
     default String sessionId() {
-        return playbackSessionId().map(PlaybackSessionId::value).orElse("");
+        return playbackSessionId().map(session -> session.value()).orElse("");
     }
 
     MediaVideoTimeline EMPTY = new MediaVideoTimeline() {

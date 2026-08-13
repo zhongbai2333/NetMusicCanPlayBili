@@ -205,7 +205,7 @@ public final class BiliLiveStreamResolver {
         while (ROOM_METADATA.size() >= ROOM_METADATA_CACHE_LIMIT) {
             String oldestKey = ROOM_METADATA.entrySet().stream()
                     .min(java.util.Comparator.comparingLong(entry -> entry.getValue().storedNanos()))
-                    .map(java.util.Map.Entry::getKey).orElse(null);
+                    .map(entry -> entry.getKey()).orElse(null);
             if (oldestKey == null || ROOM_METADATA.remove(oldestKey) == null) {
                 break;
             }

@@ -102,7 +102,8 @@ class MP4PlaybackRetryAdmissionTest {
         private final MP4PlaybackSourceSessionRegistry<Session> sessions = new MP4PlaybackSourceSessionRegistry<>();
         private final MP4ResolveIntentRegistry resolveIntents = new MP4ResolveIntentRegistry();
         private final MP4PlaybackRetryAdmission<Session> admission = new MP4PlaybackRetryAdmission<>(sessions,
-                resolveIntents, Session::sessionId, Session::queueIndex, Session::sourceUrl);
+                resolveIntents, session -> session.sessionId(), session -> session.queueIndex(),
+                session -> session.sourceUrl());
     }
 
     private record Session(PlaybackSessionId sessionId, int queueIndex, String sourceUrl, String directUrl,
