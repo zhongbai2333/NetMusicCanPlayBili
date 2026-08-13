@@ -371,13 +371,13 @@ dependencies {
     // the same immutable release, while NeoForge negotiates one compatible copy when several mods JiJ it.
     jarJar(api("com.github.zhongbai2333.SceneEditor:scene-editor-core:${scene_editor_version}")) {
         version {
-            strictly '[1.0.0-beta.2,2.0.0)'
+            strictly '[1.0.0-beta.3,2.0.0)'
             prefer scene_editor_version
         }
     }
     jarJar(implementation("com.github.zhongbai2333.SceneEditor:scene-editor-minecraft:${scene_editor_version}")) {
         version {
-            strictly '[1.0.0-beta.2,2.0.0)'
+            strictly '[1.0.0-beta.3,2.0.0)'
             prefer scene_editor_version
         }
     }
@@ -671,7 +671,7 @@ tasks.register('verifySceneEditorJiJ') {
                 }
                 def descriptor = matches[0]
                 if (descriptor.version.artifactVersion != expectedVersion
-                        || descriptor.version.range != '[1.0.0-beta.2,2.0.0)') {
+                        || descriptor.version.range != '[1.0.0-beta.3,2.0.0)') {
                     throw new GradleException("Unexpected ${artifact} JiJ version contract: ${descriptor.version}")
                 }
                 def nestedEntry = zip.getEntry(descriptor.path)

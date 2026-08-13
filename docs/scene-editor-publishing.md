@@ -3,15 +3,15 @@
 Scene Editor 已从主模组拆出为独立项目：
 
 - 源码与发布仓库：<https://github.com/zhongbai2333/SceneEditor>
-- 当前兼容版本：`1.0.0-beta.2`
+- 当前兼容版本：`1.0.0-beta.3`
 - 发布入口：JitPack
 
 ## Artifact
 
 | 坐标 | 内容 | NeoForge 运行层 |
 |---|---|---|
-| `com.github.zhongbai2333.SceneEditor:scene-editor-core:1.0.0-beta.2` | 相机、投影、拾取、Gizmo、场景文档、命令栈和编辑会话 | `LIBRARY` |
-| `com.github.zhongbai2333.SceneEditor:scene-editor-minecraft:1.0.0-beta.2` | Minecraft 窗口、输入和 viewport adapter | `GAMELIBRARY` |
+| `com.github.zhongbai2333.SceneEditor:scene-editor-core:1.0.0-beta.3` | 相机、投影、拾取、Gizmo、场景文档、命令栈和编辑会话 | `LIBRARY` |
+| `com.github.zhongbai2333.SceneEditor:scene-editor-minecraft:1.0.0-beta.3` | Minecraft 窗口、输入和 viewport adapter | `GAMELIBRARY` |
 
 每个 publication 都包含主 JAR、sources JAR、Javadoc JAR、POM 和 Gradle module metadata。core 的公开面只依赖
 Java 与 JOML；Minecraft adapter 单独进入转换后的 game layer。
@@ -25,7 +25,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'com.github.zhongbai2333.SceneEditor:scene-editor-core:1.0.0-beta.2'
+    implementation 'com.github.zhongbai2333.SceneEditor:scene-editor-core:1.0.0-beta.3'
 }
 ```
 
@@ -38,20 +38,20 @@ dependencies {
 ```groovy
 jarJar(api("com.github.zhongbai2333.SceneEditor:scene-editor-core:${scene_editor_version}")) {
     version {
-        strictly '[1.0.0-beta.2,2.0.0)'
+        strictly '[1.0.0-beta.3,2.0.0)'
         prefer scene_editor_version
     }
 }
 jarJar(implementation("com.github.zhongbai2333.SceneEditor:scene-editor-minecraft:${scene_editor_version}")) {
     version {
-        strictly '[1.0.0-beta.2,2.0.0)'
+        strictly '[1.0.0-beta.3,2.0.0)'
         prefer scene_editor_version
     }
 }
 ```
 
-最低版本刻意设为 `beta.2`：`beta.1` 的发布坐标正确，但 Minecraft adapter 的运行时 group 常量仍是迁移前值，
-因此不能参与多宿主版本协商。
+最低版本设为 `beta.3`，使 NCPB 与其他 Scene Editor 宿主统一使用包含相机极点钳制、事务修复及共享交互策略的
+同一兼容基线。`beta.1` 的运行时 group 常量仍是迁移前值，继续不得参与多宿主版本协商。
 
 `verifySceneEditorJiJ` 检查：
 

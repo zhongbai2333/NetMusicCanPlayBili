@@ -71,7 +71,7 @@
   Iris/MakeUp shaderpack。首端退出并收敛后，第二端继续持有媒体与 lease 60 ticks，再独立回到自己的资源基线。
   这些结果只证明当前 Apple M4 与固定模组/资源包组合，不外推到所有 GPU、驱动或操作系统。
 - Phase 8 的库边界已进一步迁移到独立的 [SceneEditor](https://github.com/zhongbai2333/SceneEditor) 项目：
-  `scene-editor-core` 和 `scene-editor-minecraft` 由 JitPack 发布 `1.0.0-beta.2` 的 main/sources/Javadoc artifact，
+  `scene-editor-core` 和 `scene-editor-minecraft` 由 JitPack 发布 `1.0.0-beta.3` 的 main/sources/Javadoc artifact，
   core 有公开 API 快照兼容门槛且不解析 Minecraft/NeoForge/LWJGL/OpenAL/主模组；独立示例仅按 Maven 坐标完成
   相机、元素、拾取和撤销会话。主模组以外部可协商 JiJ 内嵌两库，core 使用
   `LIBRARY`，引用转换后 Minecraft 类的 adapter 使用 `GAMELIBRARY`；Apple M4 integrated client 与专用服务器均实际
@@ -1124,7 +1124,7 @@ main/sources/Javadoc artifact；前者保持纯 Java/JOML 边界，后者仅承�
 公开 API 快照、示例宿主和双 JiJ fixture 也随库迁出主仓库。
 
 主模组 production JAR 只通过 JiJ 嵌入两库，外层无重复 class，版本范围固定为
-`[1.0.0-beta.2,2.0.0)`。客户端 integrated-client 和专用服务器均已实际加载；Minecraft adapter 必须使用
+`[1.0.0-beta.3,2.0.0)`。客户端 integrated-client 和专用服务器均已实际加载；Minecraft adapter 必须使用
 `GAMELIBRARY` 以进入转换后的 game layer，纯 core 保持 `LIBRARY`。两个独立 fixture 模组同时内嵌相同 core 的
 专用服务器验证确认两个宿主取得同一个 `SceneDocument.class` 身份和唯一资源 URL。宿主 persistence schema 由主模组
 独立管理，不随 editor library API/artifact 版本自动变化。发布和复验命令见

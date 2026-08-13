@@ -2782,8 +2782,9 @@ self-hosted 物理 GPU 矩阵签核，不能用 hosted runner 缺失 AV1 GPU 的
 
 Scene Editor 的两个库模块、普通 Maven 示例和双宿主 JiJ fixture 已迁至独立公开仓库
 [zhongbai2333/SceneEditor](https://github.com/zhongbai2333/SceneEditor)。独立项目通过 JitPack 发布
-`1.0.0-beta.2`；主项目直接解析并 JiJ `scene-editor-core` 与 `scene-editor-minecraft`，协商范围固定为
-`[1.0.0-beta.2,2.0.0)`。`beta.1` 不进入该范围，因为其 adapter 的运行时 group 常量仍是迁移前值。
+`1.0.0-beta.3`；主项目直接解析并 JiJ `scene-editor-core` 与 `scene-editor-minecraft`，协商范围固定为
+`[1.0.0-beta.3,2.0.0)`。该版本统一建模编辑器与 NCPB 的共享交互基线，并带入相机极点钳制、事务语义修复、
+多选/Gizmo/线宽及历史会话公共策略；NCPB 现有单选与专用 Gizmo 表示保持不变。
 
 主项目不再保存这两个库的源码、示例或 fixture，只保留实际业务集成、专用服务器自检、integrated-client 场景和
 production JAR 的 `verifySceneEditorJiJ` 结构门槛。Scene Editor 库版本独立于主模组版本；本次迁移保持主模组
