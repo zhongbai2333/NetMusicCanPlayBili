@@ -208,7 +208,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
             long consumedSamples = spatialAudio.flushQueuedAudio();
             totalFramesFedToOpenAL = Math.max(0L, consumedSamples / 1536L);
             for (SpeakerAudioRelay relay : relays) {
-                relay.flushQueuedAudio();
+                relay.flushQueuedAudio(consumedSamples);
             }
             return true;
         }
@@ -229,7 +229,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         spatialAudio.flushQueuedAudio(targetFrames * 1536L);
         totalFramesFedToOpenAL = targetFrames;
         for (SpeakerAudioRelay relay : relays) {
-            relay.flushQueuedAudio();
+            relay.flushQueuedAudio(targetFrames * 1536L);
         }
         LOGGER.warn(
                 "Dolby OpenAL 输出队列落后过多，已丢弃待播放缓冲以追赶: audible={}ticks target={}ticks fed={}ticks lag={}ticks",
@@ -311,6 +311,9 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
             relay.setSampleRate(48000); // EC-3 Dolby 固定 48kHz，显式设置以防 relay 默认值被意外覆盖
             relay.setPaused(paused);
             if (playbackStarted) {
+                long baseline = spatialAudio != null
+                        ? spatialAudio.getConsumedSamples() : totalFramesFedToOpenAL * 1536L;
+                relay.flushQueuedAudio(baseline);
                 relay.setHandlerStarted(true); // 已开始播放时新 relay 立即获得启动信号
             }
             relays.add(relay);

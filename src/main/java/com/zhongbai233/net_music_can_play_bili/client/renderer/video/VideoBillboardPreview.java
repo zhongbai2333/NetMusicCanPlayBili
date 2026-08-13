@@ -478,7 +478,7 @@ public final class VideoBillboardPreview {
         return new ProjectorFrameSnapshot(true, false, texture, null, null, null,
                 Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
                 LOADING_PLACEHOLDER_WIDTH, LOADING_PLACEHOLDER_HEIGHT,
-                true, false, 0.0F);
+                true, ControlConsoleVideoArtwork.loadingProgressOverlay(state), 0.0F);
     }
 
     public static boolean hasTerminalFailure(String sessionId) {

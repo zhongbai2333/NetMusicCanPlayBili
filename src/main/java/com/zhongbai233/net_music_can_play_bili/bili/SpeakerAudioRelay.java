@@ -30,6 +30,7 @@ public class SpeakerAudioRelay {
     private volatile boolean paused;
     private int pendingFed = 0;
     private long totalSamplesFed = 0L;
+    private long timelineBaselineSamples;
     private int sampleRate = 48000;
 
     public void setChannelIndex(int idx) {
@@ -114,9 +115,12 @@ public class SpeakerAudioRelay {
             spatialAudio = next;
             next.setPaused(paused);
             pendingFed = 0;
-            totalSamplesFed = 0L;
+            totalSamplesFed = timelineBaselineSamples;
             started = false;
             initialized = true;
+            if (timelineBaselineSamples > 0L) {
+                next.flushQueuedAudio(timelineBaselineSamples);
+            }
             PlaybackLatencyBench.markAudioOpenAlInitialized(this, kind(), sampleRate);
         }
 
@@ -219,11 +223,23 @@ public class SpeakerAudioRelay {
 
     public void flushQueuedAudio() {
         OpenALSpatialAudio sa = spatialAudio;
-        if (sa != null) {
-            sa.flushQueuedAudio();
-        }
+        long baseline = sa != null ? sa.getConsumedSamples() : totalSamplesFed;
+        flushQueuedAudio(baseline);
+    }
+
+    /** Flushes stale buffers while preserving the shared handler media timeline. */
+    public void flushQueuedAudio(long mediaPositionSamples) {
+        long baseline = Math.max(0L, mediaPositionSamples);
+        timelineBaselineSamples = Math.max(timelineBaselineSamples, baseline);
+        OpenALSpatialAudio sa = spatialAudio;
+        totalSamplesFed = sa != null
+                ? Math.max(baseline, sa.flushQueuedAudio(baseline))
+                : Math.max(totalSamplesFed, baseline);
         pendingFed = 0;
-        totalSamplesFed = 0L;
+    }
+
+    long timelineBaselineSamples() {
+        return timelineBaselineSamples;
     }
 
     public void hardStopOutput() {
@@ -231,6 +247,7 @@ public class SpeakerAudioRelay {
         handlerStarted = false;
         pendingFed = 0;
         totalSamplesFed = 0L;
+        timelineBaselineSamples = 0L;
         OpenALSpatialAudio sa = spatialAudio;
         if (sa != null) {
             sa.hardStopOutput();

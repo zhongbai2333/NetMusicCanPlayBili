@@ -305,7 +305,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
             long consumedSamples = spatialAudio.flushQueuedAudio();
             totalSamplesFed = Math.max(0L, consumedSamples);
             for (SpeakerAudioRelay relay : relays) {
-                relay.flushQueuedAudio();
+                relay.flushQueuedAudio(consumedSamples);
             }
             return true;
         }
@@ -326,7 +326,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
         spatialAudio.flushQueuedAudio(targetSamples);
         totalSamplesFed = targetSamples;
         for (SpeakerAudioRelay relay : relays) {
-            relay.flushQueuedAudio();
+            relay.flushQueuedAudio(targetSamples);
         }
         LOGGER.warn(
                 "Stereo OpenAL 输出队列落后过多，已丢弃待播放缓冲以追赶: audible={}ticks target={}ticks fed={}ticks lag={}ticks",
@@ -352,7 +352,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
         spatialAudio.flushQueuedAudio(baselineSamples);
         totalSamplesFed = baselineSamples;
         for (SpeakerAudioRelay relay : relays) {
-            relay.flushQueuedAudio();
+            relay.flushQueuedAudio(baselineSamples);
         }
         LOGGER.warn(
                 "Stereo OpenAL 解码与输出同时落后，已丢弃陈旧 PCM 追赶: audible={}ticks target={}ticks fed={}ticks input={}samples baseline={}samples",
@@ -417,6 +417,8 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
             relay.setSampleRate(sampleRate); // 注入正确采样率（如 44100Hz AAC/FLAC），避免 relay 用错误速率播放
             relay.setPaused(paused);
             if (started) {
+                long baseline = spatialAudio != null ? spatialAudio.getConsumedSamples() : totalSamplesFed;
+                relay.flushQueuedAudio(baseline);
                 relay.setHandlerStarted(true); // 已开始播放时新 relay 立即获得启动信号
             }
             relays.add(relay);

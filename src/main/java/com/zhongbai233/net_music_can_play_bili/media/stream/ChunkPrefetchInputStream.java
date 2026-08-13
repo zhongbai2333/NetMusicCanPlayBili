@@ -1,9 +1,9 @@
 package com.zhongbai233.net_music_can_play_bili.media.stream;
 
-import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliCdnSelector;
 import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
+import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
 
 import java.io.IOException;
@@ -43,6 +43,10 @@ public final class ChunkPrefetchInputStream extends InputStream {
     private final int highWater;
     private final Object demandLock = new Object();
     private final AtomicReference<InputStream> activeBody = new AtomicReference<>();
+    private final AtomicReference<URL> activeRequestUrl = new AtomicReference<>();
+    private final AtomicReference<URL> startupFailoverUrl = new AtomicReference<>();
+    private final long startupPrebufferBytes;
+    private final long startupPrebufferMaxWaitMillis;
 
     private volatile boolean closed;
     private volatile long readPosition;
@@ -82,12 +86,28 @@ public final class ChunkPrefetchInputStream extends InputStream {
             int lowWater,
             int highWater,
             long startByteOffset) throws IOException {
+        this(url, client, chunkSize, lowWater, highWater, startByteOffset,
+                startByteOffset > 0L ? SEEK_STARTUP_PREBUFFER_BYTES : STARTUP_PREBUFFER_BYTES,
+                STARTUP_PREBUFFER_MAX_WAIT_MILLIS);
+    }
+
+    ChunkPrefetchInputStream(
+            URL url,
+            HttpRangeClient client,
+            int chunkSize,
+            int lowWater,
+            int highWater,
+            long startByteOffset,
+            long startupPrebufferBytes,
+            long startupPrebufferMaxWaitMillis) throws IOException {
         this.url = url;
         this.client = client;
         this.chunkSize = Math.max(1024 * 1024, chunkSize);
         this.lowWater = Math.max(this.chunkSize, lowWater);
         this.highWater = Math.max(this.lowWater, highWater);
         this.startByteOffset = Math.max(0L, startByteOffset);
+        this.startupPrebufferBytes = Math.max(0L, startupPrebufferBytes);
+        this.startupPrebufferMaxWaitMillis = Math.max(0L, startupPrebufferMaxWaitMillis);
         this.spool = new TempFileByteSpool("http-prefetch-");
         this.downloader = NetMusicThreadFactory.daemonThread("HttpPrefetch", this::downloadLoop);
         this.downloader.start();
@@ -142,12 +162,12 @@ public final class ChunkPrefetchInputStream extends InputStream {
             return;
         }
         startupPrebufferDone = true;
-        long target = startByteOffset > 0L ? SEEK_STARTUP_PREBUFFER_BYTES : STARTUP_PREBUFFER_BYTES;
+        long target = startupPrebufferBytes;
         if (target <= 0L) {
             return;
         }
         long before = System.currentTimeMillis();
-        long cached = spool.waitUntilCached(target, STARTUP_PREBUFFER_MAX_WAIT_MILLIS);
+        long cached = spool.waitUntilCached(target, startupPrebufferMaxWaitMillis);
         long waited = System.currentTimeMillis() - before;
         if (cached > 0L) {
             LOGGER.debug("HTTP startup prebuffer ready: cached={} target={} waited={}ms offset={} host={}",
@@ -156,6 +176,12 @@ public final class ChunkPrefetchInputStream extends InputStream {
         }
         LOGGER.debug("HTTP startup prebuffer empty after wait: target={} waited={}ms offset={} host={}",
                 target, waited, startByteOffset, safeHost(url));
+        if (requestStartupFailover()) {
+            long retryBefore = System.currentTimeMillis();
+            cached = spool.waitUntilCached(target, startupPrebufferMaxWaitMillis);
+            LOGGER.debug("HTTP startup prebuffer after CDN failover: cached={} target={} waited={}ms offset={} host={}",
+                    cached, target, System.currentTimeMillis() - retryBefore, startByteOffset, safeHost(url));
+        }
     }
 
     private void downloadLoop() {
@@ -176,7 +202,8 @@ public final class ChunkPrefetchInputStream extends InputStream {
     private void downloadWithRangeProbe() throws IOException {
         // 非 B站 CDN 的服务器优先尝试全量 GET（单 TCP 连接），
         // 避免跨域/跨境 QoS 对多连接限速导致的吞吐量骤降。
-        if (!isBiliCdnHost() && startByteOffset == 0L && tryFullDownload()) {
+        if (!isBiliCdnHost() && startByteOffset == 0L
+                && CdnUrlFallbacks.candidates(url).size() <= 1 && tryFullDownload()) {
             return;
         }
 
@@ -201,9 +228,16 @@ public final class ChunkPrefetchInputStream extends InputStream {
             URL candidate = candidates.get(i);
             for (int attempt = 1; attempt <= PER_HOST_ATTEMPTS; attempt++) {
                 try {
-                    return downloadChunk(candidate, nextStart, end);
+                    long downloadedTo = downloadChunk(candidate, nextStart, end);
+                    startupFailoverUrl.compareAndSet(candidate, null);
+                    return downloadedTo;
                 } catch (EmptyCdnResponseException e) {
                     lastError = e;
+                    if (consumeStartupFailover(candidate)) {
+                        Thread.interrupted();
+                        logStartupFailover(candidate, candidates, i, nextStart, end);
+                        break;
+                    }
                     if (attempt < PER_HOST_ATTEMPTS && !CdnHealthTracker.isCoolingDown(candidate)) {
                         LOGGER.warn(
                                 "CDN returned empty media chunk, retrying same host {} attempt={}/{} range={}-{}: {}",
@@ -217,6 +251,11 @@ public final class ChunkPrefetchInputStream extends InputStream {
                     }
                 } catch (IOException e) {
                     lastError = e;
+                    if (consumeStartupFailover(candidate)) {
+                        Thread.interrupted();
+                        logStartupFailover(candidate, candidates, i, nextStart, end);
+                        break;
+                    }
                     if (attempt < PER_HOST_ATTEMPTS && !CdnHealthTracker.isCoolingDown(candidate)) {
                         LOGGER.warn("CDN media chunk failed, retrying same host {} attempt={}/{} range={}-{}: {}",
                                 safeHost(candidate), attempt + 1, PER_HOST_ATTEMPTS, nextStart, end, e.getMessage());
@@ -249,6 +288,7 @@ public final class ChunkPrefetchInputStream extends InputStream {
     private long downloadChunk(URL requestUrl, long nextStart, long end) throws IOException {
         long started = System.currentTimeMillis();
         boolean outcomeRecorded = false;
+        activeRequestUrl.set(requestUrl);
         try (HttpRangeClient.CdnResponse response = client.getRangeDirect(requestUrl, nextStart, end)) {
             int status = response.statusCode();
             if (status == 403 || status == 404 || status == 408 || status == 425 || status == 429 || status >= 500) {
@@ -307,6 +347,8 @@ public final class ChunkPrefetchInputStream extends InputStream {
                 CdnHealthTracker.recordFailure(requestUrl, CdnHealthTracker.FailureKind.IO);
             }
             throw e;
+        } finally {
+            activeRequestUrl.compareAndSet(requestUrl, null);
         }
     }
 
@@ -423,7 +465,9 @@ public final class ChunkPrefetchInputStream extends InputStream {
     }
 
     private long safeRangeEnd(long start) {
-        long end = start + chunkSize - 1L;
+        long requestBytes = StartupCdnFailoverPolicy.firstRequestBytes(chunkSize, startupPrebufferBytes,
+                start == startByteOffset && spool.cachedLength() == 0L);
+        long end = start + Math.max(1L, requestBytes) - 1L;
         if (end < start) {
             return Long.MAX_VALUE;
         }
@@ -494,6 +538,40 @@ public final class ChunkPrefetchInputStream extends InputStream {
         try {
             body.close();
         } catch (IOException ignored) {
+        }
+    }
+
+    private boolean requestStartupFailover() {
+        long cached = spool.cachedLength();
+        int candidateCount = CdnUrlFallbacks.candidates(url).size();
+        URL active = activeRequestUrl.get();
+        if (!StartupCdnFailoverPolicy.shouldSwitch(closed, cached, candidateCount,
+                active != null, startupFailoverUrl.get() != null)) {
+            return false;
+        }
+        if (active == null || !startupFailoverUrl.compareAndSet(null, active)) {
+            return false;
+        }
+        if (spool.cachedLength() > 0L) {
+            startupFailoverUrl.compareAndSet(active, null);
+            return false;
+        }
+        LOGGER.warn("CDN startup produced no bytes within {}ms; cancelling slow host {} and trying alternate",
+                startupPrebufferMaxWaitMillis, safeHost(active));
+        closeActiveBody();
+        downloader.interrupt();
+        return true;
+    }
+
+    private boolean consumeStartupFailover(URL candidate) {
+        return candidate != null && startupFailoverUrl.compareAndSet(candidate, null);
+    }
+
+    private static void logStartupFailover(URL candidate, List<URL> candidates, int index,
+            long nextStart, long end) {
+        if (index + 1 < candidates.size()) {
+            LOGGER.warn("Slow CDN startup switched to alternate host {} -> {} range={}-{}",
+                    safeHost(candidate), safeHost(candidates.get(index + 1)), nextStart, end);
         }
     }
 

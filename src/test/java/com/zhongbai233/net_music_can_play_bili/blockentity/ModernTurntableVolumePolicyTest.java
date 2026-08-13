@@ -6,10 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class ModernTurntableVolumePolicyTest {
     @Test
-    void playingMuteStopsAndUnmuteResynchronizes() {
-        assertEquals(ModernTurntableVolumePolicy.Action.STOP_MUTED,
+    void playingMuteAndUnmuteKeepTheMediaSessionAlive() {
+        assertEquals(ModernTurntableVolumePolicy.Action.APPLY_ONLY,
                 ModernTurntableVolumePolicy.decide(700, 0, true));
-        assertEquals(ModernTurntableVolumePolicy.Action.RESYNC_UNMUTED,
+        assertEquals(ModernTurntableVolumePolicy.Action.APPLY_ONLY,
                 ModernTurntableVolumePolicy.decide(0, 700, true));
     }
 

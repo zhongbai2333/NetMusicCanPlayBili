@@ -4,7 +4,9 @@ import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ControlConsoleVideoArtworkTest {
     @Test
@@ -17,5 +19,13 @@ class ControlConsoleVideoArtworkTest {
                 ControlConsoleVideoArtwork.texturePath(ControlConsoleVideoStatePolicy.State.ERROR));
         assertThrows(IllegalArgumentException.class,
                 () -> ControlConsoleVideoArtwork.texturePath(ControlConsoleVideoStatePolicy.State.ACTIVE));
+    }
+
+    @Test
+    void loadingProgressIsRenderedOnlyWhileBuffering() {
+        assertTrue(ControlConsoleVideoArtwork.loadingProgressOverlay(ControlConsoleVideoStatePolicy.State.BUFFERING));
+        assertFalse(ControlConsoleVideoArtwork.loadingProgressOverlay(ControlConsoleVideoStatePolicy.State.IDLE));
+        assertFalse(ControlConsoleVideoArtwork.loadingProgressOverlay(ControlConsoleVideoStatePolicy.State.ERROR));
+        assertFalse(ControlConsoleVideoArtwork.loadingProgressOverlay(ControlConsoleVideoStatePolicy.State.ACTIVE));
     }
 }

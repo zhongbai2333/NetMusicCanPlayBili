@@ -4,10 +4,24 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SpeakerRelayMutePolicyTest {
+    @Test
+    void flushKeepsRelayOnTheSharedMediaTimeline() {
+        SpeakerAudioRelay relay = new SpeakerAudioRelay();
+        relay.flushQueuedAudio(88_200L);
+        assertEquals(88_200L, relay.timelineBaselineSamples());
+
+        relay.flushQueuedAudio(44_100L);
+        assertEquals(88_200L, relay.timelineBaselineSamples());
+
+        relay.hardStopOutput();
+        assertEquals(0L, relay.timelineBaselineSamples());
+    }
+
     @Test
     void ignoresMutedAndUnsupportedRelays() {
         SpeakerAudioRelay muted = new SpeakerAudioRelay();

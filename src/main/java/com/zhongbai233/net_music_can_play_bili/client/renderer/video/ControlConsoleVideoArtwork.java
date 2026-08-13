@@ -17,4 +17,8 @@ final class ControlConsoleVideoArtwork {
             case ACTIVE -> throw new IllegalArgumentException("ACTIVE control-console video requires a real frame");
         };
     }
+
+    static boolean loadingProgressOverlay(ControlConsoleVideoStatePolicy.State state) {
+        return state == ControlConsoleVideoStatePolicy.State.BUFFERING;
+    }
 }

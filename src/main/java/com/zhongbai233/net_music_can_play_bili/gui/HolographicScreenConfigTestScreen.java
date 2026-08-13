@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.gui;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
 import net.minecraft.client.gui.screens.Screen;
@@ -151,7 +152,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
     private DragTransaction<EditorSceneState> gizmoTransaction;
 
     private boolean showNumericPanel;
-    private boolean showTransformInspector = true;
+    private boolean showTransformInspector;
     private EditBox numericDistanceBox;
     private EditBox numericOffsetXBox;
     private EditBox numericOffsetYBox;
@@ -170,7 +171,7 @@ public class HolographicScreenConfigTestScreen extends Screen {
     private EditBox numericSkewYByXBox;
     private EditBox elementTextBox;
     private EditBox elementTextScaleBox;
-    private EditBox elementVolumeBox;
+    private ElementVolumeSlider elementVolumeSlider;
     private EditBox elementMaxDistanceBox;
     private EditBox elementColorBox;
     private EditBox elementTranslationColorBox;
@@ -796,9 +797,10 @@ public class HolographicScreenConfigTestScreen extends Screen {
                 addRenderableWidget(alignmentButton);
                 addRenderableWidget(wrapButton);
         } else if (selected.type == ElementType.AUDIO) {
-            elementVolumeBox = addInspectorBox(x, y, 48, 54, "音量", selected.volume,
-                    0.0F, 1.0F, value -> editSelected("设置音源音量", item -> item.volume = value));
-            BlackGoldButton channelButton = new BlackGoldButton(x + 62, y, 70, 18,
+            elementVolumeSlider = new ElementVolumeSlider(x, y, 132, 18, selected.volume);
+            elementVolumeSlider.active = !selected.locked;
+            addRenderableWidget(elementVolumeSlider);
+            BlackGoldButton channelButton = new BlackGoldButton(x, y + 22, 64, 18,
                 Component.literal("声道：" + com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media
                     .ControlConsoleMediaSettings.audioChannelLabel(selected.channelIndex)), button -> {
                     editSelected("切换音源声道", item -> item.channelIndex =
@@ -806,16 +808,16 @@ public class HolographicScreenConfigTestScreen extends Screen {
                                     .nextAudioChannel(item.channelIndex));
                     init();
                 }, GOLD_DIM);
-            elementMaxDistanceBox = addUnboundedInspectorBox(x, y + 22, 54, "距离", selected.maxDistance, true,
+            elementMaxDistanceBox = addUnboundedInspectorBox(x + 68, y + 22, 64, "距离", selected.maxDistance, true,
                 value -> editSelected("设置音源距离", item -> item.maxDistance = value));
-            elementVolumeBox.active = elementMaxDistanceBox.active = channelButton.active = !selected.locked;
+            elementMaxDistanceBox.active = channelButton.active = !selected.locked;
             addRenderableWidget(channelButton);
-            BlackGoldButton audioEnabledButton = new BlackGoldButton(x + 62, y + 22, 70, 18,
+            BlackGoldButton audioEnabledButton = new BlackGoldButton(x, y + 44, 64, 18,
                 Component.literal(selected.enabled ? "音源：开" : "音源：关"),
                 button -> { editSelected("切换音源", item -> item.enabled = !item.enabled); init(); }, GOLD_DIM);
             audioEnabledButton.active = !selected.locked;
             addRenderableWidget(audioEnabledButton);
-            BlackGoldButton autoMixButton = new BlackGoldButton(x, y + 44, 132, 18,
+            BlackGoldButton autoMixButton = new BlackGoldButton(x + 68, y + 44, 64, 18,
                 Component.literal(selected.autoMixJoc ? "自动混合：开" : "自动混合：关"),
                 button -> { editSelected("切换自动混合", item -> item.autoMixJoc = !item.autoMixJoc); init(); }, GOLD_DIM);
             autoMixButton.active = !selected.locked;
@@ -2890,6 +2892,30 @@ public class HolographicScreenConfigTestScreen extends Screen {
         NONE,
         PLAYER,
         SCREEN
+    }
+
+    private final class ElementVolumeSlider extends AbstractSliderButton {
+        private ElementVolumeSlider(int x, int y, int width, int height, float volume) {
+            super(x, y, width, height, Component.empty(), Math.clamp(volume, 0.0F, 1.0F));
+            updateMessage();
+        }
+
+        @Override
+        protected void updateMessage() {
+            setMessage(Component.literal("音量：" + Math.round(value * 100.0D) + "%"));
+        }
+
+        @Override
+        protected void applyValue() {
+            updateMessage();
+        }
+
+        @Override
+        public void onRelease(MouseButtonEvent event) {
+            super.onRelease(event);
+            float volume = (float) Math.clamp(value, 0.0D, 1.0D);
+            editSelected("设置音源音量", item -> item.volume = volume);
+        }
     }
 
     private enum ElementType {

@@ -695,12 +695,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
 
     private Fmp4StreamStart openStreamStart(long offsetMillis) throws IOException {
         if (offsetMillis <= 1_000L) {
-            HttpRangeClient.CdnResponse response = http.get(videoUrl);
-            InputStream body = trackInput(response.body());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw closeBeforeThrow(body, new IOException("DASH video HTTP " + response.statusCode()));
-            }
-            return new Fmp4StreamStart(body, 0.0F, 0.0D);
+            return new Fmp4StreamStart(trackInput(new ChunkPrefetchInputStream(videoUrl)), 0.0F, 0.0D);
         }
 
         boolean shouldTryRangeSeek = FMP4_RANGE_SEEK_ENABLED
@@ -716,12 +711,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                 FMP4_FALLBACK_MAX_RESIDUAL_SECONDS >= 0.0D
                         ? Math.min(requestedResidualSeconds, FMP4_FALLBACK_MAX_RESIDUAL_SECONDS)
                         : requestedResidualSeconds);
-        HttpRangeClient.CdnResponse response = http.get(videoUrl);
-        InputStream body = trackInput(response.body());
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            throw closeBeforeThrow(body, new IOException("DASH video HTTP " + response.statusCode()));
-        }
-        return new Fmp4StreamStart(body, fallbackResidualSeconds, 0.0D);
+        return new Fmp4StreamStart(trackInput(new ChunkPrefetchInputStream(videoUrl)),
+                fallbackResidualSeconds, 0.0D);
     }
 
     private Fmp4StreamStart tryOpenRangeSeek(long offsetMillis) {

@@ -557,17 +557,8 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
         if (action == ModernTurntableVolumePolicy.Action.NONE) {
             return;
         }
-        if (action == ModernTurntableVolumePolicy.Action.STOP_MUTED) {
-            notifyPlaybackStopped();
-            syncedPlayers.clear();
-        }
         volumePerMille = nextVolume;
         markDirty();
-        if (action == ModernTurntableVolumePolicy.Action.RESYNC_UNMUTED
-                && level instanceof ServerLevel serverLevel) {
-            syncedPlayers.clear();
-            syncNearbyPlayers(serverLevel, remainingSeconds(serverLevel.getGameTime()));
-        }
     }
 
     private boolean canAutomationExtract() {
@@ -868,7 +859,7 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
     }
 
     private void syncNearbyPlayers(ServerLevel serverLevel, int remainingSeconds) {
-        if (playUrl.isBlank() || volumePerMille <= 0) {
+        if (playUrl.isBlank()) {
             return;
         }
         if (!isPlaybackAllowed(serverLevel, rawUrl.isBlank() ? playUrl : rawUrl, null)) {
@@ -935,7 +926,7 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
     }
 
     private void syncNearbySpectators(ServerLevel serverLevel) {
-        if (!playing || playUrl.isBlank() || volumePerMille <= 0) {
+        if (!playing || playUrl.isBlank()) {
             return;
         }
         int remaining = remainingSeconds(serverLevel.getGameTime());

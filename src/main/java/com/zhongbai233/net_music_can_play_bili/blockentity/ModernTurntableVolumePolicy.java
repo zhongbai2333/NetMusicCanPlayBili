@@ -4,9 +4,7 @@ package com.zhongbai233.net_music_can_play_bili.blockentity;
 public final class ModernTurntableVolumePolicy {
     public enum Action {
         NONE,
-        APPLY_ONLY,
-        STOP_MUTED,
-        RESYNC_UNMUTED
+        APPLY_ONLY
     }
 
     private ModernTurntableVolumePolicy() {
@@ -20,12 +18,6 @@ public final class ModernTurntableVolumePolicy {
         }
         if (!playing) {
             return Action.APPLY_ONLY;
-        }
-        if (previous > 0 && next == 0) {
-            return Action.STOP_MUTED;
-        }
-        if (previous == 0 && next > 0) {
-            return Action.RESYNC_UNMUTED;
         }
         return Action.APPLY_ONLY;
     }
