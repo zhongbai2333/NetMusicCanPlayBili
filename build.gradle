@@ -85,6 +85,7 @@ repositories {
         url = 'https://jitpack.io'
         content {
             includeGroup 'com.github.zhongbai2333.BenchMod'
+            includeGroup 'com.github.zhongbai2333.SceneEditor'
         }
     }
     mavenCentral()
@@ -257,15 +258,6 @@ neoForge {
             systemProperty 'ncpb.scene_editor.server_self_test', 'true'
         }
 
-        sceneEditorJiJDedupeServerSelfTest {
-            server()
-            gameDirectory = layout.buildDirectory.dir('phase8-jij-dedupe-run').get().asFile
-            programArgument '--nogui'
-            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
-            systemProperty 'ncpb.scene_editor.server_self_test', 'true'
-            systemProperty 'ncpb.scene_editor.jij_dedupe_self_test', 'true'
-        }
-
         // 开发用 GameTest 服务端。
         gameTestServer {
             type = "gameTestServer"
@@ -375,12 +367,20 @@ tasks.register("runWithRenderDoc", Exec) {
 dependencies {
     // 通用场景编辑器核心的公开 API 暴露 JOML 只读/值类型，不能依赖 Minecraft 的传递 classpath。
     api 'org.joml:joml:1.10.8'
-    // ModDevGradle 的官方 subproject JiJ 入口。两个 artifact 使用独立包和模块名，外层模组不再重复打包其 class。
-    // ModDevGradle 2.0.141 does not support rich-version closures on project JiJ dependencies. Supplying one here
-    // is interpreted as Project.version and corrupts the host artifact version; the generated descriptors are narrowed
-    // by the jarJar task below instead.
-    jarJar api(project(':scene-editor-core'))
-    jarJar implementation(project(':scene-editor-minecraft'))
+    // Scene Editor is published as an independent multi-module JitPack project. The host compiles against and embeds
+    // the same immutable release, while NeoForge negotiates one compatible copy when several mods JiJ it.
+    jarJar(api("com.github.zhongbai2333.SceneEditor:scene-editor-core:${scene_editor_version}")) {
+        version {
+            strictly '[1.0.0-beta.2,2.0.0)'
+            prefer scene_editor_version
+        }
+    }
+    jarJar(implementation("com.github.zhongbai2333.SceneEditor:scene-editor-minecraft:${scene_editor_version}")) {
+        version {
+            strictly '[1.0.0-beta.2,2.0.0)'
+            prefer scene_editor_version
+        }
+    }
 
     compileOnly "maven.modrinth:net-music:mCrjhdSq"
     // neoforge.mods.toml declares NetMusic mandatory; every dev client/server run must therefore load it as well.
@@ -404,33 +404,6 @@ dependencies {
                 new File(directory, asset.file.toString())
             }))
         }
-    }
-}
-
-// ModDevGradle 2.0.141 currently ignores rich-version closures for project JiJ dependencies and emits [version,).
-// Narrow only our two generated descriptors before the outer JAR consumes jarJar's output so a future 2.x cannot
-// be selected as binary-compatible. External dependencies continue to use the plugin's untouched metadata.
-tasks.named('jarJar') {
-    inputs.property('sceneEditorSupportedRange', '[1.0.0-beta.1,2.0.0)')
-    doLast {
-        def metadataFile = new File(outputs.files.singleFile, 'META-INF/jarjar/metadata.json')
-        if (!metadataFile.isFile()) {
-            throw new GradleException("ModDevGradle did not generate JiJ metadata at ${metadataFile}")
-        }
-        def metadata = new groovy.json.JsonSlurper().parse(metadataFile)
-        def updated = 0
-        metadata.jars.each { descriptor ->
-            if (descriptor.identifier.group == 'com.zhongbai233.sceneeditor'
-                    && descriptor.identifier.artifact in ['scene-editor-core', 'scene-editor-minecraft']) {
-                descriptor.version.range = '[1.0.0-beta.1,2.0.0)'
-                updated++
-            }
-        }
-        if (updated != 2) {
-            throw new GradleException("Expected two Scene Editor JiJ descriptors, updated ${updated}")
-        }
-        metadataFile.setText(groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(metadata)) + '\n',
-                'UTF-8')
     }
 }
 
@@ -686,7 +659,7 @@ tasks.register('verifySceneEditorJiJ') {
             }
             def metadata = new groovy.json.JsonSlurper().parse(zip.getInputStream(metadataEntry))
             def sceneEntries = metadata.jars.findAll { jar ->
-                jar.identifier.group == 'com.zhongbai233.sceneeditor'
+                jar.identifier.group == 'com.github.zhongbai2333.SceneEditor'
             }
             if (sceneEntries.size() != expected.size()) {
                 throw new GradleException("Expected exactly ${expected.size()} Scene Editor JiJ entries, got ${sceneEntries}")
@@ -698,7 +671,7 @@ tasks.register('verifySceneEditorJiJ') {
                 }
                 def descriptor = matches[0]
                 if (descriptor.version.artifactVersion != expectedVersion
-                        || descriptor.version.range != '[1.0.0-beta.1,2.0.0)') {
+                        || descriptor.version.range != '[1.0.0-beta.2,2.0.0)') {
                     throw new GradleException("Unexpected ${artifact} JiJ version contract: ${descriptor.version}")
                 }
                 def nestedEntry = zip.getEntry(descriptor.path)
@@ -716,78 +689,6 @@ tasks.register('verifySceneEditorJiJ') {
                     }
                 }
             }
-        }
-    }
-}
-
-def sceneEditorJiJDedupeRunDirectory = layout.buildDirectory.dir('phase8-jij-dedupe-run')
-
-tasks.register('stageSceneEditorJiJHosts', Sync) {
-    group = 'verification'
-    description = 'Stages two independent fixture mods that embed the same scene-editor-core artifact.'
-    dependsOn ':scene-editor-jij-host-a:jar', ':scene-editor-jij-host-b:jar'
-    into sceneEditorJiJDedupeRunDirectory.map { it.dir('mods') }
-    from {
-        [project(':scene-editor-jij-host-a'), project(':scene-editor-jij-host-b')].collect { fixture ->
-            fixture.tasks.named('jar', Jar).get().archiveFile.get().asFile
-        }
-    }
-}
-
-tasks.named('runSceneEditorJiJDedupeServerSelfTest') {
-    dependsOn tasks.named('stageSceneEditorJiJHosts')
-}
-
-tasks.register('verifySceneEditorJiJDedupeFixtures') {
-    group = 'verification'
-    description = 'Verifies both fixture mods embed byte-identical, negotiable scene-editor-core artifacts.'
-    dependsOn ':scene-editor-jij-host-a:jar', ':scene-editor-jij-host-b:jar'
-    inputs.property('sceneEditorVersion', scene_editor_version)
-    inputs.files(provider {
-        [project(':scene-editor-jij-host-a'), project(':scene-editor-jij-host-b')].collect { fixture ->
-            fixture.tasks.named('jar', Jar).get().archiveFile.get().asFile
-        }
-    })
-    doLast {
-        def expectedVersion = inputs.properties['sceneEditorVersion'].toString()
-        def nestedHashes = []
-        inputs.files.files.sort { it.name }.each { fixtureJar ->
-            new java.util.zip.ZipFile(fixtureJar).withCloseable { zip ->
-                def outerCoreClasses = zip.entries().findAll { entry ->
-                    !entry.directory && entry.name.startsWith('com/zhongbai233/scene_editor/core/')
-                            && entry.name.endsWith('.class')
-                }.collect { it.name }
-                if (!outerCoreClasses.isEmpty()) {
-                    throw new GradleException("${fixtureJar.name} contains outer core classes: ${outerCoreClasses}")
-                }
-                def metadataEntry = zip.getEntry('META-INF/jarjar/metadata.json')
-                if (metadataEntry == null) {
-                    throw new GradleException("${fixtureJar.name} is missing JiJ metadata")
-                }
-                def metadata = new groovy.json.JsonSlurper().parse(zip.getInputStream(metadataEntry))
-                def descriptors = metadata.jars.findAll { descriptor ->
-                    descriptor.identifier.group == 'com.zhongbai233.sceneeditor'
-                            && descriptor.identifier.artifact == 'scene-editor-core'
-                }
-                if (descriptors.size() != 1) {
-                    throw new GradleException("${fixtureJar.name} has invalid core descriptors: ${descriptors}")
-                }
-                def descriptor = descriptors[0]
-                if (descriptor.version.artifactVersion != expectedVersion
-                        || descriptor.version.range != '[1.0.0-beta.1,2.0.0)') {
-                    throw new GradleException("${fixtureJar.name} has invalid core version: ${descriptor.version}")
-                }
-                def nestedEntry = zip.getEntry(descriptor.path)
-                if (nestedEntry == null) {
-                    throw new GradleException("${fixtureJar.name} is missing nested ${descriptor.path}")
-                }
-                def nestedBytes = zip.getInputStream(nestedEntry).readAllBytes()
-                nestedHashes << java.util.HexFormat.of().formatHex(
-                        java.security.MessageDigest.getInstance('SHA-256').digest(nestedBytes))
-            }
-        }
-        if (nestedHashes.size() != 2 || nestedHashes.toSet().size() != 1) {
-            throw new GradleException("Fixture mods do not embed byte-identical scene-editor-core jars: ${nestedHashes}")
         }
     }
 }
@@ -1044,7 +945,6 @@ tasks.named('check') {
     dependsOn tasks.named('verifyProductionJarLegalMaterials')
     dependsOn tasks.named('verifyEmbeddedNativeBundle')
     dependsOn tasks.named('verifySceneEditorJiJ')
-    dependsOn tasks.named('verifySceneEditorJiJDedupeFixtures')
 }
 
 tasks.withType(JavaCompile).configureEach {

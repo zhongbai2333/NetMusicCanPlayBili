@@ -6,7 +6,6 @@ import com.zhongbai233.scene_editor.core.scene.SceneDocument;
 import com.zhongbai233.scene_editor.core.scene.SceneElement;
 import com.zhongbai233.scene_editor.minecraft.SceneEditorMinecraftLibrary;
 import net.neoforged.api.distmarker.Dist;
-import net.neoforged.fml.ModList;
 import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import org.slf4j.Logger;
@@ -31,7 +30,8 @@ public final class SceneEditorDedicatedServerSelfTest {
             if (FMLEnvironment.getDist() != Dist.DEDICATED_SERVER) {
                 throw new IllegalStateException("Scene Editor server smoke test must run on DEDICATED_SERVER");
             }
-            if (!"scene-editor-minecraft".equals(SceneEditorMinecraftLibrary.ARTIFACT)
+            if (!"com.github.zhongbai2333.SceneEditor".equals(SceneEditorMinecraftLibrary.GROUP)
+                    || !"scene-editor-minecraft".equals(SceneEditorMinecraftLibrary.ARTIFACT)
                     || SceneEditorMinecraftLibrary.API_MAJOR != 1) {
                 throw new IllegalStateException("Scene Editor Minecraft library identity mismatch");
             }
@@ -40,9 +40,6 @@ public final class SceneEditorDedicatedServerSelfTest {
             SceneDocument<SceneElement> document = new SceneDocument<>(List.of(element));
             if (!element.equals(document.element(id).orElseThrow())) {
                 throw new IllegalStateException("Scene Editor core API failed on dedicated server");
-            }
-            if (Boolean.getBoolean("ncpb.scene_editor.jij_dedupe_self_test")) {
-                verifyJiJDedupe();
             }
             LOGGER.info("SceneEditorDedicatedServerSelfTest passed: group={}, artifact={}, apiMajor={}, elements={}",
                     SceneEditorMinecraftLibrary.GROUP, SceneEditorMinecraftLibrary.ARTIFACT,
@@ -53,32 +50,6 @@ public final class SceneEditorDedicatedServerSelfTest {
             throw error;
         } finally {
             event.getServer().halt(false);
-        }
-    }
-
-    private static void verifyJiJDedupe() {
-        if (!ModList.get().isLoaded("scene_editor_jij_host_a")
-                || !ModList.get().isLoaded("scene_editor_jij_host_b")) {
-            throw new IllegalStateException("Both Scene Editor JiJ fixture mods must be loaded");
-        }
-        try {
-            Class<?> hostA = Class.forName("com.zhongbai233.sceneeditor.fixture.a.SceneEditorJiJHostA");
-            Class<?> hostB = Class.forName("com.zhongbai233.sceneeditor.fixture.b.SceneEditorJiJHostB");
-            Class<?> typeA = (Class<?>) hostA.getMethod("coreType").invoke(null);
-            Class<?> typeB = (Class<?>) hostB.getMethod("coreType").invoke(null);
-            if (typeA != SceneDocument.class || typeB != SceneDocument.class || typeA != typeB) {
-                throw new IllegalStateException("Fixture mods resolved different Scene Editor core class identities");
-            }
-            String resourceName = "com/zhongbai233/scene_editor/core/scene/SceneDocument.class";
-            List<java.net.URL> resources = java.util.Collections.list(
-                    SceneDocument.class.getClassLoader().getResources(resourceName));
-            if (resources.stream().distinct().count() != 1L) {
-                throw new IllegalStateException("Expected one negotiated Scene Editor core resource, got " + resources);
-            }
-            LOGGER.info("Scene Editor JiJ dedupe passed: hosts=2, sharedType={}, resource={}",
-                    SceneDocument.class.getName(), resources.getFirst());
-        } catch (ReflectiveOperationException | java.io.IOException error) {
-            throw new IllegalStateException("Unable to verify Scene Editor JiJ deduplication", error);
         }
     }
 

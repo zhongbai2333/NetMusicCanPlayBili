@@ -2,7 +2,7 @@
 
 > 本文档由原始混合设计文档于 2026-08-05 无损迁移而来，保留实现过程、Phase 0–8、历史方案和详细技术记录，避免拆分时丢失上下文。稳定产品与架构规格见 [`control-console-design.md`](control-console-design.md)；可重复的测试、Bench 和实测证据见 [`control-console-validation.md`](control-console-validation.md)。
 >
-> 本文后半仍保留部分原始规格作为历史上下文；如与稳定设计文档冲突，以稳定设计文档为目标规格，以本文顶部“当前实现状态”为当前代码状态。schema v3/v4/v5、固定 ±25 terrain 等文字仅代表历史阶段，当前实现为 schema v6 和权威 hardRange。
+> 本文后半仍保留部分原始规格作为历史上下文；如与稳定设计文档冲突，以稳定设计文档为目标规格，以本文顶部“当前实现状态”为当前代码状态。schema v3/v4/v5、固定 ±25 terrain、Scene Editor 同仓子项目等文字仅代表历史阶段；当前实现为 schema v6、权威 hardRange，以及从 JitPack 外部 JiJ 的独立 SceneEditor 项目。
 
 中控台是一个绑定现代化唱片机或直播机的**空间媒体场景编排方块**。玩家可以在类似 Unity / BlockBench 的三栏编辑器中，以中控台附近地形为参照，添加并布置屏幕、字幕和音源元素。
 
@@ -70,9 +70,10 @@
   Bilibili 视频/音频、actual VideoToolbox H.264、direct NV12/YUV/PBO、Stereo OpenAL 和运行时确认的
   Iris/MakeUp shaderpack。首端退出并收敛后，第二端继续持有媒体与 lease 60 ticks，再独立回到自己的资源基线。
   这些结果只证明当前 Apple M4 与固定模组/资源包组合，不外推到所有 GPU、驱动或操作系统。
-- Phase 8 已完成同仓多项目与发布闭环：`scene-editor-core` 和 `scene-editor-minecraft` 已形成独立 Maven
-  main/sources/Javadoc artifact，core 有完整公开 API 快照兼容门槛且不解析 Minecraft/NeoForge/LWJGL/OpenAL/主模组；
-  独立嵌套 Gradle 示例仅按 Maven 坐标完成相机、元素、拾取和撤销会话。主模组以可协商 JiJ 内嵌两库，core 使用
+- Phase 8 的库边界已进一步迁移到独立的 [SceneEditor](https://github.com/zhongbai2333/SceneEditor) 项目：
+  `scene-editor-core` 和 `scene-editor-minecraft` 由 JitPack 发布 `1.0.0-beta.2` 的 main/sources/Javadoc artifact，
+  core 有公开 API 快照兼容门槛且不解析 Minecraft/NeoForge/LWJGL/OpenAL/主模组；独立示例仅按 Maven 坐标完成
+  相机、元素、拾取和撤销会话。主模组以外部可协商 JiJ 内嵌两库，core 使用
   `LIBRARY`，引用转换后 Minecraft 类的 adapter 使用 `GAMELIBRARY`；Apple M4 integrated client 与专用服务器均实际
   启动通过。两个独立 fixture 模组同时内嵌字节一致的 core，FML 运行时解析为同一 Class/资源身份。中控台 schema v6
   和全息眼镜 persistence schema v1 由宿主持有，并以测试锁定，均不从库版本派生。
@@ -1117,19 +1118,19 @@ PIP/compiler 只消费不可变快照，不持有 `ClientLevel`、chunk 或活�
 
 ### Phase 8：多项目与 Lib/JiJ 发布
 
-状态：**已完成**。`scene-editor-core`、`scene-editor-minecraft` 已成为同仓 Gradle 子项目，分别发布普通
-Maven main/sources/Javadoc artifact；前者保持纯 Java/JOML 边界，后者仅承载 Minecraft 输入与 viewport adapter。
-公开 API 使用已提交 class-signature 快照检查兼容。独立 `examples/scene-editor-host` 只从 Maven repository 解析
-core 坐标，并实际完成相机、元素、拾取、命令栈和会话生命周期。
+状态：**已完成，并已迁移为独立项目**。`scene-editor-core`、`scene-editor-minecraft` 现由
+[SceneEditor](https://github.com/zhongbai2333/SceneEditor) 仓库构建，并通过 JitPack 发布普通 Maven
+main/sources/Javadoc artifact；前者保持纯 Java/JOML 边界，后者仅承载 Minecraft 输入与 viewport adapter。
+公开 API 快照、示例宿主和双 JiJ fixture 也随库迁出主仓库。
 
 主模组 production JAR 只通过 JiJ 嵌入两库，外层无重复 class，版本范围固定为
-`[1.0.0-beta.1,2.0.0)`。客户端 integrated-client 和专用服务器均已实际加载；Minecraft adapter 必须使用
+`[1.0.0-beta.2,2.0.0)`。客户端 integrated-client 和专用服务器均已实际加载；Minecraft adapter 必须使用
 `GAMELIBRARY` 以进入转换后的 game layer，纯 core 保持 `LIBRARY`。两个独立 fixture 模组同时内嵌相同 core 的
 专用服务器验证确认两个宿主取得同一个 `SceneDocument.class` 身份和唯一资源 URL。宿主 persistence schema 由主模组
 独立管理，不随 editor library API/artifact 版本自动变化。发布和复验命令见
 [`scene-editor-publishing.md`](scene-editor-publishing.md)。
 
-- 把验证后的 editor core 和 Minecraft adapter 移入同仓 Gradle 子项目。
+- 把验证后的 editor core 和 Minecraft adapter 发布为独立 Maven/JitPack 项目。
 - 建立 API compatibility、源码/Javadoc jar 和 Maven publication。
 - 建立不依赖媒体业务的最小示例宿主。
 - 按目标 NeoForge/ModDev 版本接入 JiJ，并验证依赖去重和客户端/服务端侧加载。

@@ -2778,6 +2778,20 @@ artifact 大小为 `9,342,446 bytes`（约 8.91 MiB / 9.34 MB），低于 10 MB�
 通用 hosted runner 只证明动态加载、runtime identity 和 JNI exports；真实 AV1 硬解、seek、资源归零仍由独立
 self-hosted 物理 GPU 矩阵签核，不能用 hosted runner 缺失 AV1 GPU 的失败冒充 bundle 故障。
 
+### 阶段 72：Scene Editor 独立项目与外部 JiJ
+
+Scene Editor 的两个库模块、普通 Maven 示例和双宿主 JiJ fixture 已迁至独立公开仓库
+[zhongbai2333/SceneEditor](https://github.com/zhongbai2333/SceneEditor)。独立项目通过 JitPack 发布
+`1.0.0-beta.2`；主项目直接解析并 JiJ `scene-editor-core` 与 `scene-editor-minecraft`，协商范围固定为
+`[1.0.0-beta.2,2.0.0)`。`beta.1` 不进入该范围，因为其 adapter 的运行时 group 常量仍是迁移前值。
+
+主项目不再保存这两个库的源码、示例或 fixture，只保留实际业务集成、专用服务器自检、integrated-client 场景和
+production JAR 的 `verifySceneEditorJiJ` 结构门槛。Scene Editor 库版本独立于主模组版本；本次迁移保持主模组
+`0.6.7-beta`，也不改变中控台 schema v6 或全息眼镜 persistence schema v1。
+
+历史 `native-patches` 工作目录也从当前树移除；v39 及此前补丁仍可由 Git 历史追溯，当前正式原生实现与构建来源为
+独立 FFmpeg 仓库及已冻结的 `media-min-v48` Release，不再依赖主项目内的旧 patch 文件。
+
 ## 推荐的新会话工作流
 
 1. 阅读本文档；

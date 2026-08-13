@@ -23,7 +23,6 @@ on:
       - "tools/prepare_native_bundle.py"
       - "tools/test_prepare_native_bundle.py"
       - "tools/native_av1_smoke/**"
-      - "native-patches/**"
       - ".github/workflows/build-release.yml"
   workflow_dispatch:
 

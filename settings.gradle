@@ -33,10 +33,3 @@ plugins {
 }
 
 rootProject.name = 'net-music-can-play-bili'
-
-include 'scene-editor-core'
-include 'scene-editor-minecraft'
-include 'scene-editor-jij-host-a'
-include 'scene-editor-jij-host-b'
-project(':scene-editor-jij-host-a').projectDir = file('phase8-fixtures/scene-editor-jij-host-a')
-project(':scene-editor-jij-host-b').projectDir = file('phase8-fixtures/scene-editor-jij-host-b')

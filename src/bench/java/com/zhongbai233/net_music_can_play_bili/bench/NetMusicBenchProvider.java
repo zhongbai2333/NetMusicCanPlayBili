@@ -1171,7 +1171,7 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
 
         @Override
         public BenchClientStepResult measure(BenchClientContext context) {
-            if (!"com.zhongbai233.sceneeditor".equals(SceneEditorMinecraftLibrary.GROUP)
+            if (!"com.github.zhongbai2333.SceneEditor".equals(SceneEditorMinecraftLibrary.GROUP)
                     || !"scene-editor-minecraft".equals(SceneEditorMinecraftLibrary.ARTIFACT)
                     || SceneEditorMinecraftLibrary.API_MAJOR != 1) {
                 throw new AssertionError("Scene Editor Minecraft adapter identity mismatch");
