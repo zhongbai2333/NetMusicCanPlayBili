@@ -23,6 +23,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.CancellableTaskFuture;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 
 /**
  * 现代唱片机客户端播放命令的唯一编排入口。
@@ -40,11 +41,7 @@ public final class ModernTurntablePlaybackCoordinator {
         private static final ConcurrentHashMap<BlockPos, CancellableTaskFuture<ClientMediaPreparer.PreparedMedia>> COMPAT_PREPARES =
             new ConcurrentHashMap<>();
     private static final ScheduledExecutorService VIDEO_RESYNC_EXECUTOR = Executors.newSingleThreadScheduledExecutor(
-            r -> {
-                Thread thread = new Thread(r, "ModernTurntableVideoResync");
-                thread.setDaemon(true);
-                return thread;
-            });
+            NetMusicThreadFactory.daemon("ModernTurntableVideoResync"));
 
     private ModernTurntablePlaybackCoordinator() {
     }

@@ -4,6 +4,7 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoPipelineProperties;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
@@ -12,6 +13,8 @@ import org.slf4j.Logger;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -22,6 +25,8 @@ import java.util.function.Consumer;
 public final class BiliRealVideoPlaybackBench {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final AtomicBoolean started = new AtomicBoolean(false);
+    private static final ExecutorService BENCH_EXECUTOR = Executors.newSingleThreadExecutor(
+            NetMusicThreadFactory.daemon("real-video-bench"));
     private static volatile RunSnapshot runSnapshot = new RunSnapshot(RunState.IDLE, "", 0, 0, "not started");
 
     public enum RunState {
@@ -88,7 +93,7 @@ public final class BiliRealVideoPlaybackBench {
         }
         markRunning();
 
-        CompletableFuture.runAsync(BiliRealVideoPlaybackBench::runBench)
+        CompletableFuture.runAsync(BiliRealVideoPlaybackBench::runBench, BENCH_EXECUTOR)
                 .orTimeout(180, TimeUnit.SECONDS)
                 .exceptionally(e -> {
                     markFailed("timeout/failure: " + e);
@@ -103,7 +108,8 @@ public final class BiliRealVideoPlaybackBench {
             return false;
         }
         markRunning();
-        CompletableFuture.runAsync(() -> runBench(ignoreSlowFrames, true, BiliRealVideoPlaybackBench::chat))
+        CompletableFuture.runAsync(() -> runBench(ignoreSlowFrames, true, BiliRealVideoPlaybackBench::chat),
+                BENCH_EXECUTOR)
                 .orTimeout(180, TimeUnit.SECONDS)
                 .exceptionally(e -> {
                     markFailed("command timeout/failure: " + e);

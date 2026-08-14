@@ -17,5 +17,12 @@ class NetMusicThreadFactoryTest {
         });
         assertTrue(pooled.isDaemon());
         assertTrue(pooled.getName().startsWith("unit-pool-"));
+        assertTrue(direct.getUncaughtExceptionHandler() != null);
+        assertTrue(pooled.getUncaughtExceptionHandler() != null);
+
+        Thread lowPriority = NetMusicThreadFactory.daemonThread("unit-low-priority", () -> {
+        }, Thread.NORM_PRIORITY - 1);
+        assertEquals(Thread.NORM_PRIORITY - 1, lowPriority.getPriority());
+        assertTrue(lowPriority.isDaemon());
     }
 }

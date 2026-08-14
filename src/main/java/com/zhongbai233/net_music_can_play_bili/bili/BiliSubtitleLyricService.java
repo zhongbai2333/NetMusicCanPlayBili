@@ -42,7 +42,9 @@ public final class BiliSubtitleLyricService {
             try {
                 java.util.List<BiliApiClient.SubtitleInfo> rawSubs = BiliApiClient.getAllSubtitles(info);
                 hasAnySubtitle = rawSubs != null && !rawSubs.isEmpty();
-            } catch (Exception ignored) {
+            } catch (Exception subtitleListFailure) {
+                LOGGER.debug("B站字幕轨道列表查询失败，将按无字幕生成占位歌词: video={} page={}",
+                        selection.videoId(), selection.page(), subtitleListFailure);
             }
 
             String note;

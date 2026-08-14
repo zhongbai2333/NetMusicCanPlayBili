@@ -80,6 +80,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
     private boolean didFirstDiag;
     private boolean didFirstDiagSpatial;
     private boolean didFirstPositionDiag;
+    private boolean didJocDecodeFailDiag;
     private boolean didJocAudioFailDiag;
 
     public DolbyAudioHandler() {
@@ -259,7 +260,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
             lines.add("音乐机/玩家位置尚未同步");
         }
         if (bedPositions != null) {
-            String[] names = bedChannelNames(numBedChannels);
+            String[] names = DolbySpatialLayout.bedChannelNames(numBedChannels);
             for (int i = 0; i < Math.min(bedPositions.length, 8); i++) {
                 String name = names != null && i < names.length ? names[i] : "bed" + i;
                 lines.add(String.format("床声道 %s local=%s", name, fmtPos(bedPositions[i])));
@@ -269,8 +270,9 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         }
         if (objectPositions != null && objectPositions.length > 0) {
             lines.add(String.format("最近JOC音频: seq=%d objs=%d active=%d peakMax=%.5f",
-                    lastJocSequence, lastJocAudioObjects, countActiveObjects(lastJocObjectRms),
-                    max(lastJocObjectPeak)));
+                    lastJocSequence, lastJocAudioObjects,
+                    DolbySpatialLayout.countActiveObjects(lastJocObjectRms),
+                    DolbySpatialLayout.max(lastJocObjectPeak)));
             int limit = Math.min(objectPositions.length, 8);
             for (int i = 0; i < limit; i++) {
                 float rms = i < lastJocObjectRms.length ? lastJocObjectRms[i] : 0f;
@@ -506,7 +508,11 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
                 if (jp != null) {
                     try {
                         jocResult = jocDecoder.decode(jp, QmfFilterBank.TIMESLOTS);
-                    } catch (Exception e) {
+                    } catch (Exception jocDecodeFailure) {
+                        if (!didJocDecodeFailDiag) {
+                            didJocDecodeFailDiag = true;
+                            LOGGER.warn("Dolby JOC 元数据解码失败，本帧降级为 bed 音频", jocDecodeFailure);
+                        }
                     }
                 }
             }
@@ -529,7 +535,8 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
                 int jocChannels = jocResult.config.channelCount;
                 for (int blk = 0; blk < 6; blk++) {
                     int off = blk * 256;
-                    float[][] blockPcm = buildJocDownmixBlock(pcmCh, channels, jocChannels, off);
+                    float[][] blockPcm = DolbySpatialLayout.buildJocDownmixBlock(
+                            pcmCh, channels, jocChannels, off);
                     float[][][][] bedQmf = QmfFilterBank.forwardMulti(blockPcm);
                     float[][][][] objQmf = QmfFilterBank.applyMixingMatrix(
                             bedQmf, jocResult.interpolatedMatrices, jocChannels, objCount);
@@ -542,8 +549,8 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
                 }
                 lastJocSequence = jocResult.config.sequence;
                 lastJocAudioObjects = objCount;
-                lastJocObjectRms = rmsByObject(objPcmCh, objCount);
-                lastJocObjectPeak = peakByObject(objPcmCh, objCount);
+                lastJocObjectRms = DolbySpatialLayout.rmsByObject(objPcmCh, objCount);
+                lastJocObjectPeak = DolbySpatialLayout.peakByObject(objPcmCh, objCount);
             } catch (RuntimeException e) {
                 objCount = 0;
                 objPcmCh = null;
@@ -608,7 +615,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
             PlaybackLatencyBench.markAudioOpenAlInitialized(this, "dolby", 48000);
             numBedChannels = chs;
             numObjects = newObjectCapacity;
-            bedPositions = computeBedPositions(chs);
+            bedPositions = DolbySpatialLayout.computeBedPositions(chs, SPATIAL_RADIUS);
             objectPositions = new float[newObjectCapacity][3];
             if (oldObjectPositions != null) {
                 for (int i = 0; i < Math.min(oldObjectPositions.length, objectPositions.length); i++) {
@@ -845,7 +852,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         float[] forward = frontSmoother.update(forwardToMachine(mp, lp), followLocalPlayerFront);
         if (!didFirstPositionDiag) {
             didFirstPositionDiag = true;
-            int ci = centerChannelIndex(numBedChannels);
+            int ci = DolbySpatialLayout.centerChannelIndex(numBedChannels);
             float[] cp = ci < bedPositions.length ? bedPositions[ci] : new float[] { 0, 0, 0 };
             LOGGER.debug(
                     "Dolby spatial map active: world-follow front->machine yaw={}deg centerLocal=({}, {}, {}) listener=({}, {}, {}) objects={}",
@@ -930,151 +937,6 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
                 objectPositions[op.objectIndex][1] = op.z * SPATIAL_RADIUS;
                 objectPositions[op.objectIndex][2] = op.y * SPATIAL_RADIUS;
             }
-    }
-
-    private static float[][] buildJocDownmixBlock(float[][] pcmCh, int pcmChannels, int jocChannels, int offset) {
-        int[] map = channelMapForJoc(pcmChannels, jocChannels);
-        float[][] block = new float[map.length][256];
-        for (int ch = 0; ch < map.length; ch++) {
-            int src = map[ch];
-            if (src >= 0 && src < pcmCh.length && offset < pcmCh[src].length) {
-                System.arraycopy(pcmCh[src], offset, block[ch], 0, Math.min(256, pcmCh[src].length - offset));
-            }
-        }
-        return block;
-    }
-
-    private static float[] rmsByObject(float[][] pcm, int count) {
-        float[] result = new float[count];
-        if (pcm == null)
-            return result;
-        for (int obj = 0; obj < count && obj < pcm.length; obj++) {
-            double sum = 0.0;
-            for (float s : pcm[obj])
-                sum += s * s;
-            result[obj] = pcm[obj].length == 0 ? 0f : (float) Math.sqrt(sum / pcm[obj].length);
-        }
-        return result;
-    }
-
-    private static float[] peakByObject(float[][] pcm, int count) {
-        float[] result = new float[count];
-        if (pcm == null)
-            return result;
-        for (int obj = 0; obj < count && obj < pcm.length; obj++) {
-            float peak = 0f;
-            for (float s : pcm[obj])
-                peak = Math.max(peak, Math.abs(s));
-            result[obj] = peak;
-        }
-        return result;
-    }
-
-    private static int countActiveObjects(float[] rms) {
-        int active = 0;
-        for (float value : rms)
-            if (value > 1.0e-5f)
-                active++;
-        return active;
-    }
-
-    private static float max(float[] values) {
-        float max = 0f;
-        for (float value : values)
-            max = Math.max(max, value);
-        return max;
-    }
-
-    private static int[] channelMapForJoc(int pcmChannels, int jocChannels) {
-        if (pcmChannels >= 6 && jocChannels == 5) {
-            return new int[] { 0, 2, 1, 4, 5 }; // FL, FC, FR, SL, SR；跳过 LFE
-        }
-        if (pcmChannels >= 8 && jocChannels == 7) {
-            return new int[] { 0, 2, 1, 6, 7, 4, 5 }; // FL, FC, FR, SL, SR, BL, BR；跳过 LFE
-        }
-        int n = Math.min(pcmChannels, jocChannels);
-        int[] map = new int[n];
-        for (int i = 0; i < n; i++)
-            map[i] = i;
-        return map;
-    }
-
-    private static float[][] computeBedPositions(int nc) {
-        float[][] p = new float[nc][3];
-        if (nc == 6) {
-            float[][] p51 = compute5_1Positions();
-            for (int i = 0; i < 6; i++)
-                p[i] = p51[i];
-            return p;
-        }
-        if (nc == 8) {
-            float[][] p71 = compute7_1Positions();
-            for (int i = 0; i < 8; i++)
-                p[i] = p71[i];
-            return p;
-        }
-        double step = 2 * Math.PI / nc, start = 0;
-        if (nc == 2) {
-            step = Math.PI / 3;
-            start = -Math.PI / 6;
-        }
-        for (int ch = 0; ch < nc; ch++) {
-            double a = start + ch * step;
-            p[ch][0] = (float) (Math.sin(a) * SPATIAL_RADIUS);
-            p[ch][1] = 0;
-            p[ch][2] = (float) (Math.cos(a) * SPATIAL_RADIUS);
-        }
-        return p;
-    }
-
-    private static float[][] compute5_1Positions() {
-        // FFmpeg E-AC-3 5.1 planar float 声道顺序: FL=0, FR=1, FC=2, LFE=3, SL=4, SR=5
-        // LFE 放在 listener 中心，超低音无方向性
-        float[][] p = new float[6][3];
-        double[] a = { -Math.PI / 6, Math.PI / 6, 0, 0, -Math.PI * 11 / 18, Math.PI * 11 / 18 };
-        for (int i = 0; i < 6; i++) {
-            p[i][0] = (float) (Math.sin(a[i]) * SPATIAL_RADIUS);
-            p[i][2] = (float) (Math.cos(a[i]) * SPATIAL_RADIUS);
-        }
-        p[3][0] = 0;
-        p[3][1] = 0;
-        p[3][2] = 0;
-        return p;
-    }
-
-    private static float[][] compute7_1Positions() {
-        // JOC 路径使用的 FFmpeg 7.1 planar 声道顺序：FL、FR、FC、LFE、BL、BR、SL、SR。
-        float[][] p = new float[8][3];
-        double[] a = {
-                -Math.PI / 6,
-                Math.PI / 6,
-                0,
-                0,
-                -Math.PI * 5 / 6,
-                Math.PI * 5 / 6,
-                -Math.PI / 2,
-                Math.PI / 2
-        };
-        for (int i = 0; i < p.length; i++) {
-            p[i][0] = (float) (Math.sin(a[i]) * SPATIAL_RADIUS);
-            p[i][2] = (float) (Math.cos(a[i]) * SPATIAL_RADIUS);
-        }
-        p[3][0] = 0;
-        p[3][1] = 0;
-        p[3][2] = 0;
-        return p;
-    }
-
-    private static String[] bedChannelNames(int channels) {
-        return switch (channels) {
-            case 6 -> new String[] { "FL", "FR", "FC", "LFE", "SL", "SR" };
-            case 8 -> new String[] { "FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR" };
-            default -> null;
-        };
-    }
-
-    private static int centerChannelIndex(int channels) {
-        return channels == 6 || channels == 8 ? 2 : 0;
     }
 
     private static float spatialGainForDistance(float d, float volume) {

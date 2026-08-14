@@ -1798,8 +1798,8 @@ release 误释放新实例的窗口。
 
 resolver 通过显式 `VideoDecodePreference` 生成 `HARDWARE_REQUIRED/AUTO/SOFTWARE_ONLY`，不再仅按 codecId 猜测。
 软件安全矩阵已落为测试过的纯策略：`<=720p60`、`<=1080p30` 可用，`prefer-av1` 额外允许 `1080p60`，
-1440p/4K/8K 和未知尺寸/fps 拒绝。当前嵌入的仍是 v38，因此 `BUNDLED_SOFTWARE_AV1_AVAILABLE=false`，生产计划
-不会提前暴露实际上不存在的 backend；只有完整 v39 六平台 bundle 一次性替换并通过门槛后才能翻转。
+1440p/4K/8K 和未知尺寸/fps 拒绝。当前生产候选计划不生成软件 AV1 候选，不会提前暴露实际上不存在的
+backend；只有完整六平台软件 AV1 bundle 一次性替换并通过门槛后才可重新接入。
 
 native patch 已扩展为一个不可拆分的 v39 单元：固定 dav1d 1.5.4 commit
 `54706fc6bc0cdecab7e9593974a4039cc038fca7`，六平台构建为 PIC static library，硬件请求显式选择 FFmpeg native
@@ -2477,14 +2477,13 @@ bundled capability、Gradle/release 门槛和下载页能力说明。
 - GLIBC floor 不再对未生成的 v39 沿用推测值；FFmpeg Release 工作流从两份 Linux archive
   的 ELF version need 中求最高值，写入 `BUILD-PROVENANCE.txt`，导入工具再生成 README，
   Gradle 要求下载页声明与 README 完全一致。
-- `BiliApiClient.BUNDLED_SOFTWARE_AV1_AVAILABLE` 不再是手工布尔值；
-  `generateNativeBundleCapabilities` 从同一 release 身份生成 Java 常量，v38 必为 false、v39 必为 true，
-  `NativeBundleCapabilitiesTest` 再与打包资源中的 README 交叉校验，避免二进制与候选策略反向漂移。
+- native release 身份、精确文件集、许可证和运行库边界由 Gradle 直接读取打包 README、manifest 与实际
+  二进制进行校验；生产候选计划不依赖额外生成的 Java capability 常量。
 
 当前验证：Python importer 11/11、runtime metadata 5/5、六平台静态 architecture verifier 3/3，且现有 v38
 34 个嵌入二进制全部通过格式/共享库类型/机器号审计；现有 v38 的
 `verifyEmbeddedNativeBundle` + `verifyProductionJarLegalMaterials` 均为 `BUILD SUCCESSFUL`，本机 macOS ARM64
-runtime smoke 精确通过 5 个 EAC3 + 17 个 Video 导出；生成式 capability + Bili 候选策略定向测试与
+runtime smoke 精确通过 5 个 EAC3 + 17 个 Video 导出；Bili 候选策略定向测试与
 重跑的两项发布门槛也均为 `BUILD SUCCESSFUL`。随后使用独立构建目录执行未跳过子项目的
 `bash gradlew build --stacktrace --no-daemon`，主项目、Scene Editor core/Minecraft、两个 JiJ host、JAR/native/法律门槛
 全部通过：229 个 test suite、871 tests、0 failures / 0 errors / 0 skipped。FFmpeg v39 本地候选提交更新为
@@ -2942,6 +2941,109 @@ JiJ 和冲突副本门槛全部成功。产物为单一六平台通用 JAR，大
 已通过：222 suites / 843 tests / 0 failures / 0 errors / 0 skipped；Bench 源集、生产 JAR 内容隔离、
 六平台 embedded native、法律材料、Scene Editor JiJ 与冲突副本门槛全部成功。正式通用 JAR 为
 9,205,355 bytes（约 8.78 MiB）；新增直播/白名单场景只存在于 `src/bench`，未进入生产 JAR。
+
+## Phase 79：中控台元素选择保留编辑视角（2026-08-14）
+
+修复中控台从场景漫游或其他元素选择新元素时恢复旧 `modelingCamera`、导致预览视角跳回默认位置的问题。
+`selectElement` 现在只更新选择目标，并把选择前的活动相机继续作为建模相机；从漫游模式进入元素编辑时仍保存
+漫游相机快照，之后返回漫游模式的行为不变。首次打开编辑器的中控台/指定元素聚焦，以及用户显式按 `F`、
+1–6 视图快捷键或切换投影时的相机变化仍保留。
+
+新增 `ControlConsoleElementSelectionCameraContractTest` 锁定选择接线不再读取旧建模相机。最终隔离命令
+`bash gradlew clean build -PenableModBench=true
+-PncpbBuildDirectory=/private/tmp/ncpb-console-selection-camera-final-20260814 --no-daemon --no-build-cache`
+通过：223 suites / 844 tests / 0 failures / 0 errors / 0 skipped；生产 JAR 为 9,205,365 bytes（约
+8.78 MiB），Bench 隔离、六平台 native、法律材料、Scene Editor JiJ 和冲突副本门槛全部成功。
+
+## Phase 80：移除未消费的 native capability 生成模板（2026-08-14）
+
+删除 `src/nativeBundleTemplates`、`generateNativeBundleCapabilities` 生成任务和仅用于回读该生成常量的
+`NativeBundleCapabilitiesTest`。生产代码并不读取该类，原流程只是从 native README 生成 release/软件 AV1
+常量，再由测试与同一 README 比较，既没有参与候选策略，也没有提供独立的真实性来源。
+
+发布门槛不受影响：Gradle 仍直接要求 README 唯一声明 `media-min-v48` 和两套 Linux GLIBC floor，并由
+`verifyEmbeddedNativeBundle`、生产 JAR 法律材料校验和 workflow 契约继续检查六平台精确文件集、
+`SHA256SUMS`、许可证、二进制格式/架构、JNI 导出及打包内容。生产候选计划仍不生成软件 AV1 候选。
+
+最终隔离命令 `bash gradlew clean build -PenableModBench=true
+-PncpbBuildDirectory=/private/tmp/ncpb-native-template-cleanup-final-20260814 --no-daemon --no-build-cache`
+通过：222 suites / 843 tests / 0 failures / 0 errors / 0 skipped；生产 JAR 为 9,204,800 bytes，且不再
+包含 `NativeBundleCapabilities`。Bench 隔离、六平台 native、法律材料、Scene Editor JiJ 和冲突副本门槛
+全部成功。
+
+## Phase 81：全项目代码健康整理（2026-08-14）
+
+本轮在不改变媒体协议和正式玩法行为的前提下收敛构建配置、后台执行器和诊断边界：
+
+- `build.gradle` 用 `sharedMediaRunProperties` 作为普通 client、Bench client 和 paired physical client 的
+  单一媒体参数目录，删除三份重复接线；补齐此前未传给 paired client 的真实直播开关/房间、真实视频最大
+  FPS、render backend、native backend 与 AV1 首帧预算。新增 `BuildMediaRunPropertiesContractTest` 防止三端
+  再次漂移；
+- ModBench 从 `0.1.2` 升级到已发布的 `0.1.3-beta`。旧版本没有 `pairedClientCount`/
+  `pairedProjectProperties` DSL，导致 `-PncpbLocalModBench=true` 分支配置即失败；升级后带直播房间和 FPS
+  覆盖的 paired `help` 配置门槛已通过；模组自身版本未修改；
+- 新增有界、核心线程可回收的 `MediaIoExecutor`，白名单音频/视频审核预览不再占用
+  `ForkJoinPool.commonPool()`，队列饱和会返回 exceptional future，由原有 UI/消息失败路径处理；
+- `NetMusicThreadFactory` 统一安装 JVM 标准未捕获异常处理器，并支持低优先级 daemon。OpenAL 清理、唱片机
+  视频重同步、手持视频、投影视频/测试图、真实视频 Bench、FMP4 decoder 和 terrain compiler 均改走该工厂，
+  生产源码中不再存在绕过统一入口的裸 `new Thread`；
+- B站字幕列表和 Dolby JOC 元数据解码的降级不再完全静默；前者记录 debug 上下文，后者首次失败记录 warning
+  后继续安全回落到 bed 音频；
+- 删除中控台编辑器中 5 个确认无调用的 private helper。四个 tooltip override 属于 Minecraft 26.1.2 仍会
+  调用、但已标 deprecated 且没有替代扩展点的兼容边界，改为局部注释抑制，主源码
+  `-Xlint:deprecation,unchecked` 已达到零警告。
+
+验证证据：Python 工具链 41/41 通过；最终隔离命令 `bash gradlew clean build -PenableModBench=true
+-PncpbBuildDirectory=/private/tmp/ncpb-code-health-final-v2-20260814 --no-daemon --no-build-cache` 通过，
+224 suites / 845 tests / 0 failures / 0 errors / 0 skipped。生产通用 JAR 为 9,205,436 bytes（约 8.78 MiB），
+Bench 隔离、六平台 native、法律材料、Scene Editor JiJ 和冲突副本门槛全部成功。`compileTestJava` 仍会报告
+一条 NeoForge `Dist.CLIENT` 注解类型未出现在纯测试 classpath 的外部 classfile warning；主源码无该警告，
+测试和运行结果不受影响，未为消除日志而引入 MergeTool 构建工具依赖。
+
+这些结构性热点已在下一阶段按职责边界完成拆分，不再作为待办保留。
+
+## Phase 82：千行巨型职责类拆分（2026-08-14）
+
+以当前发布基线中的全部 Java 源码为边界，将 12 个超过 1000 行的类拆成稳定 facade、领域协作者和独立 Bench
+场景；没有改变公开入口、媒体协议、场景 ID 或生产 JAR 的 Bench 隔离规则。拆分前后主文件行数如下：
+
+- `NetMusicBenchProvider`：7153 → 262，仅保留 provider 元数据、场景注册和两个共享断言；33 个场景/辅助类型移入
+  `src/bench` 同包独立文件；
+- `VideoBillboardPreview`：3883 → 836，拆出状态、quad、几何、上传、decoder 与 session 支持层；
+- `HolographicScreenConfigTestScreen`：3107 → 361，拆出编辑状态、生命周期、中控台 inspector、渲染和输入层；
+- `Fmp4NativeVideoDecoder`：2461 → 831，拆出配置解析、流定位、decode pump、NV12 池、输入所有权和关闭重试；
+- `VideoPlaybackInstance`：2014 → 921，拆出候选解码、帧队列、纹理、占位帧、关闭与 presentation；
+- `MP4HandheldVideoClient`：1652 → 949，拆出设备状态、会话、时间线、候选关闭与 decoder factory；
+- `HttpAudioStreamHandler`：1394 → 927，拆出 FMP4 音频定位；
+- `BiliApiClient`：1379 → 984，拆出视频引用解析和字幕 API；
+- `OpenALSpatialAudio`：1246 → 965，拆出 Minecraft OpenAL context 和原生删除队列；
+- `Fmp4ToMp4Converter`：1178 → 874，拆出 AAC MP4 muxer；
+- `ModernTurntableBlockEntity`：1135 → 991，拆出唱片处理、播放时钟、访问接口与 audience sync；
+- `DolbyAudioHandler`：1124 → 986，拆出空间声道布局。
+
+全仓库 Java 行数审计（排除 `build`、`run`、`.gradle` 和生成目录）已无 1000 行以上文件；当前最大文件为
+991 行的 `ModernTurntableBlockEntity`。拆分完成后又机械删除 6343 条未使用普通 import，并移除 33 个静态
+通配导入；每批拆分均先通过相关定向测试和启用 Bench 的 Gradle 构建。项目移出 iCloud Documents 后，最终直接在默认 `build/` 执行
+`bash gradlew clean build -PenableModBench=true --no-daemon --no-build-cache` 通过；生产/测试/Bench
+源码、生产 JAR、Bench 内容隔离、embedded native、法律材料和 Scene Editor JiJ 门槛全部成功；226 suites /
+848 tests / 0 failures / 0 errors / 0 skipped，Python 工具测试 41/41 通过。正式通用 JAR 为 9,295,272 bytes，
+仍低于 10 MB。最终 `git diff --check` 通过。真实公网媒体、OpenAL 设备和物理多客户端场景没有因纯结构拆分重复实跑，仍沿用阶段 66、69、73、78 的
+现场证据；发布前若环境可用，应按对应场景补跑而不能用编译结果代替。
+
+## Phase 83：Scene Editor 1.0.1-beta.2 发布与宿主升级（2026-08-14）
+
+`1.0.1-beta.1` tag 已被 JitPack 构建，但 tag 对应提交的 `scene_editor_version` 和兼容范围仍是
+`1.0.0-beta.3`，导致外部 artifact 版本与 nested JAR Manifest 的 `Implementation-Version` 不一致；NCPB 的
+`verifySceneEditorJiJ` 正确拒绝该发布。为保持已发布 tag 不可变，SceneEditor 在 `master` 提交
+`325b7d7` 并发布 annotated tag `1.0.1-beta.2`，根版本、兼容范围、示例宿主、README、POM/module metadata
+和两个 JAR Manifest 已统一到该版本。SceneEditor `clean build` 为 14 suites / 60 tests / 0 failures，且与
+JitPack 相同的 `publishToMavenLocal` 流水线通过；JitPack 上的 core/Minecraft JAR 已分别验证为
+`LIBRARY`/`GAMELIBRARY` 和 `Implementation-Version: 1.0.1-beta.2`。
+
+NCPB 的依赖版本、JiJ 协商范围、精确结构门槛和当前集成文档同步为 `1.0.1-beta.2`。刷新 JitPack 后执行
+`bash gradlew clean build -PenableModBench=true --refresh-dependencies --no-daemon --no-build-cache` 通过：
+226 suites / 848 tests / 0 failures / 0 errors / 0 skipped，`verifySceneEditorJiJ` 成功，正式通用 JAR 为
+9,295,106 bytes，仍低于 10 MB；主模组版本和宿主持久化 schema 均未提升。
 
 ## 推荐的新会话工作流
 

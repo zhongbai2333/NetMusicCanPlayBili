@@ -21,6 +21,7 @@ import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainResidentSec
 import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainTranslucentSortPolicy;
 import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainBounds;
 import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainSectionKey;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.color.block.BlockColors;
 import net.minecraft.client.renderer.DynamicUniforms;
@@ -35,6 +36,7 @@ import org.joml.Matrix4f;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
@@ -47,12 +49,11 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
-import java.lang.ref.WeakReference;
 
 /** 渲染线程所有的 section 持久 GPU 网格缓存。 */
 final class TerrainPreviewGpuCache implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(TerrainPreviewGpuCache.class);
-        private static final Identifier BLOCK_ATLAS_LOCATION =
+    private static final Identifier BLOCK_ATLAS_LOCATION =
             Identifier.withDefaultNamespace("textures/atlas/blocks.png");
     private static final List<String> CHUNK_SECTION_UNIFORM = List.of("ChunkSection");
     private static final long COVERAGE_LOG_INTERVAL_NANOS = 5_000_000_000L;
@@ -642,12 +643,8 @@ final class TerrainPreviewGpuCache implements AutoCloseable {
     }
 
     private static ThreadFactory terrainCompilerThreadFactory() {
-        return task -> {
-            Thread thread = new Thread(task, "NCPB terrain section compiler");
-            thread.setDaemon(true);
-            thread.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
-            return thread;
-        };
+        return task -> NetMusicThreadFactory.daemonThread("NCPB terrain section compiler", task,
+                Thread.NORM_PRIORITY - 1);
     }
 
         private record CompilationRequest(long epoch, TerrainPreviewFrame frame,

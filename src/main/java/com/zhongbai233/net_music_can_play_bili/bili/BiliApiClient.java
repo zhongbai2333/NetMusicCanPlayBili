@@ -25,8 +25,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * B站 API 客户端：BV/AV 解析、视频信息、DASH 音频流地址
@@ -39,16 +37,6 @@ public final class BiliApiClient {
     static final int FNVAL_4K = 128;
     static final int FNVAL_8K = 1024;
     static final int FNVAL_AV1 = 2048;
-    private static final Pattern BV_FULL_RE = Pattern.compile("^[Bb][Vv][0-9A-Za-z]{10}$");
-    private static final Pattern AV_FULL_RE = Pattern.compile("^av(\\d+)$", Pattern.CASE_INSENSITIVE);
-    private static final Pattern BV_ANYWHERE_RE = Pattern.compile("[Bb][Vv][0-9A-Za-z]{10}");
-    private static final Pattern AV_ANYWHERE_RE = Pattern.compile("(?:^|[^0-9A-Za-z])av(\\d+)(?:$|[^0-9A-Za-z])",
-            Pattern.CASE_INSENSITIVE);
-    private static final Pattern STORED_SELECTION_RE = Pattern.compile(
-            "^((?:[Bb][Vv][0-9A-Za-z]{10}|av\\d+))(?:\\|p=(\\d+))?$",
-            Pattern.CASE_INSENSITIVE);
-    private static final Pattern PAGE_PARAM_RE = Pattern.compile("(?:^|[?&#|;])p=(\\d+)(?:$|[&#;])",
-            Pattern.CASE_INSENSITIVE);
     private static final int[] STANDARD_AUDIO_ORDER = { 30280, 30232, 30216 };
     private static final int[] LOSSLESS_AUDIO_ORDER = { 30251, 30280, 30232, 30216 };
     private static final int[] DOLBY_AUDIO_ORDER = { 30250, 30251, 30280, 30232, 30216 };
@@ -69,28 +57,11 @@ public final class BiliApiClient {
     // == 视频 ID 解析 ==
 
     public static boolean isBiliVideoId(String input) {
-        if (input == null || input.isBlank())
-            return false;
-
-        String raw = input.trim();
-        return BV_FULL_RE.matcher(raw).matches() || AV_FULL_RE.matcher(raw).matches();
+        return BiliVideoReferenceParser.isVideoId(input);
     }
 
     public static VideoId extractVideoId(String raw) {
-        if (raw == null || raw.isBlank())
-            return null;
-
-        raw = raw.trim();
-
-        Matcher fullBv = BV_FULL_RE.matcher(raw);
-        if (fullBv.matches())
-            return VideoId.bvid("BV" + raw.substring(2));
-
-        Matcher fullAv = AV_FULL_RE.matcher(raw);
-        if (fullAv.matches())
-            return VideoId.aid(fullAv.group(1));
-
-        return null;
+        return BiliVideoReferenceParser.extractVideoId(raw);
     }
 
     /**
@@ -99,33 +70,7 @@ public final class BiliApiClient {
      * b23.tv 短链需要联网跟随重定向，命令层暂不自动展开，避免服务器命令卡在网络请求上。
      */
     public static VideoId extractVideoIdLenient(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return null;
-        }
-
-        String trimmed = raw.trim();
-        VideoSelection selection = parseStoredVideoSelection(trimmed);
-        if (selection != null) {
-            return selection.videoId();
-        }
-
-        VideoId direct = extractVideoId(trimmed);
-        if (direct != null) {
-            return direct;
-        }
-
-        Matcher bv = BV_ANYWHERE_RE.matcher(trimmed);
-        if (bv.find()) {
-            String value = bv.group();
-            return VideoId.bvid("BV" + value.substring(2));
-        }
-
-        Matcher av = AV_ANYWHERE_RE.matcher(trimmed);
-        if (av.find()) {
-            return VideoId.aid(av.group(1));
-        }
-
-        return null;
+        return BiliVideoReferenceParser.extractVideoIdLenient(raw);
     }
 
     public static boolean containsBiliVideoId(String input) {
@@ -134,7 +79,8 @@ public final class BiliApiClient {
 
     public static VideoId extractVideoIdLenientWithShortLink(String raw) {
         VideoId direct = extractVideoIdLenient(raw);
-        if (direct != null || raw == null || raw.isBlank() || !looksLikeBiliShortLink(raw)) {
+        if (direct != null || raw == null || raw.isBlank()
+                || !BiliVideoReferenceParser.looksLikeShortLink(raw)) {
             return direct;
         }
         String expanded = expandBiliShortLink(raw.trim());
@@ -142,42 +88,17 @@ public final class BiliApiClient {
     }
 
     public static VideoSelection extractVideoSelectionLenient(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return null;
-        }
-        String trimmed = raw.trim();
-        VideoSelection stored = parseStoredVideoSelection(trimmed);
-        if (stored != null) {
-            return stored;
-        }
-        VideoId id = extractVideoIdLenient(trimmed);
-        return id != null ? new VideoSelection(id, extractPageOrDefault(trimmed, 1)) : null;
+        return BiliVideoReferenceParser.extractSelectionLenient(raw);
     }
 
     public static VideoSelection extractVideoSelectionLenientWithShortLink(String raw) {
         VideoSelection direct = extractVideoSelectionLenient(raw);
-        if (direct != null || raw == null || raw.isBlank() || !looksLikeBiliShortLink(raw)) {
+        if (direct != null || raw == null || raw.isBlank()
+                || !BiliVideoReferenceParser.looksLikeShortLink(raw)) {
             return direct;
         }
         String expanded = expandBiliShortLink(raw.trim());
         return expanded == null ? null : extractVideoSelectionLenient(expanded);
-    }
-
-    private static boolean looksLikeBiliShortLink(String raw) {
-        String lower = raw.toLowerCase(java.util.Locale.ROOT);
-        return lower.contains("b23.tv/") || lower.contains("bili2233.cn/");
-    }
-
-    private static int extractPageOrDefault(String raw, int fallback) {
-        int safeFallback = Math.max(1, fallback);
-        if (raw == null || raw.isBlank()) {
-            return safeFallback;
-        }
-        Matcher matcher = PAGE_PARAM_RE.matcher(raw.trim());
-        if (!matcher.find()) {
-            return safeFallback;
-        }
-        return parsePositivePageOrDefault(matcher.group(1), safeFallback);
     }
 
     private static String expandBiliShortLink(String raw) {
@@ -201,37 +122,11 @@ public final class BiliApiClient {
     }
 
     public static VideoSelection parseStoredVideoSelection(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return null;
-        }
-
-        Matcher matcher = STORED_SELECTION_RE.matcher(raw.trim());
-        if (!matcher.matches()) {
-            return null;
-        }
-
-        VideoId videoId = extractVideoId(matcher.group(1));
-        if (videoId == null) {
-            return null;
-        }
-
-        int page = 1;
-        if (matcher.group(2) != null && !matcher.group(2).isBlank()) {
-            page = parsePositivePageOrDefault(matcher.group(2), 1);
-        }
-        return new VideoSelection(videoId, page);
-    }
-
-    private static int parsePositivePageOrDefault(String rawPage, int fallback) {
-        try {
-            return Math.max(1, Integer.parseInt(rawPage));
-        } catch (NumberFormatException ignored) {
-            return Math.max(1, fallback);
-        }
+        return BiliVideoReferenceParser.parseStoredSelection(raw);
     }
 
     public static String formatStoredVideoSelection(VideoId videoId, int page) {
-        return videoId.asInputText() + "|p=" + Math.max(1, page);
+        return BiliVideoReferenceParser.formatStoredSelection(videoId, page);
     }
 
     // == API ==
@@ -395,11 +290,11 @@ public final class BiliApiClient {
 
     public record SubtitleInfo(String lan, String url, boolean aiGenerated) {
         public SubtitleInfo(String lan, String url) {
-            this(lan, url, isAiLanguage(lan));
+            this(lan, url, BiliSubtitleApi.isAiLanguage(lan));
         }
 
         public boolean isAiGenerated() {
-            return aiGenerated || isAiLanguage(lan);
+            return aiGenerated || BiliSubtitleApi.isAiLanguage(lan);
         }
 
         public boolean isJsonSubtitle() {
@@ -1044,326 +939,36 @@ public final class BiliApiClient {
 
     // 获取字幕并转为 NetEase 歌词 JSON 格式
     public static String getBilingualSubtitleAsNetEaseLyric(VideoInfo info) throws Exception {
-        return getBilingualSubtitleAsNetEaseLyric(info, SubtitlePreference.HUMAN_ONLY);
+        return BiliSubtitleApi.getBilingualLyric(info, SubtitlePreference.HUMAN_ONLY);
     }
 
     public static String getBilingualSubtitleAsNetEaseLyric(VideoInfo info, boolean allowAi) throws Exception {
-        return getBilingualSubtitleAsNetEaseLyric(info,
+        return BiliSubtitleApi.getBilingualLyric(info,
                 allowAi ? SubtitlePreference.HUMAN_OR_AI : SubtitlePreference.HUMAN_ONLY);
     }
 
     public static String getBilingualSubtitleAsNetEaseLyric(VideoInfo info, SubtitlePreference preference)
             throws Exception {
-        List<SubtitleInfo> all = getAllSubtitles(info);
-        if (all.isEmpty()) {
-            return null;
-        }
-
-        List<SubtitleInfo> candidates = selectSubtitleCandidates(all, preference);
-        if (candidates.isEmpty()) {
-            return null;
-        }
-
-        SubtitleInfo chinese = null;
-        SubtitleInfo english = null;
-        SubtitleInfo other = null;
-        for (SubtitleInfo s : candidates) {
-            if (chinese == null && isChineseSubtitle(s.lan())) {
-                chinese = s;
-            } else if (english == null && isEnglishSubtitle(s.lan())) {
-                english = s;
-            } else if (other == null) {
-                other = s;
-            }
-        }
-
-        SubtitleInfo zhSub = chinese != null ? chinese
-                : english != null ? english
-                        : other;
-        if (zhSub == null) {
-            return null;
-        }
-
-        SubtitleInfo transSub = null;
-        if (zhSub == chinese) {
-            transSub = english != null ? english : other;
-        } else if (zhSub == english) {
-            transSub = chinese != null ? chinese : other;
-        } else {
-            transSub = chinese != null ? chinese : (english != null ? english : null);
-        }
-
-        String zhLrc = convertSubtitleJsonToLrc(getText(zhSub.normalizedUrl()));
-        String transLrc = transSub != null ? convertSubtitleJsonToLrc(getText(transSub.normalizedUrl())) : null;
-        return buildNetEaseLyricJson(zhLrc, transLrc);
+        return BiliSubtitleApi.getBilingualLyric(info, preference);
     }
 
     static List<SubtitleInfo> selectSubtitleCandidates(List<SubtitleInfo> all, SubtitlePreference preference) {
-        Objects.requireNonNull(preference, "preference");
-        if (all == null || all.isEmpty()) {
-            return List.of();
-        }
-        List<SubtitleInfo> candidates = new ArrayList<>();
-        for (SubtitleInfo subtitle : all) {
-            if (subtitle == null || subtitle.normalizedUrl().isBlank()) {
-                continue;
-            }
-            boolean accept = switch (preference) {
-                case HUMAN_ONLY -> !subtitle.isAiGenerated();
-                case HUMAN_OR_AI -> true;
-                case AI_ONLY -> subtitle.isAiGenerated();
-            };
-            if (accept) {
-                candidates.add(subtitle);
-            }
-        }
-        if (preference == SubtitlePreference.HUMAN_OR_AI) {
-            // Enabling fallback to AI must not silently replace an uploader-authored subtitle when both exist.
-            candidates.sort(java.util.Comparator.comparing(
-                    subtitle -> Objects.requireNonNull(subtitle, "subtitle").isAiGenerated()));
-        }
-        return List.copyOf(candidates);
+        return BiliSubtitleApi.selectCandidates(all, preference);
     }
 
     static List<SubtitleInfo> getAllSubtitles(VideoInfo info) throws Exception {
-        List<SubtitleInfo> subtitles = getSubtitlesFromPlayerApi(info);
-        if (subtitles.isEmpty()) {
-            subtitles = getSubtitlesFromViewApi(info);
-        }
-        return subtitles;
+        return BiliSubtitleApi.getAll(info);
     }
 
-    private static List<SubtitleInfo> getSubtitlesFromPlayerApi(VideoInfo info) throws Exception {
-        Map<String, String> params = new HashMap<>();
-        params.put("aid", String.valueOf(info.aid()));
-        params.put("cid", String.valueOf(info.cid()));
-        info.videoId().putViewParam(params);
-        Map<String, String> signed = BiliWbiSigner.signParams(params);
-
-        String url = "https://api.bilibili.com/x/player/wbi/v2?" + BiliWbiSigner.buildQuery(signed);
-        JsonObject root = getJson(url);
-        List<SubtitleInfo> subtitles = new ArrayList<>();
-        if (!root.has("data") || root.get("data").isJsonNull()) {
-            return subtitles;
-        }
-
-        JsonObject data = root.getAsJsonObject("data");
-        if (!data.has("subtitle") || data.get("subtitle").isJsonNull()) {
-            return subtitles;
-        }
-
-        JsonObject subtitle = data.getAsJsonObject("subtitle");
-        JsonArray array = subtitle.has("subtitles") && !subtitle.get("subtitles").isJsonNull()
-                ? subtitle.getAsJsonArray("subtitles")
-                : null;
-        if (array == null) {
-            return subtitles;
-        }
-
-        for (JsonElement element : array) {
-            JsonObject item = element.getAsJsonObject();
-            String lan = item.has("lan") ? item.get("lan").getAsString() : "unknown";
-            String subtitleUrl = item.has("subtitle_url") ? item.get("subtitle_url").getAsString() : "";
-            if (!subtitleUrl.isBlank()) {
-                subtitles.add(new SubtitleInfo(lan, subtitleUrl, subtitleIsAi(item, lan)));
-            }
-        }
-        return subtitles;
-    }
-
-    private static List<SubtitleInfo> getSubtitlesFromViewApi(VideoInfo info) throws Exception {
-        Map<String, String> params = new HashMap<>();
-        params.put("aid", String.valueOf(info.aid()));
-        params.put("cid", String.valueOf(info.cid()));
-        info.videoId().putViewParam(params);
-        Map<String, String> signed = BiliWbiSigner.signParams(params);
-
-        String url = "https://api.bilibili.com/x/web-interface/view?" + BiliWbiSigner.buildQuery(signed);
-        JsonObject root = getJson(url);
-        List<SubtitleInfo> subtitles = new ArrayList<>();
-        if (!root.has("data") || root.get("data").isJsonNull()) {
-            return subtitles;
-        }
-
-        JsonObject data = root.getAsJsonObject("data");
-        if (!data.has("subtitle") || data.get("subtitle").isJsonNull()) {
-            return subtitles;
-        }
-
-        JsonObject subtitle = data.getAsJsonObject("subtitle");
-        JsonArray array = subtitle.has("list") && !subtitle.get("list").isJsonNull()
-                ? subtitle.getAsJsonArray("list")
-                : null;
-        if (array == null) {
-            return subtitles;
-        }
-
-        for (JsonElement element : array) {
-            JsonObject item = element.getAsJsonObject();
-            String lan = item.has("lan") ? item.get("lan").getAsString() : "unknown";
-            String subtitleUrl = item.has("subtitle_url") ? item.get("subtitle_url").getAsString() : "";
-            if (!subtitleUrl.isBlank()) {
-                subtitles.add(new SubtitleInfo(lan, subtitleUrl, subtitleIsAi(item, lan)));
-            }
-        }
-        return subtitles;
-    }
-
-    private static JsonObject getJson(String url) throws Exception {
-        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
-                .timeout(Duration.ofSeconds(15))
-                .GET();
-        BiliRequestHeaders.applyWebApiHeaders(builder);
-        HttpResponse<String> response = sendApi(BiliWbiSigner.HTTP, builder.build(),
-                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), "bili-api-json");
-        return JsonParser.parseString(response.body()).getAsJsonObject();
-    }
-
-    private static String getText(String url) throws Exception {
-        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
-                .timeout(Duration.ofSeconds(15))
-                .GET();
-        BiliRequestHeaders.applyWebApiHeaders(builder);
-        HttpResponse<String> response = sendApi(BiliWbiSigner.HTTP, builder.build(),
-                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), "bili-api-text");
-        return response.body();
-    }
-
-    private static <T> HttpResponse<T> sendApi(HttpClient client, HttpRequest request,
+    static <T> HttpResponse<T> sendApi(HttpClient client, HttpRequest request,
             HttpResponse.BodyHandler<T> handler, String kind) throws Exception {
         return CancellableHttpRequestScope.sendOneBlocking(client, request, handler,
                 HttpRequestCloseDiagnostics.global(), kind);
     }
 
-    private static String convertSubtitleJsonToLrc(String subtitleJson) {
-        JsonObject root = JsonParser.parseString(subtitleJson).getAsJsonObject();
-        if (!root.has("body") || !root.get("body").isJsonArray()) {
-            return null;
-        }
-
-        StringBuilder lrc = new StringBuilder();
-        JsonArray body = root.getAsJsonArray("body");
-        for (JsonElement element : body) {
-            JsonObject line = element.getAsJsonObject();
-            String content = line.has("content") && !line.get("content").isJsonNull()
-                    ? line.get("content").getAsString().trim()
-                    : "";
-            if (content.isEmpty()) {
-                continue;
-            }
-            double from = line.has("from") && !line.get("from").isJsonNull()
-                    ? line.get("from").getAsDouble()
-                    : 0.0D;
-            lrc.append(formatLrcTime(from)).append(content).append('\n');
-        }
-
-        return lrc.isEmpty() ? null : lrc.toString();
-    }
-
     // 为没有 CC 字幕的 B站视频生成占位歌词。
     public static String buildPlaceholderNetEaseLyric(VideoInfo info, String note) {
-        String title = info.displayTitle();
-        String artists = !info.staffNames().isEmpty() ? String.join(" | ", info.staffNames()) : "";
-
-        // 截断过长内容，避免歌词行溢出
-        int maxArtistLen = 30;
-        if (artists.length() > maxArtistLen) {
-            artists = artists.substring(0, maxArtistLen - 1) + "\u2026";
-        }
-        int maxTotal = 52;
-        int titleBudget = maxTotal - (artists.isEmpty() ? 0 : 5 + artists.length()); // " By. " = 5
-        if (title.length() > titleBudget) {
-            title = title.substring(0, Math.max(8, titleBudget - 1)) + "\u2026";
-        }
-
-        StringBuilder zhLrc = new StringBuilder();
-        zhLrc.append(formatLrcTime(0)).append(title);
-        if (!artists.isEmpty()) {
-            zhLrc.append(" By. ").append(artists);
-        }
-        zhLrc.append('\n');
-
-        String transLrc = formatLrcTime(0) + "\uff08" + note + "\uff09\n";
-
-        return buildNetEaseLyricJson(zhLrc.toString(), transLrc);
-    }
-
-    // 构建 NetEase 歌词 JSON
-    private static String buildNetEaseLyricJson(String zhLrc, String transLrc) {
-        JsonObject netEaseLyric = new JsonObject();
-        netEaseLyric.addProperty("code", 200);
-
-        boolean hasTrans = transLrc != null && !transLrc.isBlank();
-
-        // lrc 必须有内容，有翻译时放翻译，否则放原文
-        String lrcContent = hasTrans ? transLrc : zhLrc;
-        if (lrcContent != null && !lrcContent.isBlank()) {
-            JsonObject lrc = new JsonObject();
-            lrc.addProperty("lyric", lrcContent);
-            netEaseLyric.add("lrc", lrc);
-        }
-
-        // tlyric 仅在有翻译时传递，放原文
-        if (hasTrans && zhLrc != null && !zhLrc.isBlank()) {
-            JsonObject tlyric = new JsonObject();
-            tlyric.addProperty("lyric", zhLrc);
-            netEaseLyric.add("tlyric", tlyric);
-        }
-
-        return netEaseLyric.toString();
-    }
-
-    private static boolean subtitleIsAi(JsonObject item, String lan) {
-        return isAiLanguage(lan) || jsonTruthy(item, "ai_status") || jsonTruthy(item, "ai_type");
-    }
-
-    private static boolean jsonTruthy(JsonObject object, String key) {
-        if (object == null || !object.has(key) || object.get(key).isJsonNull()
-                || !object.get(key).isJsonPrimitive()) {
-            return false;
-        }
-        var value = object.getAsJsonPrimitive(key);
-        if (value.isBoolean()) {
-            return value.getAsBoolean();
-        }
-        if (value.isNumber()) {
-            return value.getAsInt() != 0;
-        }
-        String normalized = value.getAsString().trim().toLowerCase(Locale.ROOT);
-        return !normalized.isEmpty() && !"0".equals(normalized) && !"false".equals(normalized)
-                && !"none".equals(normalized);
-    }
-
-    private static boolean isAiLanguage(String lan) {
-        return lan != null && lan.trim().toLowerCase(Locale.ROOT).startsWith("ai-");
-    }
-
-    private static boolean isChineseSubtitle(String lan) {
-        if (lan == null) {
-            return false;
-        }
-        String normalized = normalizeSubtitleLanguage(lan);
-        return normalized.startsWith("zh")
-                || normalized.startsWith("yue")
-                || normalized.contains("hans")
-                || normalized.contains("hant");
-    }
-
-    private static boolean isEnglishSubtitle(String lan) {
-        return lan != null && normalizeSubtitleLanguage(lan).startsWith("en");
-    }
-
-    private static String normalizeSubtitleLanguage(String lan) {
-        String normalized = lan.trim().toLowerCase(Locale.ROOT);
-        return normalized.startsWith("ai-") ? normalized.substring(3) : normalized;
-    }
-
-    private static String formatLrcTime(double seconds) {
-        int totalMilliseconds = (int) Math.round(seconds * 1000.0D);
-        int minutes = totalMilliseconds / 60000;
-        int sec = (totalMilliseconds % 60000) / 1000;
-        int milliseconds = totalMilliseconds % 1000;
-        return String.format("[%02d:%02d.%03d]", minutes, sec, milliseconds);
+        return BiliSubtitleApi.buildPlaceholder(info, note);
     }
 
     private static Logger logger() {

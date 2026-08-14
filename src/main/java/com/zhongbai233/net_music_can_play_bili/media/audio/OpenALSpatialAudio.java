@@ -1,20 +1,12 @@
 package com.zhongbai233.net_music_can_play_bili.media.audio;
 
 import com.mojang.logging.LogUtils;
-import com.zhongbai233.net_music_can_play_bili.bridge.LibraryBridge;
-import com.zhongbai233.net_music_can_play_bili.bridge.SoundEngineBridge;
-import com.zhongbai233.net_music_can_play_bili.bridge.SoundManagerBridge;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.sounds.SoundEngine;
-import net.minecraft.client.sounds.SoundManager;
 import net.neoforged.fml.ModList;
 import org.slf4j.Logger;
 
 import org.lwjgl.BufferUtils;
-import org.lwjgl.openal.AL;
 import org.lwjgl.openal.AL10;
 import org.lwjgl.openal.AL11;
-import org.lwjgl.openal.ALC;
 import org.lwjgl.openal.ALC10;
 import org.lwjgl.openal.EXTFloat32;
 import org.lwjgl.openal.SOFTHRTF;
@@ -22,14 +14,8 @@ import org.lwjgl.openal.SOFTSourceSpatialize;
 import org.lwjgl.system.MemoryUtil;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker.Category;
-import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseProperties;
 
 import java.util.ArrayDeque;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
@@ -50,23 +36,7 @@ public class OpenALSpatialAudio {
     private static final OpenAlHrtfProperties.Settings HRTF_PROPERTIES = OpenAlHrtfProperties.settings();
 
     /** 是否支持 AL_EXT_FLOAT32（浮点 PCM，无量化损失） */
-    private static final ThreadLocal<Long> CAPABILITIES_CONTEXT = ThreadLocal.withInitial(() -> 0L);
     private static volatile boolean hrtfAttempted;
-
-    /** Minecraft OpenAL context/device 缓存。 */
-    private static volatile OpenAlHandles CACHED_HANDLES;
-    private static final Object CACHE_LOCK = new Object();
-    private static final ConcurrentLinkedQueue<NativeResources> PENDING_NATIVE_DELETES = new ConcurrentLinkedQueue<>();
-    private static final Object NATIVE_DELETE_LOCK = new Object();
-    private static final AtomicBoolean NATIVE_DELETE_DRAIN_SCHEDULED = new AtomicBoolean();
-    private static final AtomicLong NEXT_NATIVE_DELETE_RETRY_NANOS = new AtomicLong();
-    private static final long NATIVE_DELETE_RETRY_NANOS = MediaCloseProperties.openAlRetryNanos();
-    private static final ExecutorService NATIVE_DELETE_EXECUTOR = Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "OpenALSpatialCleanup");
-        thread.setDaemon(true);
-        return thread;
-    });
-
     private int[] bedSources; // 床声道 OpenAL 声源 ID
     private int[] objectSources; // 动态对象 OpenAL 声源 ID
     private int[][] bedBuffers; // [channel][bufferIdx] = AL buffer ID
@@ -106,12 +76,10 @@ public class OpenALSpatialAudio {
     }
 
     public synchronized boolean init(int numBedChannels, int numDynamicObjects, int sampleRate) {
-        if (!ensureOpenAlContext("init")) {
+        if (!MinecraftOpenAlContext.ensure("init")) {
             return false;
         }
-        synchronized (NATIVE_DELETE_LOCK) {
-            drainPendingNativeDeletes();
-        }
+        OpenALNativeDeleteQueue.drainNow();
         cleanup();
         try {
             detectAudioFormat();
@@ -251,7 +219,7 @@ public class OpenALSpatialAudio {
     public synchronized void pumpQueuedAudio() {
         if (!initialized || deviceLost)
             return;
-        if (!ensureOpenAlContext("pumpQueuedAudio"))
+        if (!MinecraftOpenAlContext.ensure("pumpQueuedAudio"))
             return;
         for (int ch = 0; ch < numBeds; ch++) {
             pumpSource(bedSources[ch], bedPending[ch], 1.0f);
@@ -264,7 +232,7 @@ public class OpenALSpatialAudio {
     /** Pause/unpause every native source without discarding queued media or timeline state. */
     public synchronized void setPaused(boolean paused) {
         this.paused = paused;
-        if (!initialized || deviceLost || !ensureOpenAlContext(paused ? "pause" : "resume")) {
+        if (!initialized || deviceLost || !MinecraftOpenAlContext.ensure(paused ? "pause" : "resume")) {
             return;
         }
         applyPausedState(bedSources, paused);
@@ -280,7 +248,7 @@ public class OpenALSpatialAudio {
             float[] listenerPos, float[] listenerForward) {
         if (!initialized || listenerPos == null || listenerPos.length < 3)
             return;
-        if (!ensureOpenAlContext("updatePositions"))
+        if (!MinecraftOpenAlContext.ensure("updatePositions"))
             return;
 
         float[] front = frontToMachine(listenerForward);
@@ -302,7 +270,7 @@ public class OpenALSpatialAudio {
     /** 设置指定 bed 声道的增益 */
     public synchronized void setBedGain(int channel, float gain) {
         if (initialized && !deviceLost && channel >= 0 && bedSources != null && channel < bedSources.length) {
-            if (!ensureOpenAlContext("setBedGain"))
+            if (!MinecraftOpenAlContext.ensure("setBedGain"))
                 return;
             float clamped = clampGain(gain);
             if (bedGains != null && channel < bedGains.length)
@@ -314,7 +282,7 @@ public class OpenALSpatialAudio {
     /** 设置指定对象的增益 */
     public synchronized void setObjectGain(int obj, float gain) {
         if (initialized && !deviceLost && obj >= 0 && objectSources != null && obj < objectSources.length) {
-            if (!ensureOpenAlContext("setObjectGain"))
+            if (!MinecraftOpenAlContext.ensure("setObjectGain"))
                 return;
             float clamped = clampGain(gain);
             if (objectGains != null && obj < objectGains.length)
@@ -350,7 +318,7 @@ public class OpenALSpatialAudio {
 
     public synchronized long getConsumedSamples() {
         long baseSamples = mediaConsumedBuffers * (long) SAMPLES_PER_BUFFER;
-        if (!initialized || deviceLost || !ensureOpenAlContext("getConsumedSamples")) {
+        if (!initialized || deviceLost || !MinecraftOpenAlContext.ensure("getConsumedSamples")) {
             return baseSamples;
         }
         int source = primarySource();
@@ -384,7 +352,7 @@ public class OpenALSpatialAudio {
      * </p>
      */
     public synchronized long getOutputDelaySamples() {
-        if (!initialized || deviceLost || !ensureOpenAlContext("getOutputDelaySamples")) {
+        if (!initialized || deviceLost || !MinecraftOpenAlContext.ensure("getOutputDelaySamples")) {
             return 0L;
         }
         int source = primarySource();
@@ -423,7 +391,7 @@ public class OpenALSpatialAudio {
      */
     public synchronized long flushQueuedAudio() {
         long consumedSamples = getConsumedSamples();
-        if (!initialized || deviceLost || !ensureOpenAlContext("flushQueuedAudio")) {
+        if (!initialized || deviceLost || !MinecraftOpenAlContext.ensure("flushQueuedAudio")) {
             return consumedSamples;
         }
         clearPendingQueues(bedPending);
@@ -458,7 +426,7 @@ public class OpenALSpatialAudio {
      * 先把旧音频从实际输出端硬切掉，再异步释放 native 资源。
      */
     public synchronized void hardStopOutput() {
-        if (!initialized || deviceLost || !ensureOpenAlContext("hardStopOutput")) {
+        if (!initialized || deviceLost || !MinecraftOpenAlContext.ensure("hardStopOutput")) {
             return;
         }
         clearPendingQueues(bedPending);
@@ -483,157 +451,16 @@ public class OpenALSpatialAudio {
             MemoryResourceTracker.freed(Category.AUDIO_STAGING, uploadScratchToFree.capacity());
             MemoryUtil.memFree(uploadScratchToFree);
         }
-        int sourceCount = countSources(bedSourcesToDelete) + countSources(objectSourcesToDelete);
-        int bufferCount = countBuffers(bedBuffersToDelete) + countBuffers(objBuffersToDelete);
-        if (sourceCount == 0 && bufferCount == 0) {
-            return;
-        }
-        long operationId = AudioNativeCloseDiagnostics.global().begin(sourceCount, bufferCount, System.nanoTime());
-        NativeResources resources = new NativeResources(operationId, bedSourcesToDelete, objectSourcesToDelete,
+        OpenALNativeDeleteQueue.enqueue(bedSourcesToDelete, objectSourcesToDelete,
                 bedBuffersToDelete, objBuffersToDelete);
-        PENDING_NATIVE_DELETES.offer(resources);
-        schedulePendingNativeDeleteDrain();
-    }
-
-    private static void schedulePendingNativeDeleteDrain() {
-        if (!PENDING_NATIVE_DELETES.isEmpty() && NATIVE_DELETE_DRAIN_SCHEDULED.compareAndSet(false, true)) {
-            NATIVE_DELETE_EXECUTOR.execute(() -> {
-                boolean contextAvailable = false;
-                try {
-                    synchronized (NATIVE_DELETE_LOCK) {
-                        contextAvailable = ensureOpenAlContext("pending cleanup");
-                        if (contextAvailable) {
-                            drainPendingNativeDeletes();
-                        } else {
-                            for (NativeResources pending : PENDING_NATIVE_DELETES) {
-                                AudioNativeCloseDiagnostics.global().deferred(pending.operationId());
-                            }
-                        }
-                    }
-                } finally {
-                    NATIVE_DELETE_DRAIN_SCHEDULED.set(false);
-                }
-                if (contextAvailable && !PENDING_NATIVE_DELETES.isEmpty()) {
-                    schedulePendingNativeDeleteDrain();
-                }
-            });
-        }
-    }
-
-    private static void drainPendingNativeDeletes() {
-        NativeResources pending;
-        while ((pending = PENDING_NATIVE_DELETES.poll()) != null) {
-            deleteNativeResources(pending);
-        }
-    }
-
-    private static void deleteNativeResources(NativeResources resources) {
-        int sourceDeleteFailures = 0;
-        int bufferDeleteFailures = 0;
-        try {
-            int[] bedSourcesToDelete = resources.bedSources();
-            int[] objectSourcesToDelete = resources.objectSources();
-            int[][] bedBuffersToDelete = resources.bedBuffers();
-            int[][] objBuffersToDelete = resources.objectBuffers();
-            if (bedSourcesToDelete != null) {
-                for (int src : bedSourcesToDelete) {
-                    if (!deleteSourceChecked(src)) {
-                        sourceDeleteFailures++;
-                    }
-                }
-            }
-            if (objectSourcesToDelete != null) {
-                for (int src : objectSourcesToDelete) {
-                    if (!deleteSourceChecked(src)) {
-                        sourceDeleteFailures++;
-                    }
-                }
-            }
-            if (bedBuffersToDelete != null) {
-                for (int[] chBufs : bedBuffersToDelete) {
-                    for (int buf : chBufs) {
-                        if (!deleteBufferChecked(buf)) {
-                            bufferDeleteFailures++;
-                        }
-                    }
-                }
-            }
-            if (objBuffersToDelete != null) {
-                for (int[] objBufs : objBuffersToDelete) {
-                    for (int buf : objBufs) {
-                        if (!deleteBufferChecked(buf)) {
-                            bufferDeleteFailures++;
-                        }
-                    }
-                }
-            }
-        } finally {
-            AudioNativeCloseDiagnostics.global().complete(resources.operationId(), System.nanoTime(),
-                    sourceDeleteFailures, bufferDeleteFailures);
-            if (sourceDeleteFailures > 0 || bufferDeleteFailures > 0) {
-                LOGGER.warn("OpenAL native delete batch completed with item failures: op={} sources={} buffers={}",
-                        resources.operationId(), sourceDeleteFailures, bufferDeleteFailures);
-            }
-        }
-    }
-
-    private static boolean deleteSourceChecked(int source) {
-        if (source == 0) {
-            return true;
-        }
-        try {
-            clearAlErrors();
-            stopAndDelete(source);
-            return AL10.alGetError() == AL10.AL_NO_ERROR;
-        } catch (Throwable failure) {
-            return false;
-        }
-    }
-
-    private static boolean deleteBufferChecked(int buffer) {
-        if (buffer == 0) {
-            return true;
-        }
-        try {
-            clearAlErrors();
-            AL10.alDeleteBuffers(buffer);
-            return AL10.alGetError() == AL10.AL_NO_ERROR;
-        } catch (Throwable failure) {
-            return false;
-        }
     }
 
     public static int pendingNativeDeleteBatches() {
-        return PENDING_NATIVE_DELETES.size();
+        return OpenALNativeDeleteQueue.pendingBatches();
     }
 
     public static void tickNativeDeletes(long nowNanos) {
-        if (PENDING_NATIVE_DELETES.isEmpty()) {
-            return;
-        }
-        long next = NEXT_NATIVE_DELETE_RETRY_NANOS.get();
-        if (nowNanos >= next && NEXT_NATIVE_DELETE_RETRY_NANOS.compareAndSet(next,
-                nowNanos + Math.max(1L, NATIVE_DELETE_RETRY_NANOS))) {
-            schedulePendingNativeDeleteDrain();
-        }
-    }
-
-    private static int countSources(int[] sources) {
-        return sources == null ? 0 : sources.length;
-    }
-
-    private static int countBuffers(int[][] buffers) {
-        int count = 0;
-        if (buffers != null) {
-            for (int[] group : buffers) {
-                count += group == null ? 0 : group.length;
-            }
-        }
-        return count;
-    }
-
-    private record NativeResources(long operationId, int[] bedSources, int[] objectSources, int[][] bedBuffers,
-            int[][] objectBuffers) {
+        OpenALNativeDeleteQueue.tick(nowNanos);
     }
 
     private void detectAudioFormat() {
@@ -931,7 +758,7 @@ public class OpenALSpatialAudio {
         if (err == AL10.AL_INVALID_NAME) {
             if (!deviceLost) {
                 deviceLost = true;
-                CACHED_HANDLES = null; // 设备失效后缓存作废，下次调用时重建
+                MinecraftOpenAlContext.invalidate(); // 设备失效后缓存作废，下次调用时重建
                 LOGGER.warn("OpenAL device lost detected ({}): source/buffer handles invalidated. "
                         + "This can happen when another mod resets the OpenAL device (e.g. Sound Physics). "
                         + "Spatial audio will be reinitialized on next tick.",
@@ -1016,110 +843,6 @@ public class OpenALSpatialAudio {
         }
     }
 
-    private static boolean ensureOpenAlContext(String operation) {
-        long context = ALC10.alcGetCurrentContext();
-        long device = 0L;
-        if (context == 0L) {
-            OpenAlHandles handles = minecraftOpenAlHandles();
-            context = handles.context();
-            device = handles.device();
-            if (context == 0L) {
-                LOGGER.debug("OpenAL spatial {} skipped: no current Minecraft OpenAL context", operation);
-                return false;
-            }
-            if (!ALC10.alcMakeContextCurrent(context)) {
-                LOGGER.warn("OpenAL spatial {} skipped: failed to make Minecraft OpenAL context current", operation);
-                return false;
-            }
-        }
-
-        if (device == 0L) {
-            device = ALC10.alcGetContextsDevice(context);
-        }
-        if (device == 0L) {
-            LOGGER.warn("OpenAL spatial {} skipped: no OpenAL device for context", operation);
-            return false;
-        }
-
-        if (CAPABILITIES_CONTEXT.get() != context) {
-            try {
-                AL.createCapabilities(ALC.createCapabilities(device));
-                CAPABILITIES_CONTEXT.set(context);
-            } catch (IllegalStateException e) {
-                CACHED_HANDLES = null;
-                LOGGER.warn("OpenAL spatial {} skipped: context lost between check and capability init", operation);
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static OpenAlHandles minecraftOpenAlHandles() {
-        OpenAlHandles cached = CACHED_HANDLES;
-        if (cached != null) {
-            return cached;
-        }
-        synchronized (CACHE_LOCK) {
-            cached = CACHED_HANDLES;
-            if (cached != null) {
-                return cached;
-            }
-            cached = resolveMinecraftOpenAlHandles();
-            CACHED_HANDLES = cached;
-            return cached;
-        }
-    }
-
-    /** OpenAL 句柄解析失败时只警告一次，避免刷屏 */
-    private static volatile boolean handleWarningLogged;
-
-    private static OpenAlHandles resolveMinecraftOpenAlHandles() {
-        try {
-            Minecraft minecraft = Minecraft.getInstance();
-            if (minecraft == null) {
-                return OpenAlHandles.EMPTY;
-            }
-            SoundManager soundManager = minecraft.getSoundManager();
-            if (soundManager == null) {
-                return OpenAlHandles.EMPTY;
-            }
-            SoundEngine soundEngine = ((SoundManagerBridge) soundManager).net_music_can_play_bili$soundEngine();
-            if (soundEngine == null) {
-                return OpenAlHandles.EMPTY;
-            }
-            SoundEngineBridge soundEngineBridge = (SoundEngineBridge) soundEngine;
-            if (!soundEngineBridge.net_music_can_play_bili$loaded()) {
-                return OpenAlHandles.EMPTY;
-            }
-            var library = soundEngineBridge.net_music_can_play_bili$library();
-            if (library == null) {
-                return OpenAlHandles.EMPTY;
-            }
-            LibraryBridge libraryBridge = (LibraryBridge) library;
-            long context = libraryBridge.net_music_can_play_bili$context();
-            long device = libraryBridge.net_music_can_play_bili$currentDevice();
-            if (context == 0L) {
-                return OpenAlHandles.EMPTY;
-            }
-            LOGGER.debug("Cached Minecraft OpenAL handles: context=0x{} device=0x{}",
-                    Long.toHexString(context), Long.toHexString(device));
-            return new OpenAlHandles(context, device);
-        } catch (Throwable t) {
-            if (!handleWarningLogged) {
-                handleWarningLogged = true;
-                LOGGER.warn(
-                        "[NetMusicCanPlayBili] Dolby 空间音频不可用：无法获取 Minecraft SoundEngine 的 OpenAL 句柄。"
-                                + "这通常是因为当前 Minecraft/NeoForge 版本与模组不兼容（SoundEngine/Library 内部字段名已变更）。"
-                                + "音频将自动降级为 FLAC/AAC 立体声。"
-                                + "具体异常: {}",
-                        t.toString());
-            } else {
-                LOGGER.debug("OpenAL handle resolution retry failed: {}", t.toString());
-            }
-            return OpenAlHandles.EMPTY;
-        }
-    }
-
     private static synchronized void ensureHrtfEnabled() {
         if (hrtfAttempted || !HRTF_PROPERTIES.forceHrtf())
             return;
@@ -1177,7 +900,7 @@ public class OpenALSpatialAudio {
         }
     }
 
-    private static void stopAndDelete(int sourceId) {
+    static void stopAndDelete(int sourceId) {
         AL10.alSourceStop(sourceId);
         // 取消所有缓冲区的排队
         int queued = AL10.alGetSourcei(sourceId, AL10.AL_BUFFERS_QUEUED);
@@ -1185,10 +908,6 @@ public class OpenALSpatialAudio {
             AL10.alSourceUnqueueBuffers(sourceId);
         }
         AL10.alDeleteSources(sourceId);
-    }
-
-    private record OpenAlHandles(long context, long device) {
-        private static final OpenAlHandles EMPTY = new OpenAlHandles(0L, 0L);
     }
 
     // ── Source / Buffer 分配（含失败检测） ──
@@ -1238,7 +957,7 @@ public class OpenALSpatialAudio {
         return buffer;
     }
 
-    private static void clearAlErrors() {
+    static void clearAlErrors() {
         for (int i = 0; i < 8 && AL10.alGetError() != AL10.AL_NO_ERROR; i++) {
             // Clear stale context errors before attributing an error to a new allocation.
         }

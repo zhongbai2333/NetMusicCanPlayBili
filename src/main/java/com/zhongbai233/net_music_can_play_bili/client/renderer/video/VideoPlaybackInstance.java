@@ -1,20 +1,14 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
-import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.logging.LogUtils;
-import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.VideoCandidate;
-import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.item.HolographicGlassesItem;
-import com.zhongbai233.net_music_can_play_bili.media.stream.MediaNetworkFailureClassifier;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseExecutor;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.core.BlockPos;
-import net.minecraft.resources.Identifier;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
@@ -23,15 +17,11 @@ import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.client.event.SubmitCustomGeometryEvent;
 import org.slf4j.Logger;
 
-import java.io.IOException;
-import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.EnumSet;
 
 /**
  * 单个同步视频播放会话，负责解码线程、会话专属动态纹理和投影仪列表
@@ -52,100 +42,63 @@ final class VideoPlaybackInstance {
     private static final long RUNTIME_LAG_RESTART_MILLIS = TIMING.runtimeLagRestartMillis();
     private static final long RUNTIME_LAG_CONFIRM_MILLIS = TIMING.runtimeLagConfirmMillis();
     private static final long RUNTIME_LAG_RESTART_COOLDOWN_MILLIS = TIMING.runtimeLagRestartCooldownMillis();
-    private static final long DECODER_STABILIZATION_MILLIS = TIMING.decoderStabilizationMillis();
     private static final long DECODER_RESTART_CLOSE_TIMEOUT_MILLIS = TIMING.decoderRestartCloseTimeoutMillis();
     private static final long FIRST_FRAME_TIMEOUT_MILLIS = TIMING.firstFrameTimeoutMillis();
     private static final int MAX_FIRST_FRAME_RECOVERY_ATTEMPTS = TIMING.firstFrameRecoveryAttempts();
     private static final boolean OFFSCREEN_PAUSE_DECODE = OFFSCREEN.pauseDecode();
-    private static final long OFFSCREEN_GRACE_NANOS = OFFSCREEN.graceMillis() * 1_000_000L;
-    private static final long OFFSCREEN_RESUME_RESTART_LAG_NANOS = OFFSCREEN.resumeRestartLagMillis() * 1_000_000L;
-    private static final double OFFSCREEN_PREWARM_DOT_THRESHOLD = OFFSCREEN.prewarmDotThreshold();
-    private static final int MAX_OPERATIONAL_SOURCE_WIDTH = PRESENTATION.maxSourceWidth();
-    private static final int MAX_OPERATIONAL_SOURCE_HEIGHT = PRESENTATION.maxSourceHeight();
-    private static final double IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET =
-            PRESENTATION.irisWarningViewDepthOffset();
-    private static final float IRIS_WARNING_PLACEHOLDER_LOCAL_DEPTH_OFFSET =
-            PRESENTATION.irisWarningLocalDepthOffset();
-    private static final Identifier[] LOADING_PLACEHOLDER_TEXTURES = new Identifier[] {
-            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
-                    "textures/gui/video_loading/loading_base_phase0.png"),
-            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
-                    "textures/gui/video_loading/loading_base_phase1.png"),
-            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
-                    "textures/gui/video_loading/loading_base_phase2.png"),
-            Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
-                    "textures/gui/video_loading/loading_base_phase3.png")
-    };
-    private static final Identifier IRIS_WARNING_PLACEHOLDER_TEXTURE = Identifier.fromNamespaceAndPath(
-            NetMusicCanPlayBili.MODID, "textures/gui/video_loading/iris_translucent_warning_base.png");
-    private static final Identifier NETWORK_ERROR_PLACEHOLDER_TEXTURE = Identifier.fromNamespaceAndPath(
-            NetMusicCanPlayBili.MODID, "textures/gui/video_loading/network_error_base.png");
-        private static final Identifier IDLE_PLACEHOLDER_TEXTURE = Identifier.fromNamespaceAndPath(
-            NetMusicCanPlayBili.MODID, "textures/gui/video_loading/idle_base.png");
-        private static final boolean NETWORK_ERROR_PLACEHOLDER_ENABLED =
-            VideoPipelineProperties.networkErrorPlaceholderEnabled();
-    private static final int LOADING_PLACEHOLDER_WIDTH = 320;
-    private static final int LOADING_PLACEHOLDER_HEIGHT = 180;
-
-    private volatile int targetWidth;
-    private volatile int targetHeight;
+    volatile int targetWidth;
+    volatile int targetHeight;
     private final int fps;
-    private final List<VideoCandidate> candidates;
+    final List<VideoCandidate> candidates;
     /** 直播总线源：pts 已在音频输出时间域，播放时钟不得按"当前媒体位置"重基准。 */
-    private final boolean liveSource;
-    private final PlaybackSessionId playbackSessionId;
+    final boolean liveSource;
+    final PlaybackSessionId playbackSessionId;
     private final long startOffsetMillis;
-    private final long totalMillis;
-    private final boolean preferNative;
-    private final String decoderOverride;
-    private final Identifier firstTextureId;
-    private final Identifier secondTextureId;
-    private final Identifier yTextureId;
-    private final Identifier uTextureId;
-    private final Identifier vTextureId;
-    private final VideoPlaybackAnchor anchor;
-    private final VideoFrameQueue frameQueue = new VideoFrameQueue(PRESENTATION.queueCapacity());
-    private final AtomicLong generation = new AtomicLong();
-    private final VideoConsumerRegistry<BlockPos> consumers = new VideoConsumerRegistry<>();
-    private final VideoPhysicalCloseHandoff physicalCloseHandoff = new VideoPhysicalCloseHandoff();
-    private final VideoPerformanceMonitor performanceMonitor = new VideoPerformanceMonitor();
-    private volatile boolean running;
-    private volatile boolean hasFrame;
-    private volatile long startNanoTime;
-    private volatile long decoderGenerationStartedNanoTime;
-    private volatile Thread decodeThread;
-    private volatile AutoCloseable decoder;
-    private volatile CompletableFuture<Void> decodeExit = CompletableFuture.completedFuture(null);
-    private volatile DynamicTexture frontTexture;
-    private volatile DynamicTexture backTexture;
-    private volatile VideoYuvTextureSet yuvTextureSet;
-    private volatile Identifier frontTextureId;
-    private volatile Identifier backTextureId;
-    private volatile boolean firstFrameLogged;
-    private volatile boolean firstYuvImmediateLogged;
-    private volatile long firstDecodedNanoTime;
+    final long totalMillis;
+    final boolean preferNative;
+    final String decoderOverride;
+    final VideoPlaybackTextures textures;
+    final VideoPlaybackAnchor anchor;
+    final VideoPlaybackFrameQueue frameQueue = new VideoPlaybackFrameQueue(PRESENTATION.queueCapacity());
+    final AtomicLong generation = new AtomicLong();
+    final VideoConsumerRegistry<BlockPos> consumers = new VideoConsumerRegistry<>();
+    final VideoPhysicalCloseHandoff physicalCloseHandoff = new VideoPhysicalCloseHandoff();
+    final VideoPerformanceMonitor performanceMonitor = new VideoPerformanceMonitor();
+    private final VideoCandidateDecodeRunner candidateDecodeRunner = new VideoCandidateDecodeRunner(this);
+    private final VideoPlaybackCloser closer = new VideoPlaybackCloser(this);
+    private final VideoPlaybackPresentation presentation = new VideoPlaybackPresentation(this);
+    volatile boolean running;
+    volatile boolean hasFrame;
+    volatile long startNanoTime;
+    volatile long decoderGenerationStartedNanoTime;
+    volatile Thread decodeThread;
+    volatile AutoCloseable decoder;
+    volatile CompletableFuture<Void> decodeExit = CompletableFuture.completedFuture(null);
+    volatile boolean firstFrameLogged;
+    volatile boolean firstYuvImmediateLogged;
+    volatile long firstDecodedNanoTime;
     private volatile boolean startupBufferReady;
-    private volatile long lastUploadPumpNanoTime;
-    private volatile long decoderStartOffsetMillis;
+    volatile long lastUploadPumpNanoTime;
+    volatile long decoderStartOffsetMillis;
     private volatile long lastUploadedPtsNanos = -1L;
     private volatile long lastUploadedBaseOffsetMillis = -1L;
-    private volatile long adaptiveRestartOffsetMillis = -1L;
-    private volatile long lastVisibleNanoTime;
-    private volatile long offscreenSinceNanoTime;
+    volatile long adaptiveRestartOffsetMillis = -1L;
+    volatile long lastVisibleNanoTime;
+    volatile long offscreenSinceNanoTime;
     private volatile long runtimeLagSinceNanoTime;
     private volatile long lastRuntimeLagRestartNanoTime;
-    private volatile boolean restartInProgress;
-    private volatile VideoDecoderRestartState restartState = VideoDecoderRestartState.ACTIVE;
-    private volatile boolean prewarmVisible = true;
-    private volatile boolean loggedOffscreenPause;
-    private volatile boolean networkFailure;
-    private volatile boolean terminalFailure;
+    volatile boolean restartInProgress;
+    volatile VideoDecoderRestartState restartState = VideoDecoderRestartState.ACTIVE;
+    volatile boolean prewarmVisible = true;
+    volatile boolean loggedOffscreenPause;
+    volatile boolean networkFailure;
+    volatile boolean terminalFailure;
     private volatile boolean networkFailureNotified;
-    private volatile boolean stopRequested;
-    private volatile VideoCandidate activeCandidate;
-    private volatile String actualDecoderBackend = "unknown";
-    private volatile String fallbackReason = "";
-    private volatile boolean performanceFallbackLocked;
+    volatile boolean stopRequested;
+    volatile VideoCandidate activeCandidate;
+    volatile String actualDecoderBackend = "unknown";
+    volatile String fallbackReason = "";
+    volatile boolean performanceFallbackLocked;
     private volatile boolean performanceNoH264Logged;
     private volatile int firstFrameRecoveryAttempts;
     private int consecutiveBadUploads;
@@ -185,19 +138,7 @@ final class VideoPlaybackInstance {
         this.decoderOverride = decoderOverride;
         this.anchor = anchor != null ? anchor
                 : VideoPlaybackAnchor.turntable(null, sessionId(), this.totalMillis);
-        String textureSuffix = Integer.toUnsignedString(sessionId().hashCode(), 16);
-        this.firstTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
-                "dynamic/bili_video_preview_" + textureSuffix + "_a");
-        this.secondTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
-                "dynamic/bili_video_preview_" + textureSuffix + "_b");
-        this.yTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
-                "dynamic/bili_video_preview_" + textureSuffix + "_y");
-        this.uTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
-                "dynamic/bili_video_preview_" + textureSuffix + "_u");
-        this.vTextureId = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
-                "dynamic/bili_video_preview_" + textureSuffix + "_v");
-        this.frontTextureId = firstTextureId;
-        this.backTextureId = secondTextureId;
+        this.textures = new VideoPlaybackTextures(sessionId());
         replaceProjectors(projectorPositions);
         LOGGER.debug("视频会话创建: session={}, {}x{} @ {}fps, renderBackend={}, decodeFormat={}", sessionId(),
                 this.targetWidth, this.targetHeight, this.fps, VideoBillboardPreview.RENDER_BACKEND,
@@ -243,465 +184,10 @@ final class VideoPlaybackInstance {
         startNanoTime = System.nanoTime();
         decoderGenerationStartedNanoTime = startNanoTime;
         long gen = generation.incrementAndGet();
-        startDecodeThread(gen, "bili-video-" + sessionId());
+        candidateDecodeRunner.start(gen, "bili-video-" + sessionId());
     }
 
-    private void startDecodeThread(long gen, String threadName) {
-        CompletableFuture<Void> exit = new CompletableFuture<>();
-        decodeExit = exit;
-        physicalCloseHandoff.beginDecode(exit);
-        Thread thread = new Thread(() -> {
-            try {
-                decode(gen);
-            } finally {
-                exit.complete(null);
-            }
-        }, threadName);
-        thread.setDaemon(true);
-        decodeThread = thread;
-        try {
-            thread.start();
-        } catch (RuntimeException | Error startFailure) {
-            decodeThread = null;
-            exit.completeExceptionally(startFailure);
-            throw startFailure;
-        }
-    }
-
-    private void decode(long gen) {
-        Exception lastStartupFailure = null;
-        List<VideoCandidate> operationalCandidates = VideoStartupFallbackPolicy.operationalCandidates(candidates,
-                MAX_OPERATIONAL_SOURCE_WIDTH, MAX_OPERATIONAL_SOURCE_HEIGHT);
-        if (performanceFallbackLocked) {
-            operationalCandidates = VideoStartupFallbackPolicy.lockedH264Candidates(operationalCandidates);
-        }
-        for (VideoCandidate candidate : operationalCandidates) {
-            if (!running || gen != generation.get()) {
-                return;
-            }
-            try {
-                if (decodeCandidate(gen, candidate)) {
-                    return;
-                }
-            } catch (Exception error) {
-                if (gen != generation.get() || !running || isInterruptedWait(error)) {
-                    return;
-                }
-                if (error instanceof VideoBillboardPreview.CandidateResourceCloseException closeFailure) {
-                    failCandidateClose(gen, new CandidateCloseTimeoutException(candidate,
-                            closeFailure.nativeTermination, closeFailure.getMessage(), closeFailure));
-                    return;
-                }
-                if (error instanceof CandidateCloseTimeoutException closeTimeout) {
-                    failCandidateClose(gen, closeTimeout);
-                    return;
-                }
-                if (firstFrameLogged) {
-                    handleDecodeFailure(gen, error);
-                    return;
-                }
-                lastStartupFailure = error;
-                if (candidate.codecId() == 13) {
-                    fallbackReason = VideoFallbackReason.classifyAv1StartupFailure(error,
-                            operationalCandidates.stream().anyMatch(next -> next.codecId() == 7));
-                }
-                LOGGER.warn("视频实例候选首帧失败，尝试下一候选: session={} quality={} codec={} source={}x{} reason={}",
-                        sessionId(), candidate.quality(), candidate.codecId(), candidate.sourceWidth(),
-                        candidate.sourceHeight(), error.toString());
-            }
-        }
-        if (lastStartupFailure != null) {
-            handleDecodeFailure(gen, lastStartupFailure);
-        }
-        if (gen == generation.get()) {
-            running = false;
-            decoder = null;
-        }
-    }
-
-    private boolean decodeCandidate(long gen, VideoCandidate candidate) throws Exception {
-        int candidateFps = Math.max(1, candidate.fps());
-        long frameIntervalNs = Math.max(1L, 1_000_000_000L / candidateFps);
-        long frameIndex = 0L;
-        long effectiveStartOffsetMillis = effectiveDecoderStartOffsetMillis();
-        decoderStartOffsetMillis = effectiveStartOffsetMillis;
-        adaptiveRestartOffsetMillis = -1L;
-        boolean candidateCommitted = false;
-        VideoStartupFallbackPolicy.DecodeSize decodeSize = VideoStartupFallbackPolicy.candidateDecodeSize(
-                targetWidth, targetHeight, candidate.sourceWidth(), candidate.sourceHeight());
-        AutoCloseable dec = VideoBillboardPreview.openDecoder(candidate.url(), decodeSize.width(),
-                decodeSize.height(),
-                candidateFps,
-                candidate.codecId(),
-                preferNative, decoderOverride, effectiveStartOffsetMillis, totalMillis, consumers.hasGuiConsumer(),
-                candidate.decodeMode());
-        if (dec instanceof com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder nativeDecoder) {
-            physicalCloseHandoff.attachDecoder(nativeDecoder.terminationFuture());
-        }
-        try {
-            decoder = dec;
-            while (running && gen == generation.get()) {
-                if (!waitWhilePaused(gen)) {
-                    break;
-                }
-                if (!hasVideoConsumer()) {
-                    break;
-                }
-                if (!waitWhileOffscreen(gen, candidateCommitted)) {
-                    break;
-                }
-                if (frameIndex > 0L) {
-                    waitForDecodeLead(frameIntervalNs, gen);
-                }
-                long waitStartNs = System.nanoTime();
-                boolean boundedAv1Probe = !candidateCommitted
-                        && VideoStartupFallbackPolicy.requiresBoundedFirstFrameProbe(candidate);
-                VideoBillboardPreview.DecodedFrame frame = boundedAv1Probe
-                        ? VideoBillboardPreview.nextDecodedFrameWithAv1FirstFrameProbe(dec)
-                        : VideoBillboardPreview.nextDecodedFrame(dec);
-                long waitNs = System.nanoTime() - waitStartNs;
-                if (frame == null) {
-                    if (!firstFrameLogged) {
-                        throw new java.io.IOException("候选在输出首帧前结束");
-                    }
-                    return true;
-                }
-                frameIndex++;
-                long ptsNanos = frame.ptsNanos() >= 0L ? frame.ptsNanos() : frameIndex * frameIntervalNs;
-                if (!firstFrameLogged && shouldDropStaleStartupFrame(ptsNanos)) {
-                    try {
-                        if (boundedAv1Probe) {
-                            VideoBillboardPreview.rejectAv1FirstFrameProbeFrame(dec, frame);
-                        }
-                    } finally {
-                        frame.close();
-                    }
-                    continue;
-                }
-                boolean offered;
-                try {
-                    offered = frameQueue.offer(new DecodedVideoFrame(frameIndex, ptsNanos, frame),
-                            () -> running && gen == generation.get());
-                } catch (InterruptedException error) {
-                    try {
-                        if (boundedAv1Probe) {
-                            VideoBillboardPreview.rejectAv1FirstFrameProbeFrame(dec, frame);
-                        }
-                    } finally {
-                        frame.close();
-                    }
-                    throw error;
-                }
-                if (!offered) {
-                    try {
-                        if (boundedAv1Probe) {
-                            VideoBillboardPreview.rejectAv1FirstFrameProbeFrame(dec, frame);
-                        }
-                    } finally {
-                        frame.close();
-                    }
-                    break;
-                }
-                if (!candidateCommitted) {
-                    if (boundedAv1Probe) {
-                        try {
-                            VideoBillboardPreview.commitAv1FirstFrameProbe(dec, frame);
-                        } catch (IOException error) {
-                            frameQueue.clear();
-                            throw error;
-                        }
-                    }
-                    candidateCommitted = true;
-                    targetWidth = decodeSize.width();
-                    targetHeight = decodeSize.height();
-                    firstFrameLogged = true;
-                    firstDecodedNanoTime = System.nanoTime();
-                    activeCandidate = candidate;
-                    actualDecoderBackend = actualBackend(dec);
-                    performanceMonitor.start(firstDecodedNanoTime, candidateFps, actualDecoderBackend);
-                    performanceMonitor.recordDecodedFrame(preferredDecodeSampleNanos(frame, waitNs));
-                    LOGGER.debug("视频实例首个解码帧已提交: session={}, pts={}ms, wait={}ms, startOffset={}ms",
-                            sessionId(), ptsNanos / 1_000_000L, waitNs / 1_000_000L, effectiveStartOffsetMillis);
-                } else {
-                    performanceMonitor.recordDecodedFrame(preferredDecodeSampleNanos(frame, waitNs));
-                }
-                warnIfUploadPumpStalled();
-            }
-            return candidateCommitted;
-        } finally {
-            try {
-                closeCandidateBeforeFallback(dec, candidateCommitted, gen, candidate);
-            } finally {
-                if (decoder == dec) {
-                    decoder = null;
-                }
-            }
-        }
-    }
-
-    private static long preferredDecodeSampleNanos(VideoBillboardPreview.DecodedFrame frame, long waitNanos) {
-        long nativeGet = frame != null ? frame.nativeGetNanos() : -1L;
-        return nativeGet >= 0L ? nativeGet : Math.max(0L, waitNanos);
-    }
-
-    private static String actualBackend(AutoCloseable decoder) {
-        if (decoder instanceof com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder nativeDecoder) {
-            String actual = nativeDecoder.actualHwaccel();
-            return actual == null || actual.isBlank() ? "unknown" : actual;
-        }
-        return decoder != null ? decoder.getClass().getSimpleName() : "unknown";
-    }
-
-    private void closeCandidateBeforeFallback(AutoCloseable candidateDecoder, boolean candidateCommitted,
-            long gen, VideoCandidate candidate) throws Exception {
-        if (candidateDecoder == null) {
-            return;
-        }
-        if (candidateCommitted
-                || !(candidateDecoder instanceof com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder nativeDecoder)) {
-            CompletableFuture<Void> closeReturned = new CompletableFuture<>();
-            CompletableFuture<Void> nativeTermination = candidateDecoder instanceof com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder nativeCandidate
-                    ? nativeCandidate.terminationFuture() : CompletableFuture.completedFuture(null);
-            physicalCloseHandoff.attachClose(closeReturned, nativeTermination, decodeExit);
-            try {
-                candidateDecoder.close();
-                closeReturned.complete(null);
-            } catch (Exception | Error error) {
-                closeReturned.completeExceptionally(error);
-                throw error;
-            }
-            return;
-        }
-
-        long closeStartedNanos = System.nanoTime();
-        CompletableFuture<Void> nativeTermination = nativeDecoder.terminationFuture();
-        long closeOperation = VideoCloseDiagnostics.global().begin(playbackSessionId, EnumSet.of(
-                VideoCloseDiagnostics.Phase.DECODER_CLOSE_RETURNED,
-                VideoCloseDiagnostics.Phase.NATIVE_TERMINATED), closeStartedNanos);
-        nativeTermination.whenComplete((ignored, error) -> VideoCloseDiagnostics.global().complete(closeOperation,
-                VideoCloseDiagnostics.Phase.NATIVE_TERMINATED, error, System.nanoTime()));
-        nativeDecoder.requestClose();
-        CompletableFuture<Void> candidateCloseReturned = new CompletableFuture<>();
-        physicalCloseHandoff.attachClose(candidateCloseReturned, nativeTermination, decodeExit);
-        Exception closeFailure = null;
-        try {
-            candidateDecoder.close();
-            candidateCloseReturned.complete(null);
-        } catch (Exception error) {
-            closeFailure = error;
-            candidateCloseReturned.completeExceptionally(error);
-        } finally {
-            VideoCloseDiagnostics.global().complete(closeOperation,
-                    VideoCloseDiagnostics.Phase.DECODER_CLOSE_RETURNED, System.nanoTime());
-        }
-        long timeoutMillis = Math.max(1L, DECODER_RESTART_CLOSE_TIMEOUT_MILLIS);
-        long closeElapsedNanos = Math.max(0L, System.nanoTime() - closeStartedNanos);
-        VideoCandidateClosePolicy.Decision closeDecision = VideoCandidateClosePolicy.decide(
-                true, VideoCandidateClosePolicy.completedNormally(nativeTermination),
-                closeElapsedNanos, timeoutMillis);
-        if (nativeTermination.isDone()
-                && !VideoCandidateClosePolicy.completedNormally(nativeTermination)) {
-            throw new CandidateCloseTimeoutException(candidate, nativeTermination,
-                    "native termination completed exceptionally");
-        }
-        if (closeDecision == VideoCandidateClosePolicy.Decision.OPEN_NEXT) {
-            if (closeFailure != null) {
-                throw new CandidateCloseTimeoutException(candidate, nativeTermination,
-                        "decoder close returned exceptionally", closeFailure);
-            }
-            return;
-        }
-        if (closeDecision == VideoCandidateClosePolicy.Decision.FAIL_CLOSED) {
-            throw new CandidateCloseTimeoutException(candidate, nativeTermination);
-        }
-        long timeoutNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
-        long remainingNanos = timeoutNanos - closeElapsedNanos;
-        try {
-            nativeTermination.get(remainingNanos, TimeUnit.NANOSECONDS);
-        } catch (TimeoutException error) {
-            throw new CandidateCloseTimeoutException(candidate, nativeTermination);
-        } catch (InterruptedException error) {
-            Thread.currentThread().interrupt();
-            throw new IOException("等待旧视频候选关闭时被中断", error);
-        } catch (java.util.concurrent.ExecutionException error) {
-            throw new CandidateCloseTimeoutException(candidate, nativeTermination,
-                    "native termination completed exceptionally", error.getCause());
-        }
-        if (closeFailure != null) {
-            throw new CandidateCloseTimeoutException(candidate, nativeTermination,
-                    "decoder close returned exceptionally", closeFailure);
-        }
-    }
-
-    private synchronized void failCandidateClose(long gen, CandidateCloseTimeoutException error) {
-        // Always retain the native termination signal. A concurrent stop/restart
-        // may invalidate the logical generation while the physical handle is
-        // still alive; dropping this handoff would make the zombie invisible.
-        VideoZombieCloseSupervisor.global().track(sessionId(), gen,
-                CompletableFuture.completedFuture(null), error.nativeTermination, decodeExit);
-        if (gen != generation.get() || !running || stopRequested) {
-            return;
-        }
-        long failedGeneration = generation.incrementAndGet();
-        restartInProgress = false;
-        restartState = VideoDecoderRestartState.FAILED_CLOSE;
-        networkFailure = false;
-        terminalFailure = true;
-        frameQueue.clear();
-        LOGGER.error(
-                "旧视频候选未正常收敛，禁止打开下一视频候选: session={} generation={} quality={} codec={} timeout={}ms",
-                sessionId(), failedGeneration, error.candidate.quality(), error.candidate.codecId(),
-                DECODER_RESTART_CLOSE_TIMEOUT_MILLIS);
-    }
-
-    private static final class CandidateCloseTimeoutException extends IOException {
-        private final VideoCandidate candidate;
-        private final CompletableFuture<Void> nativeTermination;
-
-        private CandidateCloseTimeoutException(VideoCandidate candidate,
-                CompletableFuture<Void> nativeTermination) {
-            this(candidate, nativeTermination, "close timeout", null);
-        }
-
-        private CandidateCloseTimeoutException(VideoCandidate candidate,
-                CompletableFuture<Void> nativeTermination, String reason) {
-            this(candidate, nativeTermination, reason, null);
-        }
-
-        private CandidateCloseTimeoutException(VideoCandidate candidate,
-                CompletableFuture<Void> nativeTermination, String reason, Throwable cause) {
-            super("旧视频候选 native worker 未正常收敛: quality=" + candidate.quality()
-                    + ", codec=" + candidate.codecId() + ", reason=" + reason, cause);
-            this.candidate = candidate;
-            this.nativeTermination = nativeTermination;
-        }
-    }
-
-    private void handleDecodeFailure(long gen, Throwable error) {
-        if (error instanceof OutOfMemoryError) {
-            com.zhongbai233.net_music_can_play_bili.client.ClientMediaLifecycleHandler
-                    .tripMemoryProtection("video decoder allocation failed: " + error.getMessage());
-            LOGGER.error("视频会话内存分配失败并触发熔断: session={}", sessionId(), error);
-        } else {
-            if (gen != generation.get() || (!running && isInterruptedWait(error))) {
-                return;
-            }
-            networkFailure = MediaNetworkFailureClassifier.isNetworkFailure(error);
-            terminalFailure = true;
-            if (networkFailure) {
-                notifyNetworkFailure();
-            }
-            LOGGER.error("视频会话解码失败: session={}", sessionId(), error);
-        }
-    }
-
-    private boolean shouldDropStaleStartupFrame(long ptsNanos) {
-        long maxStartupLagNs = VideoPipelineProperties.startupDropLagMillis() * 1_000_000L;
-        if (maxStartupLagNs <= 0L) {
-            return false;
-        }
-        long playbackNs = playbackNanos();
-        boolean drop = playbackNs - ptsNanos > maxStartupLagNs;
-        return drop && frameQueue.isEmpty();
-    }
-
-    private void waitForDecodeLead(long frameIntervalNs, long gen) throws InterruptedException {
-        long maxLeadNs = Math.max(frameIntervalNs * frameQueue.capacity(),
-                VideoPipelineProperties.maxDecodeLeadMillis() * 1_000_000L);
-        while (running && gen == generation.get() && frameQueue.isFull()
-                && frameQueue.latestPtsNanos() - playbackNanos() > maxLeadNs) {
-            warnIfUploadPumpStalled();
-            java.util.concurrent.TimeUnit.MILLISECONDS.sleep(5L);
-        }
-    }
-
-    private void warnIfUploadPumpStalled() {
-        long thresholdNs = VideoPipelineProperties.uploadPumpWarnMillis() * 1_000_000L;
-        long idleNs = System.nanoTime() - lastUploadPumpNanoTime;
-        if (thresholdNs > 0L && frameQueue.isFull() && idleNs > thresholdNs) {
-            lastUploadPumpNanoTime = System.nanoTime();
-            LOGGER.warn("视频流水线上传泵疑似停滞: session={}, queue={}, latestPts={}ms, clock={}ms, idle={}ms",
-                    sessionId(), frameQueue.size(), frameQueue.latestPtsNanos() / 1_000_000L,
-                    playbackNanos() / 1_000_000L, idleNs / 1_000_000L);
-        }
-    }
-
-    private boolean waitWhilePaused(long gen) {
-        if (!isGamePaused()) {
-            return running && gen == generation.get();
-        }
-        long pauseStartNs = System.nanoTime();
-        performanceMonitor.pause(pauseStartNs);
-        while (running && gen == generation.get() && isGamePaused()) {
-            try {
-                java.util.concurrent.TimeUnit.MILLISECONDS.sleep(25L);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-        }
-        startNanoTime += Math.max(0L, System.nanoTime() - pauseStartNs);
-        performanceMonitor.resume(System.nanoTime());
-        return running && gen == generation.get();
-    }
-
-    private boolean waitWhileOffscreen(long gen, boolean candidateCommitted) {
-        if (!VideoRestartSuppressionPolicy.shouldPauseDecodeOffscreen(
-                candidateCommitted, liveSource, OFFSCREEN_PAUSE_DECODE)
-                || !isOffscreenPauseActive()) {
-            return running && gen == generation.get();
-        }
-        long pauseStartNs = System.nanoTime();
-        performanceMonitor.pause(pauseStartNs);
-        if (!loggedOffscreenPause) {
-            loggedOffscreenPause = true;
-            LOGGER.debug("视频会话离屏暂停取帧: session={}, queue={}, media={}ms, master={}ms",
-                    sessionId(), frameQueue.size(), mediaMillis(), anchor.timeline().mediaMillis());
-        }
-        while (running && gen == generation.get() && isOffscreenPauseActive()) {
-            try {
-                java.util.concurrent.TimeUnit.MILLISECONDS.sleep(25L);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-        }
-        long pausedNs = System.nanoTime() - pauseStartNs;
-        performanceMonitor.resume(System.nanoTime());
-        if (pausedNs > 0L) {
-            LOGGER.debug("视频会话离屏恢复取帧: session={}, paused={}ms, media={}ms, master={}ms",
-                    sessionId(), pausedNs / 1_000_000L, mediaMillis(), anchor.timeline().mediaMillis());
-        }
-        return running && gen == generation.get();
-    }
-
-    private boolean isOffscreenPauseActive() {
-        if (prewarmVisible) {
-            return false;
-        }
-        long lastVisible = lastVisibleNanoTime;
-        return lastVisible > 0L && System.nanoTime() - lastVisible > Math.max(0L, OFFSCREEN_GRACE_NANOS);
-    }
-
-    private static boolean isGamePaused() {
-        Minecraft minecraft = Minecraft.getInstance();
-        return minecraft != null && minecraft.isPaused();
-    }
-
-    private static boolean isInterruptedWait(Throwable error) {
-        for (Throwable current = error; current != null; current = current.getCause()) {
-            if (current instanceof InterruptedException) {
-                return true;
-            }
-            if (current instanceof IOException && current.getMessage() != null
-                    && current.getMessage().contains("等待 native 视频帧时被中断")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private long playbackNanos() {
+    long playbackNanos() {
         long synced = syncedPlaybackNanos();
         if (synced >= 0L) {
             return synced;
@@ -719,7 +205,7 @@ final class VideoPlaybackInstance {
         return synced;
     }
 
-    private long effectiveDecoderStartOffsetMillis() {
+    long effectiveDecoderStartOffsetMillis() {
         if (liveSource) {
             // 直播样本 pts 与播放时钟同域（音频输出时间），重基准会把帧推到"未来"。
             return 0L;
@@ -734,7 +220,7 @@ final class VideoPlaybackInstance {
     void pumpUploadOnRenderThread() {
         lastUploadPumpNanoTime = System.nanoTime();
         if (VideoRestartSuppressionPolicy.shouldPauseOffscreen(liveSource, OFFSCREEN_PAUSE_DECODE)
-                && isOffscreenPauseActive()) {
+                && candidateDecodeRunner.isOffscreenPauseActive()) {
             return;
         }
         if (!running && frameQueue.isEmpty()) {
@@ -842,7 +328,8 @@ final class VideoPlaybackInstance {
     }
 
     private void maybeRestartForRuntimeLag() {
-        if (!restartAllowed() || !hasFrame || !hasVideoConsumer() || RUNTIME_LAG_RESTART_MILLIS <= 0L) {
+        if (!presentation.restartAllowed() || !hasFrame || !hasVideoConsumer()
+                || RUNTIME_LAG_RESTART_MILLIS <= 0L) {
             runtimeLagSinceNanoTime = 0L;
             return;
         }
@@ -932,7 +419,7 @@ final class VideoPlaybackInstance {
         restartDecoder(nextWidth, nextHeight, restartOffsetMillis, false);
     }
 
-    private void restartDecoder(int nextWidth, int nextHeight, long restartOffsetMillis, boolean keepVisibleFrame) {
+    void restartDecoder(int nextWidth, int nextHeight, long restartOffsetMillis, boolean keepVisibleFrame) {
         if (restartInProgress) {
             LOGGER.debug("视频解码器重启正在等待旧 worker 退出，忽略重复请求: session={}", sessionId());
             return;
@@ -944,7 +431,7 @@ final class VideoPlaybackInstance {
                 && nextWidth == targetWidth
                 && nextHeight == targetHeight
                 && hasFrame
-                && (frontTexture != null || yuvTextureSet != null);
+                && (textures.hasRgbaTexture() || textures.hasYuvTexture());
         AutoCloseable oldDecoder = decoder;
         decoder = null;
         CompletableFuture<Void> oldDecodeExit = decodeExit;
@@ -964,7 +451,7 @@ final class VideoPlaybackInstance {
 
         frameQueue.clear();
         if (!preserveVisibleFrame) {
-            releaseTexture();
+            textures.release();
         }
         targetWidth = nextWidth;
         targetHeight = nextHeight;
@@ -1018,7 +505,7 @@ final class VideoPlaybackInstance {
         restartInProgress = false;
         restartState = VideoDecoderRestartState.ACTIVE;
         decoderGenerationStartedNanoTime = System.nanoTime();
-        startDecodeThread(gen, preserveVisibleFrame
+        candidateDecodeRunner.start(gen, preserveVisibleFrame
                 ? "bili-video-" + sessionId() + "-resume"
                 : "bili-video-" + sessionId() + "-adaptive");
     }
@@ -1060,443 +547,54 @@ final class VideoPlaybackInstance {
         return wait;
     }
 
-    private boolean uploadOnRenderThread(byte[] rgba) {
-        Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.level == null || rgba.length < targetWidth * targetHeight * 4) {
-            return false;
-        }
-        ensureTexture();
-        NativeImage image = backTexture.getPixels();
-        if (image == null || image.isClosed()) {
-            return false;
-        }
-        VideoFrameUploader.uploadRgba(image, rgba, targetWidth, targetHeight);
-        backTexture.upload();
-        swapTextures();
-        releaseYuvTextures();
-        hasFrame = true;
-        return true;
-    }
-
     private boolean uploadDecodedFrameOnRenderThread(VideoBillboardPreview.DecodedFrame frame) {
-        if (VideoBillboardPreview.isCustomYuvShaderAvailable()
-                && isYuvFrameFormat(frame.format())) {
-            return uploadYuvOnRenderThread(frame);
-        }
-        return uploadOnRenderThread(Yuv420pConverter.toUploadRgba(frame, targetWidth, targetHeight));
-    }
-
-    private boolean uploadYuvOnRenderThread(VideoBillboardPreview.DecodedFrame frame) {
-        Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.level == null) {
-            return false;
-        }
-        ensureYuvTextureSet(frame.format());
-        if (!uploadYuvFrameData(frame)) {
-            return false;
-        }
-        releaseRgbaTextures();
-        hasFrame = true;
-        return true;
-    }
-
-    private boolean uploadYuvFrameData(VideoBillboardPreview.DecodedFrame frame) {
-        if (yuvTextureSet == null || frame == null || yuvTextureSet.format() != frame.format()) {
-            return false;
-        }
-        java.nio.ByteBuffer buffer = frame.buffer();
-        if (buffer != null) {
-            return yuvTextureSet.upload(buffer, frame.byteLength(), targetWidth, targetHeight);
-        }
-        return yuvTextureSet.upload(frame.data(), targetWidth, targetHeight);
-    }
-
-    private void ensureYuvTextureSet(
-            com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format format) {
-        com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format normalized = format == com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P
-                ? com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P
-                : com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.NV12;
-        if (yuvTextureSet != null && yuvTextureSet.format() == normalized) {
-            return;
-        }
-        if (yuvTextureSet != null) {
-            yuvTextureSet.close();
-        }
-        if (normalized == com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P) {
-            yuvTextureSet = new Yuv420pTextureSet(yTextureId, uTextureId, vTextureId,
-                    "bili_video_" + sessionId() + "_yuv420p");
-        } else {
-            yuvTextureSet = new Nv12TextureSet(yTextureId, uTextureId, yTextureId,
-                    "bili_video_" + sessionId() + "_nv12");
-        }
-    }
-
-    private static boolean isYuvFrameFormat(
-            com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format format) {
-        return format == com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.YUV420P
-                || format == com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.NV12;
-    }
-
-    private void releaseRgbaTextures() {
-        if (frontTexture != null) {
-            Minecraft.getInstance().getTextureManager().release(frontTextureId);
-            frontTexture.close();
-            frontTexture = null;
-        }
-        if (backTexture != null && !backTextureId.equals(frontTextureId)) {
-            Minecraft.getInstance().getTextureManager().release(backTextureId);
-            backTexture.close();
-            backTexture = null;
-        } else if (backTexture != null) {
-            backTexture.close();
-            backTexture = null;
-        }
-        frontTextureId = firstTextureId;
-        backTextureId = secondTextureId;
-    }
-
-    private void releaseYuvTextures() {
-        if (yuvTextureSet != null) {
-            yuvTextureSet.close();
-            yuvTextureSet = null;
-        }
-    }
-
-    private void ensureTexture() {
-        if (frontTexture != null && backTexture != null) {
-            NativeImage image = frontTexture.getPixels();
-            NativeImage backImage = backTexture.getPixels();
-            if (image != null && !image.isClosed() && image.getWidth() == targetWidth
-                    && image.getHeight() == targetHeight
-                    && backImage != null && !backImage.isClosed() && backImage.getWidth() == targetWidth
-                    && backImage.getHeight() == targetHeight) {
-                return;
-            }
-        }
-        releaseTexture();
-        frontTexture = new DynamicTexture("bili_video_" + sessionId() + "_front", targetWidth, targetHeight, false);
-        backTexture = new DynamicTexture("bili_video_" + sessionId() + "_back", targetWidth, targetHeight, false);
-        frontTextureId = firstTextureId;
-        backTextureId = secondTextureId;
-        Minecraft.getInstance().getTextureManager().register(frontTextureId, frontTexture);
-        Minecraft.getInstance().getTextureManager().register(backTextureId, backTexture);
-    }
-
-    private void swapTextures() {
-        DynamicTexture oldFront = frontTexture;
-        frontTexture = backTexture;
-        backTexture = oldFront;
-        Identifier oldFrontId = frontTextureId;
-        frontTextureId = backTextureId;
-        backTextureId = oldFrontId;
+        boolean uploaded = textures.uploadDecodedFrame(frame, targetWidth, targetHeight);
+        hasFrame |= uploaded;
+        return uploaded;
     }
 
     VideoBillboardPreview.ProjectorFrameSnapshot frameSnapshot(BlockPos projectorPos) {
-        if (projectorPos != null && !consumers.containsProjector(projectorPos)) {
-            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
-        }
-        if (terminalFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
-            return placeholderSnapshot(PlaceholderKind.NETWORK_ERROR);
-        }
-        if (!hasFrame) {
-            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
-        }
-        return currentFrameSnapshot();
+        return presentation.frameSnapshot(projectorPos);
     }
 
     VideoBillboardPreview.ProjectorFrameSnapshot displayFrameSnapshot(BlockPos projectorPos) {
-        if (projectorPos != null && !consumers.containsProjector(projectorPos)) {
-            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
-        }
-        boolean loadingPlaceholderEnabled = VideoPipelineProperties.loadingPlaceholderEnabled();
-        // Iris shaderpack 会捕获 BER 提交的多平面 YUV 几何；直接把这类帧交给
-        // VideoProjectorRenderer 会造成不可见颜色写入或随视角变化的深度闪烁。
-        // 与旧的全局提交路径保持一致：该兼容模式下用明确的警告占位图替代 YUV
-        // 面片，而不是先因 hasFrame 返回实际视频，导致下方警告分支永远不可达。
-        if (terminalFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
-            return placeholderSnapshot(PlaceholderKind.NETWORK_ERROR);
-        }
-        boolean irisWarning = shouldShowIrisTranslucencyWarning();
-        if (irisWarning && loadingPlaceholderEnabled) {
-            return placeholderSnapshot(PlaceholderKind.IRIS_WARNING);
-        }
-        if (hasFrame) {
-            return irisWarning ? VideoBillboardPreview.ProjectorFrameSnapshot.empty() : currentFrameSnapshot();
-        }
-        if (!loadingPlaceholderEnabled) {
-            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
-        }
-        return placeholderSnapshot(PlaceholderKind.LOADING);
+        return presentation.displayFrameSnapshot(projectorPos);
     }
 
     VideoBillboardPreview.ProjectorFrameSnapshot realFrameSnapshot(BlockPos projectorPos) {
-        if (projectorPos != null && !consumers.containsProjector(projectorPos)) {
-            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
-        }
-        return hasFrame ? currentFrameSnapshot() : VideoBillboardPreview.ProjectorFrameSnapshot.empty();
+        return presentation.realFrameSnapshot(projectorPos);
     }
 
     VideoBillboardPreview.ProjectorFrameSnapshot failurePlaceholderSnapshot() {
-        return placeholderSnapshot(PlaceholderKind.NETWORK_ERROR);
-    }
-
-    private VideoBillboardPreview.ProjectorFrameSnapshot placeholderSnapshot(PlaceholderKind kind) {
-        if (kind == PlaceholderKind.LOADING) {
-            return loadingPlaceholderSnapshot(startNanoTime);
-        }
-        boolean irisWarning = kind == PlaceholderKind.IRIS_WARNING;
-        return new VideoBillboardPreview.ProjectorFrameSnapshot(true, false, placeholderTexture(kind),
-                null,
-                null, null,
-                com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
-                LOADING_PLACEHOLDER_WIDTH, LOADING_PLACEHOLDER_HEIGHT,
-                // Iris guard 会主动跳过有已知 sampler 问题的 item_cutout draw。警告图是
-                // 完整不透明画面，应走 ENTITY_SOLID RGBA 兼容路径；普通加载图仍保留
-                // emissive/cutout 及进度层。警告图作为 immediate 视频的 RGBA 回退底片，
-                // 正常写入世界深度，但沿 BER 局部屏幕法线稍微后退，避免与视频共面。
-                !irisWarning, kind == PlaceholderKind.LOADING,
-                irisWarning ? IRIS_WARNING_PLACEHOLDER_LOCAL_DEPTH_OFFSET : 0.0F);
+        return presentation.failurePlaceholderSnapshot();
     }
 
     static VideoBillboardPreview.ProjectorFrameSnapshot loadingPlaceholderSnapshot(long startedNanoTime) {
-        long elapsedNs = Math.max(0L, System.nanoTime() - startedNanoTime);
-        int phase = (int) ((elapsedNs / 300_000_000L) % LOADING_PLACEHOLDER_TEXTURES.length);
-        return new VideoBillboardPreview.ProjectorFrameSnapshot(true, false, LOADING_PLACEHOLDER_TEXTURES[phase],
-                null, null, null,
-                com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
-                LOADING_PLACEHOLDER_WIDTH, LOADING_PLACEHOLDER_HEIGHT, true, true, 0.0F);
+        return VideoPlaceholderFrames.loading(startedNanoTime);
     }
 
     static VideoBillboardPreview.ProjectorFrameSnapshot idlePlaceholderSnapshot() {
-        return new VideoBillboardPreview.ProjectorFrameSnapshot(true, false, IDLE_PLACEHOLDER_TEXTURE,
-                null, null, null,
-                com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
-                LOADING_PLACEHOLDER_WIDTH, LOADING_PLACEHOLDER_HEIGHT, true, false, 0.0F);
+        return VideoPlaceholderFrames.idle();
     }
 
     VideoBillboardPreview.ProjectorFrameSnapshot turntableFrameSnapshot(BlockPos turntablePos) {
-        if (turntablePos == null || !anchor.isForTurntable(turntablePos)) {
-            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
-        }
-        if (terminalFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
-            return placeholderSnapshot(PlaceholderKind.NETWORK_ERROR);
-        }
-        if (!hasFrame) {
-            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
-        }
-        return currentFrameSnapshot();
-    }
-
-    private VideoBillboardPreview.ProjectorFrameSnapshot currentFrameSnapshot() {
-        if (frontTexture != null) {
-            return new VideoBillboardPreview.ProjectorFrameSnapshot(true, false, frontTextureId, null, null, null,
-                    com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
-                    targetWidth, targetHeight, false, false, 0.0F);
-        }
-        if (yuvTextureSet != null) {
-            return new VideoBillboardPreview.ProjectorFrameSnapshot(true, true, null, yuvTextureSet.yId(),
-                    yuvTextureSet.uId(), yuvTextureSet.vId(), yuvTextureSet.format(), yuvTextureSet.width(),
-                    yuvTextureSet.height(), false, false, 0.0F);
-        }
-        return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
+        return presentation.turntableFrameSnapshot(turntablePos);
     }
 
     VideoBillboardPreview.ProjectorFrameSnapshot previewFrameSnapshot() {
-        if (terminalFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
-            return placeholderSnapshot(PlaceholderKind.NETWORK_ERROR);
-        }
-        if (!hasFrame) {
-            return VideoBillboardPreview.ProjectorFrameSnapshot.empty();
-        }
-        return currentFrameSnapshot();
+        return presentation.previewFrameSnapshot();
     }
 
     void submit(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera) {
-        boolean renderable = false;
-        boolean prewarm = false;
-        List<BlockPos> projectorPositions = consumers.projectors();
-        for (BlockPos pos : projectorPositions) {
-            boolean berManagedProjector = VideoBillboardPreview.isProjectorRenderedByBer(pos);
-            boolean submittedByBer = VideoBillboardPreview.wasProjectorRecentlySubmittedByBer(sessionId(), pos);
-            if (VideoBerConsumerVisibilityPolicy.usesBerSubmission(berManagedProjector, submittedByBer)) {
-                // BER 管理归属是持久状态，不能等同于本帧通过视锥。否则投影仪
-                // 第一次出现后会永久保持 prewarm，离屏上传和解码永远不会暂停。
-                // 中控台不是 VideoProjectorBlockEntity，也不会加入持久 projector 集合；
-                // 它同 session、同位置的近期 BER submission 本身就是有效可见性证据。
-                renderable |= submittedByBer;
-                prewarm |= submittedByBer;
-                continue;
-            }
-            if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
-                // 矿车内的模拟方块实体不属于 Minecraft.level。不能因真实世界查询不到它，
-                // 就在某一渲染帧永久删除 consumer；卸载和解绑由 stopIfProjector 明确处理。
-                continue;
-            }
-            boolean projectorRenderable = VideoBillboardPreview.isProjectorScreenRenderable(minecraft, camera,
-                    projector, VideoBillboardPreview.viewDotThreshold());
-            boolean projectorPrewarm = projectorRenderable || VideoBillboardPreview.isProjectorScreenRenderable(
-                    minecraft, camera, projector, OFFSCREEN_PREWARM_DOT_THRESHOLD);
-            renderable |= projectorRenderable;
-            prewarm |= projectorPrewarm;
-        }
-        boolean holographicVisible = hasHolographicTurntableConsumer();
-        markVisibility(renderable || holographicVisible, prewarm || holographicVisible);
-        pumpUploadOnRenderThread();
-        for (BlockPos pos : projectorPositions) {
-            if (VideoBillboardPreview.isProjectorRenderedByBer(pos)) {
-                continue;
-            }
-            if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
-                continue;
-            }
-            if (HolographicGlassesClient.shouldHideProjectorVideos()) {
-                VideoBillboardPreview.submitProjectorPrivacyOverlay(event, minecraft, camera, projector);
-            } else if (networkFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED) {
-                VideoBillboardPreview.submitProjectorEmissiveGeometry(event, minecraft, camera, projector,
-                        placeholderTexture(PlaceholderKind.NETWORK_ERROR), LOADING_PLACEHOLDER_WIDTH,
-                        LOADING_PLACEHOLDER_HEIGHT);
-            } else if (hasFrame && frontTexture != null) {
-                VideoBillboardPreview.submitProjectorGeometry(event, minecraft, camera, projector, frontTextureId,
-                        targetWidth, targetHeight);
-            } else if (hasFrame && yuvTextureSet != null && VideoBillboardPreview.isCustomYuvShaderAvailable()
-                    && !VideoBillboardPreview.shouldDrawYuvImmediateWithIris()) {
-                VideoBillboardPreview.submitProjectorYuvGeometry(event, minecraft, camera, projector, yuvTextureSet);
-            } else if (VideoPipelineProperties.loadingPlaceholderEnabled()) {
-                PlaceholderKind kind = shouldShowIrisTranslucencyWarning()
-                        ? PlaceholderKind.IRIS_WARNING
-                        : PlaceholderKind.LOADING;
-                boolean irisWarning = kind == PlaceholderKind.IRIS_WARNING;
-                if (irisWarning && IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET > 0.0D) {
-                    VideoBillboardPreview.submitProjectorViewDepthOffsetGeometry(event, minecraft, camera, projector,
-                            placeholderTexture(kind), LOADING_PLACEHOLDER_WIDTH,
-                            LOADING_PLACEHOLDER_HEIGHT,
-                            IRIS_WARNING_PLACEHOLDER_VIEW_DEPTH_OFFSET);
-                } else {
-                    VideoBillboardPreview.submitProjectorEmissiveGeometry(event, minecraft, camera, projector,
-                            placeholderTexture(kind), LOADING_PLACEHOLDER_WIDTH,
-                            LOADING_PLACEHOLDER_HEIGHT);
-                }
-            }
-        }
-    }
-
-    private void markVisibility(boolean renderable, boolean prewarm) {
-        long nowNs = System.nanoTime();
-        prewarmVisible = prewarm;
-        if (renderable || prewarm) {
-            long offscreenSince = offscreenSinceNanoTime;
-            lastVisibleNanoTime = nowNs;
-            offscreenSinceNanoTime = 0L;
-            if (offscreenSince > 0L) {
-                maybeRestartForVisibleResume(nowNs - offscreenSince);
-            }
-            loggedOffscreenPause = false;
-            return;
-        }
-        if (offscreenSinceNanoTime == 0L) {
-            offscreenSinceNanoTime = nowNs;
-        }
-    }
-
-    private void maybeRestartForVisibleResume(long offscreenDurationNs) {
-        if (!running || !restartAllowed() || OFFSCREEN_RESUME_RESTART_LAG_NANOS <= 0L) {
-            return;
-        }
-        long masterMillis = anchor.timeline().mediaMillis();
-        if (masterMillis < 0L) {
-            return;
-        }
-        long queuedMillis = queuedMediaMillis();
-        long displayedMillis = mediaMillis();
-        long bestVideoMillis = Math.max(queuedMillis, displayedMillis);
-        long lagNs = bestVideoMillis >= 0L ? (masterMillis - bestVideoMillis) * 1_000_000L : offscreenDurationNs;
-        if (lagNs < OFFSCREEN_RESUME_RESTART_LAG_NANOS) {
-            return;
-        }
-        long restartOffsetMillis = totalMillis > 0L ? Math.min(totalMillis, masterMillis) : masterMillis;
-        LOGGER.debug("视频会话离屏恢复重定位: session={}, offscreen={}ms, master={}ms, video={}ms, offset={}ms",
-                sessionId(), offscreenDurationNs / 1_000_000L, masterMillis, bestVideoMillis, restartOffsetMillis);
-        restartDecoder(targetWidth, targetHeight, restartOffsetMillis, true);
-    }
-
-    private boolean restartAllowed() {
-        long generationStart = decoderGenerationStartedNanoTime;
-        long sinceStartMillis = generationStart > 0L
-            ? Math.max(0L, (System.nanoTime() - generationStart) / 1_000_000L) : 0L;
-        return VideoRestartSuppressionPolicy.allowsRestart(liveSource, restartInProgress,
-                sinceStartMillis, DECODER_STABILIZATION_MILLIS);
+        presentation.submit(event, minecraft, camera);
     }
 
     void renderYuvImmediate(RenderLevelStageEvent event, String route) {
-        if ((networkFailure && NETWORK_ERROR_PLACEHOLDER_ENABLED)
-                || !hasFrame || yuvTextureSet == null || !VideoBillboardPreview.isCustomYuvShaderAvailable()
-                || !VideoBillboardPreview.shouldDrawYuvImmediateWithIris()) {
-            return;
-        }
-        pumpUploadOnRenderThread();
-        Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.level == null || minecraft.player == null) {
-            return;
-        }
-        Camera camera = minecraft.gameRenderer.getMainCamera();
-        boolean drew = false;
-        boolean prewarm = false;
-        for (BlockPos pos : consumers.projectors()) {
-            if (VideoBillboardPreview.drawCapturedProjectorYuvImmediate(event, sessionId(), pos, yuvTextureSet,
-                    route)) {
-                drew = true;
-                prewarm = true;
-                continue;
-            }
-            if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
-                continue;
-            }
-            prewarm |= VideoBillboardPreview.isProjectorScreenRenderable(minecraft, camera, projector,
-                    OFFSCREEN_PREWARM_DOT_THRESHOLD);
-            if (HolographicGlassesClient.shouldHideProjectorVideos()) {
-                VideoBillboardPreview.drawProjectorPrivacyOverlayImmediate(event, minecraft, camera, projector, route);
-                drew = true;
-            } else {
-                drew |= VideoBillboardPreview.drawProjectorYuvImmediate(event, minecraft, camera, projector,
-                        yuvTextureSet, route);
-            }
-        }
-        markVisibility(drew, prewarm);
-        if (drew && !firstYuvImmediateLogged) {
-            firstYuvImmediateLogged = true;
-            LOGGER.debug("Iris/YUV: session={} 的投影仪 YUV 使用实例纹理 immediate 绘制，route={}, texture={}x{}",
-                    sessionId(), route, yuvTextureSet.width(), yuvTextureSet.height());
-        }
-    }
-
-    private Identifier placeholderTexture(PlaceholderKind kind) {
-        if (kind == PlaceholderKind.NETWORK_ERROR) {
-            return NETWORK_ERROR_PLACEHOLDER_TEXTURE;
-        }
-        if (kind == PlaceholderKind.IRIS_WARNING) {
-            return IRIS_WARNING_PLACEHOLDER_TEXTURE;
-        }
-        long elapsedNs = Math.max(0L, System.nanoTime() - startNanoTime);
-        int phase = (int) ((elapsedNs / 300_000_000L) % LOADING_PLACEHOLDER_TEXTURES.length);
-        return LOADING_PLACEHOLDER_TEXTURES[phase];
-    }
-
-    private enum PlaceholderKind {
-        LOADING,
-        IRIS_WARNING,
-        NETWORK_ERROR
-    }
-
-    private boolean shouldShowIrisTranslucencyWarning() {
-        return hasFrame && yuvTextureSet != null && IrisShaderpackCompat.shouldApplyIrisYuvCompatibility();
+        presentation.renderYuvImmediate(event, route);
     }
 
     boolean isWithinAudioRange(Minecraft minecraft) {
-        if (minecraft.player == null || !hasVideoConsumer()) {
-            return false;
-        }
-        return anchor.isWithinAudioRange(minecraft, consumers.projectors(),
-                VideoBillboardPreview.AUDIO_SYNC_RANGE_SQR);
+        return presentation.isWithinAudioRange(minecraft);
     }
 
     boolean isRunningAtOffset(long requestedOffsetMillis) {
@@ -1646,7 +744,7 @@ final class VideoPlaybackInstance {
         return consumers.hasGuiConsumer();
     }
 
-    private boolean hasHolographicTurntableConsumer() {
+    boolean hasHolographicTurntableConsumer() {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft == null || minecraft.level == null) {
             return false;
@@ -1747,7 +845,7 @@ final class VideoPlaybackInstance {
         return true;
     }
 
-    private void notifyNetworkFailure() {
+    void notifyNetworkFailure() {
         if (networkFailureNotified) {
             return;
         }
@@ -1807,208 +905,11 @@ final class VideoPlaybackInstance {
     }
 
     synchronized void stop() {
-        if (stopRequested) {
-            return;
-        }
-        stopRequested = true;
-        restartState = VideoDecoderRestartState.STOPPED;
-        restartInProgress = false;
-        long now = System.nanoTime();
-        AutoCloseable dec = decoder;
-        CompletableFuture<Void> threadExit = decodeExit;
-        CompletableFuture<Void> nativeTermination = dec instanceof com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder nativeDecoder
-                ? nativeDecoder.terminationFuture() : CompletableFuture.completedFuture(null);
-        CompletableFuture<Void> closeReturned = dec != null
-                ? MediaCloseExecutor.closeAsyncStrict(dec, "video decoder " + sessionId())
-                : CompletableFuture.completedFuture(null);
-        CompletableFuture<Void> renderRelease = new CompletableFuture<>();
-        physicalCloseHandoff.attachClose(closeReturned, nativeTermination, threadExit);
-        physicalCloseHandoff.seal(renderRelease);
-        EnumSet<VideoCloseDiagnostics.Phase> required = EnumSet.of(
-                VideoCloseDiagnostics.Phase.FRAME_QUEUE_CLEARED,
-                VideoCloseDiagnostics.Phase.RENDER_RELEASE_RETURNED);
-        if (dec != null) {
-            required.add(VideoCloseDiagnostics.Phase.DECODER_CLOSE_RETURNED);
-        }
-        if (threadExit != null && !threadExit.isDone()) {
-            required.add(VideoCloseDiagnostics.Phase.DECODE_THREAD_EXITED);
-        }
-        if (nativeTermination != null && !nativeTermination.isDone()) {
-            required.add(VideoCloseDiagnostics.Phase.NATIVE_TERMINATED);
-        }
-        long closeOperation = VideoCloseDiagnostics.global().begin(playbackSessionId, required, now);
-        running = false;
-        generation.incrementAndGet();
-        frameQueue.clear();
-        VideoCloseDiagnostics.global().complete(closeOperation,
-                VideoCloseDiagnostics.Phase.FRAME_QUEUE_CLEARED, System.nanoTime());
-        decoder = null;
-        VideoCloseDiagnostics diagnostics = VideoCloseDiagnostics.global();
-        if (required.contains(VideoCloseDiagnostics.Phase.DECODER_CLOSE_RETURNED)) {
-            diagnostics.observe(closeOperation, VideoCloseDiagnostics.Phase.DECODER_CLOSE_RETURNED, closeReturned);
-        }
-        if (required.contains(VideoCloseDiagnostics.Phase.DECODE_THREAD_EXITED)) {
-            // Do not re-check isDone here. The decode thread may complete between the required-phase snapshot and
-            // observer registration; whenComplete deliberately closes that race by firing immediately.
-            diagnostics.observe(closeOperation, VideoCloseDiagnostics.Phase.DECODE_THREAD_EXITED, threadExit);
-        }
-        if (required.contains(VideoCloseDiagnostics.Phase.NATIVE_TERMINATED)) {
-            diagnostics.observe(closeOperation, VideoCloseDiagnostics.Phase.NATIVE_TERMINATED, nativeTermination);
-        }
-        Thread thread = decodeThread;
-        if (thread != null) {
-            thread.interrupt();
-        }
-        if (threadExit != null && !threadExit.isDone()) {
-            scheduleDecodeExitDiagnostic(thread, threadExit);
-        }
-        Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.isSameThread()) {
-            releaseTextureAndReport(closeOperation, renderRelease);
-        } else {
-            minecraft.execute(() -> releaseTextureAndReport(closeOperation, renderRelease));
-        }
-    }
-
-    private void scheduleDecodeExitDiagnostic(Thread thread, CompletableFuture<Void> threadExit) {
-        CompletableFuture.delayedExecutor(Math.max(1L, DECODER_RESTART_CLOSE_TIMEOUT_MILLIS),
-                TimeUnit.MILLISECONDS).execute(() -> {
-                    if (threadExit.isDone()) {
-                        return;
-                    }
-                    if (thread == null) {
-                        LOGGER.error("视频 decode exit 在 stop 后仍 pending，但实例没有 decode thread: session={}",
-                                sessionId());
-                        return;
-                    }
-                    StackTraceElement[] trace = thread.getStackTrace();
-                    StringBuilder location = new StringBuilder();
-                    int limit = Math.min(12, trace.length);
-                    for (int index = 0; index < limit; index++) {
-                        if (index > 0) {
-                            location.append(" <- ");
-                        }
-                        location.append(trace[index]);
-                    }
-                    LOGGER.error(
-                            "视频 decode exit 在 stop 后仍 pending: session={} thread={} alive={} state={} stack={}",
-                            sessionId(), thread.getName(), thread.isAlive(), thread.getState(), location);
-                });
+        closer.stop();
     }
 
     synchronized void abandonBeforeStart() {
-        if (running || stopRequested) {
-            stop();
-            return;
-        }
-        stopRequested = true;
-        restartState = VideoDecoderRestartState.STOPPED;
-        CompletableFuture<Void> renderRelease = new CompletableFuture<>();
-        physicalCloseHandoff.seal(renderRelease);
-        renderRelease.complete(null);
+        closer.abandonBeforeStart();
     }
 
-    private void releaseTextureAndReport(long closeOperation, CompletableFuture<Void> renderRelease) {
-        try {
-            releaseTexture();
-            renderRelease.complete(null);
-        } catch (RuntimeException | Error error) {
-            renderRelease.completeExceptionally(error);
-            throw error;
-        } finally {
-            VideoCloseDiagnostics.global().complete(closeOperation,
-                    VideoCloseDiagnostics.Phase.RENDER_RELEASE_RETURNED, System.nanoTime());
-        }
-    }
-
-    private void releaseTexture() {
-        releaseRgbaTextures();
-        releaseYuvTextures();
-    }
-
-    private record DecodedVideoFrame(long frameIndex, long ptsNanos, VideoBillboardPreview.DecodedFrame frame) {
-        void close() {
-            frame.close();
-        }
-    }
-
-    private static final class VideoFrameQueue {
-        private final int capacity;
-        private final ArrayDeque<DecodedVideoFrame> frames = new ArrayDeque<>();
-
-        VideoFrameQueue(int capacity) {
-            this.capacity = Math.max(1, capacity);
-        }
-
-        synchronized boolean offer(DecodedVideoFrame frame, java.util.function.BooleanSupplier shouldContinue)
-                throws InterruptedException {
-            while (frames.size() >= capacity && shouldContinue.getAsBoolean()) {
-                wait(5L);
-            }
-            if (!shouldContinue.getAsBoolean()) {
-                return false;
-            }
-            frames.addLast(frame);
-            notifyAll();
-            return true;
-        }
-
-        synchronized DecodedVideoFrame pollBestFrame(long playbackNanos, long earlyToleranceNanos) {
-            DecodedVideoFrame best = null;
-            long visibleUntil = playbackNanos + Math.max(0L, earlyToleranceNanos);
-            while (!frames.isEmpty()) {
-                DecodedVideoFrame next = frames.peekFirst();
-                if (next.ptsNanos() > visibleUntil) {
-                    break;
-                }
-                DecodedVideoFrame polled = frames.pollFirst();
-                if (best != null) {
-                    best.close();
-                    droppedFrames++;
-                }
-                best = polled;
-            }
-            if (best != null) {
-                notifyAll();
-            }
-            return best;
-        }
-
-        synchronized void clear() {
-            for (DecodedVideoFrame frame : frames) {
-                frame.close();
-            }
-            frames.clear();
-            notifyAll();
-        }
-
-        private long droppedFrames;
-
-        synchronized long drainDroppedFrames() {
-            long value = droppedFrames;
-            droppedFrames = 0L;
-            return value;
-        }
-
-        synchronized boolean isFull() {
-            return frames.size() >= capacity;
-        }
-
-        synchronized boolean isEmpty() {
-            return frames.isEmpty();
-        }
-
-        synchronized int size() {
-            return frames.size();
-        }
-
-        int capacity() {
-            return capacity;
-        }
-
-        synchronized long latestPtsNanos() {
-            DecodedVideoFrame latest = frames.peekLast();
-            return latest != null ? latest.ptsNanos() : -1L;
-        }
-    }
 }

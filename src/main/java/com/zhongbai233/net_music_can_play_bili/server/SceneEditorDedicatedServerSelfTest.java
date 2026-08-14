@@ -32,7 +32,7 @@ public final class SceneEditorDedicatedServerSelfTest {
             }
             if (!"com.github.zhongbai2333.SceneEditor".equals(SceneEditorMinecraftLibrary.GROUP)
                     || !"scene-editor-minecraft".equals(SceneEditorMinecraftLibrary.ARTIFACT)
-                    || SceneEditorMinecraftLibrary.API_MAJOR != 1) {
+                    || sceneEditorApiMajor() != 1) {
                 throw new IllegalStateException("Scene Editor Minecraft library identity mismatch");
             }
             UUID id = UUID.fromString("00000000-0000-0000-0000-000000000008");
@@ -51,6 +51,10 @@ public final class SceneEditorDedicatedServerSelfTest {
         } finally {
             event.getServer().halt(false);
         }
+    }
+
+    private static int sceneEditorApiMajor() {
+        return SceneEditorMinecraftLibrary.API_MAJOR;
     }
 
     private record ServerElement(UUID id, String typeId, EditorTransform transform) implements SceneElement {

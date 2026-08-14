@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.client;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoPipelineProperties;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 import net.neoforged.api.distmarker.Dist;
@@ -68,8 +69,8 @@ public final class VideoRenderStressBench {
         if (!started.compareAndSet(false, true)) {
             return;
         }
-        Thread thread = new Thread(() -> runBench(false), "bili-video-render-stress-bench");
-        thread.setDaemon(true);
+        Thread thread = NetMusicThreadFactory.daemonThread("bili-video-render-stress-bench",
+                () -> runBench(false));
         thread.start();
     }
 
@@ -77,9 +78,8 @@ public final class VideoRenderStressBench {
         if (!started.compareAndSet(false, true)) {
             return false;
         }
-        Thread thread = new Thread(() -> runBench(ignoreSlowFrames, VideoRenderStressBench::chat),
-                "bili-video-render-stress-bench-command");
-        thread.setDaemon(true);
+        Thread thread = NetMusicThreadFactory.daemonThread("bili-video-render-stress-bench-command",
+                () -> runBench(ignoreSlowFrames, VideoRenderStressBench::chat));
         thread.start();
         return true;
     }

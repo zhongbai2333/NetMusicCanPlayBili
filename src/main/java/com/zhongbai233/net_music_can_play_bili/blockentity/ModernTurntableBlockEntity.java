@@ -3,18 +3,14 @@ package com.zhongbai233.net_music_can_play_bili.blockentity;
 import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.github.tartaricacid.netmusic.api.resolver.MusicPlayResolverManager;
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
-import com.github.tartaricacid.netmusic.network.NetworkHandler;
-import com.github.tartaricacid.netmusic.network.message.MusicToClientMessage;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSongInfoSanitizer;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.media.sync.ResolveGeneration;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
-import com.zhongbai233.net_music_can_play_bili.compat.minecartrevolution.MinecartTurntableCompat;
 import com.zhongbai233.net_music_can_play_bili.block.ModernTurntableBlock;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.network.ModernTurntableStopPacket;
-import com.zhongbai233.net_music_can_play_bili.server.BiliWhitelistManager;
 import com.zhongbai233.net_music_can_play_bili.server.PlaybackAuditManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -31,8 +27,6 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.transfer.ResourceHandler;
 import net.neoforged.neoforge.transfer.item.ItemResource;
-import net.neoforged.neoforge.transfer.item.ItemStackResourceHandler;
-import net.neoforged.neoforge.transfer.transaction.TransactionContext;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
@@ -122,52 +116,25 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
         clientLyricTick = -1;
     }
 
-    private final ResourceHandler<ItemResource> itemHandler = new ItemStackResourceHandler() {
-        @Override
-        protected ItemStack getStack() {
-            return disc;
-        }
+    private final ResourceHandler<ItemResource> itemHandler = new ModernTurntableDiscHandler(
+            () -> disc,
+            stack -> disc = stack.isEmpty()
+                    ? ItemStack.EMPTY
+                    : BiliSongInfoSanitizer.sanitizeDisc(stack.copyWithCount(1)),
+            this::canAutomationExtract,
+            this::onDiscHandlerCommit);
 
-        @Override
-        protected void setStack(ItemStack stack) {
-            disc = stack.isEmpty() ? ItemStack.EMPTY : BiliSongInfoSanitizer.sanitizeDisc(stack.copyWithCount(1));
+    private void onDiscHandlerCommit(ItemStack originalStack) {
+        boolean hadDisc = !originalStack.isEmpty();
+        if (hadDisc && disc.isEmpty()) {
+            pendingAutomaticStart = false;
+            stopPlayback();
+        } else if (!hadDisc && !disc.isEmpty()) {
+            playbackCompleted = false;
+            pendingAutomaticStart = true;
         }
-
-        @Override
-        protected boolean isValid(ItemResource resource) {
-            ItemStack stack = Objects.requireNonNull(resource.toStack(), "ItemResource.toStack");
-            return ItemMusicCD.getSongInfo(stack) != null;
-        }
-
-        @Override
-        protected int getCapacity(ItemResource resource) {
-            return 1;
-        }
-
-        @Override
-        public int extract(int index, ItemResource resource, int amount, TransactionContext transaction) {
-            if (!canAutomationExtract()) {
-                return 0;
-            }
-            return super.extract(index, resource, amount, transaction);
-        }
-
-        @Override
-        protected void onRootCommit(ItemStack originalStack) {
-            boolean hadDisc = !originalStack.isEmpty();
-            if (hadDisc && disc.isEmpty()) {
-                pendingAutomaticStart = false;
-                stopPlayback();
-                markDirty();
-            } else if (!hadDisc && !disc.isEmpty()) {
-                playbackCompleted = false;
-                pendingAutomaticStart = true;
-                markDirty();
-            } else {
-                markDirty();
-            }
-        }
-    };
+        markDirty();
+    }
 
     public ResourceHandler<ItemResource> getItemHandler() {
         return itemHandler;
@@ -866,46 +833,12 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
             stopPlayback();
             return;
         }
-        // 剩余秒数 <= 0 时不跳过同步：仍需要通知客户端歌曲已结束并停止播放
-        // 传入 Math.max(1, remainingSeconds) 保证客户端 MusicToClientMessage 收到
-        // 有效的 timeSecond 值，触发 ModernTurntableSound 的结束逻辑
-
-        AABB range = new AABB(worldPosition).inflate(SYNC_RANGE);
-        Set<UUID> nearby = new HashSet<>();
         long elapsedMillis = elapsedMillis(serverLevel.getGameTime());
-        String syncedPlayUrl = PlaybackSync.withSync(playUrl, playbackSessionId(), elapsedMillis,
-                durationSeconds * 1000L);
-        var hostMinecart = MinecartTurntableCompat.hostMinecart(level);
-        if (hostMinecart != null) {
-            syncedPlayUrl = PlaybackSync.withMinecartAnchor(syncedPlayUrl, hostMinecart.getId(),
-                    hostMinecart.getUUID());
-        }
-        for (ServerPlayer player : serverLevel.getEntitiesOfClass(ServerPlayer.class, range)) {
-            UUID id = player.getUUID();
-            nearby.add(id);
-            syncedPlayers.add(id);
-            syncPlayer(player, remainingSeconds, syncedPlayUrl);
-        }
-        stopPlayersLeavingRange(serverLevel, nearby);
-        syncedPlayers.retainAll(nearby);
-    }
-
-    private void stopPlayersLeavingRange(ServerLevel serverLevel, Set<UUID> nearby) {
-        Set<UUID> departed = ModernTurntableAudiencePolicy.departed(syncedPlayers, nearby);
-        if (departed.isEmpty()) {
-            return;
-        }
-        PlaybackSessionId sessionId = PlaybackSessionId.parse(playbackSessionId()).orElse(null);
-        if (sessionId == null) {
-            return;
-        }
-        ModernTurntableStopPacket packet = new ModernTurntableStopPacket(worldPosition, sessionId.value());
-        for (UUID playerId : departed) {
-            ServerPlayer player = serverLevel.getServer().getPlayerList().getPlayer(playerId);
-            if (player != null && player.level() == serverLevel) {
-                PacketDistributor.sendToPlayer(player, packet);
-            }
-        }
+        Set<UUID> nearby = ModernTurntableAudienceSync.syncNearbyPlayers(serverLevel, level, worldPosition,
+                syncedPlayers, playUrl, rawUrl, songName, playbackSessionId(), elapsedMillis,
+                durationSeconds * 1000L, remainingSeconds, SYNC_RANGE);
+        syncedPlayers.clear();
+        syncedPlayers.addAll(nearby);
     }
 
     public static void syncLoadedTurntablesToSpectators(ServerLevel serverLevel) {
@@ -933,55 +866,12 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
         if (remaining <= 0) {
             return;
         }
-        AABB range = new AABB(worldPosition).inflate(SYNC_RANGE);
-        Set<UUID> nearbySpectators = new HashSet<>();
-        for (ServerPlayer player : serverLevel.players()) {
-            if (player.isSpectator() && range.contains(player.position())) {
-                nearbySpectators.add(player.getUUID());
-                syncPlayer(serverLevel, player, remaining);
-            }
-        }
-        PlaybackSessionId sessionId = PlaybackSessionId.parse(playbackSessionId()).orElse(null);
-        ModernTurntableStopPacket stopPacket = sessionId != null
-                ? new ModernTurntableStopPacket(worldPosition, sessionId.value())
-                : null;
-        syncedPlayers.removeIf(id -> {
-            ServerPlayer player = serverLevel.getServer().getPlayerList().getPlayer(id);
-            if (player == null || player.level() != serverLevel) {
-                return true;
-            }
-            boolean departedSpectator = player.isSpectator() && !nearbySpectators.contains(id);
-            if (departedSpectator && stopPacket != null) {
-                PacketDistributor.sendToPlayer(player, stopPacket);
-            }
-            return departedSpectator;
-        });
-    }
-
-    private void syncPlayer(ServerLevel serverLevel, ServerPlayer player, int remainingSeconds) {
-        if (!syncedPlayers.add(player.getUUID())) {
-            return;
-        }
         long elapsedMillis = elapsedMillis(serverLevel.getGameTime());
-        String syncedPlayUrl = PlaybackSync.withSync(playUrl, playbackSessionId(), elapsedMillis,
-                durationSeconds * 1000L);
-        var hostMinecart = MinecartTurntableCompat.hostMinecart(level);
-        if (hostMinecart != null) {
-            syncedPlayUrl = PlaybackSync.withMinecartAnchor(syncedPlayUrl, hostMinecart.getId(),
-                    hostMinecart.getUUID());
-        }
-        syncPlayer(player, remainingSeconds, syncedPlayUrl);
-    }
-
-    private void syncPlayer(ServerPlayer player, int remainingSeconds, String syncedPlayUrl) {
-        @SuppressWarnings("null")
-        MusicToClientMessage message = new MusicToClientMessage(
-                worldPosition,
-                syncedPlayUrl,
-                rawUrl.isBlank() ? playUrl : rawUrl,
-                Math.max(1, remainingSeconds),
-                songName);
-        NetworkHandler.sendToClientPlayer(message, player);
+        Set<UUID> retained = ModernTurntableAudienceSync.syncNearbySpectators(serverLevel, level, worldPosition,
+                syncedPlayers, playUrl, rawUrl, songName, playbackSessionId(), elapsedMillis,
+                durationSeconds * 1000L, remaining, SYNC_RANGE);
+        syncedPlayers.clear();
+        syncedPlayers.addAll(retained);
     }
 
     private void recordAudit(ServerLevel serverLevel) {
@@ -991,53 +881,19 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
     }
 
     private boolean isPlaybackAllowed(ServerLevel serverLevel, String sourceUrl, ServerPlayer actor) {
-        if (BiliSongInfoSanitizer.isForbiddenBiliDirectUrl(sourceUrl)) {
-            if (actor != null) {
-                actor.sendSystemMessage(BiliWhitelistManager.denialMessage(actor, sourceUrl, "播放"));
-            }
-            return false;
-        }
-        if (!BiliWhitelistManager.enabled() || BiliWhitelistManager.canonicalResource(sourceUrl).isEmpty()) {
-            return true;
-        }
-        if (BiliWhitelistManager.isAllowed(serverLevel.getServer(), sourceUrl)) {
-            return true;
-        }
-        if (actor != null) {
-            actor.sendSystemMessage(BiliWhitelistManager.denialMessage(actor, sourceUrl, "播放"));
-        }
-        return false;
+        return ModernTurntablePlaybackAccess.isAllowed(serverLevel, sourceUrl, actor);
     }
 
     private String playbackSessionId() {
-        UUID hostUuid = MinecartTurntableCompat.hostUuid(level);
-        String sourceId = hostUuid != null ? "minecart-" + hostUuid : Long.toString(worldPosition.asLong());
-        return sourceId + "-" + Long.toString(startedGameTime)
-                + (seekGeneration > 0 ? "-" + seekGeneration : "");
+        return ModernTurntablePlaybackClock.sessionId(level, worldPosition, startedGameTime, seekGeneration);
     }
 
     private int remainingSeconds(long gameTime) {
-        if (!playing || durationSeconds <= 0) {
-            return 0;
-        }
-        return Math.max(0, durationSeconds - elapsedSeconds(gameTime));
+        return ModernTurntablePlaybackClock.remainingSeconds(playing, durationSeconds, startedGameTime, gameTime);
     }
 
     private long elapsedMillis(long gameTime) {
-        if (!playing) {
-            return 0L;
-        }
-        // 与 getPlaybackElapsedMillis 对齐：超过歌曲总时长的已播放时间视为已结束
-        return Math.min(durationSeconds * 1000L, Math.max(0L, (gameTime - startedGameTime) * 50L));
-    }
-
-    private int elapsedSeconds(long gameTime) {
-        if (!playing) {
-            return 0;
-        }
-        long elapsed = Math.max(0L, (gameTime - startedGameTime) / 20L);
-        // 与 getPlaybackElapsedMillis 对齐：已播放秒数不应超过歌曲总时长
-        return Math.min(durationSeconds, (int) Math.min(Integer.MAX_VALUE, elapsed));
+        return ModernTurntablePlaybackClock.elapsedMillis(playing, durationSeconds, startedGameTime, gameTime);
     }
 
     @Override

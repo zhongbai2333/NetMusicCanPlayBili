@@ -6,6 +6,7 @@ import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaIoExecutor;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
@@ -16,9 +17,8 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 import org.slf4j.Logger;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.UUID;
 import java.util.Objects;
+import java.util.UUID;
 
 /** 白名单审核“查看”预览所需的音视频播放信息。 */
 public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl, String audioUrl, String videoUrl,
@@ -69,7 +69,7 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
         String audioOnlyUrl = audioOnlyUrl(idOrLink);
         if (audioOnlyUrl != null) {
             player.sendSystemMessage(Component.literal("正在准备音频预览...").withStyle(ChatFormatting.GRAY));
-            CompletableFuture.supplyAsync(() -> audioOnlyPacket(audioOnlyUrl, elapsedMillis, playing))
+            MediaIoExecutor.supply(() -> audioOnlyPacket(audioOnlyUrl, elapsedMillis, playing))
                     .whenComplete((packet, error) -> player.level().getServer().execute(() -> {
                         if (error != null) {
                             LOGGER.warn("白名单审核音频预览解析失败，将使用未知时长: {}", audioOnlyUrl, error);
@@ -89,7 +89,7 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
         }
         BiliApiClient.VideoSelection finalSelection = selection;
         player.sendSystemMessage(Component.literal("正在准备预览...").withStyle(ChatFormatting.GRAY));
-        CompletableFuture.supplyAsync(() -> {
+        MediaIoExecutor.supply(() -> {
             try {
                 BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(finalSelection.videoId(),
                         finalSelection.page());

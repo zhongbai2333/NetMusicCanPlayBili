@@ -10,10 +10,11 @@ import com.zhongbai233.net_music_can_play_bili.gui.core.WhitelistReviewSelection
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.media.stream.MediaNetworkFailureClassifier;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistPreviewPacket;
-import com.zhongbai233.net_music_can_play_bili.network.WhitelistReviewPacket;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistReviewActionPacket;
+import com.zhongbai233.net_music_can_play_bili.network.WhitelistReviewPacket;
 import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackSyncPacket;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.CancellableTaskFuture;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaIoExecutor;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
@@ -372,7 +373,7 @@ public class WhitelistPreviewScreen extends Screen {
             return;
         }
         resolvingVideoKey = key;
-        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+        MediaIoExecutor.supply(() -> {
             try {
                 return BiliVideoStreamResolver.resolve(packet.videoUrl(), PREVIEW_QUALITY);
             } catch (Exception e) {

@@ -61,6 +61,33 @@ if (realMediaLifecycleRequested && !modBenchEnabled) {
 }
 def terrainCompatMatrixEnabled = modBenchEnabled && terrainCompatMatrixRequested
 def realMediaLifecycleEnabled = modBenchEnabled && realMediaLifecycleRequested
+// Client、Bench client 与 paired client 共用的媒体运行参数。保持单一清单，避免新增场景时只接通其中一端。
+def sharedMediaRunProperties = [
+        [system: 'ncpb.video.advanced_features', gradle: 'ncpbVideoAdvancedFeatures', fallback: 'false'],
+        [system: 'ncpb.video.enable_bench_features', gradle: 'ncpbVideoBenchFeatures', fallback: 'false'],
+        [system: 'ncpb.video.render.backend', gradle: 'ncpbVideoRenderBackend', fallback: 'nv12'],
+        [system: 'ncpb.video.real_bench', gradle: 'ncpbRealBench', fallback: 'false'],
+        [system: 'ncpb.video.real_bench.bv', gradle: 'ncpbBenchVideo', fallback: 'BV1GJ411x7h7'],
+        [system: 'ncpb.video.real_bench.frames', gradle: 'ncpbRealBenchFrames', fallback: '12'],
+        [system: 'ncpb.video.real_bench.warmup_frames', gradle: 'ncpbRealBenchWarmupFrames', fallback: '2'],
+        [system: 'ncpb.video.real_bench.output_format', gradle: 'ncpbRealBenchOutputFormat', fallback: 'nv12'],
+        [system: 'ncpb.video.real_bench.preview', gradle: 'ncpbRealBenchPreview', fallback: 'false'],
+        [system: 'ncpb.video.real_bench.realtime', gradle: 'ncpbRealBenchRealtime', fallback: 'false'],
+        [system: 'ncpb.video.real_bench.max_fps', gradle: 'ncpbRealBenchMaxFps', fallback: '30'],
+        [system: 'ncpb.video.real_bench.qualities', gradle: 'ncpbRealBenchQualities', fallback: '16'],
+        [system: 'ncpb.live.real_bench', gradle: 'ncpbRealLiveBench', fallback: 'false'],
+        [system: 'ncpb.live.real_bench.room', gradle: 'ncpbLiveBenchRoom', fallback: '8178490'],
+        [system: 'ncpb.video.real_media_lifecycle', gradle: 'ncpbRealMediaLifecycle', fallback: 'false'],
+        [system: 'ncpb.video.real_media_lifecycle.rounds', gradle: 'ncpbRealMediaLifecycleRounds', fallback: '100'],
+        [system: 'ncpb.video.real_media_lifecycle.cycle_timeout_ticks',
+                gradle: 'ncpbRealMediaLifecycleCycleTimeoutTicks', fallback: '600'],
+        [system: 'ncpb.video.real_media_lifecycle.quality', gradle: 'ncpbRealMediaLifecycleQuality', fallback: '16'],
+        [system: 'ncpb.video.native.hwaccel', gradle: 'ncpbNativeHwaccel', fallback: 'auto'],
+        [system: 'ncpb.video.native.av1_first_frame_probe_timeout_ms',
+                gradle: 'ncpbAv1FirstFrameProbeTimeoutMillis', fallback: '2000'],
+        [system: 'ncpb.video.native.av1_first_frame_probe_max_packets',
+                gradle: 'ncpbAv1FirstFrameProbeMaxPackets', fallback: '256']
+]
 def terrainCompatAssetManifestFile = layout.projectDirectory.file('tools/terrain_compat_matrix_assets.json')
 def terrainCompatNeoForgeVersion = neo_version.toString()
 def terrainCompatAssetDirectory = providers.gradleProperty('ncpbTerrainCompatAssetDirectory')
@@ -136,10 +163,9 @@ neoForge {
 
             // 限定 GameTest 命名空间，减少开发客户端扫描量。
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
-            // 正式播放默认走 NV12 direct-buffer + PBO + shader；Bench 均默认关闭，按需用 -P... 显式打开。
-            jvmProp 'ncpb.video.advanced_features', prop('ncpbVideoAdvancedFeatures', 'false')
-            jvmProp 'ncpb.video.enable_bench_features', prop('ncpbVideoBenchFeatures', 'false')
-            jvmProp 'ncpb.video.render.backend', prop('ncpbVideoRenderBackend', 'nv12')
+            sharedMediaRunProperties.each { spec ->
+                jvmProp spec.system, prop(spec.gradle, spec.fallback)
+            }
 
             // 内存诊断：低频输出 JVM、进程提交以及本模组显式 native/PBO 分配。
             jvmProp 'ncpb.memory.diagnostics', prop('ncpbMemoryDiagnostics', 'false')
@@ -184,30 +210,7 @@ neoForge {
             jvmProp 'ncpb.playback.bench.interval_ms', prop('ncpbPlaybackLatencyIntervalMs', '3000')
 
             // B站真实压力 Bench：真实 DASH 视频解码/上传与 AAC/OpenAL 音频联合门槛。
-            jvmProp 'ncpb.video.real_bench', prop('ncpbRealBench', 'false')
             jvmProp 'ncpb.video.real_bench.managed', prop('ncpbRealBenchManaged', modBenchEnabled ? 'true' : 'false')
-            jvmProp 'ncpb.video.real_bench.bv', prop('ncpbBenchVideo', 'BV1GJ411x7h7')
-            jvmProp 'ncpb.video.real_bench.frames', prop('ncpbRealBenchFrames', '12')
-            jvmProp 'ncpb.video.real_bench.warmup_frames', prop('ncpbRealBenchWarmupFrames', '2')
-            jvmProp 'ncpb.video.real_bench.output_format', prop('ncpbRealBenchOutputFormat', 'nv12')
-            jvmProp 'ncpb.video.real_bench.preview', prop('ncpbRealBenchPreview', 'false')
-            jvmProp 'ncpb.video.real_bench.realtime', prop('ncpbRealBenchRealtime', 'false')
-            jvmProp 'ncpb.video.real_bench.max_fps', prop('ncpbRealBenchMaxFps', '30')
-            jvmProp 'ncpb.video.real_bench.qualities', prop('ncpbRealBenchQualities', '16')
-            jvmProp 'ncpb.live.real_bench', prop('ncpbRealLiveBench', 'false')
-            jvmProp 'ncpb.live.real_bench.room', prop('ncpbLiveBenchRoom', '8178490')
-            jvmProp 'ncpb.video.real_media_lifecycle', prop('ncpbRealMediaLifecycle', 'false')
-            jvmProp 'ncpb.video.real_media_lifecycle.rounds', prop('ncpbRealMediaLifecycleRounds', '100')
-            jvmProp 'ncpb.video.real_media_lifecycle.cycle_timeout_ticks',
-                    prop('ncpbRealMediaLifecycleCycleTimeoutTicks', '600')
-            jvmProp 'ncpb.video.real_media_lifecycle.quality', prop('ncpbRealMediaLifecycleQuality', '16')
-
-            // FFmpeg/native 解码默认参数；普通播放走平台 auto，必要时可用 -PncpbNativeHwaccel=d3d11va/vaapi/none 覆盖。
-            jvmProp 'ncpb.video.native.hwaccel', prop('ncpbNativeHwaccel', 'auto')
-            jvmProp 'ncpb.video.native.av1_first_frame_probe_timeout_ms',
-                    prop('ncpbAv1FirstFrameProbeTimeoutMillis', '2000')
-            jvmProp 'ncpb.video.native.av1_first_frame_probe_max_packets',
-                    prop('ncpbAv1FirstFrameProbeMaxPackets', '256')
             // 需要排查“音频启动但视频未入场”时开启，输出 stop/wait/schedule 视频决策。
             jvmProp 'bili.video.turntable.log_sync_decisions', prop('ncpbVideoLogSyncDecisions', 'false')
             // 手持 MP4/Pad 视频默认保持原 native auto 行为；排查时可用 d3d11va/none 覆盖。
@@ -299,8 +302,7 @@ sourceSets.main.resources { srcDir 'src/generated/resources' }
 // 显式声明测试目录，确保 Gradle/Buildship 在多根工作区中稳定导入测试源码模型。
 sourceSets.test.java.setSrcDirs(['src/test/java'])
 sourceSets.test.resources.setSrcDirs(['src/test/resources'])
-// 云同步可能在 generated source root 中恢复 "NativeBundleCapabilities 2.java" 之类冲突副本。
-// 这类文件不可能是合法编译单元，也不应被 Gradle/Buildship 当成第二份类型定义。
+// 云同步可能恢复 "SomeType 2.java" 之类冲突副本；它们不应成为第二份类型定义。
 sourceSets.main.java.exclude { details -> details.file.name ==~ /.* \d+\.java/ }
 sourceSets.test.java.exclude { details -> details.file.name ==~ /.* \d+\.java/ }
 
@@ -373,13 +375,13 @@ dependencies {
     // the same immutable release, while NeoForge negotiates one compatible copy when several mods JiJ it.
     jarJar(api("com.github.zhongbai2333.SceneEditor:scene-editor-core:${scene_editor_version}")) {
         version {
-            strictly '[1.0.0-beta.3,2.0.0)'
+            strictly '[1.0.1-beta.2,2.0.0)'
             prefer scene_editor_version
         }
     }
     jarJar(implementation("com.github.zhongbai2333.SceneEditor:scene-editor-minecraft:${scene_editor_version}")) {
         version {
-            strictly '[1.0.0-beta.3,2.0.0)'
+            strictly '[1.0.1-beta.2,2.0.0)'
             prefer scene_editor_version
         }
     }
@@ -425,18 +427,11 @@ if (modBenchEnabled) {
             pairedProjectProperties.put('modbench_version', providers.gradleProperty('modbench_version').get())
             pairedProjectProperties.put('ncpbPairedClientCount', String.valueOf(pairedClientCount.get()))
             pairedProjectProperties.put('ncpbBuildDirectory', layout.buildDirectory.get().asFile.absolutePath)
-            [
-                    'ncpbVideoAdvancedFeatures', 'ncpbVideoBenchFeatures', 'ncpbRealBench',
-                    'ncpbRealBenchManaged', 'ncpbBenchVideo', 'ncpbRealBenchFrames',
-                    'ncpbRealBenchWarmupFrames', 'ncpbRealBenchQualities', 'ncpbRealBenchOutputFormat',
-                    'ncpbRealBenchPreview', 'ncpbRealBenchRealtime', 'ncpbRealMediaLifecycle',
-                    'ncpbRealMediaLifecycleRounds', 'ncpbRealMediaLifecycleCycleTimeoutTicks',
-                    'ncpbRealMediaLifecycleQuality', 'ncpbNativeHwaccel',
-                    'ncpbAv1FirstFrameProbeTimeoutMillis', 'ncpbAv1FirstFrameProbeMaxPackets',
-                    'ncpbVideoRenderBackend',
+            (sharedMediaRunProperties.collect { it.gradle } + [
+                    'ncpbRealBenchManaged',
                     'ncpbRealMp3Bench', 'ncpbRealMp3BenchUrl', 'enableTerrainCompatMatrix',
                     'ncpbTerrainCompatAssetDirectory'
-            ].each { propertyName ->
+            ]).unique().each { propertyName ->
                 def propertyValue = providers.gradleProperty(propertyName).orNull
                 if (propertyValue != null) {
                     pairedProjectProperties.put(propertyName, propertyValue)
@@ -449,32 +444,10 @@ if (modBenchEnabled) {
         ['benchClient', 'benchRemoteClient'].each { runName ->
             neoForge.runs.named(runName) {
                 jvmArgument "--enable-native-access=${mod_id}"
-                systemProperty 'ncpb.video.advanced_features', benchProp('ncpbVideoAdvancedFeatures', 'false')
-                systemProperty 'ncpb.video.enable_bench_features', benchProp('ncpbVideoBenchFeatures', 'false')
-                systemProperty 'ncpb.video.real_bench', benchProp('ncpbRealBench', 'false')
+                sharedMediaRunProperties.each { spec ->
+                    systemProperty spec.system, benchProp(spec.gradle, spec.fallback)
+                }
                 systemProperty 'ncpb.video.real_bench.managed', benchProp('ncpbRealBenchManaged', 'true')
-                systemProperty 'ncpb.video.real_bench.bv', benchProp('ncpbBenchVideo', 'BV1GJ411x7h7')
-                systemProperty 'ncpb.video.real_bench.frames', benchProp('ncpbRealBenchFrames', '12')
-                systemProperty 'ncpb.video.real_bench.warmup_frames', benchProp('ncpbRealBenchWarmupFrames', '2')
-                systemProperty 'ncpb.video.real_bench.qualities', benchProp('ncpbRealBenchQualities', '16')
-                systemProperty 'ncpb.video.real_bench.output_format', benchProp('ncpbRealBenchOutputFormat', 'nv12')
-                systemProperty 'ncpb.video.real_bench.preview', benchProp('ncpbRealBenchPreview', 'false')
-                systemProperty 'ncpb.video.real_bench.realtime', benchProp('ncpbRealBenchRealtime', 'false')
-                systemProperty 'ncpb.live.real_bench', benchProp('ncpbRealLiveBench', 'false')
-                systemProperty 'ncpb.live.real_bench.room', benchProp('ncpbLiveBenchRoom', '8178490')
-                systemProperty 'ncpb.video.real_media_lifecycle', benchProp('ncpbRealMediaLifecycle', 'false')
-                systemProperty 'ncpb.video.real_media_lifecycle.rounds',
-                        benchProp('ncpbRealMediaLifecycleRounds', '100')
-                systemProperty 'ncpb.video.real_media_lifecycle.cycle_timeout_ticks',
-                        benchProp('ncpbRealMediaLifecycleCycleTimeoutTicks', '600')
-                systemProperty 'ncpb.video.real_media_lifecycle.quality',
-                        benchProp('ncpbRealMediaLifecycleQuality', '16')
-                systemProperty 'ncpb.video.native.hwaccel', benchProp('ncpbNativeHwaccel', 'auto')
-                systemProperty 'ncpb.video.native.av1_first_frame_probe_timeout_ms',
-                        benchProp('ncpbAv1FirstFrameProbeTimeoutMillis', '2000')
-                systemProperty 'ncpb.video.native.av1_first_frame_probe_max_packets',
-                        benchProp('ncpbAv1FirstFrameProbeMaxPackets', '256')
-                systemProperty 'ncpb.video.render.backend', benchProp('ncpbVideoRenderBackend', 'nv12')
                 systemProperty 'ncpb.bili.audio.real_mp3_bench', benchProp('ncpbRealMp3Bench', 'false')
                 systemProperty 'ncpb.bili.audio.real_mp3_bench.url', benchProp('ncpbRealMp3BenchUrl',
                         'https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.mp3')
@@ -675,7 +648,7 @@ tasks.register('verifySceneEditorJiJ') {
                 }
                 def descriptor = matches[0]
                 if (descriptor.version.artifactVersion != expectedVersion
-                        || descriptor.version.range != '[1.0.0-beta.3,2.0.0)') {
+                        || descriptor.version.range != '[1.0.1-beta.2,2.0.0)') {
                     throw new GradleException("Unexpected ${artifact} JiJ version contract: ${descriptor.version}")
                 }
                 def nestedEntry = zip.getEntry(descriptor.path)
@@ -707,7 +680,6 @@ def embeddedNativeReleaseMatcher = embeddedNativeReadmeText =~ /(?m)^\s*- Releas
 if (embeddedNativeReleaseMatcher.count != 1) {
     throw new GradleException('native/README.md must identify exactly one supported media-min-v48 release')
 }
-def embeddedNativeRelease = embeddedNativeReleaseMatcher[0][1]
 def linuxArm64GlibcMatcher = embeddedNativeReadmeText =~ /host glibc to provide at\s+least\s+`(GLIBC_[0-9]+\.[0-9]+)` on Linux ARM64/
 def linuxX8664GlibcMatcher = embeddedNativeReadmeText =~ /at\s+least\s+`(GLIBC_[0-9]+\.[0-9]+)` on Linux x86_64/
 if (linuxArm64GlibcMatcher.count != 1 || linuxX8664GlibcMatcher.count != 1) {
@@ -716,34 +688,6 @@ if (linuxArm64GlibcMatcher.count != 1 || linuxX8664GlibcMatcher.count != 1) {
 def linuxArm64GlibcFloor = linuxArm64GlibcMatcher[0][1]
 def linuxX8664GlibcFloor = linuxX8664GlibcMatcher[0][1]
 def embeddedNativeLicenses = ['FFmpeg-LGPL-2.1.txt']
-def generatedNativeBundleSourceDirectory = layout.buildDirectory.dir('generated/sources/nativeBundle/java')
-def generateNativeBundleCapabilities = tasks.register('generateNativeBundleCapabilities', Copy) {
-    inputs.property('embeddedNativeRelease', embeddedNativeRelease)
-    inputs.property('bundledSoftwareAv1Available', false)
-    from('src/nativeBundleTemplates') {
-        expand(
-                native_bundle_release: embeddedNativeRelease,
-                bundled_software_av1_available: false
-        )
-        rename { name -> name.endsWith('.template') ? name.substring(0, name.length() - '.template'.length()) : name }
-    }
-    into(generatedNativeBundleSourceDirectory)
-    doFirst {
-        def generatedRoot = generatedNativeBundleSourceDirectory.get().asFile
-        if (generatedRoot.isDirectory()) {
-            try (def paths = java.nio.file.Files.walk(generatedRoot.toPath())) {
-                paths.filter { path -> path.fileName.toString() ==~ /.* \d+\.java/ }.forEach { duplicate ->
-                    try {
-                        java.nio.file.Files.deleteIfExists(duplicate)
-                    } catch (IOException error) {
-                        throw new GradleException("Unable to remove generated conflict copy: ${duplicate}", error)
-                    }
-                }
-            }
-        }
-    }
-}
-sourceSets.main.java.srcDir(generateNativeBundleCapabilities)
 def embeddedNativeFiles = [
         'linux-arm64': [
                 *embeddedNativeLicenses, 'libavcodec.so.63', 'libavutil.so.61',
