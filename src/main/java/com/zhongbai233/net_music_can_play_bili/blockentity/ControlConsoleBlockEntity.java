@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.blockentity;
 
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.level.block.state.BlockState;
@@ -97,8 +98,11 @@ public final class ControlConsoleBlockEntity extends SyncedBlockEntity {
     @Override
     public void setRemoved() {
         if (level != null && level.isClientSide()) {
+            // setRemoved 也会在区块卸载时调用。区块卸载不等于解绑，否则玩家走远时
+            // 唱片机主输出会意外恢复；只有世界中该位置已不再是中控台才释放路由所有权。
+            boolean bindingDestroyed = !level.getBlockState(worldPosition).is(ModBlocks.CONTROL_CONSOLE.get());
             com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleRenderer
-                .notifyConsoleRemoved(worldPosition);
+                .notifyConsoleRemoved(worldPosition, bindingDestroyed);
         }
         super.setRemoved();
     }

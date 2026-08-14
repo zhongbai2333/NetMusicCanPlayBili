@@ -35,9 +35,8 @@ public class ClientAudioOutputRegistry {
     private static final ConcurrentMap<BlockPos, SpeakerAudioRelay> RELAYS = new ConcurrentHashMap<>();
     /** relay → turntable 反向映射 */
     private static final ConcurrentMap<BlockPos, BlockPos> RELAY_TURNTABLE = new ConcurrentHashMap<>();
-    /** 每个唱片机当前仍在接管主输出的中控台虚拟音源。 */
-    private static final ConcurrentMap<BlockPos, java.util.Set<BlockPos>> CONSOLE_ROUTE_OWNERS =
-            new ConcurrentHashMap<>();
+    /** 中控台的逻辑绑定所有权，独立于进入 hardRange 后才创建的短命 relay。 */
+    private static final PersistentRouteOwners<BlockPos> CONSOLE_ROUTE_OWNERS = new PersistentRouteOwners<>();
 
     private static volatile float[] listenerPos;
     private static volatile boolean paused;
@@ -290,7 +289,6 @@ public class ClientAudioOutputRegistry {
         if (speakerPos == null)
             return;
         BlockPos turntablePos = RELAY_TURNTABLE.remove(speakerPos);
-        releaseConsoleRoute(turntablePos, speakerPos);
         SpeakerAudioRelay relay = RELAYS.remove(speakerPos);
         if (relay != null) {
             for (AudioEntry entry : OUTPUTS.values()) {
@@ -311,7 +309,6 @@ public class ClientAudioOutputRegistry {
         if (previousSource != null && !previousSource.equals(turntablePos)) {
             clearMachineOverrideForSpeaker(consoleElementKey);
         }
-        retainConsoleRoute(turntablePos, consoleElementKey);
         AudioEntry output = OUTPUTS.get(keyFor(turntablePos));
         if (output != null) {
             output.output().setConsoleRouteSuppressed(true);
@@ -337,6 +334,30 @@ public class ClientAudioOutputRegistry {
         BlockPos turntablePos = RELAY_TURNTABLE.get(consoleElementKey);
         clearMachineOverrideForSpeaker(consoleElementKey);
         refreshMainRouteSuppression(turntablePos);
+    }
+
+    /**
+     * 记录中控台对唱片机的持久逻辑接管。离开中控台 hardRange 只销毁 relay，
+     * 不能解除这个接管，否则唱片机主输出会在边界外突然恢复。
+     */
+    public static void bindConsoleRoute(BlockPos consolePos, BlockPos turntablePos) {
+        if (consolePos == null || turntablePos == null) {
+            return;
+        }
+        PersistentRouteOwners.Change<BlockPos> change = CONSOLE_ROUTE_OWNERS.bind(
+                consolePos.immutable(), turntablePos.immutable());
+        if (change.previousSource() != null && !change.previousSource().equals(change.currentSource())) {
+            refreshMainRouteSuppression(change.previousSource());
+        }
+        refreshMainRouteSuppression(change.currentSource());
+    }
+
+    /** 只有明确解绑或实际拆除中控台时才调用。 */
+    public static void unbindConsoleRoute(BlockPos consolePos) {
+        if (consolePos == null) {
+            return;
+        }
+        refreshMainRouteSuppression(CONSOLE_ROUTE_OWNERS.unbind(consolePos.immutable()));
     }
 
     /** 注册音响 relay 并关联到对应的唱片机 handler */
@@ -385,8 +406,7 @@ public class ClientAudioOutputRegistry {
             return false;
         }
         BlockPos source = turntablePos.immutable();
-        java.util.Set<BlockPos> consoleOwners = CONSOLE_ROUTE_OWNERS.get(source);
-        if (consoleOwners != null && !consoleOwners.isEmpty()) {
+        if (CONSOLE_ROUTE_OWNERS.hasOwners(source)) {
             return true;
         }
         for (var entry : RELAY_TURNTABLE.entrySet()) {
@@ -408,29 +428,6 @@ public class ClientAudioOutputRegistry {
         AudioEntry output = OUTPUTS.get(keyFor(turntablePos));
         if (output != null) {
             output.output().setConsoleRouteSuppressed(isMainRouteSuppressed(turntablePos));
-        }
-    }
-
-    private static void retainConsoleRoute(BlockPos turntablePos, BlockPos consoleElementKey) {
-        if (turntablePos == null || consoleElementKey == null) {
-            return;
-        }
-        CONSOLE_ROUTE_OWNERS.computeIfAbsent(turntablePos.immutable(), ignored -> ConcurrentHashMap.newKeySet())
-                .add(consoleElementKey.immutable());
-    }
-
-    private static void releaseConsoleRoute(BlockPos turntablePos, BlockPos consoleElementKey) {
-        if (turntablePos == null || consoleElementKey == null) {
-            return;
-        }
-        BlockPos source = turntablePos.immutable();
-        java.util.Set<BlockPos> owners = CONSOLE_ROUTE_OWNERS.get(source);
-        if (owners == null) {
-            return;
-        }
-        owners.remove(consoleElementKey);
-        if (owners.isEmpty()) {
-            CONSOLE_ROUTE_OWNERS.remove(source, owners);
         }
     }
 

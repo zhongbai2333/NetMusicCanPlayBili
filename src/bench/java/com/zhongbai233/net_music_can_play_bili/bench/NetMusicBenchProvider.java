@@ -25,10 +25,13 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEnti
 import com.zhongbai233.net_music_can_play_bili.blockentity.LyricProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.SpeakerBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.Config;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliLiveRoomInput;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliLiveStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
+import com.zhongbai233.net_music_can_play_bili.client.LiveStreamerVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.BiliRealVideoPlaybackBench;
 import com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState;
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
@@ -36,6 +39,7 @@ import com.zhongbai233.net_music_can_play_bili.client.ClientMediaLifecycleHandle
 import com.zhongbai233.net_music_can_play_bili.client.DeterministicVideoUploadWorkload;
 import com.zhongbai233.net_music_can_play_bili.client.VideoFeatureFlags;
 import com.zhongbai233.net_music_can_play_bili.client.VideoFeatureProperties;
+import com.zhongbai233.net_music_can_play_bili.client.WhitelistCsvExportClient;
 import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldMediaProfile;
 import com.zhongbai233.net_music_can_play_bili.client.PadHandheldMediaProfile;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
@@ -64,6 +68,8 @@ import com.zhongbai233.net_music_can_play_bili.client.renderer.gui.TerrainPrevie
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoCloseDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElement;
 import com.zhongbai233.net_music_can_play_bili.gui.HolographicScreenConfigTestScreen;
 import com.zhongbai233.net_music_can_play_bili.gui.ControlConsoleGuideScreen;
 import com.zhongbai233.net_music_can_play_bili.gui.LiveStreamerScreen;
@@ -101,10 +107,12 @@ import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackSyncPacket;
 import com.zhongbai233.net_music_can_play_bili.network.PadPlaybackSessionIds;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistReviewPacket;
 import com.zhongbai233.net_music_can_play_bili.network.WhitelistPreviewPacket;
+import com.zhongbai233.net_music_can_play_bili.network.WhitelistCsvExportPacket;
 import com.zhongbai233.net_music_can_play_bili.menu.MediaToolBindingMenu;
 import com.zhongbai233.net_music_can_play_bili.menu.MediaToolReportMenu;
 import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
 import com.zhongbai233.net_music_can_play_bili.server.ControlConsoleConsumerLeaseRegistry;
+import com.zhongbai233.net_music_can_play_bili.server.BiliWhitelistManager;
 import com.zhongbai233.net_music_can_play_bili.server.MediaBindingCleanupService;
 import com.zhongbai233.net_music_can_play_bili.server.MediaEquipmentBindingService;
 import com.zhongbai233.net_music_can_play_bili.mixin.GuiGraphicsExtractorAccessor;
@@ -166,6 +174,7 @@ import javax.imageio.ImageIO;
 import java.net.URI;
 import java.net.URL;
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.ArrayList;
@@ -333,6 +342,20 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
                 "Bilibili live input, metadata ownership, reconnect backoff and consumer rebind contracts",
                 Set.of("client", "live", "bilibili", "metadata", "reconnect", "consumer", "session"),
                 Duration.ofSeconds(10)), ignored -> new LiveStreamContractScenario());
+        registrar.register(new ScenarioDescriptor(
+                "ncpb.whitelist-management-lifecycle",
+                "Whitelist add/remove, live-source denial, review/preview GUI and CSV export without persistent pollution",
+                Set.of("client", "server", "whitelist", "live", "deny", "add", "remove", "export",
+                        "review", "preview", "gui"), Duration.ofSeconds(45)),
+                ignored -> new WhitelistManagementLifecycleScenario());
+        if (Boolean.getBoolean("ncpb.live.real_bench")) {
+            registrar.register(new ScenarioDescriptor(
+                    "ncpb.real-live-device-topology",
+                    "Real Bilibili live room 8178490 through live streamer, projector, console and speaker",
+                    Set.of("client", "server", "live", "bilibili", "network", "audio", "video", "openal",
+                            "native", "projector", "console", "speaker"), Duration.ofMinutes(5)),
+                    ignored -> new RealLiveDeviceTopologyScenario());
+        }
         if (AudioStreamProperties.realMp3Bench().enabled()) {
             registrar.register(new ScenarioDescriptor(
                     "ncpb.real-mp3-seek",
@@ -6026,6 +6049,435 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
         @Override
         public void teardown(BenchClientContext context) {
             LiveRoomMetadataRegistry.clear();
+        }
+    }
+
+    private static <T> T requireBlockEntity(Level level, BlockPos pos, Class<T> type) {
+        Object value = level.getBlockEntity(pos);
+        if (!type.isInstance(value)) {
+            throw new AssertionError(type.getSimpleName() + " is missing at " + pos + ": " + value);
+        }
+        return type.cast(value);
+    }
+
+    private static final class WhitelistManagementLifecycleScenario implements BenchClientScenario {
+        private static final String REVIEW_ROOM = "8178490";
+        private static final String DENIED_ROOM = "9000000000000001";
+        private static final String EXPORT_FILE = "ncpb-whitelist-bench.csv";
+        private static final BenchMetricDescriptor OPERATIONS = new BenchMetricDescriptor(
+                "ncpb.whitelist.operations", "count", MetricDirection.NEUTRAL);
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
+        private final AtomicReference<WhitelistReviewPacket> reviewPayload = new AtomicReference<>();
+        private final AtomicReference<String> exportedCsv = new AtomicReference<>();
+        private final AtomicBoolean setupComplete = new AtomicBoolean();
+        private boolean originalWhitelistEnabled;
+        private boolean reviewRoomAddedByBench;
+        private UUID playerId;
+        private BlockPos livePos;
+        private Path exportPath;
+        private BenchGuiSession gui;
+        private long openedAtFrame;
+        private int phase;
+        private int operations;
+
+        @Override
+        public void setup(BenchClientContext context) {
+            originalWhitelistEnabled = Config.enableLinkWhitelist;
+            Config.enableLinkWhitelist = true;
+            playerId = context.player().getUUID();
+            livePos = context.player().blockPosition().offset(2, 0, 2).immutable();
+            exportPath = context.minecraft().gameDirectory.toPath().resolve("exports")
+                    .resolve("net_music_can_play_bili").resolve(EXPORT_FILE);
+            try {
+                Files.deleteIfExists(exportPath);
+            } catch (IOException e) {
+                throw new AssertionError("Could not clear the whitelist Bench export", e);
+            }
+            var server = context.minecraft().getSingleplayerServer();
+            if (server == null) {
+                throw new AssertionError("Integrated server is unavailable");
+            }
+            server.execute(() -> {
+                try {
+                    ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+                    if (player == null || !(player.level() instanceof ServerLevel level)) {
+                        throw new IllegalStateException("Integrated server player is unavailable");
+                    }
+                    level.setBlockAndUpdate(livePos, ModBlocks.LIVE_STREAMER.get().defaultBlockState());
+                    LiveStreamerBlockEntity live = requireBlockEntity(level, livePos, LiveStreamerBlockEntity.class);
+                    if (!live.setRoomId(level, DENIED_ROOM, player)) {
+                        throw new AssertionError("Bench denial room was not accepted as syntactically valid");
+                    }
+                    live.startLive(level, player);
+                    if (live.isPlaying() || live.isWaitingForLive()) {
+                        throw new AssertionError("Non-whitelisted live room passed the production start gate");
+                    }
+                    String denial = BiliWhitelistManager.denialMessage(player, "live:" + DENIED_ROOM,
+                            "启动直播").getString();
+                    if (!denial.contains("未加入白名单") || !denial.contains(DENIED_ROOM)) {
+                        throw new AssertionError("Whitelist denial did not expose the rejected live room: " + denial);
+                    }
+                    operations += 2;
+
+                    BiliWhitelistManager.AddResult deniedAdd = BiliWhitelistManager.add(server,
+                            "https://live.bilibili.com/" + DENIED_ROOM, player);
+                    if (deniedAdd.status() != BiliWhitelistManager.AddResult.Status.ADDED
+                            || !BiliWhitelistManager.isAllowed(server, "live:" + DENIED_ROOM)) {
+                        throw new AssertionError("Whitelist add did not allow the canonical live room: " + deniedAdd);
+                    }
+                    operations++;
+
+                    boolean reviewAlreadyAllowed = BiliWhitelistManager.isAllowed(server, "live:" + REVIEW_ROOM);
+                    BiliWhitelistManager.AddResult reviewAdd = BiliWhitelistManager.add(server,
+                            "https://live.bilibili.com/" + REVIEW_ROOM + "?live_from=modbench", player);
+                    if (!reviewAlreadyAllowed
+                            && reviewAdd.status() != BiliWhitelistManager.AddResult.Status.ADDED
+                            || reviewAlreadyAllowed
+                            && reviewAdd.status() != BiliWhitelistManager.AddResult.Status.DUPLICATE) {
+                        throw new AssertionError("Review room add/duplicate result was inconsistent: " + reviewAdd);
+                    }
+                    reviewRoomAddedByBench = !reviewAlreadyAllowed;
+                    operations++;
+
+                    WhitelistReviewPacket packet = WhitelistReviewPacket.create(BiliWhitelistManager.entries(server));
+                    boolean roomVisible = packet.entries().stream()
+                            .anyMatch(entry -> ("live:" + REVIEW_ROOM).equals(entry.id()));
+                    boolean deniedVisible = packet.entries().stream()
+                            .anyMatch(entry -> ("live:" + DENIED_ROOM).equals(entry.id()));
+                    if (!roomVisible || !deniedVisible) {
+                        throw new AssertionError("Whitelist review list omitted Bench entries: " + packet.entries());
+                    }
+                    reviewPayload.set(packet);
+                    operations++;
+
+                    String csv = BiliWhitelistManager.exportCsv(server);
+                    if (!csv.startsWith("type,id,addedAt,addedByName,addedByUuid,originalInput\r\n")
+                            || !csv.contains("\"live\",\"live:" + REVIEW_ROOM + "\"")) {
+                        throw new AssertionError("Whitelist CSV export omitted header or live room");
+                    }
+                    exportedCsv.set(csv);
+                    operations++;
+
+                    BiliWhitelistManager.RemoveResult removed = BiliWhitelistManager.remove(server,
+                            "live:" + DENIED_ROOM);
+                    if (removed.status() != BiliWhitelistManager.RemoveResult.Status.REMOVED
+                            || BiliWhitelistManager.isAllowed(server, "live:" + DENIED_ROOM)) {
+                        throw new AssertionError("Whitelist remove did not restore the denial gate: " + removed);
+                    }
+                    operations++;
+                    setupComplete.set(true);
+                } catch (Throwable error) {
+                    failure.compareAndSet(null, error);
+                }
+            });
+        }
+
+        @Override
+        public BenchClientStepResult stabilize(BenchClientContext context) {
+            throwIfFailed();
+            if (!setupComplete.get() || reviewPayload.get() == null || exportedCsv.get() == null) {
+                return BenchClientStepResult.CONTINUE;
+            }
+            context.minecraft().setScreen(new WhitelistReviewScreen(reviewPayload.get(), "live:" + REVIEW_ROOM));
+            gui = context.automation().beginGuiSession(WhitelistReviewScreen.class);
+            openedAtFrame = context.frames().sampleCount();
+            return BenchClientStepResult.COMPLETE;
+        }
+
+        @Override
+        public BenchClientStepResult warmup(BenchClientContext context) {
+            return context.frames().sampleCount() > openedAtFrame
+                    ? BenchClientStepResult.COMPLETE : BenchClientStepResult.CONTINUE;
+        }
+
+        @Override
+        public BenchClientStepResult measure(BenchClientContext context) {
+            throwIfFailed();
+            if (context.frames().sampleCount() <= openedAtFrame) {
+                return BenchClientStepResult.CONTINUE;
+            }
+            if (phase == 0) {
+                if (!(context.minecraft().screen instanceof WhitelistReviewScreen)
+                        || gui == null || !gui.active() || gui.snapshot().flattened().size() < 4) {
+                    throw new AssertionError("Whitelist review list did not render its controls");
+                }
+                gui.close();
+                WhitelistPreviewPacket preview = new WhitelistPreviewPacket(UUID.randomUUID(),
+                        "Live room " + REVIEW_ROOM, "", "", "",
+                        16, 9, 1, 7, 0, 0L, false);
+                context.minecraft().setScreen(new WhitelistPreviewScreen(preview));
+                gui = context.automation().beginGuiSession(WhitelistPreviewScreen.class);
+                openedAtFrame = context.frames().sampleCount();
+                phase = 1;
+                return BenchClientStepResult.CONTINUE;
+            }
+            if (!(context.minecraft().screen instanceof WhitelistPreviewScreen)
+                    || gui == null || !gui.active() || gui.snapshot().flattened().isEmpty()) {
+                throw new AssertionError("Whitelist preview screen did not render");
+            }
+            WhitelistCsvExportClient.save(new WhitelistCsvExportPacket(EXPORT_FILE, exportedCsv.get()));
+            if (!Files.isRegularFile(exportPath)) {
+                throw new AssertionError("Whitelist CSV was not written to the client export directory");
+            }
+            operations++;
+            context.metrics().record(OPERATIONS, operations);
+            gui.close();
+            gui = null;
+            context.minecraft().setScreen(null);
+            phase = 2;
+            return BenchClientStepResult.COMPLETE;
+        }
+
+        @Override
+        public void verify(BenchClientContext context) {
+            throwIfFailed();
+            if (phase != 2 || operations != 8 || !Files.isRegularFile(exportPath)
+                    || context.minecraft().screen != null) {
+                throw new AssertionError("Whitelist lifecycle did not complete: phase=" + phase
+                        + " operations=" + operations + " export=" + exportPath);
+            }
+        }
+
+        @Override
+        public void teardown(BenchClientContext context) {
+            context.minecraft().setScreen(null);
+            if (gui != null) {
+                gui.close();
+                gui = null;
+            }
+            try {
+                if (exportPath != null) {
+                    Files.deleteIfExists(exportPath);
+                }
+            } catch (IOException ignored) {
+            }
+            var server = context.minecraft().getSingleplayerServer();
+            if (server != null) {
+                boolean removeReviewRoom = reviewRoomAddedByBench;
+                server.execute(() -> {
+                    try {
+                        BiliWhitelistManager.remove(server, "live:" + DENIED_ROOM);
+                        if (removeReviewRoom) {
+                            BiliWhitelistManager.remove(server, "live:" + REVIEW_ROOM);
+                        }
+                    } catch (IOException ignored) {
+                    }
+                    if (livePos != null && server.overworld().isLoaded(livePos)) {
+                        server.overworld().setBlockAndUpdate(livePos, Blocks.AIR.defaultBlockState());
+                    }
+                });
+            }
+            Config.enableLinkWhitelist = originalWhitelistEnabled;
+        }
+
+        private void throwIfFailed() {
+            Throwable error = failure.get();
+            if (error != null) {
+                throw new AssertionError("Whitelist management lifecycle failed", error);
+            }
+        }
+    }
+
+    private static final class RealLiveDeviceTopologyScenario implements BenchClientScenario {
+        private static final BenchMetricDescriptor CONSUMERS = new BenchMetricDescriptor(
+                "ncpb.real_live.consumers", "count", MetricDirection.NEUTRAL);
+        private static final BenchMetricDescriptor AUDIO_MILLIS = new BenchMetricDescriptor(
+                "ncpb.real_live.audio_millis", "ms", MetricDirection.HIGHER_IS_BETTER);
+        private final String roomId = System.getProperty("ncpb.live.real_bench.room", "8178490").trim();
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
+        private final AtomicReference<BiliLiveStreamResolver.LiveRoom> resolvedRoom = new AtomicReference<>();
+        private final AtomicBoolean fixtureReady = new AtomicBoolean();
+        private final AtomicBoolean roomAddedByBench = new AtomicBoolean();
+        private UUID playerId;
+        private BlockPos livePos;
+        private BlockPos projectorPos;
+        private BlockPos speakerPos;
+        private BlockPos consolePos;
+        private int stableTicks;
+
+        @Override
+        public void setup(BenchClientContext context) {
+            if (!BiliLiveStreamResolver.isValidRoomId(roomId)) {
+                throw new AssertionError("Invalid real-live Bench room: " + roomId);
+            }
+            playerId = context.player().getUUID();
+            BlockPos origin = context.player().blockPosition().offset(2, 0, 2).immutable();
+            livePos = origin;
+            projectorPos = origin.offset(2, 0, 0);
+            speakerPos = origin.offset(0, 0, 2);
+            consolePos = origin.offset(2, 0, 2);
+            CompletableFuture.runAsync(() -> {
+                try {
+                    BiliLiveStreamResolver.LiveRoom room = BiliLiveStreamResolver.resolve(roomId);
+                    if (!room.isLive() || room.streams().isEmpty()) {
+                        throw new IOException("Bilibili room " + roomId
+                                + " is currently offline or returned no playable streams");
+                    }
+                    resolvedRoom.set(room);
+                } catch (Throwable error) {
+                    failure.compareAndSet(null, error);
+                }
+            });
+            var server = context.minecraft().getSingleplayerServer();
+            if (server == null) {
+                throw new AssertionError("Integrated server is unavailable");
+            }
+            server.execute(() -> {
+                try {
+                    ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+                    if (player == null || !(player.level() instanceof ServerLevel level)) {
+                        throw new IllegalStateException("Integrated server player is unavailable");
+                    }
+                    if (Config.enableLinkWhitelist && !BiliWhitelistManager.isAllowed(server, "live:" + roomId)) {
+                        BiliWhitelistManager.AddResult added = BiliWhitelistManager.add(server,
+                                "https://live.bilibili.com/" + roomId, player);
+                        if (added.status() != BiliWhitelistManager.AddResult.Status.ADDED) {
+                            throw new AssertionError("Could not temporarily whitelist real-live room: " + added);
+                        }
+                        roomAddedByBench.set(true);
+                    }
+                    for (BlockPos pos : List.of(livePos, projectorPos, speakerPos, consolePos)) {
+                        level.setBlockAndUpdate(pos.below(), Blocks.STONE.defaultBlockState());
+                    }
+                    level.setBlockAndUpdate(livePos, ModBlocks.LIVE_STREAMER.get().defaultBlockState());
+                    level.setBlockAndUpdate(projectorPos, ModBlocks.VIDEO_PROJECTOR.get().defaultBlockState());
+                    level.setBlockAndUpdate(speakerPos, ModBlocks.SPEAKER.get().defaultBlockState());
+                    level.setBlockAndUpdate(consolePos, ModBlocks.CONTROL_CONSOLE.get().defaultBlockState());
+
+                    VideoProjectorBlockEntity projector = requireBlockEntity(level, projectorPos,
+                            VideoProjectorBlockEntity.class);
+                    projector.setPreferredQuality(80);
+                    projector.linkTo(livePos);
+                    SpeakerBlockEntity speaker = requireBlockEntity(level, speakerPos, SpeakerBlockEntity.class);
+                    speaker.setChannelIndex(SpeakerBlockEntity.CH_L);
+                    speaker.setVolume(1.0F);
+                    speaker.linkTo(livePos);
+                    ControlConsoleBlockEntity console = requireBlockEntity(level, consolePos,
+                            ControlConsoleBlockEntity.class);
+                    console.linkTo(level.dimension().identifier().toString(), livePos,
+                            ControlConsoleDocument.SourceKind.LIVE_STREAMER);
+                    List<ControlConsoleElement> elements = List.of(
+                            ControlConsoleElement.defaultScreen(),
+                            new ControlConsoleElement(ControlConsoleElement.Type.AUDIO, "直播音频", 1.4F,
+                                    0.0F, 0.0F, 0.25F, 1.0F, 0.0F, 0.0F, 0.0F));
+                    if (!console.replaceDocument(console.document().revision(), "Live Bench " + roomId,
+                            32.0D, 16.0D, 32.0D, elements)) {
+                        throw new AssertionError("Could not install console screen/audio elements");
+                    }
+                    LiveStreamerBlockEntity live = requireBlockEntity(level, livePos, LiveStreamerBlockEntity.class);
+                    if (!live.setRoomId(level, roomId, player)) {
+                        throw new AssertionError("Live streamer rejected Bench room " + roomId);
+                    }
+                    live.startLive(level, player);
+                    if (!player.teleportTo(level, consolePos.getX() + 0.5D, consolePos.getY() + 1.0D,
+                            consolePos.getZ() + 3.0D, Set.<Relative>of(), 180.0F, 0.0F, true)) {
+                        throw new AssertionError("Could not place player inside console range");
+                    }
+                    fixtureReady.set(true);
+                } catch (Throwable error) {
+                    failure.compareAndSet(null, error);
+                }
+            });
+        }
+
+        @Override
+        public BenchClientStepResult stabilize(BenchClientContext context) {
+            throwIfFailed();
+            if (!fixtureReady.get() || resolvedRoom.get() == null || !clientFixturesReady(context)
+                    || !context.environment().readiness().ready() || context.frames().sampleCount() < 2) {
+                return BenchClientStepResult.CONTINUE;
+            }
+            return BenchClientStepResult.COMPLETE;
+        }
+
+        @Override
+        public BenchClientStepResult warmup(BenchClientContext context) {
+            throwIfFailed();
+            if (!(context.level().getBlockEntity(livePos) instanceof LiveStreamerBlockEntity live)
+                    || !live.isPlaying()) {
+                return BenchClientStepResult.CONTINUE;
+            }
+            ClientAudioOutputRegistry.AudioTimeline audio = ClientAudioOutputRegistry.getAudioTimeline(livePos);
+            String session = audio.playbackSessionId().map(PlaybackSessionId::value).orElse("");
+            if (audio.combinedMillis() < 0L || audio.relayRegisteredCount() < 2 || session.isBlank()) {
+                return BenchClientStepResult.CONTINUE;
+            }
+            LiveStreamerVideoClient.sync(livePos, session);
+            if (!VideoBillboardPreview.isSessionRunning(session)
+                    || !VideoBillboardPreview.currentProjectorFrame(projectorPos).hasFrame()
+                    || !ControlConsoleRenderer.consumerLeaseDiagnostic(consolePos).active()) {
+                return BenchClientStepResult.CONTINUE;
+            }
+            return BenchClientStepResult.COMPLETE;
+        }
+
+        @Override
+        public BenchClientStepResult measure(BenchClientContext context) {
+            throwIfFailed();
+            ClientAudioOutputRegistry.AudioTimeline audio = ClientAudioOutputRegistry.getAudioTimeline(livePos);
+            String session = audio.playbackSessionId().map(PlaybackSessionId::value).orElse("");
+            boolean loaded = audio.combinedMillis() >= 0L && audio.relayRegisteredCount() >= 2
+                    && !session.isBlank() && VideoBillboardPreview.isSessionRunning(session)
+                    && VideoBillboardPreview.currentProjectorFrame(projectorPos).hasFrame()
+                    && ControlConsoleRenderer.consumerLeaseDiagnostic(consolePos).active();
+            if (!loaded) {
+                stableTicks = 0;
+                return BenchClientStepResult.CONTINUE;
+            }
+            context.metrics().record(CONSUMERS, 4);
+            context.metrics().record(AUDIO_MILLIS, audio.combinedMillis());
+            return ++stableTicks >= 40 ? BenchClientStepResult.COMPLETE : BenchClientStepResult.CONTINUE;
+        }
+
+        @Override
+        public void verify(BenchClientContext context) {
+            throwIfFailed();
+            BiliLiveStreamResolver.LiveRoom room = resolvedRoom.get();
+            if (room == null || !room.isLive() || room.streams().isEmpty() || stableTicks < 40
+                    || !clientFixturesReady(context)) {
+                throw new AssertionError("Real-live topology did not remain loaded: room=" + room
+                        + " stableTicks=" + stableTicks);
+            }
+        }
+
+        @Override
+        public void teardown(BenchClientContext context) {
+            LiveStreamerVideoClient.clear();
+            ClientAudioOutputRegistry.cleanup();
+            var server = context.minecraft().getSingleplayerServer();
+            if (server != null) {
+                server.execute(() -> {
+                    if (server.overworld().getBlockEntity(livePos) instanceof LiveStreamerBlockEntity live) {
+                        live.stopLive();
+                    }
+                    for (BlockPos pos : List.of(livePos, projectorPos, speakerPos, consolePos)) {
+                        server.overworld().setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
+                    }
+                    if (roomAddedByBench.get()) {
+                        try {
+                            BiliWhitelistManager.remove(server, "live:" + roomId);
+                        } catch (IOException ignored) {
+                        }
+                    }
+                });
+            }
+        }
+
+        private boolean clientFixturesReady(BenchClientContext context) {
+            return context.level().getBlockEntity(livePos) instanceof LiveStreamerBlockEntity
+                    && context.level().getBlockEntity(projectorPos) instanceof VideoProjectorBlockEntity projector
+                    && livePos.equals(projector.getLinkedTurntablePos())
+                    && context.level().getBlockEntity(speakerPos) instanceof SpeakerBlockEntity speaker
+                    && livePos.equals(speaker.getLinkedTurntablePos())
+                    && context.level().getBlockEntity(consolePos) instanceof ControlConsoleBlockEntity console
+                    && console.document().sourceKind() == ControlConsoleDocument.SourceKind.LIVE_STREAMER;
+        }
+
+        private void throwIfFailed() {
+            Throwable error = failure.get();
+            if (error != null) {
+                throw new AssertionError("Real-live device topology failed for room " + roomId, error);
+            }
         }
     }
 

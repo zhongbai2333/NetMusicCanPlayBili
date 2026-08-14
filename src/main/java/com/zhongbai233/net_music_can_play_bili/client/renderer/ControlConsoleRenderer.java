@@ -86,8 +86,10 @@ public final class ControlConsoleRenderer
         state.sourceKind = console.document().sourceKind();
         if (state.sourcePos != null && state.sourceKind == ControlConsoleDocument.SourceKind.TURNTABLE) {
             ClientLinkRegistry.link(state.consolePos, state.sourcePos);
+            ClientAudioOutputRegistry.bindConsoleRoute(state.consolePos, state.sourcePos);
         } else {
             ClientLinkRegistry.unlink(state.consolePos);
+            ClientAudioOutputRegistry.unbindConsoleRoute(state.consolePos);
         }
         registerConsumer(console);
         reconcileConsumer(state.consolePos);
@@ -464,9 +466,14 @@ public final class ControlConsoleRenderer
         CONSUMERS.remove(consolePos);
     }
 
-    public static void notifyConsoleRemoved(BlockPos consolePos) {
+    public static void notifyConsoleRemoved(BlockPos consolePos, boolean bindingDestroyed) {
         if (consolePos != null) {
             ClientLinkRegistry.unlink(consolePos);
+            if (bindingDestroyed) {
+                // Active relays keep suppression during their short exit fade. Once they are
+                // gone, an actually removed console no longer owns the source route.
+                ClientAudioOutputRegistry.unbindConsoleRoute(consolePos);
+            }
         }
         ConsumerState runtime = consolePos != null ? CONSUMERS.get(consolePos) : null;
         Minecraft minecraft = Minecraft.getInstance();
@@ -475,7 +482,17 @@ public final class ControlConsoleRenderer
             beginBurstExit(consolePos, runtime);
             return;
         }
-        unregisterConsumer(consolePos);
+        if (bindingDestroyed) {
+            unregisterConsumer(consolePos);
+        } else {
+            // Chunk unload is not a logical unbind. Keep a dormant state so that a later
+            // loaded chunk can either restore the binding or prove that the block was removed
+            // while it was outside this client's view.
+            if (runtime != null) {
+                releaseConsumerLease(consolePos, runtime);
+            }
+            deactivateConsumer(consolePos);
+        }
     }
 
     public static void tickConsumers() {
@@ -541,8 +558,20 @@ public final class ControlConsoleRenderer
      */
     public static void registerConsumer(ControlConsoleBlockEntity console) {
         if (console.getLevel() != null) {
-            CONSUMERS.compute(console.getBlockPos().immutable(), (pos, existing) -> existing != null
+            BlockPos consolePos = console.getBlockPos().immutable();
+            CONSUMERS.compute(consolePos, (pos, existing) -> existing != null
                     && existing.level == console.getLevel() ? existing : new ConsumerState(console.getLevel()));
+            reconcileRouteBinding(consolePos, console.document(), console.getLevel());
+        }
+    }
+
+    private static void reconcileRouteBinding(BlockPos consolePos, ControlConsoleDocument document,
+            net.minecraft.world.level.Level level) {
+        BlockPos source = sourcePos(document, level);
+        if (source != null && document.sourceKind() == ControlConsoleDocument.SourceKind.TURNTABLE) {
+            ClientAudioOutputRegistry.bindConsoleRoute(consolePos, source);
+        } else {
+            ClientAudioOutputRegistry.unbindConsoleRoute(consolePos);
         }
     }
 
@@ -592,21 +621,35 @@ public final class ControlConsoleRenderer
             tickBurstExit(consolePos, runtime);
             return;
         }
-        if (runtime.level != minecraft.level
-            || !minecraft.level.hasChunk(Math.floorDiv(consolePos.getX(), 16),
-                Math.floorDiv(consolePos.getZ(), 16))
-                || !(minecraft.level.getBlockEntity(consolePos) instanceof ControlConsoleBlockEntity console)) {
+        if (runtime.level != minecraft.level) {
+            CONSUMERS.remove(consolePos, runtime);
+            releaseConsumerLease(consolePos, runtime);
+            deactivateConsumer(consolePos);
+            return;
+        }
+        boolean consoleChunkLoaded = minecraft.level.hasChunk(Math.floorDiv(consolePos.getX(), 16),
+                Math.floorDiv(consolePos.getZ(), 16));
+        if (!consoleChunkLoaded) {
             if (runtime.active) {
                 beginBurstExit(consolePos, runtime);
                 tickBurstExit(consolePos, runtime);
             } else {
-                CONSUMERS.remove(consolePos, runtime);
                 releaseConsumerLease(consolePos, runtime);
                 deactivateConsumer(consolePos);
             }
             return;
         }
+        if (!(minecraft.level.getBlockEntity(consolePos) instanceof ControlConsoleBlockEntity console)) {
+            // The chunk is authoritative now: a console that disappeared while unloaded is an
+            // actual removal, not another range exit. Release the persistent route owner.
+            ClientAudioOutputRegistry.unbindConsoleRoute(consolePos);
+            CONSUMERS.remove(consolePos, runtime);
+            releaseConsumerLease(consolePos, runtime);
+            deactivateConsumer(consolePos);
+            return;
+        }
         ControlConsoleDocument document = console.document();
+        reconcileRouteBinding(consolePos, document, minecraft.level);
         BlockPos source = sourcePos(document, minecraft.level);
         double centerX = consolePos.getX() + 0.5D;
         double centerY = consolePos.getY() + 0.5D;

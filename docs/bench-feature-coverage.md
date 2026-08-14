@@ -16,15 +16,15 @@
 | 媒体 GUI | `ncpb.gui-screen-matrix` | 15 个离线安全生产 Screen 逐一打开、真实渲染、自动化快照、关闭；包括 MP4、Pad、地图、绑定/报告和白名单审核/预览 |
 | 手持 MP4/Pad | `ncpb.handheld-media-contracts`、`ncpb.playback-session-races` | 两种屏幕几何/缩放、Pad 逻辑会话身份、媒体会话竞态 |
 | Pad 地图/地形 | `ncpb.gui-screen-matrix`、`ncpb.terrain-lod-roundtrip` | 地图 Screen、采样/缓存使用路径、LOD/PIP/GPU/透明层与资源收敛 |
-| Bilibili 直播 | `ncpb.live-stream-contracts` | 房间号/链接/占位 URL、元数据 owner、健康重连与指数退避、消费者重绑 |
+| Bilibili 直播 | `ncpb.live-stream-contracts`、`ncpb.real-live-device-topology` | 房间号/链接/占位 URL、元数据 owner、健康重连与指数退避；真实 8178490 直播流的直播机、投影仪、中控台屏幕/音频元素和实体音响联合加载 |
 | 真实 Bilibili 点播 | `ncpb.real-bv-playback` | 真实 BV 分 P、DASH 音视频、AV1/H.264 候选、native decode、OpenAL、GPU 上传与清理 |
 | AV1 回退/硬解 seek | `ncpb.real-av1-h264-fallback`、`ncpb.real-av1-hardware-seek`、`ncpb.frozen-real-av1-hardware-seek` | AV1 首帧失败转 H.264、同会话 continuity、Range seek、PTS、固定样本 |
 | GPU 视频上传 | `ncpb.deterministic-video-upload` | RGBA、YUV420P、NV12/PBO 上传与纹理释放 |
 | 资源生命周期 | `ncpb.media-resource-convergence`、`ncpb.real-media-lifecycle-100` | HTTP、native、GPU/PBO、OpenAL、owned memory 的静止基线 |
 | 多客户端 | 三个 `ncpb.multi-client-*` | 独立消费者 lease、断开、重连、真实媒体 survivor |
 | 跨维度 | `ncpb.cross-dimension-media-cleanup` | respawn 包、加载 UI、跨维度媒体精确清理 |
-| 中控台 | `ncpb.console-consumer-lifecycle`、`ncpb.device-link-config-matrix` | 消费者 attach/detach、source binding、客户端消费者登记、GUI/lease |
-| 白名单 | `ncpb.gui-screen-matrix` | 审核列表 Screen 的空快照安全渲染；真实媒体预览由 `real-bv-playback` 的相同 resolver/decoder 管线覆盖 |
+| 中控台 | `ncpb.console-consumer-lifecycle`、`ncpb.device-link-config-matrix`、`ncpb.real-live-device-topology` | 消费者 attach/detach、source binding、客户端消费者登记、GUI/lease，以及真实直播的屏幕+音频元素 |
+| 白名单 | `ncpb.whitelist-management-lifecycle`、`ncpb.gui-screen-matrix` | 真实服务端增加/删除、直播机启动拦截、审核列表非空快照、预览 Screen、CSV 服务端生成与客户端落盘；场景结束恢复配置并清理临时条目 |
 
 ## 当前不能完全自动化的边界
 
@@ -41,8 +41,20 @@
 ```bash
 bash gradlew runBenchClient \
   -PenableModBench=true \
-  -PmodBench.scenarios=ncpb.device-link-config-matrix,ncpb.wearable-binding-topology,ncpb.gui-screen-matrix,ncpb.handheld-media-contracts,ncpb.live-stream-contracts \
+  -PmodBench.scenarios=ncpb.device-link-config-matrix,ncpb.wearable-binding-topology,ncpb.gui-screen-matrix,ncpb.handheld-media-contracts,ncpb.live-stream-contracts,ncpb.whitelist-management-lifecycle \
   --no-daemon
 ```
 
-真实 Bilibili 音视频仍使用 `ncpb.real-bv-playback`，默认 BV 为 `BV1GJ411x7h7`。
+真实 Bilibili 直播四设备拓扑默认使用房间 `8178490`，只在显式开启时注册：
+
+```bash
+bash gradlew runBenchClient \
+  -PenableModBench=true \
+  -PncpbRealLiveBench=true \
+  -PncpbLiveBenchRoom=8178490 \
+  -PmodBench.scenarios=ncpb.real-live-device-topology \
+  --no-daemon
+```
+
+房间当时未开播或 B站未返回可播地址时，该真实网络场景会明确失败，不会用假帧代替。真实点播仍使用
+`ncpb.real-bv-playback`，默认 BV 为 `BV1GJ411x7h7`。

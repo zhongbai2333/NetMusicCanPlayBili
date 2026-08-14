@@ -194,6 +194,8 @@ neoForge {
             jvmProp 'ncpb.video.real_bench.realtime', prop('ncpbRealBenchRealtime', 'false')
             jvmProp 'ncpb.video.real_bench.max_fps', prop('ncpbRealBenchMaxFps', '30')
             jvmProp 'ncpb.video.real_bench.qualities', prop('ncpbRealBenchQualities', '16')
+            jvmProp 'ncpb.live.real_bench', prop('ncpbRealLiveBench', 'false')
+            jvmProp 'ncpb.live.real_bench.room', prop('ncpbLiveBenchRoom', '8178490')
             jvmProp 'ncpb.video.real_media_lifecycle', prop('ncpbRealMediaLifecycle', 'false')
             jvmProp 'ncpb.video.real_media_lifecycle.rounds', prop('ncpbRealMediaLifecycleRounds', '100')
             jvmProp 'ncpb.video.real_media_lifecycle.cycle_timeout_ticks',
@@ -458,6 +460,8 @@ if (modBenchEnabled) {
                 systemProperty 'ncpb.video.real_bench.output_format', benchProp('ncpbRealBenchOutputFormat', 'nv12')
                 systemProperty 'ncpb.video.real_bench.preview', benchProp('ncpbRealBenchPreview', 'false')
                 systemProperty 'ncpb.video.real_bench.realtime', benchProp('ncpbRealBenchRealtime', 'false')
+                systemProperty 'ncpb.live.real_bench', benchProp('ncpbRealLiveBench', 'false')
+                systemProperty 'ncpb.live.real_bench.room', benchProp('ncpbLiveBenchRoom', '8178490')
                 systemProperty 'ncpb.video.real_media_lifecycle', benchProp('ncpbRealMediaLifecycle', 'false')
                 systemProperty 'ncpb.video.real_media_lifecycle.rounds',
                         benchProp('ncpbRealMediaLifecycleRounds', '100')

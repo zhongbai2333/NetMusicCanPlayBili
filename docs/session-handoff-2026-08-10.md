@@ -2895,8 +2895,9 @@ Gradle configuration cache，并在约 2 秒完成。
 ## Phase 77：运行时音轨接管、静音视频、中控台 UI 与慢 CDN 修复（2026-08-14）
 
 后续 `run/logs/debug.log` 和实机反馈推翻了“只剩外部测试”的判断，因此这些问题按发布阻断重新处理。唱片机
-音频 handler 重建时不再清除已经存在的音响/中控台主音轨接管状态；中控台虚拟音源改为按元素身份持有接管
-所有权，最后一个虚拟音源注销后才恢复主输出，避免永久静音或新 handler 重新漏出唱片机本体声音。Stereo 与
+音频 handler 重建时不再清除已经存在的音响/中控台主音轨接管状态；中控台改为按逻辑绑定持有唱片机主输出接管
+所有权，hardRange 外只注销短命虚拟音源，不恢复唱片机本体声音；只有明确解绑、改绑或实际拆除中控台才释放所有权。
+区块卸载不视为拆除，避免玩家走远时主输出突然恢复。Stereo 与
 Dolby 主输出执行追赶 flush 时，会把同一媒体样本基线传给全部 relay；中途新增 relay 也从当前主输出基线开始，
 不再像现场日志那样稳定落后约 2.05 秒。
 
@@ -2911,11 +2912,36 @@ Dolby 主输出执行追赶 flush 时，会把同一媒体样本基线传给全�
 非 B站 URL 仍保留单连接完整 GET 路径。
 
 隔离全量命令 `clean build -PenableModBench=true
--PncpbBuildDirectory=/private/tmp/ncpb-phase77-full-final-20260814 --no-daemon --no-build-cache` 已通过：221 suites /
-840 tests / 0 failures / 0 errors / 0 skipped；Bench 源集、生产 JAR、embedded native、法律材料、Scene Editor
-JiJ 和冲突副本门槛全部成功。产物为单一六平台通用 JAR，大小 9,202,026 bytes（约 8.78 MiB），仍低于
+-PncpbBuildDirectory=/private/tmp/ncpb-phase77-console-range-final-20260814 --no-daemon --no-build-cache` 已通过：222 suites /
+843 tests / 0 failures / 0 errors / 0 skipped；Bench 源集、生产 JAR、embedded native、法律材料、Scene Editor
+JiJ 和冲突副本门槛全部成功。产物为单一六平台通用 JAR，大小 9,205,355 bytes（约 8.78 MiB），仍低于
 10 MB。仍需由 `runClient` 实机确认 OpenAL 设备实际出声、主音轨确实静音、进度条动画和真实慢 CDN 切换日志；
 纯 Java/构建测试不能替代这四项设备/网络观测。
+
+## Phase 78：真实直播四设备与白名单管理 Bench（2026-08-14）
+
+`NetMusicBenchProvider` 新增默认离线可运行的 `ncpb.whitelist-management-lifecycle`：在集成服务端用
+真实 `LiveStreamerBlockEntity.startLive()` 触发未加白名单拦截，再覆盖 live 条目增加、删除、再次拦截、
+非空审核列表、预览 Screen、服务端 CSV 生成和客户端 `exports/net_music_can_play_bili` 落盘。测试只删除
+自己新增的 8178490 条目，保留测试前已存在的条目；导出文件和配置开关也在 teardown 恢复。
+
+真实网络场景 `ncpb.real-live-device-topology` 由 `-PncpbRealLiveBench=true` 显式注册，默认房间为
+`8178490`，可用 `-PncpbLiveBenchRoom` 覆盖。场景真实解析直播房与可播流，放置直播机、视频投影仪、
+实体音响和同时含屏幕/音频元素的中控台；两个 relay、OpenAL 时间线、投影首帧、中控台正式消费租约和
+40 tick 稳定窗口全部成为硬断言。直播间当时下播会明确失败，不用本地假帧冒充通过。详细命令见
+`docs/bench-feature-coverage.md`。
+
+本机 Apple M4 实跑两个新场景均为 `PASSED`：白名单报告位于
+`/private/tmp/ncpb-whitelist-lifecycle-run-20260814/modBench/raw-results/default/client/summary.json`，运行后世界白名单为空且
+客户端 CSV 已删除；8178490 当时正在直播，真实场景从 B站获得 2 个 FLV 候选，建立 48 kHz 立体声、
+两个 OpenAL relay、VideoToolbox H.264 1920×1080 NV12/PBO 首帧和两个视频消费端，报告位于
+`/private/tmp/ncpb-real-live-topology-run-20260814/modBench/raw-results/default/client/summary.json`。
+
+最终隔离全量命令 `bash gradlew clean build -PenableModBench=true
+-PncpbBuildDirectory=/private/tmp/ncpb-phase78-live-whitelist-final-20260814 --no-daemon --no-build-cache`
+已通过：222 suites / 843 tests / 0 failures / 0 errors / 0 skipped；Bench 源集、生产 JAR 内容隔离、
+六平台 embedded native、法律材料、Scene Editor JiJ 与冲突副本门槛全部成功。正式通用 JAR 为
+9,205,355 bytes（约 8.78 MiB）；新增直播/白名单场景只存在于 `src/bench`，未进入生产 JAR。
 
 ## 推荐的新会话工作流
 
