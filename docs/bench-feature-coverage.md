@@ -24,7 +24,7 @@
 | 多客户端 | 三个 `ncpb.multi-client-*` | 独立消费者 lease、断开、重连、真实媒体 survivor |
 | 跨维度 | `ncpb.cross-dimension-media-cleanup` | respawn 包、加载 UI、跨维度媒体精确清理 |
 | 中控台 | `ncpb.console-consumer-lifecycle`、`ncpb.device-link-config-matrix`、`ncpb.real-live-device-topology` | 消费者 attach/detach、source binding、客户端消费者登记、GUI/lease，以及真实直播的屏幕+音频元素 |
-| 白名单 | `ncpb.whitelist-management-lifecycle`、`ncpb.gui-screen-matrix` | 真实服务端增加/删除、直播机启动拦截、审核列表非空快照、预览 Screen、CSV 服务端生成与客户端落盘；场景结束恢复配置并清理临时条目 |
+| 白名单与权限 | `ncpb.whitelist-management-lifecycle`、`ncpb.luckperms-permission-bridge`、`ncpb.gui-screen-matrix` | 真实服务端增加/删除、直播机启动拦截、审核列表非空快照、预览 Screen、CSV 服务端生成与客户端落盘；paired Bench 加载 LuckPerms NeoForge，并验证 LP 授权/撤销经 NeoForge PermissionAPI 控制真实白名单命令；场景结束恢复配置并清理临时条目 |
 
 ## 当前不能完全自动化的边界
 

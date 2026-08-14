@@ -391,6 +391,8 @@ dependencies {
     runtimeOnly "maven.modrinth:net-music:mCrjhdSq"
     if (modBenchEnabled) {
         benchCompileOnly "maven.modrinth:net-music:mCrjhdSq"
+        // Real LuckPerms -> NeoForge PermissionAPI integration; never enters the production JAR.
+        benchRuntimeMod "maven.modrinth:Vebnzrzj:${luckperms_bench_version}"
     }
     compileOnly "maven.modrinth:iris:YEGDGnJM"
 
@@ -419,23 +421,23 @@ if (modBenchEnabled) {
         phaseTimeoutTicks = realMediaLifecycleEnabled ? 72000 : terrainCompatMatrixEnabled ? 3600 : 1200
         clientWorldPreset = 'void'
         clientRequireWindowFocus = false
+        pairedClientCount = providers.gradleProperty('ncpbPairedClientCount')
+                .map { Integer.parseInt(it) }.orElse(1).get()
+        pairedProjectProperties.put('enableModBench', 'true')
+        pairedProjectProperties.put('modbench_version', providers.gradleProperty('modbench_version').get())
+        pairedProjectProperties.put('ncpbPairedClientCount', String.valueOf(pairedClientCount.get()))
+        pairedProjectProperties.put('ncpbBuildDirectory', layout.buildDirectory.get().asFile.absolutePath)
         if (providers.gradleProperty('ncpbLocalModBench').map { it.toBoolean() }.orElse(false).get()) {
-            pairedClientCount = providers.gradleProperty('ncpbPairedClientCount')
-                    .map { Integer.parseInt(it) }.orElse(1).get()
-            pairedProjectProperties.put('enableModBench', 'true')
             pairedProjectProperties.put('ncpbLocalModBench', 'true')
-            pairedProjectProperties.put('modbench_version', providers.gradleProperty('modbench_version').get())
-            pairedProjectProperties.put('ncpbPairedClientCount', String.valueOf(pairedClientCount.get()))
-            pairedProjectProperties.put('ncpbBuildDirectory', layout.buildDirectory.get().asFile.absolutePath)
-            (sharedMediaRunProperties.collect { it.gradle } + [
-                    'ncpbRealBenchManaged',
-                    'ncpbRealMp3Bench', 'ncpbRealMp3BenchUrl', 'enableTerrainCompatMatrix',
-                    'ncpbTerrainCompatAssetDirectory'
-            ]).unique().each { propertyName ->
-                def propertyValue = providers.gradleProperty(propertyName).orNull
-                if (propertyValue != null) {
-                    pairedProjectProperties.put(propertyName, propertyValue)
-                }
+        }
+        (sharedMediaRunProperties.collect { it.gradle } + [
+                'ncpbRealBenchManaged',
+                'ncpbRealMp3Bench', 'ncpbRealMp3BenchUrl', 'enableTerrainCompatMatrix',
+                'ncpbTerrainCompatAssetDirectory'
+        ]).unique().each { propertyName ->
+            def propertyValue = providers.gradleProperty(propertyName).orNull
+            if (propertyValue != null) {
+                pairedProjectProperties.put(propertyName, propertyValue)
             }
         }
     }

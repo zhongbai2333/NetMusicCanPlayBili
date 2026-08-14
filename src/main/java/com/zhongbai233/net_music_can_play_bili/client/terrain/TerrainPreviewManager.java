@@ -6,9 +6,9 @@ import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainCoverageCurso
 import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainSectionKey;
 import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainNeighborhoodIndex;
 import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainFixedCorePolicy;
+import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainMapColorAggregator;
 import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainPackedLight;
 import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainTintColors;
-import com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainMaterialAggregator;
 import com.zhongbai233.net_music_can_play_bili.terrain.core.WeightedLruCache;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -16,6 +16,7 @@ import net.minecraft.client.renderer.BiomeColors;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.material.MapColor;
 import net.minecraft.world.level.LightLayer;
 import org.joml.Vector3dc;
 
@@ -29,7 +30,7 @@ import java.util.Set;
 
 /**
  * 单活跃中控台地形会话。初始化中心周围使用固定直径 25 的球形实景核心，
- * 3 格边缘通过稳定空间抖动消隐；硬范围内其余已加载地形发布聚合材质网格，未知区块保留线框。
+ * 3 格边缘通过稳定空间抖动消隐；硬范围内其余已加载地形发布地图配色宏体素网格，未知区块保留线框。
  * 相机移动不会改变表示层级，PIP 只消费渐进生成的不可变快照。
  */
 public final class TerrainPreviewManager {
@@ -319,7 +320,7 @@ public final class TerrainPreviewManager {
             blockEntityPositions.removeIf(pos -> TerrainSectionKey.fromBlock(
                     pos.getX(), pos.getY(), pos.getZ()).equals(key));
             List<TerrainBlockSectionSnapshot.VisibleBlock> detail = new ArrayList<>();
-            List<TerrainBlockSectionSnapshot.VisibleBlock> wire = new ArrayList<>();
+            List<TerrainMapColorAggregator.Sample<BlockState>> wire = new ArrayList<>();
             for (int localY = 0; localY < TerrainSectionKey.SIZE; localY++) {
                 int worldY = key.minBlockY() + localY;
                 if (worldY < bounds.minY() || worldY > bounds.maxY()
@@ -356,7 +357,11 @@ public final class TerrainPreviewManager {
                                 blockEntityPositions.add(cursor.immutable());
                             }
                         } else {
-                            wire.add(block);
+                            int mapColor = safeMapColor(state);
+                            if (mapColor != 0) {
+                                wire.add(new TerrainMapColorAggregator.Sample<>(
+                                        localX, localY, localZ, state, mapColor));
+                            }
                         }
                     }
                 }
@@ -375,13 +380,13 @@ public final class TerrainPreviewManager {
             if (wire.isEmpty()) {
                 overviewBySection.remove(key);
             } else {
-                overviewBySection.put(key, aggregateOverview(key, wire, overviewCellSize(key)));
+                overviewBySection.put(key, mapColorOverview(key, wire, overviewCellSize(key)));
             }
             frameDirty = true;
         }
 
         private void captureMaterialLod(TerrainSectionKey key) {
-            List<TerrainMaterialAggregator.Sample<BlockState>> visible = new ArrayList<>();
+            List<TerrainMapColorAggregator.Sample<BlockState>> visible = new ArrayList<>();
             for (int localY = 0; localY < TerrainSectionKey.SIZE; localY++) {
                 int worldY = key.minBlockY() + localY;
                 if (worldY < bounds.minY() || worldY > bounds.maxY()
@@ -400,7 +405,11 @@ public final class TerrainPreviewManager {
                         }
                         BlockState state = safeBlockState(worldX, worldY, worldZ);
                         if (state != null && isRenderableState(state)) {
-                            visible.add(new TerrainMaterialAggregator.Sample<>(localX, localY, localZ, state));
+                            int mapColor = safeMapColor(state);
+                            if (mapColor != 0) {
+                                visible.add(new TerrainMapColorAggregator.Sample<>(
+                                        localX, localY, localZ, state, mapColor));
+                            }
                         }
                     }
                 }
@@ -411,32 +420,9 @@ public final class TerrainPreviewManager {
                 overviewBySection.remove(key);
             } else {
                 int cellSize = overviewCellSize(key);
-                List<TerrainBlockSectionSnapshot.VisibleBlock> materialCells = new ArrayList<>();
-                long tintLayerCount = 0L;
-                for (TerrainMaterialAggregator.Cell<BlockState> cell
-                        : TerrainMaterialAggregator.aggregate(visible, cellSize)) {
-                    TerrainMaterialAggregator.Sample<BlockState> representative = cell.representative();
-                    int worldX = key.minBlockX() + representative.localX();
-                    int worldY = key.minBlockY() + representative.localY();
-                    int worldZ = key.minBlockZ() + representative.localZ();
-                    cursor.set(worldX, worldY, worldZ);
-                    List<Integer> tintLayers = safeTintLayers(representative.material());
-                    tintLayerCount += tintLayers.size();
-                    materialCells.add(new TerrainBlockSectionSnapshot.VisibleBlock(
-                            cell.localX(), cell.localY(), cell.localZ(), cell.size(),
-                            representative.material(), new TerrainTintColors(
-                                safeBlockTint(BiomeColors.GRASS_COLOR_RESOLVER),
-                                safeBlockTint(BiomeColors.FOLIAGE_COLOR_RESOLVER),
-                                safeBlockTint(BiomeColors.DRY_FOLIAGE_COLOR_RESOLVER),
-                                safeBlockTint(BiomeColors.WATER_COLOR_RESOLVER)),
-                            tintLayers, safePackedLightAtCursor()));
-                }
-                long estimatedBytes = ESTIMATED_SECTION_BASE_BYTES
-                        + materialCells.size() * ESTIMATED_VISIBLE_BLOCK_BYTES
-                        + tintLayerCount * Integer.BYTES;
-                sections.put(key, new TerrainBlockSectionSnapshot(key, materialCells, estimatedBytes));
-                fullDetailSectionKeys.add(key);
-                overviewBySection.remove(key);
+                sections.remove(key);
+                fullDetailSectionKeys.remove(key);
+                overviewBySection.put(key, mapColorOverview(key, visible, cellSize));
             }
             frameDirty = true;
         }
@@ -579,6 +565,26 @@ public final class TerrainPreviewManager {
                     throw fatal;
                 }
                 return null;
+            }
+        }
+
+        private int safeMapColor(BlockState state) {
+            try {
+                MapColor mapColor = state.getMapColor(level, cursor);
+                return mapColor == MapColor.NONE ? 0 : mapColor.col;
+            } catch (Throwable incompatibleModMapColor) {
+                if (incompatibleModMapColor instanceof VirtualMachineError fatal) {
+                    throw fatal;
+                }
+                try {
+                    MapColor fallback = state.getBlock().defaultMapColor();
+                    return fallback == MapColor.NONE ? 0 : fallback.col;
+                } catch (Throwable incompatibleFallback) {
+                    if (incompatibleFallback instanceof VirtualMachineError fatal) {
+                        throw fatal;
+                    }
+                    return 0;
+                }
             }
         }
 
@@ -778,6 +784,22 @@ public final class TerrainPreviewManager {
         for (var cell : cells) {
             result.add(new TerrainOverviewCell(key.minBlockX() + cell.localX(),
                     key.minBlockY() + cell.localY(), key.minBlockZ() + cell.localZ(), size, cell.material()));
+        }
+        return List.copyOf(result);
+    }
+
+    static <T> List<TerrainOverviewCell> mapColorOverview(TerrainSectionKey key,
+            List<TerrainMapColorAggregator.Sample<T>> visible, int size) {
+        List<TerrainOverviewCell> result = new ArrayList<>();
+        for (TerrainMapColorAggregator.Cell<T> cell
+                : TerrainMapColorAggregator.aggregate(visible, size)) {
+            result.add(new TerrainOverviewCell(
+                    key.minBlockX() + cell.localX(),
+                    key.minBlockY() + cell.localY(),
+                    key.minBlockZ() + cell.localZ(),
+                    cell.size(),
+                    com.zhongbai233.net_music_can_play_bili.terrain.core.TerrainCellSample.RenderCategory.MODEL,
+                    cell.color()));
         }
         return List.copyOf(result);
     }

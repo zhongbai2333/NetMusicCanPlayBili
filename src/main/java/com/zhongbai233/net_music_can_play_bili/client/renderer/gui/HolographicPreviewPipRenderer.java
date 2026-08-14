@@ -353,15 +353,19 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
                 double centerDistance = Math.sqrt(Math.pow((segment.x1() + segment.x2()) * 0.5D - frame.coreCenterX(), 2.0D)
                     + Math.pow((segment.y1() + segment.y2()) * 0.5D - frame.coreCenterY(), 2.0D)
                     + Math.pow((segment.z1() + segment.z2()) * 0.5D - frame.coreCenterZ(), 2.0D));
-                int alpha = (int) Math.clamp(0x64 - centerDistance * 0.35D, 0x30, 0x64);
-                int color = unknown ? 0x384B3F66 : alpha << 24 | 0x006FCB78;
+                boolean mapColored = segment.color() != 0;
+                int alpha = mapColored
+                        ? (int) Math.clamp(0xD8 - centerDistance * 0.5D, 0x90, 0xD8)
+                        : (int) Math.clamp(0x64 - centerDistance * 0.35D, 0x30, 0x64);
+                int color = mapColored ? alpha << 24 | segment.color() & 0x00FFFFFF
+                        : unknown ? 0x384B3F66 : alpha << 24 | 0x006FCB78;
                 line(buffer, pose,
                     segment.x1() - frame.originX() - 0.5F, segment.y1() - frame.originY(),
                     segment.z1() - frame.originZ() - 0.5F,
                     segment.x2() - frame.originX() - 0.5F, segment.y2() - frame.originY(),
                     segment.z2() - frame.originZ() - 0.5F,
-                    color, unknown ? 0.7F : 0.9F);
-                if (!unknown) {
+                    color, mapColored ? 1.2F : unknown ? 0.7F : 0.9F);
+                if (!unknown && !mapColored) {
                     drawWireBranch(buffer, pose, frame, segment);
                 }
         }
@@ -872,8 +876,27 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
     private static void line(VertexConsumer buffer, PoseStack.Pose pose, float x1, float y1, float z1, float x2,
             float y2, float z2, int color, float lineWidth) {
         float visibleWidth = Math.clamp(lineWidth * ACTIVE_LINE_WIDTH_SCALE.get(), 1.0F, 8.0F);
-        buffer.addVertex(pose, x1, y1, z1).setColor(color).setNormal(0.0F, 1.0F, 0.0F).setLineWidth(visibleWidth);
-        buffer.addVertex(pose, x2, y2, z2).setColor(color).setNormal(0.0F, 1.0F, 0.0F).setLineWidth(visibleWidth);
+        float dx = x2 - x1;
+        float dy = y2 - y1;
+        float dz = z2 - z1;
+        float lengthSquared = dx * dx + dy * dy + dz * dz;
+        float normalX;
+        float normalY;
+        float normalZ;
+        if (lengthSquared > 1.0e-12F) {
+            float inverseLength = 1.0F / (float) Math.sqrt(lengthSquared);
+            normalX = dx * inverseLength;
+            normalY = dy * inverseLength;
+            normalZ = dz * inverseLength;
+        } else {
+            normalX = 0.0F;
+            normalY = 1.0F;
+            normalZ = 0.0F;
+        }
+        buffer.addVertex(pose, x1, y1, z1).setColor(color)
+                .setNormal(pose, normalX, normalY, normalZ).setLineWidth(visibleWidth);
+        buffer.addVertex(pose, x2, y2, z2).setColor(color)
+                .setNormal(pose, normalX, normalY, normalZ).setLineWidth(visibleWidth);
     }
 
     private static void vertex(VertexConsumer buffer, PoseStack.Pose pose, float x, float y, float z, int color) {

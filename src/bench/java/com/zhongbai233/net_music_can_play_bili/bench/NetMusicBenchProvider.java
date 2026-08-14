@@ -50,6 +50,13 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
 
     @Override
     public void registerServer(BenchServerRegistrar registrar) {
+        if (!System.getProperty("modBench.paired.sessionId", "").isBlank()) {
+            registrar.register(new ScenarioDescriptor(
+                    "ncpb.luckperms-permission-bridge",
+                    "LuckPerms grants flow through NeoForge PermissionAPI into the real whitelist command gate",
+                    Set.of("server", "paired", "permissions", "luckperms", "neoforge", "whitelist", "command"),
+                    Duration.ofSeconds(30)), ignored -> new LuckPermsPermissionBridgeServerScenario());
+        }
         if (Integer.getInteger("modBench.paired.clientCount", 1) < 2) {
             return;
         }
@@ -72,6 +79,13 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
 
     @Override
     public void registerClient(BenchClientRegistrar registrar) {
+        if (!System.getProperty("modBench.paired.sessionId", "").isBlank()) {
+            registrar.register(new ScenarioDescriptor(
+                    "ncpb.luckperms-permission-bridge",
+                    "Remote non-owner player participates in the LuckPerms permission bridge test",
+                    Set.of("client", "paired", "permissions", "luckperms", "neoforge", "whitelist", "command"),
+                    Duration.ofSeconds(30)), ignored -> new LuckPermsPermissionBridgeClientScenario());
+        }
         if (Integer.getInteger("modBench.paired.clientCount", 1) >= 2) {
             registrar.register(new ScenarioDescriptor(
                     "ncpb.multi-client-consumer-lifecycle",
