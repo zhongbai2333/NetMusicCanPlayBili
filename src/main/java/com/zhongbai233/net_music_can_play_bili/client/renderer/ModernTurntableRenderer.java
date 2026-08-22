@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.github.tartaricacid.netmusic.client.event.ConfigEvent;
 import com.github.tartaricacid.netmusic.config.GeneralConfig;
@@ -56,7 +58,7 @@ public class ModernTurntableRenderer
         state.hasDisc = turntable.hasDisc();
         state.playing = turntable.isPlaying();
         state.facing = turntable.getBlockState().getValue(ModernTurntableBlock.FACING);
-        state.gameTime = turntable.getLevel() != null ? turntable.getLevel().getGameTime() : 0L;
+        state.gameTime = turntable.getLevel() != null ? MonotonicMediaClock.nowTick() : 0L;
         state.partialTick = partialTick;
 
         if (!GeneralConfig.ENABLE_PLAYER_LYRICS.get() || !turntable.isPlaying()) {

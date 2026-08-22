@@ -233,7 +233,7 @@ final class RealTurntableMp3EndToEndScenario implements BenchClientScenario {
         }
         submitServer(context, (level, player) -> {
             ModernTurntableBlockEntity turntable = turntable(level);
-            String session = turntable.getPlaybackSyncMetadata(level.getGameTime()).sessionId();
+            String session = turntable.getPlaybackSyncMetadata().sessionId();
             lastObservation.set("server playback: hasDisc=" + turntable.hasDisc() + ", playing="
                     + turntable.isPlaying() + ", rawUrl=" + turntable.getRawUrl() + ", session=" + session);
             if (turntable.hasDisc() && turntable.isPlaying() && properties.url().equals(turntable.getRawUrl())

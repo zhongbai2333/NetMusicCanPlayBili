@@ -43,9 +43,9 @@ class CancellableHttpRequestScopeTest {
 
             scope.close();
 
+            assertEquals(0, scope.activeRequests());
             Throwable cancellation = assertThrows(RuntimeException.class, future::join);
             assertTrue(hasCause(cancellation, java.util.concurrent.CancellationException.class));
-            assertEquals(0, scope.activeRequests());
             var snapshot = diagnostics.snapshot(System.nanoTime());
             assertEquals(0, snapshot.activeRequests());
             assertEquals(1, snapshot.cancelRequests());

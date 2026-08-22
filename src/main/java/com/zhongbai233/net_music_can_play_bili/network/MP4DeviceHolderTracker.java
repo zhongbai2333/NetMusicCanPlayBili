@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
@@ -69,7 +71,7 @@ public final class MP4DeviceHolderTracker {
         HolderKey key = new HolderKey(player.getUUID(), PlaybackSourceId.of(deviceId));
         active.add(key);
         int fingerprint = fingerprint(entry, headphoneLinked);
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         Long lastForcedSync = LAST_FORCED_SYNC.get(key);
         boolean force = lastForcedSync == null || gameTime - lastForcedSync.longValue() >= FORCED_SYNC_INTERVAL_TICKS;
         if (!force && Objects.equals(LAST_SENT.get(key), fingerprint)) {

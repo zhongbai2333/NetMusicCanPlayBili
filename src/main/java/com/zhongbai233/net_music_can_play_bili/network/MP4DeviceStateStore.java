@@ -65,9 +65,6 @@ public final class MP4DeviceStateStore {
 
     private static long nextUpdatedGameTime(ServerLevel level, UUID deviceId, DeviceEntry entry) {
         long base = Math.max(0L, entry.updatedGameTime());
-        if (level != null) {
-            base = Math.max(base, level.getGameTime());
-        }
         DeviceEntry current = RUNTIME.get(PlaybackSourceId.of(deviceId));
         if (current != null) {
             base = Math.max(base, current.updatedGameTime() + 1L);

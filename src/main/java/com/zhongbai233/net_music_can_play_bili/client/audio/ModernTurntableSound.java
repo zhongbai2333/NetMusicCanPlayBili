@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.audio;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
@@ -155,7 +157,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
         showNowPlayingWhenAudible();
         checkAudioProgressWatchdog(turntable, movingSource);
 
-        if (level.getGameTime() % 8L == 0L) {
+        if (MonotonicMediaClock.nowTick() % 8L == 0L) {
             var random = level.getRandom();
             for (int i = 0; i < 2; i++) {
                 level.addParticle(

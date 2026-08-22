@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.pad;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.zhongbai233.net_music_can_play_bili.client.PadFocusState;
 import com.zhongbai233.net_music_can_play_bili.item.PadItem;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
@@ -228,7 +230,7 @@ public final class PadMapClientCache {
         if (activeJob != null || completed == null || completedProfile != profile || !completed.hasUnknownTiles()) {
             return;
         }
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         if (gameTime < nextUnknownRetryTick) {
             return;
         }

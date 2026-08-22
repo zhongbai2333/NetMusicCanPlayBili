@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.blockentity;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliLiveRoomInput;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliLiveStreamResolver;
@@ -111,7 +113,7 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
             streamer.stopLive();
             return;
         }
-        long gameTime = serverLevel.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         if (streamer.needsLiveStatusConfirmation) {
             streamer.needsLiveStatusConfirmation = false;
             if (streamer.stopForegroundPlayback()) {
@@ -163,7 +165,7 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
     }
 
     @Override
-    public long getPlaybackElapsedMillis(long gameTime) {
+    public long getPlaybackElapsedMillis() {
         return -1L;
     }
 
@@ -220,18 +222,18 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
         playbackOwnerId = actor != null ? actor.getUUID() : playbackOwnerId;
         liveStatusRequestGeneration = liveStatusRequestGeneration.next();
         checkingLiveStatus = false;
-        nextLiveStatusCheckGameTime = serverLevel.getGameTime();
+        nextLiveStatusCheckGameTime = MonotonicMediaClock.nowTick();
         markDirty();
         probeLiveStatus(serverLevel, actor != null ? actor.getUUID() : null, true);
     }
 
     private void probeLiveStatus(ServerLevel serverLevel, UUID feedbackTargetId, boolean userInitiated) {
         if (!LiveStatusProbePolicy.shouldProbe(autoResumeRequested, checkingLiveStatus,
-                serverLevel.getGameTime(), nextLiveStatusCheckGameTime)) {
+                MonotonicMediaClock.nowTick(), nextLiveStatusCheckGameTime)) {
             return;
         }
         checkingLiveStatus = true;
-        nextLiveStatusCheckGameTime = LiveStatusProbePolicy.nextProbeGameTime(serverLevel.getGameTime());
+        nextLiveStatusCheckGameTime = LiveStatusProbePolicy.nextProbeGameTime(MonotonicMediaClock.nowTick());
         String requestedRoomId = roomId;
         ResolveGeneration requestGeneration = liveStatusRequestGeneration;
         long probeId = ++liveStatusProbeId;
@@ -304,9 +306,9 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
     private void beginPlaying(ServerLevel serverLevel, java.util.UUID actorId) {
         playbackOwnerId = actorId != null ? actorId : playbackOwnerId;
         playing = true;
-        startedGameTime = serverLevel.getGameTime();
+        startedGameTime = MonotonicMediaClock.nowTick();
         syncedPlayers.clear();
-        lastFullSyncGameTime = serverLevel.getGameTime();
+        lastFullSyncGameTime = MonotonicMediaClock.nowTick();
         markDirty();
         syncNearbyPlayers(serverLevel);
         LOGGER.info("直播机开始播放: pos={} room={} owner={}", worldPosition, roomId, playbackOwnerId);
@@ -359,7 +361,7 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
             return;
         }
 
-        long elapsedMillis = Math.max(0L, (serverLevel.getGameTime() - startedGameTime) * 50L);
+        long elapsedMillis = Math.max(0L, (MonotonicMediaClock.nowTick() - startedGameTime) * 50L);
         String songName = liveSongName();
         Set<UUID> nearby = IndexedBlockPlaybackSessionManager.publishAndSync(serverLevel, serverLevel,
                 getPlaybackSourceId(), worldPosition, BiliLiveRoomInput.placeholderUrl(roomId),

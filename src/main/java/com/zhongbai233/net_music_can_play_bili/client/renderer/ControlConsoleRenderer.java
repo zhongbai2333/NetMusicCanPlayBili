@@ -451,7 +451,7 @@ public final class ControlConsoleRenderer
             if (lyricTick < 0) lyricTick = turntable.getClientLyricTick();
             long visualMillis = PlaybackClock.visualMillis(sourcePos);
             float lyricVisualTick = visualMillis >= 0L ? visualMillis / 50.0F : lyricTick;
-            PlaybackSessionId sessionId = turntable.getPlaybackSyncMetadata(level.getGameTime())
+            PlaybackSessionId sessionId = turntable.getPlaybackSyncMetadata()
                     .playbackSessionId().orElse(null);
             var aiSnapshot = ClientAiSubtitleRegistry.snapshot(sourcePos, sessionId);
             return new SourceSnapshot(turntable.isPlaying(),
@@ -869,7 +869,7 @@ public final class ControlConsoleRenderer
             ClientAiSubtitleRegistry.release(consolePos);
             return;
         }
-        PlaybackSessionId sessionId = turntable.getPlaybackSyncMetadata(minecraft.level.getGameTime())
+        PlaybackSessionId sessionId = turntable.getPlaybackSyncMetadata()
                 .playbackSessionId().orElse(null);
         ClientAiSubtitleRegistry.acquire(consolePos, source, sessionId, turntable.getRawUrl(),
                 turntable.getSongName());

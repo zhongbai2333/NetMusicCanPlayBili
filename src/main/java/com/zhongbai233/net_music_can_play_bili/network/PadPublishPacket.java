@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.item.PadItem;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadDocument;
@@ -62,6 +64,6 @@ public record PadPublishPacket(UUID deviceId) implements CustomPacketPayload {
         }
         PadDeviceHolderTracker.invalidate(payload.deviceId());
         PacketDistributor.sendToPlayer(player, new PadStateMirrorPacket(payload.deviceId(), draftDocument,
-                player.level().getGameTime()));
+                MonotonicMediaClock.nowTick()));
     }
 }

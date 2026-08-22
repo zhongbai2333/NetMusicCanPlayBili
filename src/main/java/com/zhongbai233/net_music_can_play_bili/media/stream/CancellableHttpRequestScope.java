@@ -6,6 +6,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -21,6 +23,7 @@ public final class CancellableHttpRequestScope implements AutoCloseable {
     private final HttpRequestCloseDiagnostics diagnostics;
     private final ConcurrentHashMap<CompletableFuture<?>, Long> requests = new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final Object lifecycleLock = new Object();
 
     public CancellableHttpRequestScope(HttpRequestCloseDiagnostics diagnostics) {
         this.diagnostics = Objects.requireNonNull(diagnostics, "diagnostics");
@@ -42,7 +45,13 @@ public final class CancellableHttpRequestScope implements AutoCloseable {
             diagnostics.terminal(operationId, false, 0L, System.nanoTime());
             throw error;
         }
-        requests.put(future, operationId);
+        boolean cancelImmediately;
+        synchronized (lifecycleLock) {
+            cancelImmediately = closed.get();
+            if (!cancelImmediately) {
+                requests.put(future, operationId);
+            }
+        }
         future.whenComplete((response, error) -> {
             try {
                 if (response != null) {
@@ -54,7 +63,7 @@ public final class CancellableHttpRequestScope implements AutoCloseable {
                 requests.remove(future, operationId);
             }
         });
-        if (closed.get()) {
+        if (cancelImmediately) {
             cancel(future, operationId);
         }
         return future;
@@ -107,10 +116,16 @@ public final class CancellableHttpRequestScope implements AutoCloseable {
 
     @Override
     public void close() {
-        if (!closed.compareAndSet(false, true)) {
-            return;
+        Map<CompletableFuture<?>, Long> toCancel;
+        synchronized (lifecycleLock) {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            toCancel = new HashMap<>(requests);
+            // Ownership ends synchronously with close(); completion callbacks may run later.
+            requests.clear();
         }
-        requests.forEach((future, operationId) -> cancel(future, operationId.longValue()));
+        toCancel.forEach((future, operationId) -> cancel(future, operationId.longValue()));
     }
 
     private void cancel(CompletableFuture<?> future, long operationId) {

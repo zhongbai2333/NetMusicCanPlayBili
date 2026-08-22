@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.media.sync.VisualTimelineSmoother;
@@ -85,14 +87,14 @@ public final class ModernTurntableTimeline {
         if (minecraft == null || minecraft.level == null) {
             return TimelineSnapshot.EMPTY;
         }
-        PlaybackSync.Metadata sync = turntable.getPlaybackSyncMetadata(minecraft.level.getGameTime());
+        PlaybackSync.Metadata sync = turntable.getPlaybackSyncMetadata();
         long rawServerMillis = sync.hasSession() ? sync.elapsedMillis()
-                : turntable.getPlaybackElapsedMillis(minecraft.level.getGameTime());
+                : turntable.getPlaybackElapsedMillis();
         long totalMillis = sync.hasSession() ? sync.totalMillis()
                 : Math.max(0L, turntable.getDurationSeconds()) * 1000L;
         final long serverMillis = clamp(rawServerMillis, totalMillis);
         final long timelineTotalMillis = totalMillis;
-            final long observationGameTime = minecraft.level.getGameTime();
+            final long observationGameTime = MonotonicMediaClock.nowTick();
         Optional<PlaybackSessionId> playbackSessionId = sync.playbackSessionId();
         BlockPos key = turntablePos.immutable();
         MediaTimelineClock clock = CLOCKS.compute(key, (ignored, existing) -> {
@@ -211,8 +213,7 @@ public final class ModernTurntableTimeline {
             BlockPos pos = entry.getKey();
             return !(minecraft.level.getBlockEntity(pos) instanceof ModernTurntableBlockEntity turntable)
                     || !turntable.isPlaying()
-                    || !entry.getValue().isForSession(turntable.getPlaybackSyncMetadata(
-                            minecraft.level.getGameTime()).playbackSessionId());
+                    || !entry.getValue().isForSession(turntable.getPlaybackSyncMetadata().playbackSessionId());
         });
         VISUAL_CLOCKS.keySet().removeIf(pos -> !CLOCKS.containsKey(pos));
     }

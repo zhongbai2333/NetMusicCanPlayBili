@@ -115,7 +115,7 @@ public class LyricProjectorRenderer
         // late completion cannot overwrite a replacement session.
         if (state.allowAi) {
             String rawUrl = turntable.getRawUrl();
-            var sessionId = turntable.getPlaybackSyncMetadata(level.getGameTime()).playbackSessionId().orElse(null);
+            var sessionId = turntable.getPlaybackSyncMetadata().playbackSessionId().orElse(null);
             if (rawUrl != null && !rawUrl.isBlank() && BiliVideoStreamResolver.selectionOrNull(rawUrl) != null
                     && sessionId != null) {
                 ClientAiSubtitleRegistry.acquire(state.projectorPos, state.linkedPos, sessionId,

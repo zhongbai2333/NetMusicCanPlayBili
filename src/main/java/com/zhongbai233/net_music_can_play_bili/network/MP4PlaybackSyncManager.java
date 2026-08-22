@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.github.tartaricacid.netmusic.api.resolver.MusicPlayResolverManager;
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import com.mojang.logging.LogUtils;
@@ -113,7 +115,7 @@ public final class MP4PlaybackSyncManager {
         long elapsedMillis = clampElapsed(targetMillis, safeDurationSeconds);
         String syncedPlayUrl = PlaybackSync.withSync(resolvedPlayUrl, attempt.expectedSessionId(), elapsedMillis,
                 safeDurationSeconds * 1000L);
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         Session refreshed = RETRY_ADMISSION.replaceIfCurrent(deviceId, attempt,
                 current -> current.withRefreshedPlayback(syncedPlayUrl, songName, safeDurationSeconds,
                         elapsedMillis, gameTime));
@@ -142,7 +144,7 @@ public final class MP4PlaybackSyncManager {
                     MP4PlaybackSyncPacket.stop(packet.ownerId(), packet.sourceId(), packet.queueIndex()));
             return;
         }
-        long gameTime = serverLevel.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         long elapsedMillis = clampElapsed(packet.elapsedMillis(), packet.durationSeconds());
         Session session = new Session(
                 serverLevel.dimension(),
@@ -182,7 +184,7 @@ public final class MP4PlaybackSyncManager {
             RESOLVE_INTENTS.invalidate(deviceId);
             Session session = SESSION_REGISTRY.remove(deviceId);
             if (session != null && owner.level() instanceof ServerLevel serverLevel) {
-                PROGRESS_PERSISTENCE.persist(session.stack(serverLevel), session, serverLevel.getGameTime(), false);
+                PROGRESS_PERSISTENCE.persist(session.stack(serverLevel), session, MonotonicMediaClock.nowTick(), false);
                 AUDIENCE_BROADCASTER.broadcastStop(serverLevel, session);
             }
         }
@@ -196,7 +198,7 @@ public final class MP4PlaybackSyncManager {
         UUID deviceId = MP4Item.readDeviceId(stack);
         Session session = SESSION_REGISTRY.get(deviceId);
         return session != null ? MP4PlaybackProgressPolicy.progressPerMille(
-                session.elapsedMillis(serverLevel.getGameTime()),
+                session.elapsedMillis(MonotonicMediaClock.nowTick()),
                 session.durationSeconds()) : fallback;
     }
 
@@ -206,7 +208,7 @@ public final class MP4PlaybackSyncManager {
         }
         Session session = SESSION_REGISTRY.get(deviceId);
         if (session != null) {
-            return session.elapsedMillis(serverLevel.getGameTime());
+            return session.elapsedMillis(MonotonicMediaClock.nowTick());
         }
         return PROGRESS_PERSISTENCE.currentElapsed(serverLevel, deviceId, fallback);
     }
@@ -251,7 +253,7 @@ public final class MP4PlaybackSyncManager {
             if (server != null) {
                 ServerLevel level = server.getLevel(updated.levelKey());
                 if (level != null) {
-                    AUDIENCE_BROADCASTER.broadcastTimeline(level, updated, level.getGameTime());
+                    AUDIENCE_BROADCASTER.broadcastTimeline(level, updated, MonotonicMediaClock.nowTick());
                 }
             }
             return updated;
@@ -287,7 +289,7 @@ public final class MP4PlaybackSyncManager {
         long elapsedMillis = clampElapsed(targetMillis, safeDurationSeconds);
         String syncedPlayUrl = PlaybackSync.withSync(resolvedPlayUrl, expectedSessionId, elapsedMillis,
                 safeDurationSeconds * 1000L);
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         Session refreshed = current.withRefreshedPlayback(syncedPlayUrl, songName, safeDurationSeconds,
                 elapsedMillis, gameTime);
         if (!SESSION_REGISTRY.replace(deviceId, current, refreshed)) {
@@ -356,7 +358,7 @@ public final class MP4PlaybackSyncManager {
         if (session == null || session.queueIndex() != queueIndex) {
             return false;
         }
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         Session base = session.withVolume(volumePerMille);
         if (targetMillis >= 0L) {
             long elapsedMillis = clampElapsed(targetMillis, session.durationSeconds());
@@ -389,7 +391,7 @@ public final class MP4PlaybackSyncManager {
         if (session == null) {
             return;
         }
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         Session migrated = session.asItemSource(itemEntity.getId(), itemEntity.blockPosition(), gameTime);
         MP4DeviceLocationIndex.recordItemEntity(level, itemEntity, deviceId);
         PROGRESS_PERSISTENCE.persist(itemEntity.getItem(), migrated, gameTime, true);
@@ -481,7 +483,7 @@ public final class MP4PlaybackSyncManager {
                 }
                 continue;
             }
-            long gameTime = serverLevel.getGameTime();
+            long gameTime = MonotonicMediaClock.nowTick();
             Session refreshed = SOURCE_DISCOVERY.refreshActiveSource(server, session, gameTime);
             if (refreshed != null && !MP4PlaybackSourceDiscovery.sameSource(session, refreshed)) {
                 if (!SESSION_REGISTRY.replace(deviceId, session, refreshed)) {
@@ -641,7 +643,7 @@ public final class MP4PlaybackSyncManager {
                     deviceId + "-mp4-" + System.nanoTime());
             String syncedPlayUrl = PlaybackSync.withSync(playUrl, playbackSessionId, elapsedMillis,
                     durationSeconds * 1000L);
-            long gameTime = level.getGameTime();
+            long gameTime = MonotonicMediaClock.nowTick();
             Session session = new Session(level.dimension(), ownerId, deviceId, sourceType, sourceEntityId, sourcePos,
                     containerSlot, index, syncedPlayUrl, rawUrl, songName == null ? "" : songName, durationSeconds,
                     state.volumePerMille(), playbackSessionId, gameTime - Math.round(elapsedMillis / 50.0D), gameTime,

@@ -150,7 +150,7 @@ public final class ModernTurntableVideoClient {
         if (rawUrl == null || rawUrl.isBlank()) {
             return;
         }
-        PlaybackSync.Metadata sync = turntable.getPlaybackSyncMetadata(turntable.getLevel().getGameTime());
+        PlaybackSync.Metadata sync = turntable.getPlaybackSyncMetadata();
         if (!sync.hasSession()) {
             return;
         }
@@ -166,7 +166,7 @@ public final class ModernTurntableVideoClient {
         if (rawUrl == null || rawUrl.isBlank()) {
             return;
         }
-        PlaybackSync.Metadata sync = turntable.getPlaybackSyncMetadata(turntable.getLevel().getGameTime());
+        PlaybackSync.Metadata sync = turntable.getPlaybackSyncMetadata();
         if (!sync.hasSession()) {
             return;
         }
@@ -211,7 +211,7 @@ public final class ModernTurntableVideoClient {
             VideoBillboardPreview.stopIfProjector(projectorPos);
             return;
         }
-        PlaybackSync.Metadata sync = turntable.getPlaybackSyncMetadata(turntable.getLevel().getGameTime());
+        PlaybackSync.Metadata sync = turntable.getPlaybackSyncMetadata();
         if (!sync.hasSession()) {
             VideoBillboardPreview.stopIfProjector(projectorPos);
             return;
@@ -693,7 +693,7 @@ public final class ModernTurntableVideoClient {
         if (!(blockEntity instanceof ModernTurntableBlockEntity turntable) || !turntable.isPlaying()) {
             return VideoResolveAdmissionPolicy.decide(latest, false, false, consumers.hasAny());
         }
-        PlaybackSync.Metadata current = turntable.getPlaybackSyncMetadata(minecraft.level.getGameTime());
+        PlaybackSync.Metadata current = turntable.getPlaybackSyncMetadata();
         boolean sameSession = current.hasSession() && sessionId.equals(current.sessionId());
         return VideoResolveAdmissionPolicy.decide(latest, sameSession, true, consumers.hasAny());
     }
@@ -769,7 +769,7 @@ public final class ModernTurntableVideoClient {
         if (!(blockEntity instanceof ModernTurntableBlockEntity turntable) || !turntable.isPlaying()) {
             return fallback;
         }
-        PlaybackSync.Metadata current = turntable.getPlaybackSyncMetadata(minecraft.level.getGameTime());
+        PlaybackSync.Metadata current = turntable.getPlaybackSyncMetadata();
         return current.hasSession() && fallback.sessionId().equals(current.sessionId()) ? current : fallback;
     }
 

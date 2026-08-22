@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import com.zhongbai233.net_music_can_play_bili.item.PadItem;
@@ -170,7 +172,7 @@ final class MP4PlaybackSourceDiscovery {
         MP4PlaybackSourceObservationPolicy.Action action = observationAction(existing,
                 ClientMediaSyncPayload.SOURCE_ITEM,
                 itemEntity.getId(), itemEntity.blockPosition(), -1);
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         if (action == MP4PlaybackSourceObservationPolicy.Action.MIGRATE) {
             MP4PlaybackSyncManager.Session migrated = existing.asItemSource(itemEntity.getId(),
                     itemEntity.blockPosition(), gameTime);
@@ -201,7 +203,7 @@ final class MP4PlaybackSourceDiscovery {
             return;
         }
         MP4PlaybackSyncManager.Session existing = sessions.get(deviceId);
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         MP4DeviceLocationIndex.recordPlayer(level, player, deviceId);
         MP4PlaybackSourceObservationPolicy.Action action = observationAction(existing,
                 ClientMediaSyncPayload.SOURCE_PLAYER,
@@ -249,7 +251,7 @@ final class MP4PlaybackSourceDiscovery {
             return;
         }
         Container container = slot.container;
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         MP4PlaybackSyncManager.Session existing = sessions.get(deviceId);
         if (container instanceof BlockEntity blockEntity) {
             BlockPos pos = blockEntity.getBlockPos();

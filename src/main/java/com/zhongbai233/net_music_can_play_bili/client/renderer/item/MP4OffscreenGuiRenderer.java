@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.item;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.ProjectionType;
@@ -768,7 +770,7 @@ final class MP4OffscreenGuiRenderer implements AutoCloseable {
         if (minecraft.level == null) {
             return "--:--";
         }
-        long dayTime = minecraft.level.getGameTime() % 24000L;
+        long dayTime = MonotonicMediaClock.nowTick() % 24000L;
         int totalMinutes = (int) ((dayTime + 6000L) % 24000L * 1440L / 24000L);
         return String.format(java.util.Locale.ROOT, "%02d:%02d", totalMinutes / 60, totalMinutes % 60);
     }

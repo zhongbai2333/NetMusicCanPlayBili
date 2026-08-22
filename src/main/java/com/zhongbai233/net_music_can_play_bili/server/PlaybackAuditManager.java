@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.server;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
@@ -68,7 +70,7 @@ public final class PlaybackAuditManager {
         if (level == null || sourcePos == null) {
             return;
         }
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         SOURCES.put(key, new ActiveSource(key, kind, level.dimension(), sourcePos.immutable(),
                 safe(songName, "未知歌曲"), safe(rawUrl, ""), Math.max(0, durationSeconds),
                 Math.max(0L, elapsedMillis), ownerId, gameTime));
@@ -122,7 +124,7 @@ public final class PlaybackAuditManager {
         if (server == null) {
             return ReportResult.EMPTY;
         }
-        long now = reporter.level().getGameTime();
+        long now = MonotonicMediaClock.nowTick();
         PlaybackReportTracker.Decision<UUID> decision = REPORTS.record(source.key(), reporter.getUUID(), now);
         PlaybackReportTracker.Snapshot<UUID> state = decision.snapshot();
         if (!decision.shouldNotify()) {
@@ -305,7 +307,7 @@ public final class PlaybackAuditManager {
     private static void prune(MinecraftServer server) {
         SOURCES.removeIf(source -> {
             ServerLevel level = server.getLevel(source.levelKey());
-            return level == null || level.getGameTime() - source.lastSeenGameTime() > STALE_AFTER_TICKS;
+            return level == null || MonotonicMediaClock.nowTick() - source.lastSeenGameTime() > STALE_AFTER_TICKS;
         });
         REPORTS.retainSources(SOURCES.keys());
     }

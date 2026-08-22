@@ -19,5 +19,5 @@ public interface PlaybackAudioSource {
      *
      * @return 无界媒体（如直播）返回 -1，表示输出层不做进度 pacing
      */
-    long getPlaybackElapsedMillis(long gameTime);
+    long getPlaybackElapsedMillis();
 }

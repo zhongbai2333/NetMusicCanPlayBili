@@ -400,7 +400,7 @@ public final class ModernTurntablePlaybackCoordinator {
         var level = minecraft.level;
         if (level != null && level.getBlockEntity(sourcePos) instanceof ModernTurntableBlockEntity turntable
                 && turntable.isPlaying()) {
-            authoritativeSessionId = turntable.getPlaybackSyncMetadata(level.getGameTime()).sessionId();
+            authoritativeSessionId = turntable.getPlaybackSyncMetadata().sessionId();
         }
         String trackedSessionId = ModernTurntablePlaybackTracker.currentSessionId(sourcePos, command.sessionId());
         ModernTurntableCommandAdmissionPolicy.Decision decision = ModernTurntableCommandAdmissionPolicy.decide(

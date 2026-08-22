@@ -35,7 +35,7 @@ final class ClientAudioOutputPolicy {
         if (source == null || minecraft == null || minecraft.level == null || !source.isPlaying()) {
             return Long.MAX_VALUE;
         }
-        long elapsedMillis = source.getPlaybackElapsedMillis(minecraft.level.getGameTime());
+        long elapsedMillis = source.getPlaybackElapsedMillis();
         if (elapsedMillis < 0L) {
             // 无界媒体（直播）没有服务端进度，不做 pacing
             return Long.MAX_VALUE;

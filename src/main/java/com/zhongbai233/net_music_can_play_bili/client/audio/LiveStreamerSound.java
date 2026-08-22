@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.audio;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackRuntimeProperties;
@@ -95,7 +97,7 @@ public class LiveStreamerSound extends SyncedMediaSound {
             com.zhongbai233.net_music_can_play_bili.client.LiveStreamerVideoClient.sync(pos, sessionId());
         }
 
-        if (level.getGameTime() % 8L == 0L) {
+        if (MonotonicMediaClock.nowTick() % 8L == 0L) {
             var random = level.getRandom();
             for (int i = 0; i < 2; i++) {
                 level.addParticle(

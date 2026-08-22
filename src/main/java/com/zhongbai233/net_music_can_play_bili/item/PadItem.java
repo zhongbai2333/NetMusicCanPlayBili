@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.item;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSongInfoSanitizer;
 import com.zhongbai233.net_music_can_play_bili.client.PadClientHooks;
@@ -311,7 +313,7 @@ public class PadItem extends Item {
         if (player == null || deviceId == null || document == null) {
             return;
         }
-        PacketDistributor.sendToPlayer(player, new PadStateMirrorPacket(deviceId, document, player.level().getGameTime()));
+        PacketDistributor.sendToPlayer(player, new PadStateMirrorPacket(deviceId, document, MonotonicMediaClock.nowTick()));
     }
 
     @Override

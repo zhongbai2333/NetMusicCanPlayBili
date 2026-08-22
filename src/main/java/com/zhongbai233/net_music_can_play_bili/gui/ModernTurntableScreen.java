@@ -364,7 +364,7 @@ public class ModernTurntableScreen extends BlackGoldScreen {
         var t = turntable();
         if (Minecraft.getInstance().level == null || t == null)
             return 0L;
-        return t.getPlaybackElapsedMillis(Minecraft.getInstance().level.getGameTime());
+        return t.getPlaybackElapsedMillis();
     }
 
     private long currentSliderMillis() {

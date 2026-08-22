@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
@@ -54,7 +56,7 @@ final class MP4PlaybackQueueController {
         List<ItemStack> safeNewQueue = newQueue != null ? newQueue : List.of();
         MP4PlaybackQueuePolicy.Reconciliation reconciliation = MP4PlaybackQueuePolicy.reconcile(
                 session.queueIndex(), session.rawUrl(), sourceUrls(safeNewQueue));
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         long elapsedMillis = session.elapsedMillis(gameTime);
         if (reconciliation.action() == MP4PlaybackQueuePolicy.ReconcileAction.KEEP) {
             return;

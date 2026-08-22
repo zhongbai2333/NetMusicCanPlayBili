@@ -166,7 +166,7 @@ final class RealVideoRangeReentryScenario implements BenchClientScenario {
             stream = resolution.join();
         }
         if (sessionId.isBlank()) {
-            sessionId = turntable.getPlaybackSyncMetadata(context.level().getGameTime()).sessionId();
+            sessionId = turntable.getPlaybackSyncMetadata().sessionId();
             if (sessionId.isBlank()) {
                 return BenchClientStepResult.CONTINUE;
             }

@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
@@ -73,7 +75,7 @@ public final class MP4DeviceLocationIndex {
         }
         LOCATIONS.put(PlaybackSourceId.of(deviceId),
                 LocationRef.player(level.dimension(), player.getUUID(), player.getId(),
-                player.blockPosition(), level.getGameTime()));
+                player.blockPosition(), MonotonicMediaClock.nowTick()));
     }
 
     public static void recordItemEntity(ServerLevel level, ItemEntity entity, UUID deviceId) {
@@ -82,7 +84,7 @@ public final class MP4DeviceLocationIndex {
         }
         LOCATIONS.put(PlaybackSourceId.of(deviceId),
                 LocationRef.item(level.dimension(), entity.getId(), entity.blockPosition(),
-                level.getGameTime()));
+                MonotonicMediaClock.nowTick()));
     }
 
     public static void recordBlockContainer(ServerLevel level, BlockPos pos, int slot, UUID deviceId) {
@@ -90,7 +92,7 @@ public final class MP4DeviceLocationIndex {
             return;
         }
         LOCATIONS.put(PlaybackSourceId.of(deviceId),
-                LocationRef.block(level.dimension(), pos.immutable(), slot, level.getGameTime()));
+                LocationRef.block(level.dimension(), pos.immutable(), slot, MonotonicMediaClock.nowTick()));
         ensureGraph(level, pos.immutable(), false);
     }
 
@@ -100,7 +102,7 @@ public final class MP4DeviceLocationIndex {
         }
         LOCATIONS.put(PlaybackSourceId.of(deviceId),
                 LocationRef.containerEntity(level.dimension(), entity.getId(), entity.blockPosition(),
-                slot, level.getGameTime()));
+                slot, MonotonicMediaClock.nowTick()));
     }
 
     public static Optional<ResolvedLocation> resolve(ServerLevel level, UUID deviceId) {
@@ -111,7 +113,7 @@ public final class MP4DeviceLocationIndex {
         if (ref == null || ref.dimension() != level.dimension()) {
             return Optional.empty();
         }
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         Optional<ResolvedLocation> direct = verify(level, ref, deviceId, gameTime);
         if (direct.isPresent()) {
             return direct;
@@ -132,7 +134,7 @@ public final class MP4DeviceLocationIndex {
         if (level == null || deviceId == null || origin == null) {
             return Optional.empty();
         }
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         LocationRef ref = LocationRef.block(level.dimension(), origin.immutable(), -1, gameTime);
         return relocateFromBlock(level, ref, deviceId, gameTime);
     }
@@ -341,7 +343,7 @@ public final class MP4DeviceLocationIndex {
         }
         GraphKey key = new GraphKey(level.dimension(), origin.immutable());
         LogisticsGraph existing = GRAPHS.get(key);
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         if (!forceRebuild && existing != null && gameTime - existing.createdGameTime() <= GRAPH_TTL_TICKS) {
             return existing;
         }

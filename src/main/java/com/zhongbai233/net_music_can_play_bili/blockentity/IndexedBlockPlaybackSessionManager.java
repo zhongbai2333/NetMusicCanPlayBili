@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.blockentity;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import com.zhongbai233.net_music_can_play_bili.network.ModernTurntableStopPacket;
@@ -45,7 +46,7 @@ public final class IndexedBlockPlaybackSessionManager {
                 || PlaybackSessionId.parse(sessionId).isEmpty()) {
             return Set.of();
         }
-        long gameTime = level.getGameTime();
+        long nowNanos = MonotonicMediaClock.nowNanos();
         Session next = SESSIONS.compute(sourceId, (ignored, current) -> {
             if (current != null && !current.sessionId.equals(sessionId)) {
                 stopRecipients(level, current);
@@ -53,14 +54,14 @@ public final class IndexedBlockPlaybackSessionManager {
             }
             if (current == null) {
                 current = new Session(level.dimension(), anchorLevel, sourcePos.immutable(), playUrl, rawUrl,
-                        songName, sessionId, elapsedMillis, durationMillis, remainingSeconds, repeat, gameTime);
+                        songName, sessionId, elapsedMillis, durationMillis, remainingSeconds, repeat, nowNanos);
             } else {
                 current.update(anchorLevel, sourcePos, playUrl, rawUrl, songName, elapsedMillis,
-                        durationMillis, remainingSeconds, repeat, gameTime);
+                        durationMillis, remainingSeconds, repeat, nowNanos);
             }
             return current;
         });
-        sync(level, sourceId, next, gameTime);
+        sync(level, sourceId, next, nowNanos);
         return Set.copyOf(next.syncedPlayers);
     }
 
@@ -92,13 +93,13 @@ public final class IndexedBlockPlaybackSessionManager {
                 }
                 continue;
             }
-            long gameTime = level.getGameTime();
-            long elapsed = session.elapsedAt(gameTime);
+            long nowNanos = MonotonicMediaClock.nowNanos();
+            long elapsed = session.elapsedAt(nowNanos);
             if (session.durationMillis > 0L && elapsed >= session.durationMillis) {
                 if (session.repeat) {
                     stopRecipients(level, session);
-                    session.restartForIndexedRepeat(gameTime);
-                    sync(level, indexed.getKey(), session, gameTime);
+                    session.restartForIndexedRepeat(nowNanos);
+                    sync(level, indexed.getKey(), session, nowNanos);
                     continue;
                 }
                 if (SESSIONS.remove(indexed.getKey(), session)) {
@@ -107,7 +108,7 @@ public final class IndexedBlockPlaybackSessionManager {
                 }
                 continue;
             }
-            sync(level, indexed.getKey(), session, gameTime);
+            sync(level, indexed.getKey(), session, nowNanos);
         }
     }
 
@@ -124,11 +125,8 @@ public final class IndexedBlockPlaybackSessionManager {
         ModernTurntableAudienceSync.clearSubscriptions();
     }
 
-    private static void sync(ServerLevel level, PlaybackSourceId sourceId, Session session, long gameTime) {
-        if (session.lastSyncGameTime == gameTime) {
-            return;
-        }
-        long elapsed = session.elapsedAt(gameTime);
+    private static void sync(ServerLevel level, PlaybackSourceId sourceId, Session session, long nowNanos) {
+        long elapsed = session.elapsedAt(nowNanos);
         int remaining = session.durationMillis > 0L
                 ? (int) Math.max(1L, (session.durationMillis - elapsed + 999L) / 1_000L)
                 : session.remainingSeconds;
@@ -139,7 +137,6 @@ public final class IndexedBlockPlaybackSessionManager {
         session.syncedPlayers.clear();
         session.syncedPlayers.addAll(recipients);
         session.knownPlayers.addAll(recipients);
-        session.lastSyncGameTime = gameTime;
     }
 
     private static void stopRecipients(ServerLevel level, Session session) {
@@ -170,25 +167,24 @@ public final class IndexedBlockPlaybackSessionManager {
         private long baseElapsedMillis;
         private long durationMillis;
         private int remainingSeconds;
-        private long publishedGameTime;
-        private long lastSyncGameTime = Long.MIN_VALUE;
+        private MonotonicMediaClock.Anchor playbackClock = MonotonicMediaClock.paused(0L);
         private final Set<UUID> syncedPlayers = new HashSet<>();
         /** Every client that received this exact session; authoritative stop must reach dormant clients too. */
         private final Set<UUID> knownPlayers = new HashSet<>();
 
         private Session(ResourceKey<Level> dimension, Level anchorLevel, BlockPos sourcePos,
                 String playUrl, String rawUrl, String songName, String sessionId,
-                long elapsedMillis, long durationMillis, int remainingSeconds, boolean repeat, long gameTime) {
+                long elapsedMillis, long durationMillis, int remainingSeconds, boolean repeat, long nowNanos) {
             this.dimension = dimension;
             this.rootSessionId = sessionId;
             this.sessionId = sessionId;
             update(anchorLevel, sourcePos, playUrl, rawUrl, songName, elapsedMillis,
-                    durationMillis, remainingSeconds, repeat, gameTime);
+                    durationMillis, remainingSeconds, repeat, nowNanos);
         }
 
         private void update(Level anchorLevel, BlockPos sourcePos, String playUrl, String rawUrl,
                 String songName, long elapsedMillis, long durationMillis, int remainingSeconds,
-                boolean repeat, long gameTime) {
+                boolean repeat, long nowNanos) {
             this.anchorLevel = anchorLevel;
             this.sourcePos = sourcePos.immutable();
             this.playUrl = playUrl;
@@ -198,24 +194,23 @@ public final class IndexedBlockPlaybackSessionManager {
             this.baseElapsedMillis = Math.max(0L, elapsedMillis);
             this.durationMillis = Math.max(0L, durationMillis);
             this.remainingSeconds = Math.max(1, remainingSeconds);
-            this.publishedGameTime = gameTime;
+            this.playbackClock = MonotonicMediaClock.running(this.baseElapsedMillis, nowNanos);
         }
 
-        private void restartForIndexedRepeat(long gameTime) {
+        private void restartForIndexedRepeat(long nowNanos) {
             repeatGeneration++;
             String suffix = "~indexed-repeat-" + repeatGeneration;
             int rootLength = Math.min(rootSessionId.length(), MAX_SESSION_ID_LENGTH - suffix.length());
             sessionId = PlaybackSessionId.of(rootSessionId.substring(0, rootLength) + suffix).value();
             baseElapsedMillis = 0L;
             remainingSeconds = (int) Math.max(1L, (durationMillis + 999L) / 1_000L);
-            publishedGameTime = gameTime;
-            lastSyncGameTime = Long.MIN_VALUE;
+            playbackClock = MonotonicMediaClock.running(0L, nowNanos);
             syncedPlayers.clear();
             knownPlayers.clear();
         }
 
-        private long elapsedAt(long gameTime) {
-            return baseElapsedMillis + Math.max(0L, gameTime - publishedGameTime) * 50L;
+        private long elapsedAt(long nowNanos) {
+            return playbackClock.elapsedMillis(nowNanos, durationMillis);
         }
     }
 }

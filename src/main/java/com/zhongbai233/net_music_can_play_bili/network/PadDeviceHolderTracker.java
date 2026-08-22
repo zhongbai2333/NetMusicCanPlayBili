@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
 import com.zhongbai233.net_music_can_play_bili.item.PadItem;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadDocument;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadTriggerMode;
@@ -80,7 +82,7 @@ public final class PadDeviceHolderTracker {
         }
         tickAutoPlayback(level, player, stack, key, deviceId, document);
         int fingerprint = document.hashCode();
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         Long lastForcedSync = LAST_FORCED_SYNC.get(key);
         boolean force = lastForcedSync == null || gameTime - lastForcedSync.longValue() >= FORCED_SYNC_INTERVAL_TICKS;
         if (!force && Objects.equals(LAST_SENT.get(key), fingerprint)) {
@@ -98,7 +100,7 @@ public final class PadDeviceHolderTracker {
             AUTO_COOLDOWNS.remove(key);
             return;
         }
-        long gameTime = level.getGameTime();
+        long gameTime = MonotonicMediaClock.nowTick();
         Long cooldownUntil = AUTO_COOLDOWNS.get(key);
         boolean coolingDown = cooldownUntil != null && gameTime < cooldownUntil.longValue();
         PadTriggerPoint target = nearestAutoPoint(document, player.getX(), player.getY(), player.getZ());

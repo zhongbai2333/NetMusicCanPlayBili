@@ -106,7 +106,7 @@ public class VideoProjectorRenderer
         state.visible = turntable.isPlaying();
         if (state.visible) {
             VideoBillboardPreview.attachProjectorToTurntable(linkedPos, projector.getBlockPos());
-            var sync = turntable.getPlaybackSyncMetadata(level.getGameTime());
+            var sync = turntable.getPlaybackSyncMetadata();
             state.playbackSessionId = sync.playbackSessionId();
             if (!sync.hasSession() || !VideoBillboardPreview.hasSessionForTurntable(linkedPos, sync.sessionId())) {
                 ModernTurntableVideoClient.syncFromTurntableForProjectorIfPossible(turntable, projector);

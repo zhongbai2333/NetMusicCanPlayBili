@@ -38,8 +38,8 @@ class BiliLoginManagerCancellationTest {
 
             manager.close();
 
-            assertEquals(BiliLoginManager.State.FAILED, generate.join());
             assertEquals(0, manager.activeRequestCount());
+            assertEquals(BiliLoginManager.State.FAILED, generate.join());
             assertEquals(BiliLoginManager.State.FAILED, manager.generate().join());
             assertNull(manager.loadQrImage("late").join());
         } finally {
