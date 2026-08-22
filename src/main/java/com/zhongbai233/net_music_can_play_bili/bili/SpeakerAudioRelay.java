@@ -1,7 +1,10 @@
 package com.zhongbai233.net_music_can_play_bili.bili;
 
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioPlaybackRange;
 
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackApproachPredictor;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackPresentationEnvelope;
 import com.zhongbai233.net_music_can_play_bili.client.PlaybackLatencyBench;
 import com.zhongbai233.net_music_can_play_bili.media.audio.OpenALSpatialAudio;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -25,8 +28,10 @@ public class SpeakerAudioRelay {
     private volatile float userVolume = 1.0f;
     private volatile float rangeGain = 1.0f;
     private volatile float maxDistance = AudioUtils.MAX_AUDIBLE_DISTANCE;
+    private volatile boolean preparationDemand;
     private volatile float[] speakerPos;
     private volatile boolean handlerStarted;
+    private final PlaybackPresentationEnvelope presentationEnvelope = new PlaybackPresentationEnvelope();
     private volatile boolean paused;
     private int pendingFed = 0;
     private long totalSamplesFed = 0L;
@@ -63,17 +68,19 @@ public class SpeakerAudioRelay {
     }
 
     public void setUserVolume(float v) {
-        this.userVolume = AudioUtils.clampGain(v);
+        this.userVolume = AudioPlaybackRange.clampVolume(v);
     }
 
     public void setRangeGain(float gain) {
         this.rangeGain = AudioUtils.clampGain(gain);
     }
+    public void setPreparationDemand(boolean preparationDemand) {
+        this.preparationDemand = preparationDemand;
+    }
+
 
     public void setMaxDistance(float distance) {
-        if (Float.isFinite(distance) && distance > 0.0F) {
-            this.maxDistance = Math.min(distance, 4096.0F);
-        }
+        this.maxDistance = AudioPlaybackRange.normalizeConfiguredDistance(distance);
     }
 
     public float getMaxDistance() {
@@ -158,9 +165,9 @@ public class SpeakerAudioRelay {
         }
         sa.updatePositions(new float[][] { MONO_POS }, new float[0][0], listenerPos,
                 forward(speakerPos, listenerPos));
-        float g = muted ? 0.0F
-            : gainForDistance(distance(listenerPos, speakerPos), maxDistance, userVolume)
-                * rangeGain * gameVol();
+        float baseGain = muted ? 0.0F : rangeAt(listenerPos).gain() * rangeGain;
+        float entryGain = presentationEnvelope.gain(baseGain > 0.0F, System.nanoTime());
+        float g = baseGain * entryGain * gameVol();
         sa.setBedGain(0, g);
         if (sa.isDeviceLost()) {
             sa.cleanup();
@@ -186,12 +193,26 @@ public class SpeakerAudioRelay {
         return started;
     }
 
-    /** 是否配置了有效声道，且指定监听位置处于播放提示预警范围。 */
-    public boolean isWithinNoticeRangeAt(float[] listenerPos) {
+    /** Whether this relay currently contributes a non-zero acoustic gain. */
+    public boolean isAudibleAt(float[] listenerPos) {
+        return rangeGain > 0.0F && hasOutputIntent() && rangeAt(listenerPos).audible();
+    }
+
+    public boolean hasAnticipatedDemand(float[] listenerPos, float[] velocity) {
         float[] currentSpeakerPos = speakerPos;
-        return channelIndex >= 0 && listenerPos != null && currentSpeakerPos != null
-                && com.zhongbai233.net_music_can_play_bili.client.audio.PlaybackNoticePolicy
-                        .isWithinNoticeRange(distance(listenerPos, currentSpeakerPos), userVolume);
+        if (listenerPos == null || velocity == null || currentSpeakerPos == null || !hasOutputIntent()) {
+            return false;
+        }
+        if (preparationDemand) {
+            return true;
+        }
+        if (rangeGain <= 0.0F) {
+            return false;
+        }
+        AudioPlaybackRange.Profile profile = AudioPlaybackRange.profile(maxDistance, userVolume, userVolume);
+        return PlaybackApproachPredictor.willEnterSphere(listenerPos[0], listenerPos[1], listenerPos[2],
+                velocity[0], velocity[1], velocity[2], currentSpeakerPos[0], currentSpeakerPos[1],
+                currentSpeakerPos[2], profile.fadeEndDistance());
     }
 
     public long getPositionTicks() {
@@ -247,6 +268,7 @@ public class SpeakerAudioRelay {
         handlerStarted = false;
         pendingFed = 0;
         totalSamplesFed = 0L;
+        presentationEnvelope.reset();
         timelineBaselineSamples = 0L;
         OpenALSpatialAudio sa = spatialAudio;
         if (sa != null) {
@@ -272,9 +294,14 @@ public class SpeakerAudioRelay {
         return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
 
-    /** 音响音量会同步收缩最大传播距离，避免低音量仍能被远处听到。 */
-    private static float gainForDistance(float d, float maxDistance, float volume) {
-        return AudioUtils.spatialGainForDistance(d, maxDistance, volume, true);
+    private AudioPlaybackRange.SphereResult rangeAt(float[] listenerPos) {
+        float[] currentSpeakerPos = speakerPos;
+        if (listenerPos == null || currentSpeakerPos == null) {
+            return AudioPlaybackRange.evaluateSphere(Float.POSITIVE_INFINITY, maxDistance,
+                    userVolume, userVolume, false);
+        }
+        return AudioPlaybackRange.evaluateSphere(distance(listenerPos, currentSpeakerPos), maxDistance,
+                userVolume, userVolume, false);
     }
 
     private static float gameVol() {

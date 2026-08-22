@@ -17,6 +17,8 @@ import java.util.concurrent.CopyOnWriteArraySet;
 public final class ClientLinkRegistry {
     /** 目标方块位置 → 来源方块位置集合 */
     private static final Map<BlockPos, Set<BlockPos>> LINKS = new ConcurrentHashMap<>();
+    /** 只有字幕投影仪和承担字幕投影的中控台才进入此表，避免把视频投影仪/音响误报为字幕投影。 */
+    private static final Map<BlockPos, Set<BlockPos>> SUBTITLE_PROJECTION_LINKS = new ConcurrentHashMap<>();
 
     private ClientLinkRegistry() {
     }
@@ -32,13 +34,20 @@ public final class ClientLinkRegistry {
                 .add(sourcePos.immutable());
     }
 
+    /** 注册一个会接管唱片机头顶字幕的链接。 */
+    public static void linkSubtitleProjector(BlockPos sourcePos, BlockPos targetPos) {
+        link(sourcePos, targetPos);
+        SUBTITLE_PROJECTION_LINKS.computeIfAbsent(targetPos.immutable(), k -> new CopyOnWriteArraySet<>())
+                .add(sourcePos.immutable());
+    }
+
     /** 移除指定来源方块的所有链接 */
     public static void unlink(BlockPos sourcePos) {
         if (sourcePos == null) {
             return;
         }
-        LINKS.values().forEach(set -> set.remove(sourcePos));
-        LINKS.entrySet().removeIf(e -> e.getValue().isEmpty());
+        removeSource(LINKS, sourcePos);
+        removeSource(SUBTITLE_PROJECTION_LINKS, sourcePos);
     }
 
     /** 移除来源→指定目标的链接 */
@@ -50,11 +59,24 @@ public final class ClientLinkRegistry {
                 LINKS.remove(targetPos);
             }
         }
+        Set<BlockPos> projectionSources = SUBTITLE_PROJECTION_LINKS.get(targetPos);
+        if (projectionSources != null) {
+            projectionSources.remove(sourcePos);
+            if (projectionSources.isEmpty()) {
+                SUBTITLE_PROJECTION_LINKS.remove(targetPos);
+            }
+        }
     }
 
     /** 目标方块是否被任何来源方块连接 */
     public static boolean isTargetLinked(BlockPos targetPos) {
         Set<BlockPos> sources = LINKS.get(targetPos);
+        return sources != null && !sources.isEmpty();
+    }
+
+    /** 目标唱片机的头顶字幕是否由字幕投影仪或中控台接管。 */
+    public static boolean isSubtitleProjectionTarget(BlockPos targetPos) {
+        Set<BlockPos> sources = SUBTITLE_PROJECTION_LINKS.get(targetPos);
         return sources != null && !sources.isEmpty();
     }
 
@@ -66,5 +88,11 @@ public final class ClientLinkRegistry {
     /** 客户端断连/切世界时清空所有旧世界链接。 */
     public static void clear() {
         LINKS.clear();
+        SUBTITLE_PROJECTION_LINKS.clear();
+    }
+
+    private static void removeSource(Map<BlockPos, Set<BlockPos>> links, BlockPos sourcePos) {
+        links.values().forEach(set -> set.remove(sourcePos));
+        links.entrySet().removeIf(e -> e.getValue().isEmpty());
     }
 }

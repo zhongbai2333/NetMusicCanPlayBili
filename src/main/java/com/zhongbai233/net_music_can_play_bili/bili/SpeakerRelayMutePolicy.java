@@ -16,7 +16,7 @@ final class SpeakerRelayMutePolicy {
         if (!enabled || privateHeadphoneRoute || relays == null) {
             return false;
         }
-        return relays.stream().anyMatch(relay -> relay.takesOverMainOutput() && relay.hasOutputIntent());
+        return relays.stream().anyMatch(relay -> relay.takesOverMainOutput());
     }
 
     static boolean shouldMuteMain(boolean enabled, Collection<SpeakerAudioRelay> relays,

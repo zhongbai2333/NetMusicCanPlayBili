@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.client.audio;
 
+import com.mojang.logging.LogUtils;
 import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.github.tartaricacid.netmusic.client.audio.MusicPlayManager;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
@@ -9,6 +10,8 @@ import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackRequest;
 import net.minecraft.core.BlockPos;
 import net.minecraft.client.resources.sounds.SoundInstance;
+import net.minecraft.client.sounds.SoundEngine;
+import org.slf4j.Logger;
 
 import java.net.MalformedURLException;
 import java.net.URI;
@@ -27,6 +30,8 @@ import java.util.function.BiFunction;
  * </p>
  */
 public final class SyncedMediaPlaybackLauncher {
+    private static final Logger LOGGER = LogUtils.getLogger();
+
     private SyncedMediaPlaybackLauncher() {
     }
 
@@ -86,12 +91,31 @@ public final class SyncedMediaPlaybackLauncher {
         }
         try {
             URL url = new URI(finalUrl.get()).toURL();
-            net.minecraft.client.Minecraft.getInstance().submitAsync(() ->
-                    net.minecraft.client.Minecraft.getInstance().getSoundManager()
-                            .play(soundFactory.apply(url, lyricRecord)));
+            net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
+            if (minecraft.isSameThread()) {
+                return submitSound(minecraft, soundFactory.apply(url, lyricRecord), songName);
+            }
+            minecraft.execute(() -> submitSound(minecraft, soundFactory.apply(url, lyricRecord), songName));
         } catch (MalformedURLException | URISyntaxException error) {
             return false;
         }
+        return true;
+    }
+
+    private static boolean submitSound(net.minecraft.client.Minecraft minecraft, SoundInstance sound,
+            String songName) {
+        if (sound == null) {
+            LOGGER.warn("同步媒体声音工厂返回空实例: song='{}'", songName);
+            return false;
+        }
+        SoundEngine.PlayResult result = minecraft.getSoundManager().play(sound);
+        if (result == SoundEngine.PlayResult.NOT_STARTED) {
+            LOGGER.warn("同步媒体声音引擎拒绝启动: song='{}' sound={} volume={} canStartSilent={}",
+                    songName, sound.getIdentifier(), sound.getVolume(), sound.canStartSilent());
+            return false;
+        }
+        LOGGER.debug("同步媒体声音引擎已接受: song='{}' result={} volume={} canStartSilent={}",
+                songName, result, sound.getVolume(), sound.canStartSilent());
         return true;
     }
 

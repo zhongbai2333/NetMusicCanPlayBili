@@ -25,6 +25,7 @@ class ControlConsoleRangeGateTest {
     void inactiveConsumerRequiresAllAxesInsideReentryBox() {
         assertFalse(ControlConsoleRangeGate.evaluate(false, 6.1, 0, 0, 8, 8, 8).active());
         assertFalse(ControlConsoleRangeGate.evaluate(false, 0, 6.1, 0, 8, 8, 8).active());
+        assertTrue(ControlConsoleRangeGate.evaluate(false, 5.9, 0, 0, 8, 8, 8).active());
         assertTrue(ControlConsoleRangeGate.evaluate(false, 5.9, 5.9, 5.9, 8, 8, 8).active());
     }
 

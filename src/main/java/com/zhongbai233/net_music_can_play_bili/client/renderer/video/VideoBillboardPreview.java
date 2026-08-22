@@ -25,6 +25,7 @@ import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.client.event.SubmitCustomGeometryEvent;
 import org.joml.Matrix4f;
+import org.joml.Vector3f;
 import org.joml.Vector4f;
 import org.joml.Vector3fc;
 
@@ -45,6 +46,9 @@ import java.util.concurrent.ExecutionException;
  */
 @EventBusSubscriber(modid = NetMusicCanPlayBili.MODID, value = Dist.CLIENT)
 public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
+    private static final double VIDEO_PREWARM_DOT_THRESHOLD =
+            VideoPipelineProperties.offscreen().prewarmDotThreshold();
+
     /**
      * 根据相机相对空间中的屏幕姿态，选择提示底片远离玩家的一侧。
      * BER 的最终矩阵以相机为原点，因此屏幕局部 +Z 法线与屏幕中心的点积
@@ -65,6 +69,56 @@ public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
             return configuredOffset;
         }
         return towardCameraDot > 0.0F ? -distance : distance;
+    }
+
+    /**
+     * Checks the actual virtual screen surface rather than the owning console's
+     * audience-range box. This is deliberately a prewarm test: edge samples may
+     * start decode shortly before the screen center enters the camera view.
+     */
+    public static boolean isControlConsoleScreenPotentiallyVisible(BlockPos consolePos,
+            Matrix4f elementTransform, float halfWidth, float halfHeight) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (consolePos == null || elementTransform == null || halfWidth <= 0.0F || halfHeight <= 0.0F
+                || minecraft.level == null || minecraft.player == null) {
+            return false;
+        }
+        Camera camera = minecraft.gameRenderer.getMainCamera();
+        Vec3 cameraPos = camera.position();
+        float sampleHalfWidth = (float) (halfWidth * VIEW_SAMPLE_EDGE_SCALE);
+        float sampleHalfHeight = (float) (halfHeight * VIEW_SAMPLE_EDGE_SCALE);
+        float[][] samples = {
+                { 0.0F, 0.0F },
+                { sampleHalfWidth, sampleHalfHeight },
+                { sampleHalfWidth, -sampleHalfHeight },
+                { -sampleHalfWidth, sampleHalfHeight },
+                { -sampleHalfWidth, -sampleHalfHeight }
+        };
+        for (float[] sample : samples) {
+            Vector3f point = elementTransform.transformPosition(
+                    new Vector3f(sample[0], sample[1], 0.0F));
+            Vec3 worldPoint = new Vec3(consolePos.getX() + 0.5D + point.x,
+                    consolePos.getY() + 1.55D + point.y,
+                    consolePos.getZ() + 0.5D + point.z);
+            if (worldPoint.distanceToSqr(cameraPos) <= MAX_RENDER_DISTANCE_SQR
+                    && isScreenInView(camera, worldPoint.x, worldPoint.y, worldPoint.z,
+                            VIDEO_PREWARM_DOT_THRESHOLD)
+                    && !isOccluded(minecraft, cameraPos, worldPoint, consolePos)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Applies the same prewarm and occlusion rules to a physical projector's real screen. */
+    public static boolean isProjectorScreenPotentiallyVisible(BlockPos projectorPos) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (projectorPos == null || minecraft.level == null || minecraft.player == null
+                || !(minecraft.level.getBlockEntity(projectorPos) instanceof VideoProjectorBlockEntity projector)) {
+            return false;
+        }
+        return isProjectorScreenRenderable(minecraft, minecraft.gameRenderer.getMainCamera(), projector,
+                VIDEO_PREWARM_DOT_THRESHOLD);
     }
 
     public static ProjectorFrameSnapshot currentProjectorFrame(BlockPos projectorPos) {
@@ -319,7 +373,8 @@ public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
     public static BenchDecoderState benchDecoderState(String sessionId) {
         VideoPlaybackInstance instance = SESSION_INSTANCES.get(sessionId != null ? sessionId : "");
         return instance != null ? new BenchDecoderState(true, instance.generationForBench(),
-                instance.decoderStartOffsetMillisForBench(), instance.restartStateForBench())
+                instance.decoderStartOffsetMillisForBench(), instance.restartStateForBench(),
+                instance.prewarmVisibleForBench(), instance.offscreenPauseActiveForBench(), instance.hasFrame())
                 : BenchDecoderState.empty();
     }
 
@@ -451,9 +506,11 @@ public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
                 if (!instance.hasVideoConsumer()) {
                     return true;
                 }
-                if (!instance.hasGuiConsumer() && !instance.isWithinAudioRange(minecraft)) {
-                    return true;
-                }
+                // Range/view loss is a dormant state, not a lifecycle boundary. The
+                // presentation owns offscreen pause and visible-resume/reseek. Removing
+                // the registry entry here used to physically close the decoder, leaving
+                // the still-active synchronized session with nothing to resume when the
+                // player returned.
                 instance.submit(event, minecraft, camera);
                 return !instance.isRunning() && !instance.hasFrame() && !instance.hasNetworkFailure();
             });
@@ -740,32 +797,30 @@ public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
 
     public static void captureProjectorImmediatePose(String sessionId, BlockPos projectorPos, Matrix4f pose,
             float halfHeight) {
-        PlaybackSessionId.parse(sessionId).ifPresent(playbackSessionId ->
-                captureProjectorImmediatePose(playbackSessionId, projectorPos, pose, halfHeight));
+        captureProjectorImmediatePose(sessionId, projectorPos, pose, halfHeight, 1.0F);
     }
 
     public static void captureProjectorImmediatePose(PlaybackSessionId playbackSessionId, BlockPos projectorPos,
             Matrix4f pose, float halfHeight) {
-        if (playbackSessionId == null || projectorPos == null || pose == null
-                || halfHeight <= 0.0F) {
-            return;
-        }
-        PROJECTOR_IMMEDIATE_POSES.put(new ProjectorImmediateKey(playbackSessionId, projectorPos.immutable()),
-                new ProjectorImmediatePose(new Matrix4f(pose), halfHeight));
+        captureProjectorImmediatePose(playbackSessionId, projectorPos, pose, halfHeight, 1.0F);
     }
 
     public static void captureProjectorImmediatePose(String sessionId, BlockPos projectorPos, Matrix4f pose,
             float halfHeight, float opacity) {
-        if (opacity > 0.0F) {
-            captureProjectorImmediatePose(sessionId, projectorPos, pose, halfHeight);
-        }
+        PlaybackSessionId.parse(sessionId).ifPresent(playbackSessionId ->
+                captureProjectorImmediatePose(playbackSessionId, projectorPos, pose, halfHeight, opacity));
     }
 
     public static void captureProjectorImmediatePose(PlaybackSessionId playbackSessionId, BlockPos projectorPos,
             Matrix4f pose, float halfHeight, float opacity) {
-        if (opacity > 0.0F) {
-            captureProjectorImmediatePose(playbackSessionId, projectorPos, pose, halfHeight);
+        VideoOpacityRoute opacityRoute = VideoOpacityRoute.choose(opacity);
+        if (playbackSessionId == null || projectorPos == null || pose == null || halfHeight <= 0.0F
+                || opacityRoute == VideoOpacityRoute.SKIP) {
+            return;
         }
+        PROJECTOR_IMMEDIATE_POSES.put(new ProjectorImmediateKey(playbackSessionId, projectorPos.immutable()),
+                new ProjectorImmediatePose(new Matrix4f(pose), halfHeight,
+                        VideoOpacityRoute.normalize(opacity)));
     }
 
     static boolean drawCapturedProjectorYuvImmediate(RenderLevelStageEvent event, String sessionId,
@@ -787,9 +842,9 @@ public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
         BufferBuilder builder = Tesselator.getInstance().begin(renderType.mode(), renderType.format());
         PoseStack.Pose identityPose = new PoseStack().last();
         emitQuad(builder, identityPose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),
-                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), false);
+                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), false, captured.opacity());
         emitQuad(builder, identityPose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),
-                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), true);
+                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), true, captured.opacity());
         MeshData mesh = builder.build();
         if (mesh == null) {
             return false;

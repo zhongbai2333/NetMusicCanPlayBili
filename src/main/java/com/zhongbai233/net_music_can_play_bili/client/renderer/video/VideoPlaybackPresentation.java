@@ -11,6 +11,7 @@ import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.client.event.SubmitCustomGeometryEvent;
 import org.slf4j.Logger;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /** Owns frame snapshots, projector submission, visibility tracking, and Iris YUV presentation. */
@@ -99,32 +100,39 @@ final class VideoPlaybackPresentation {
         boolean renderable = false;
         boolean prewarm = false;
         List<BlockPos> projectorPositions = owner.consumers.projectors();
+        List<VideoProjectorBlockEntity> renderableProjectors = new ArrayList<>();
         for (BlockPos pos : projectorPositions) {
             boolean berManaged = VideoBillboardPreview.isProjectorRenderedByBer(pos);
             boolean submittedByBer = VideoBillboardPreview.wasProjectorRecentlySubmittedByBer(owner.sessionId(), pos);
             if (VideoBerConsumerVisibilityPolicy.usesBerSubmission(berManaged, submittedByBer)) {
                 renderable |= submittedByBer;
-                prewarm |= submittedByBer;
+                boolean predicted = com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleRenderer
+                        .isPredictivePrewarmActive(pos)
+                        || minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector
+                            && isApproachingProjector(minecraft, projector);
+                prewarm |= submittedByBer || predicted;
                 continue;
             }
             if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
+                prewarm |= com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleRenderer
+                        .isPredictivePrewarmActive(pos);
                 continue;
             }
             boolean projectorRenderable = VideoBillboardPreview.isProjectorScreenRenderable(minecraft, camera,
                     projector, VideoBillboardPreview.viewDotThreshold());
             boolean projectorPrewarm = projectorRenderable || VideoBillboardPreview.isProjectorScreenRenderable(
-                    minecraft, camera, projector, PREWARM_DOT_THRESHOLD);
+                    minecraft, camera, projector, PREWARM_DOT_THRESHOLD)
+                    || isApproachingProjector(minecraft, projector);
             renderable |= projectorRenderable;
             prewarm |= projectorPrewarm;
+            if (projectorRenderable) {
+                renderableProjectors.add(projector);
+            }
         }
         boolean holographicVisible = owner.hasHolographicTurntableConsumer();
         markVisibility(renderable || holographicVisible, prewarm || holographicVisible);
         owner.pumpUploadOnRenderThread();
-        for (BlockPos pos : projectorPositions) {
-            if (VideoBillboardPreview.isProjectorRenderedByBer(pos)
-                    || !(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
-                continue;
-            }
+        for (VideoProjectorBlockEntity projector : renderableProjectors) {
             submitProjector(event, minecraft, camera, projector);
         }
     }
@@ -168,10 +176,12 @@ final class VideoPlaybackPresentation {
         long nowNs = System.nanoTime();
         owner.prewarmVisible = prewarm;
         if (renderable || prewarm) {
+            owner.grantDecodeAdmission();
             long offscreenSince = owner.offscreenSinceNanoTime;
             owner.lastVisibleNanoTime = nowNs;
             owner.offscreenSinceNanoTime = 0L;
             if (offscreenSince > 0L) {
+                owner.resetFirstFrameWatchdogAfterVisibilityResume(nowNs);
                 maybeRestartForVisibleResume(nowNs - offscreenSince);
             }
             owner.loggedOffscreenPause = false;
@@ -231,10 +241,12 @@ final class VideoPlaybackPresentation {
                 continue;
             }
             if (!(minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector)) {
+                prewarm |= com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleRenderer
+                        .isPredictivePrewarmActive(pos);
                 continue;
             }
             prewarm |= VideoBillboardPreview.isProjectorScreenRenderable(minecraft, camera, projector,
-                    PREWARM_DOT_THRESHOLD);
+                    PREWARM_DOT_THRESHOLD) || isApproachingProjector(minecraft, projector);
             if (HolographicGlassesClient.shouldHideProjectorVideos()) {
                 VideoBillboardPreview.drawProjectorPrivacyOverlayImmediate(event, minecraft, camera, projector, route);
                 drew = true;
@@ -250,6 +262,22 @@ final class VideoPlaybackPresentation {
                     owner.sessionId(), route, owner.textures.yuvTextureSet().width(),
                     owner.textures.yuvTextureSet().height());
         }
+    }
+
+    private static boolean isApproachingProjector(Minecraft minecraft, VideoProjectorBlockEntity projector) {
+        if (minecraft == null || minecraft.player == null || projector == null) {
+            return false;
+        }
+        var listener = minecraft.player.position();
+        var velocity = minecraft.player.getDeltaMovement();
+        BlockPos pos = projector.getBlockPos();
+        double targetX = pos.getX() + 0.5D + projector.getProjectionDistanceX();
+        double targetY = pos.getY() + projector.getProjectionHeight();
+        double targetZ = pos.getZ() + 0.5D + projector.getProjectionDistanceZ();
+        double range = VideoPipelineProperties.visibility().maxRenderDistance();
+        return com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackApproachPredictor.willEnterSphere(
+                listener.x, listener.y, listener.z, velocity.x, velocity.y, velocity.z,
+                targetX, targetY, targetZ, range);
     }
 
     private Identifier placeholderTexture(VideoPlaceholderFrames.Kind kind) {

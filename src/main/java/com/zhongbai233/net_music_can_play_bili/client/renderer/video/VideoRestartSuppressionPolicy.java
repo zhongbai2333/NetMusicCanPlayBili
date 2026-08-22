@@ -6,8 +6,9 @@ final class VideoRestartSuppressionPolicy {
     }
 
     static boolean shouldPauseOffscreen(boolean liveSource, boolean pauseEnabled) {
-        // 直播总线是持续前进的短缓存；停止消费会丢掉时间连续性，并在每次重新可见时被迫等关键帧。
-        return pauseEnabled && !liveSource;
+        // Video decode is visual work. Live streams may need to wait for a new keyframe on
+        // resume, but that is preferable to decoding indefinitely without a visible surface.
+        return pauseEnabled;
     }
 
     static boolean shouldPauseDecodeOffscreen(boolean candidateCommitted,

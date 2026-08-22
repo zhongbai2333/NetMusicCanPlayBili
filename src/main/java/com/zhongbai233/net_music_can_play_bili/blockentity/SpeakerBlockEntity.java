@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.blockentity;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.bili.SpeakerAudioRelay;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
 import net.minecraft.core.BlockPos;
@@ -14,6 +15,7 @@ import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.server.level.ServerLevel;
 
 import javax.annotation.Nullable;
+import java.util.UUID;
 
 /**
  * 音响方块实体 — 将唱片机音频重定向到本方块位置输出，支持 7.1.4 声道选择
@@ -23,6 +25,8 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
     private static final String CHANNEL_INDEX = "ChannelIndex";
     private static final String VOLUME = "Volume";
     private static final String AUTO_MIX_JOC = "AutoMixJoc";
+    private static final String ENDPOINT_ID = "AudioEndpointId";
+    private static final String ENDPOINT_REVISION = "AudioEndpointRevision";
 
     /**
      * 声道索引：-1=无(静音), 0=L, 1=R, 2=C, 3=LFE, 4=Ls, 5=Rs, 6=Lrs, 7=Rrs, 8=Ltf, 9=Rtf,
@@ -50,6 +54,8 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
     private float volume = 1.0f;
     /** 是否自动融合 JOC 移动对象到音响位置 */
     private boolean autoMixJoc;
+    private UUID endpointId = UUID.randomUUID();
+    private long endpointRevision;
 
     public SpeakerBlockEntity(BlockPos pos, BlockState blockState) {
         super(ModBlockEntities.SPEAKER.get(), pos, blockState);
@@ -57,15 +63,14 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
 
     public void linkTo(BlockPos turntablePos) {
         this.linkedTurntablePos = turntablePos.immutable();
-        if (level != null && !level.isClientSide()) {
-            AudioLinkIndex.registerSpeaker((ServerLevel) level, worldPosition, linkedTurntablePos);
-        }
+        endpointRevision++;
+        syncServerEndpoint();
         markDirtyAndSync();
     }
 
     public void unlink() {
         if (level instanceof ServerLevel serverLevel) {
-            AudioLinkIndex.unregisterSpeaker(serverLevel, worldPosition);
+            AudioLinkIndex.removeSpeakerEndpoint(serverLevel, endpointId, worldPosition);
         }
         this.linkedTurntablePos = null;
         markDirtyAndSync();
@@ -86,6 +91,8 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
 
     public void setChannelIndex(int v) {
         this.channelIndex = v;
+        endpointRevision++;
+        syncServerEndpoint();
         setChanged();
     }
 
@@ -95,6 +102,8 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
 
     public void setVolume(float v) {
         this.volume = Math.clamp(v, 0.0f, 2.0f);
+        endpointRevision++;
+        syncServerEndpoint();
         setChanged();
     }
 
@@ -104,6 +113,8 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
 
     public void setAutoMixJoc(boolean v) {
         this.autoMixJoc = v;
+        endpointRevision++;
+        syncServerEndpoint();
         setChanged();
     }
 
@@ -115,6 +126,8 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
         output.putInt(CHANNEL_INDEX, channelIndex);
         output.putFloat(VOLUME, volume);
         output.putBoolean(AUTO_MIX_JOC, autoMixJoc);
+        output.putString(ENDPOINT_ID, endpointId.toString());
+        output.putLong(ENDPOINT_REVISION, endpointRevision);
     }
 
     @Override
@@ -125,11 +138,14 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
         this.channelIndex = input.getIntOr(CHANNEL_INDEX, CH_NONE);
         this.volume = input.getFloatOr(VOLUME, 1.0f);
         this.autoMixJoc = input.getBooleanOr(AUTO_MIX_JOC, false);
+        UUID savedEndpointId = parseUuid(input.getStringOr(ENDPOINT_ID, ""));
+        this.endpointId = savedEndpointId != null ? savedEndpointId : UUID.randomUUID();
+        this.endpointRevision = Math.max(0L, input.getLongOr(ENDPOINT_REVISION, 0L));
 
         if (level != null && level.isClientSide()) {
             syncAudioOverride();
-        } else if (level instanceof ServerLevel serverLevel && linkedTurntablePos != null) {
-            AudioLinkIndex.registerSpeaker(serverLevel, worldPosition, linkedTurntablePos);
+        } else if (level instanceof ServerLevel && linkedTurntablePos != null) {
+            syncServerEndpoint();
         }
     }
 
@@ -144,8 +160,8 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
     @Override
     public void onLoad() {
         super.onLoad();
-        if (level instanceof ServerLevel serverLevel) {
-            AudioLinkIndex.registerSpeaker(serverLevel, worldPosition, linkedTurntablePos);
+        if (level instanceof ServerLevel) {
+            syncServerEndpoint();
         } else if (level != null && level.isClientSide()) {
             syncAudioOverride();
         }
@@ -153,12 +169,13 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
 
     @Override
     public void setRemoved() {
-        super.setRemoved();
-        if (level instanceof ServerLevel serverLevel) {
-            AudioLinkIndex.unregisterSpeaker(serverLevel, worldPosition);
-        } else if (level != null && level.isClientSide()) {
-            ClientAudioOutputRegistry.clearMachineOverrideForSpeaker(worldPosition);
+        if (level != null && level.isClientSide()) {
+            boolean bindingDestroyed = !level.getBlockState(worldPosition).is(ModBlocks.SPEAKER.get());
+            if (bindingDestroyed) {
+                ClientAudioOutputRegistry.clearMachineOverrideForSpeaker(worldPosition);
+            }
         }
+        super.setRemoved();
     }
 
     /**
@@ -173,6 +190,26 @@ public class SpeakerBlockEntity extends SyncedBlockEntity {
             relay.setUserVolume(volume);
             ClientAudioOutputRegistry.registerRelay(worldPosition, linkedTurntablePos, relay);
             ClientAudioOutputRegistry.updateRelayConfig(worldPosition, channelIndex, volume, autoMixJoc);
+        }
+    }
+
+    public UUID getEndpointId() {
+        return endpointId;
+    }
+
+    private void syncServerEndpoint() {
+        if (level instanceof ServerLevel serverLevel && linkedTurntablePos != null) {
+            AudioLinkIndex.upsertSpeakerEndpoint(serverLevel, endpointId, worldPosition, linkedTurntablePos,
+                    channelIndex, volume, autoMixJoc, 64.0F, endpointRevision);
+        }
+    }
+
+    @Nullable
+    private static UUID parseUuid(String value) {
+        try {
+            return value == null || value.isBlank() ? null : UUID.fromString(value);
+        } catch (IllegalArgumentException ignored) {
+            return null;
         }
     }
 

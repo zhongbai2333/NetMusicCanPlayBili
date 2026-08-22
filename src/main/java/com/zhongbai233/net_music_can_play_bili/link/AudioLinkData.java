@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.link;
 
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioPlaybackRange;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
@@ -16,7 +17,7 @@ import java.util.UUID;
  * </p>
  */
 public final class AudioLinkData {
-    public static final double MP4_HEADPHONE_RANGE_SQUARED = 64.0D * 64.0D;
+    public static final double MP4_HEADPHONE_RANGE_SQUARED = AudioPlaybackRange.HEADPHONE_LINK_DISTANCE_SQUARED;
 
     private static final String HEADPHONE_TURNTABLE_X = "headphones_turntable_x";
     private static final String HEADPHONE_TURNTABLE_Y = "headphones_turntable_y";

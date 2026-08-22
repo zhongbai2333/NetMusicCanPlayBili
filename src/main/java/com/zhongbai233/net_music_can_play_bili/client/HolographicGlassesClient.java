@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.client;
 
+import com.zhongbai233.net_music_can_play_bili.client.renderer.ClientDisplayProperties;
 import com.zhongbai233.net_music_can_play_bili.item.HolographicGlassesItem;
 import com.zhongbai233.net_music_can_play_bili.link.EquippedMediaItems;
 import com.zhongbai233.net_music_can_play_bili.link.HolographicGlassesAbility;
@@ -51,7 +52,8 @@ public final class HolographicGlassesClient {
     }
 
     public static boolean handlesTurntable(ResourceKey<Level> dimension, BlockPos turntablePos) {
-        if (dimension == null || turntablePos == null) {
+        if (!ClientDisplayProperties.holographicWorldScreenEnabled()
+                || dimension == null || turntablePos == null) {
             return false;
         }
         for (HolographicGlassesItem.ScreenBinding binding : screenBindings()) {

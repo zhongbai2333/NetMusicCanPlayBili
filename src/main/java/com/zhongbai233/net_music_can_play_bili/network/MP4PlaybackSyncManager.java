@@ -14,6 +14,7 @@ import com.zhongbai233.net_music_can_play_bili.link.AudioLinkData;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import com.zhongbai233.net_music_can_play_bili.link.EquippedMediaItems;
 import com.zhongbai233.net_music_can_play_bili.link.HeadphoneAbility;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioPlaybackRange;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.server.BiliWhitelistManager;
 import com.zhongbai233.net_music_can_play_bili.server.PlaybackAuditManager;
@@ -50,7 +51,7 @@ public final class MP4PlaybackSyncManager {
     private static final int FULL_SYNC_INTERVAL_TICKS = 300;
     private static final int DISCOVERY_INTERVAL_TICKS = 40;
     private static final int SOURCE_MISSING_GRACE_TICKS = 20;
-    private static final double SYNC_RANGE = 64.0D;
+    private static final double SYNC_RANGE = AudioPlaybackRange.SYNC_DISTANCE_BLOCKS;
     private static final MP4PlaybackSourceSessionRegistry<Session> SESSION_REGISTRY =
             new MP4PlaybackSourceSessionRegistry<>();
     private static final MP4ResolveIntentRegistry RESOLVE_INTENTS = new MP4ResolveIntentRegistry();

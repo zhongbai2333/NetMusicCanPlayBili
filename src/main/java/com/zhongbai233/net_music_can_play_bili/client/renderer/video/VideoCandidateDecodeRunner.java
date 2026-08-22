@@ -63,6 +63,9 @@ final class VideoCandidateDecodeRunner {
             if (!owner.running || generation != owner.generation.get()) {
                 return;
             }
+            if (!waitForVisualDemand(generation)) {
+                return;
+            }
             try {
                 if (decodeCandidate(generation, candidate)) {
                     return;
@@ -101,6 +104,22 @@ final class VideoCandidateDecodeRunner {
             owner.running = false;
             owner.decoder = null;
         }
+    }
+
+    private boolean waitForVisualDemand(long generation) {
+        while (owner.running && generation == owner.generation.get() && !owner.prewarmVisible) {
+            try {
+                TimeUnit.MILLISECONDS.sleep(25L);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        if (!owner.running || generation != owner.generation.get()) {
+            return false;
+        }
+        owner.grantDecodeAdmission();
+        return true;
     }
 
     private boolean decodeCandidate(long generation, VideoCandidate candidate) throws Exception {

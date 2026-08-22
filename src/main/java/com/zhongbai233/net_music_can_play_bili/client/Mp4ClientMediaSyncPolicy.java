@@ -22,6 +22,14 @@ final class Mp4ClientMediaSyncPolicy implements ClientMediaSyncPolicy {
     private static final boolean PAD_VIDEO_DEBUG_LOG = PadDiagnosticsProperties.videoDebugLogEnabled();
 
     @Override
+    public com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPreparePolicy preparePolicy(
+            ClientMediaSyncPayload payload) {
+        return PadClientMediaSessionIds.isPadSession(payload.sessionId())
+                ? PadClientMediaPreparePolicy.INSTANCE
+                : Mp4ClientMediaPreparePolicy.INSTANCE;
+    }
+
+    @Override
     public boolean canHear(UUID sourceId, boolean headphoneRouted) {
         return ClientMediaAudioRouting.canHear(sourceId, headphoneRouted);
     }

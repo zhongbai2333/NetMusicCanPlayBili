@@ -12,7 +12,10 @@ class PlaybackSyncTest {
     @Test
     void preservesMinecartMetadataAcrossTransfer() {
         UUID minecartUuid = UUID.fromString("12345678-1234-5678-9abc-def012345678");
+        PlaybackSourceId sourceId = PlaybackSourceId.of(
+                UUID.fromString("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"));
         String synced = PlaybackSync.withSync("https://example.invalid/audio.m4a", "session-1", 1_250L, 9_000L);
+        synced = PlaybackSync.withSourceId(synced, sourceId);
         synced = PlaybackSync.withMinecartAnchor(synced, 42, minecartUuid);
 
         PlaybackSync.Metadata metadata = PlaybackSync.parse(synced);
@@ -24,12 +27,14 @@ class PlaybackSyncTest {
         assertNotNull(anchor);
         assertEquals(42, anchor.entityId());
         assertEquals(minecartUuid, anchor.entityUuid());
+        assertEquals(sourceId, PlaybackSync.parsePlaybackSourceId(synced).orElseThrow());
 
         String transferred = PlaybackSync.transferSync(synced, "https://cdn.example.invalid/audio.m4a");
         PlaybackSync.MinecartAnchor transferredAnchor = PlaybackSync.parseMinecartAnchor(transferred);
         assertNotNull(transferredAnchor);
         assertEquals(42, transferredAnchor.entityId());
         assertEquals(minecartUuid, transferredAnchor.entityUuid());
+        assertEquals(sourceId, PlaybackSync.parsePlaybackSourceId(transferred).orElseThrow());
         assertEquals("https://cdn.example.invalid/audio.m4a", PlaybackSync.strip(transferred));
     }
 

@@ -100,7 +100,7 @@ public class LyricProjectorRenderer
             return;
         }
 
-        ClientLinkRegistry.link(projector.getBlockPos(), state.linkedPos);
+        ClientLinkRegistry.linkSubtitleProjector(projector.getBlockPos(), state.linkedPos);
 
         if (!turntable.isPlaying()) {
             ClientAiSubtitleRegistry.release(state.projectorPos);

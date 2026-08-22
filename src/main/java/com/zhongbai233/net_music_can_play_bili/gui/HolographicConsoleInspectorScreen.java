@@ -447,16 +447,15 @@ abstract class HolographicConsoleInspectorScreen extends HolographicEditorLifecy
     protected ControlConsoleDocument currentConsoleDocument() {
         ControlConsoleDocument document = controlConsoleDocument();
         if (consoleDraft == null && document != null) {
+            // Establish the server baseline while loading, rather than waiting for the first tick.
+            // Otherwise add/copy/delete followed by an immediate close is mistaken for the initial
+            // observation and the structural edit never reaches the server.
+            consoleSavedFingerprint = documentFingerprint(document);
+            consoleObservedFingerprint = consoleSavedFingerprint;
+            consoleAutosaveFingerprintInitialized = true;
             consoleDraft = document.withInitialScreenIfPristine();
             if (!consoleElementsLoaded) {
                 loadConsoleElements(consoleDraft);
-            }
-            if (consoleDraft != document) {
-                // 旧 revision 0 空文档的正式主屏幕属于待保存变更，不能在自动保存初始化时
-                // 被误认为已经存在于服务端。
-                consoleSavedFingerprint = documentFingerprint(document);
-                consoleObservedFingerprint = consoleSavedFingerprint;
-                consoleAutosaveFingerprintInitialized = true;
             }
             if (roamingHistoryPending) {
                 roamingHistoryPending = false;

@@ -6,13 +6,13 @@ import net.minecraft.core.BlockPos;
 public final class AudioUtils {
 
     /** 手动反比衰减参考距离 */
-    public static final float DISTANCE_REFERENCE = 8.0f;
+    public static final float DISTANCE_REFERENCE = AudioPlaybackRange.DISTANCE_REFERENCE;
     /** 最小有效距离（音响半径），避免进入音响圈内部时增益异常 */
-    public static final float SPATIAL_RADIUS = 1.5f;
+    public static final float SPATIAL_RADIUS = AudioPlaybackRange.SPATIAL_RADIUS;
     /** 空间音源满音量时的最大可听距离；音量降低时会按比例收缩 */
-    public static final float MAX_AUDIBLE_DISTANCE = 64.0f;
+    public static final float MAX_AUDIBLE_DISTANCE = AudioPlaybackRange.DEFAULT_DISTANCE;
     /** 超出设计听距后用于客户端平滑淡入淡出的额外距离比例。 */
-    public static final float AUDIBLE_FADE_FRACTION = 0.20f;
+    public static final float AUDIBLE_FADE_FRACTION = AudioPlaybackRange.FADE_FRACTION;
 
     private AudioUtils() {
     }
@@ -71,47 +71,14 @@ public final class AudioUtils {
      * 适用于 UI 使用非线性响度曲线、但仍希望听距按滑块线性缩放的移动媒体。
      */
     public static float spatialGainForDistance(float d, float audibleRangeScale, float outputGain) {
-        float clampedRangeScale = clampGain(audibleRangeScale);
-        float clampedOutputGain = clampGain(outputGain);
-        if (clampedRangeScale <= 0.0f || clampedOutputGain <= 0.0f) {
-            return 0.0f;
-        }
-        float maxAudibleDistance = MAX_AUDIBLE_DISTANCE * clampedRangeScale;
-        float baseGain = gainForDistance(d) * clampedOutputGain;
-        if (d <= maxAudibleDistance) {
-            return baseGain;
-        }
-        float fadeDistance = maxAudibleDistance * AUDIBLE_FADE_FRACTION;
-        float fadeEnd = maxAudibleDistance + fadeDistance;
-        if (d >= fadeEnd) {
-            return 0.0f;
-        }
-        float remaining = clampGain((fadeEnd - d) / fadeDistance);
-        float fadeGain = remaining * remaining * (3.0f - 2.0f * remaining);
-        return baseGain * fadeGain;
+        return AudioPlaybackRange.evaluateSphere(d, MAX_AUDIBLE_DISTANCE,
+                audibleRangeScale, outputGain, false).gain();
     }
 
     /** 使用绝对听距和独立输出增益的空间衰减。 */
     public static float spatialGainForDistance(float d, float maxDistance, float outputGain,
             boolean absoluteDistance) {
-        float range = Float.isFinite(maxDistance) && maxDistance > 0.0F
-            ? Math.min(maxDistance, 4096.0F) : MAX_AUDIBLE_DISTANCE;
-        float gain = clampGain(outputGain);
-        if (gain <= 0.0F) {
-            return 0.0F;
-        }
-        float baseGain = gainForDistance(d) * gain;
-        if (d <= range) {
-            return baseGain;
-        }
-        float fadeDistance = Math.max(0.001F, range * AUDIBLE_FADE_FRACTION);
-        float fadeEnd = range + fadeDistance;
-        if (d >= fadeEnd) {
-            return 0.0F;
-        }
-        float remaining = clampGain((fadeEnd - d) / fadeDistance);
-        float fadeGain = remaining * remaining * (3.0F - 2.0F * remaining);
-        return baseGain * fadeGain;
+        return AudioPlaybackRange.evaluateSphere(d, maxDistance, 1.0F, outputGain, false).gain();
     }
 
     /** 格式化坐标为可读字符串 */

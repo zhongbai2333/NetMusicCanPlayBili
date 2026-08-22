@@ -2,10 +2,13 @@ package com.zhongbai233.net_music_can_play_bili.client.audio;
 
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioPlaybackRange;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import com.zhongbai233.net_music_can_play_bili.bili.DolbyAudioHandler;
 import com.zhongbai233.net_music_can_play_bili.bili.SpeakerAudioRelay;
 import com.zhongbai233.net_music_can_play_bili.bili.StereoOpenALHandler;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackApproachPredictor;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
@@ -29,7 +32,6 @@ public class ClientAudioOutputRegistry {
     private static final BoundedConcurrentStore<BlockPos, AudioEntry> OUTPUTS = new BoundedConcurrentStore<>(
             MAX_ACTIVE_TURNTABLES);
     private static final ConcurrentMap<UUID, BlockPos> MINECART_KEYS = new ConcurrentHashMap<>();
-    private static final ConcurrentMap<UUID, Float> OWNER_VOLUMES = new ConcurrentHashMap<>();
 
     /** 音响 relay 注册表：speakerPos → relay */
     private static final ConcurrentMap<BlockPos, SpeakerAudioRelay> RELAYS = new ConcurrentHashMap<>();
@@ -74,7 +76,7 @@ public class ClientAudioOutputRegistry {
                 startOffsetTicks(startOffsetSeconds), playbackSessionId, ownerId);
         handler.setConsoleRouteSuppressed(isMainRouteSuppressed(pos));
         handler.setPaused(paused);
-        handler.setUserVolume(ownerId != null ? OWNER_VOLUMES.getOrDefault(ownerId, 1.0F)
+        handler.setUserVolume(ownerId != null ? ClientAudioOwnerVolumes.getOrDefault(ownerId, 1.0F)
                 : ClientAudioOutputPolicy.volume(pos));
         cleanupAfterPut(OUTPUTS.put(key, entry, entry.createdAtMillis()));
         // 自动连接已注册的音响 relay
@@ -122,7 +124,7 @@ public class ClientAudioOutputRegistry {
                 startOffsetTicks(startOffsetSeconds), playbackSessionId, ownerId);
         handler.setConsoleRouteSuppressed(isMainRouteSuppressed(pos));
         handler.setPaused(paused);
-        handler.setUserVolume(ownerId != null ? OWNER_VOLUMES.getOrDefault(ownerId, 1.0F)
+        handler.setUserVolume(ownerId != null ? ClientAudioOwnerVolumes.getOrDefault(ownerId, 1.0F)
                 : ClientAudioOutputPolicy.volume(pos));
         cleanupAfterPut(OUTPUTS.put(key, entry, entry.createdAtMillis()));
         // 自动连接已注册的音响 relay
@@ -149,7 +151,15 @@ public class ClientAudioOutputRegistry {
     }
 
     private static void unregisterOutput(AudioOutputHandle handler) {
-        OUTPUTS.removeIf(entry -> entry.output() == handler);
+        for (AudioEntry removed : OUTPUTS.removeIf(entry -> entry.output() == handler)) {
+            releaseMinecartKeyIfUnused(removed.pos());
+        }
+    }
+
+    public static void updateListenerPosition(float[] listenerPos) {
+        if (listenerPos != null) {
+            ClientAudioOutputRegistry.listenerPos = AudioUtils.copyPos3(listenerPos);
+        }
     }
 
     public static void updatePositions(float[] listenerPos) {
@@ -387,6 +397,10 @@ public class ClientAudioOutputRegistry {
         updateRelayConfig(speakerPos, channelIndex, volume, autoMixJoc, AudioUtils.MAX_AUDIBLE_DISTANCE);
     }
 
+    public static boolean hasRelayAt(BlockPos speakerPos) {
+        return speakerPos != null && RELAYS.containsKey(speakerPos);
+    }
+
     public static void updateRelayConfig(BlockPos speakerPos, int channelIndex, float volume, boolean autoMixJoc,
             float maxDistance) {
         if (speakerPos == null)
@@ -414,7 +428,7 @@ public class ClientAudioOutputRegistry {
                 continue;
             }
             SpeakerAudioRelay relay = RELAYS.get(entry.getKey());
-            if (relay != null && relay.takesOverMainOutput() && relay.hasOutputIntent()) {
+            if (relay != null && relay.takesOverMainOutput()) {
                 return true;
             }
         }
@@ -440,6 +454,17 @@ public class ClientAudioOutputRegistry {
             relay.setRangeGain(rangeGain);
         }
     }
+    /** Enables decode preparation for a muted relay without making it audible. */
+    public static void updateRelayPreparationDemand(BlockPos speakerPos, boolean preparationDemand) {
+        if (speakerPos == null) {
+            return;
+        }
+        SpeakerAudioRelay relay = RELAYS.get(speakerPos);
+        if (relay != null) {
+            relay.setPreparationDemand(preparationDemand);
+        }
+    }
+
 
     /** 将音响配置（声道掩码/音量/JOC 静态化）应用到对应唱片机的 handler */
     public static void applySpeakerConfig(BlockPos turntablePos, int channelMask, float volume, boolean autoMixJoc) {
@@ -460,32 +485,155 @@ public class ClientAudioOutputRegistry {
         return AudioUtils.copyPos3(listenerPos);
     }
 
+    /** Actual audible demand; metadata delivery and decode prewarming are deliberately excluded. */
+    public static boolean hasAudioDemand(BlockPos sourcePos, PlaybackSourceId sourceId, String sessionId) {
+        return audioDemandDebug(sourcePos, sourceId, sessionId).demand();
+    }
+
+    /**
+     * Decode preparation may lead audibility by a bounded movement projection. It never changes
+     * output gain; the spatial outputs remain silent until the real range test succeeds.
+     */
+    public static boolean hasPreparationDemand(BlockPos sourcePos, PlaybackSourceId sourceId, String sessionId) {
+        AudioDemandDebug actual = audioDemandDebug(sourcePos, sourceId, sessionId);
+        if (actual.demand() || sourcePos == null || !actual.audioEnabled() || !actual.listenerPresent()) {
+            return actual.demand();
+        }
+        var minecraft = net.minecraft.client.Minecraft.getInstance();
+        if (minecraft.player == null) {
+            return false;
+        }
+        var movement = minecraft.player.getDeltaMovement();
+        float[] velocity = { (float) movement.x, (float) movement.y, (float) movement.z };
+        float[] listener = currentListenerPosition();
+        if (listener == null) {
+            return false;
+        }
+        if (sourceId != null && !ClientAudioEndpointIndex.anticipatedDemands(sourceId).isEmpty()) {
+            return true;
+        }
+        if (!actual.mainSuppressed() && actual.sourceVolume() > 0.0F) {
+            float[] sourcePosition = AudioUtils.centerFor(sourcePos);
+            var movingPosition = ClientMinecartAudioAnchors.position(sessionId);
+            if (movingPosition != null) {
+                sourcePosition = new float[] { (float) movingPosition.x, (float) movingPosition.y,
+                        (float) movingPosition.z };
+            }
+            AudioPlaybackRange.Profile profile = AudioPlaybackRange.profile(AudioPlaybackRange.DEFAULT_DISTANCE,
+                    actual.sourceVolume(), actual.sourceVolume());
+            if (PlaybackApproachPredictor.willEnterSphere(listener[0], listener[1], listener[2],
+                    velocity[0], velocity[1], velocity[2], sourcePosition[0], sourcePosition[1], sourcePosition[2],
+                    profile.fadeEndDistance())) {
+                return true;
+            }
+        }
+        for (var entry : RELAY_TURNTABLE.entrySet()) {
+            if (!sourcePos.equals(entry.getValue())) {
+                continue;
+            }
+            SpeakerAudioRelay relay = RELAYS.get(entry.getKey());
+            if (relay != null && relay.hasAnticipatedDemand(listener, velocity)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static AudioDemandDebug audioDemandDebug(BlockPos sourcePos, PlaybackSourceId sourceId, String sessionId) {
+        boolean audioEnabled = gameAudioEnabled();
+        float[] listener = currentListenerPosition();
+        float sourceVolume = sourcePos != null ? ClientAudioOutputPolicy.volume(sourcePos) : 0.0F;
+        boolean headphone = sourcePos != null && sourceVolume > 0.0F
+                && com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
+                        .handlesTurntable(sourcePos);
+        int indexedDemands = sourceId != null ? ClientAudioEndpointIndex.audibleDemands(sourceId).size() : 0;
+        boolean consoleRoute = sourcePos != null && CONSOLE_ROUTE_OWNERS.hasOwners(sourcePos);
+        boolean mainSuppressed = sourcePos != null && isMainRouteSuppressed(sourcePos);
+        float mainDistance = Float.POSITIVE_INFINITY;
+        boolean mainAudible = false;
+        if (sourcePos != null && listener != null && !mainSuppressed) {
+            float[] sourcePosition = AudioUtils.centerFor(sourcePos);
+            var movingPosition = ClientMinecartAudioAnchors.position(sessionId);
+            if (movingPosition != null) {
+                sourcePosition = new float[] { (float) movingPosition.x, (float) movingPosition.y,
+                        (float) movingPosition.z };
+            }
+            mainDistance = AudioUtils.distance(listener, sourcePosition);
+            mainAudible = AudioPlaybackRange.evaluateSphere(mainDistance,
+                    AudioPlaybackRange.DEFAULT_DISTANCE, sourceVolume, false).audible();
+        }
+        int matchingRelays = 0;
+        boolean relayAudible = false;
+        if (sourcePos != null) {
+            for (var entry : RELAY_TURNTABLE.entrySet()) {
+                if (!sourcePos.equals(entry.getValue())) {
+                    continue;
+                }
+                SpeakerAudioRelay relay = RELAYS.get(entry.getKey());
+                if (relay != null) {
+                    matchingRelays++;
+                    relayAudible |= listener != null && relay.isAudibleAt(listener);
+                }
+            }
+        }
+        boolean demand = sourcePos != null && audioEnabled && listener != null
+                && (headphone || indexedDemands > 0 || mainAudible || relayAudible);
+        return new AudioDemandDebug(demand, audioEnabled, listener != null, sourceVolume, headphone,
+                indexedDemands, mainSuppressed, consoleRoute, mainDistance, mainAudible,
+                matchingRelays, relayAudible);
+    }
+
+    public record AudioDemandDebug(boolean demand, boolean audioEnabled, boolean listenerPresent,
+            float sourceVolume, boolean headphone, int indexedDemands, boolean mainSuppressed,
+            boolean consoleRoute, float mainDistance, boolean mainAudible,
+            int matchingRelays, boolean relayAudible) {
+    }
+
     /** 玩家位于唱片机本体或任一已连接音响的实际可听范围内时才显示播放提示。 */
     public static boolean hasAudibleOutput(BlockPos turntablePos) {
         var minecraft = net.minecraft.client.Minecraft.getInstance();
-        if (minecraft == null || minecraft.player == null || minecraft.options == null
-                || minecraft.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.MASTER) <= 0.0F
-                || minecraft.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.RECORDS) <= 0.0F) {
+        if (minecraft == null || minecraft.player == null || !gameAudioEnabled()) {
             return false;
         }
         float[] listener = { (float) minecraft.player.getX(), (float) minecraft.player.getEyeY(),
                 (float) minecraft.player.getZ() };
         AudioEntry mainOutput = turntablePos != null ? OUTPUTS.get(keyFor(turntablePos)) : null;
-        if (mainOutput != null && mainOutput.output().getPositionMillis() >= 0L
-                && PlaybackNoticePolicy.isWithinNoticeRange(
+        if (mainOutput != null && !isMainRouteSuppressed(turntablePos)
+                && mainOutput.output().getPositionMillis() >= 0L
+                && AudioPlaybackRange.evaluateSphere(
                         AudioUtils.distance(listener, AudioUtils.centerFor(turntablePos)),
-                        ClientAudioOutputPolicy.volume(turntablePos))) {
+                        AudioPlaybackRange.DEFAULT_DISTANCE, ClientAudioOutputPolicy.volume(turntablePos),
+                        false).audible()) {
             return true;
         }
         for (var entry : RELAY_TURNTABLE.entrySet()) {
             if (turntablePos != null && turntablePos.equals(entry.getValue())) {
                 SpeakerAudioRelay relay = RELAYS.get(entry.getKey());
-                if (relay != null && relay.isStarted() && relay.isWithinNoticeRangeAt(listener)) {
+                if (relay != null && relay.isStarted() && relay.isAudibleAt(listener)) {
                     return true;
                 }
             }
         }
         return false;
+    }
+
+    private static boolean gameAudioEnabled() {
+        var minecraft = net.minecraft.client.Minecraft.getInstance();
+        return minecraft != null && minecraft.options != null
+                && minecraft.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.MASTER) > 0.0F
+                && minecraft.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.RECORDS) > 0.0F;
+    }
+
+    private static float[] currentListenerPosition() {
+        float[] current = listenerPos;
+        if (current != null) {
+            return AudioUtils.copyPos3(current);
+        }
+        var minecraft = net.minecraft.client.Minecraft.getInstance();
+        return minecraft != null && minecraft.player != null
+                ? new float[] { (float) minecraft.player.getX(), (float) minecraft.player.getEyeY(),
+                        (float) minecraft.player.getZ() }
+                : null;
     }
 
     public static boolean isActive() {
@@ -497,7 +645,7 @@ public class ClientAudioOutputRegistry {
             return;
         }
         float clamped = AudioUtils.clampGain(volume);
-        OWNER_VOLUMES.put(ownerId, clamped);
+        ClientAudioOwnerVolumes.put(ownerId, clamped);
         for (AudioEntry entry : OUTPUTS.values()) {
             if (ownerId.equals(entry.ownerId())) {
                 entry.output().setUserVolume(clamped);
@@ -786,6 +934,7 @@ public class ClientAudioOutputRegistry {
         CONSOLE_ROUTE_OWNERS.clear();
         listenerPos = null;
         ClientMinecartAudioAnchors.clear();
+        ClientAudioOwnerVolumes.clear();
         MINECART_KEYS.clear();
         runCleanupTasks(cleanupTasks);
     }
@@ -842,6 +991,7 @@ public class ClientAudioOutputRegistry {
             LOGGER.debug("OpenAL hard-stop failed before cleanup: {}", t.toString());
         }
         entry.output().cleanup();
+        releaseMinecartKeyIfUnused(entry.pos());
     }
 
     private static void cleanupAfterPut(BoundedConcurrentStore.PutResult<AudioEntry> result) {
@@ -880,6 +1030,13 @@ public class ClientAudioOutputRegistry {
                     ignored -> new BlockPos(Integer.MIN_VALUE + 2, 0, ANONYMOUS_COUNTER.getAndIncrement()));
         }
         return keyFor(pos, ownerId);
+    }
+
+    private static void releaseMinecartKeyIfUnused(BlockPos key) {
+        if (key == null || key.getX() != Integer.MIN_VALUE + 2 || OUTPUTS.get(key) != null) {
+            return;
+        }
+        MINECART_KEYS.entrySet().removeIf(entry -> key.equals(entry.getValue()));
     }
 
     private static boolean isRealWorldKey(BlockPos pos) {

@@ -16,6 +16,7 @@ public final class ClientMediaPlaybackSessions {
         ClientMediaSoundRegistry.removeAndDiscard(deviceId);
         ClientMediaRetryHandler.removePendingForDevice(deviceId);
         ClientMediaPrepareLauncher.removeScheduledForDevice(deviceId);
+        ClientMediaDemandScheduler.remove(deviceId);
         if (carrierStopHook != null) {
             carrierStopHook.accept(deviceId);
         }
@@ -26,6 +27,7 @@ public final class ClientMediaPlaybackSessions {
         ClientMediaSoundRegistry.clearAndDiscard();
         ClientMediaRetryHandler.clearPending();
         ClientMediaPrepareLauncher.clearScheduled();
+        ClientMediaDemandScheduler.clear();
         if (carrierClearHook != null) {
             carrierClearHook.run();
         }

@@ -8,9 +8,13 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliSongInfoSanitizer;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.media.sync.ResolveGeneration;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioPlaybackRange;
 import com.zhongbai233.net_music_can_play_bili.block.ModernTurntableBlock;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.network.ModernTurntableStopPacket;
+import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
+import com.zhongbai233.net_music_can_play_bili.link.AudioPlaybackIndexSavedData;
 import com.zhongbai233.net_music_can_play_bili.server.PlaybackAuditManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -58,7 +62,8 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
     private static final String EXTRACTION_MODE_TAG = "ExtractionMode";
     private static final String PLAYBACK_COMPLETED_TAG = "PlaybackCompleted";
     private static final String VOLUME_PER_MILLE_TAG = "VolumePerMille";
-    private static final int SYNC_RANGE = 96;
+    private static final String SOURCE_ID_TAG = "PlaybackSourceId";
+    private static final int SYNC_RANGE = AudioPlaybackRange.SYNC_DISTANCE_BLOCKS;
     private static final int SYNC_INTERVAL_TICKS = 20;
     private static final Set<ModernTurntableBlockEntity> LOADED_SERVER_TURNTABLES = Collections.synchronizedSet(
             Collections.newSetFromMap(new WeakHashMap<>()));
@@ -89,6 +94,7 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
     private TurntableExtractionMode extractionMode = TurntableExtractionMode.AFTER_PLAYBACK;
     private boolean playbackCompleted;
     private int volumePerMille = 1000;
+    private UUID playbackSourceId = UUID.randomUUID();
     private transient LyricRecord clientLyricRecord;
     private transient String clientLyricSessionId = "";
     private transient int clientLyricTick = -1;
@@ -97,11 +103,17 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
         super(ModBlockEntities.MODERN_TURNTABLE.get(), pos, blockState);
     }
 
+    public PlaybackSourceId getPlaybackSourceId() {
+        return PlaybackSourceId.of(playbackSourceId);
+    }
+
     @Override
     public void onLoad() {
         super.onLoad();
         if (level instanceof ServerLevel) {
             LOADED_SERVER_TURNTABLES.add(this);
+            AudioLinkIndex.registerPlaybackSource((ServerLevel) level, worldPosition, getPlaybackSourceId(),
+                    AudioPlaybackIndexSavedData.SourceKind.TURNTABLE);
         }
     }
 
@@ -603,6 +615,9 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
     }
 
     public void stopPlayback() {
+        if (level instanceof ServerLevel serverLevel) {
+            IndexedBlockPlaybackSessionManager.remove(serverLevel, getPlaybackSourceId());
+        }
         notifyPlaybackStopped();
         invalidatePlaybackIntent();
         if (!playing && playUrl.isBlank()) {
@@ -614,6 +629,9 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
     }
 
     private void stopPlaybackWithoutBlockUpdate() {
+        if (level instanceof ServerLevel serverLevel) {
+            IndexedBlockPlaybackSessionManager.remove(serverLevel, getPlaybackSourceId());
+        }
         notifyPlaybackStopped();
         invalidatePlaybackIntent();
         clearPlaybackState();
@@ -834,9 +852,9 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
             return;
         }
         long elapsedMillis = elapsedMillis(serverLevel.getGameTime());
-        Set<UUID> nearby = ModernTurntableAudienceSync.syncNearbyPlayers(serverLevel, level, worldPosition,
-                syncedPlayers, playUrl, rawUrl, songName, playbackSessionId(), elapsedMillis,
-                durationSeconds * 1000L, remainingSeconds, SYNC_RANGE);
+        Set<UUID> nearby = IndexedBlockPlaybackSessionManager.publishAndSync(serverLevel, level,
+                getPlaybackSourceId(), worldPosition, playUrl, rawUrl, songName, playbackSessionId(), elapsedMillis,
+                durationSeconds * 1000L, remainingSeconds, repeatOne);
         syncedPlayers.clear();
         syncedPlayers.addAll(nearby);
     }
@@ -868,6 +886,7 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
         }
         long elapsedMillis = elapsedMillis(serverLevel.getGameTime());
         Set<UUID> retained = ModernTurntableAudienceSync.syncNearbySpectators(serverLevel, level, worldPosition,
+                getPlaybackSourceId(),
                 syncedPlayers, playUrl, rawUrl, songName, playbackSessionId(), elapsedMillis,
                 durationSeconds * 1000L, remaining, SYNC_RANGE);
         syncedPlayers.clear();
@@ -920,6 +939,7 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
         output.putString(EXTRACTION_MODE_TAG, extractionMode.serializedName());
         output.putBoolean(PLAYBACK_COMPLETED_TAG, playbackCompleted);
         output.putInt(VOLUME_PER_MILLE_TAG, volumePerMille);
+        output.putString(SOURCE_ID_TAG, playbackSourceId.toString());
     }
 
     @Override
@@ -944,6 +964,10 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
                 input.getStringOr(EXTRACTION_MODE_TAG, "after_playback"));
         playbackCompleted = input.getBooleanOr(PLAYBACK_COMPLETED_TAG, false);
         volumePerMille = Math.max(0, Math.min(1000, input.getIntOr(VOLUME_PER_MILLE_TAG, 1000)));
+        playbackSourceId = parseUuid(input.getStringOr(SOURCE_ID_TAG, ""));
+        if (playbackSourceId == null) {
+            playbackSourceId = UUID.randomUUID();
+        }
         redstoneStateInitialized = false;
         pulsePlaybackRequested = redstoneMode == TurntableRedstoneMode.PULSE_TOGGLE && playing;
         saveElapsedTicks(savedElapsedTicks);

@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.blockentity;
 
 import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
 import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponentMap;
@@ -54,12 +55,14 @@ public class LyricProjectorBlockEntity extends SyncedBlockEntity {
 
     public void linkTo(BlockPos turntablePos) {
         this.linkedTurntablePos = turntablePos.immutable();
+        syncClientLink();
         markDirtyAndSync();
     }
 
     public void unlink() {
         this.linkedTurntablePos = null;
         this.cachedLyricRecord = null;
+        syncClientLink();
         markDirtyAndSync();
     }
 
@@ -185,11 +188,20 @@ public class LyricProjectorBlockEntity extends SyncedBlockEntity {
     }
 
     @Override
+    public void onLoad() {
+        super.onLoad();
+        syncClientLink();
+    }
+
+    @Override
     public void setRemoved() {
-        super.setRemoved();
         if (level != null && level.isClientSide()) {
-            com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry.unlink(worldPosition);
+            boolean bindingDestroyed = !level.getBlockState(worldPosition).is(ModBlocks.LYRIC_PROJECTOR.get());
+            if (bindingDestroyed) {
+                com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry.unlink(worldPosition);
+            }
         }
+        super.setRemoved();
     }
 
     @Override
@@ -220,6 +232,18 @@ public class LyricProjectorBlockEntity extends SyncedBlockEntity {
         this.projectionDistanceZ = input.getFloatOr(PROJ_DISTANCE_Z, 0.0F);
         this.projectionMode = input.getIntOr(PROJ_MODE, 0);
         this.allowAi = input.getBooleanOr(ALLOW_AI, false);
+        syncClientLink();
+    }
+
+    private void syncClientLink() {
+        if (level == null || !level.isClientSide()) {
+            return;
+        }
+        com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry.unlink(worldPosition);
+        if (linkedTurntablePos != null) {
+            com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry.linkSubtitleProjector(
+                    worldPosition, linkedTurntablePos);
+        }
     }
 
     @Override

@@ -8,6 +8,7 @@ import java.util.UUID;
 
 public final class PlaybackSync {
     private static final String SESSION_KEY = "nmb_session=";
+    private static final String SOURCE_KEY = "nmb_source=";
     private static final String ELAPSED_MS_KEY = "nmb_elapsed_ms=";
     private static final String TOTAL_MS_KEY = "nmb_total_ms=";
     private static final String REQUEST_KEY = "nmb_request=";
@@ -54,8 +55,36 @@ public final class PlaybackSync {
             return target;
         }
         String result = withSync(target, sync.sessionId(), sync.elapsedMillis(), sync.totalMillis());
+        PlaybackSourceId sourceId = parsePlaybackSourceId(source).orElse(null);
+        if (sourceId != null) {
+            result = withSourceId(result, sourceId);
+        }
         MinecartAnchor anchor = parseMinecartAnchor(source);
         return anchor != null ? withMinecartAnchor(result, anchor.entityId(), anchor.entityUuid()) : result;
+    }
+
+    public static String withSourceId(String value, PlaybackSourceId sourceId) {
+        if (value == null || value.isBlank() || sourceId == null) {
+            return value;
+        }
+        String separator = value.indexOf('#') >= 0 ? "&" : "#";
+        return value + separator + SOURCE_KEY + sourceId;
+    }
+
+    public static Optional<PlaybackSourceId> parsePlaybackSourceId(String value) {
+        if (value == null) {
+            return Optional.empty();
+        }
+        int hash = value.indexOf('#');
+        if (hash < 0 || hash == value.length() - 1) {
+            return Optional.empty();
+        }
+        for (String part : value.substring(hash + 1).split("&")) {
+            if (part.startsWith(SOURCE_KEY)) {
+                return PlaybackSourceId.parse(part.substring(SOURCE_KEY.length()));
+            }
+        }
+        return Optional.empty();
     }
 
     public static String withMinecartAnchor(String value, int entityId, UUID entityUuid) {
@@ -184,7 +213,8 @@ public final class PlaybackSync {
             return value;
         }
         String fragment = value.substring(hash + 1);
-        return fragment.contains(SESSION_KEY) || fragment.contains(ELAPSED_MS_KEY) || fragment.contains(TOTAL_MS_KEY)
+        return fragment.contains(SESSION_KEY) || fragment.contains(SOURCE_KEY)
+                || fragment.contains(ELAPSED_MS_KEY) || fragment.contains(TOTAL_MS_KEY)
                 || fragment.contains(MINECART_ENTITY_KEY) || fragment.contains(MINECART_UUID_KEY)
                 || fragment.contains(REQUEST_KEY)
                         ? value.substring(0, hash)

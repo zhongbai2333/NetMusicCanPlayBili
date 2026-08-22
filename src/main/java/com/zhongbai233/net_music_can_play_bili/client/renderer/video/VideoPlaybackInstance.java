@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.VideoCandidate;
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.ClientDisplayProperties;
 import com.zhongbai233.net_music_can_play_bili.item.HolographicGlassesItem;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseExecutor;
@@ -90,6 +91,8 @@ final class VideoPlaybackInstance {
     volatile boolean restartInProgress;
     volatile VideoDecoderRestartState restartState = VideoDecoderRestartState.ACTIVE;
     volatile boolean prewarmVisible = true;
+    volatile boolean decodeAdmissionGranted;
+    volatile boolean initialDecodeWorkerStarted;
     volatile boolean loggedOffscreenPause;
     volatile boolean networkFailure;
     volatile boolean terminalFailure;
@@ -164,9 +167,12 @@ final class VideoPlaybackInstance {
         lastUploadedPtsNanos = -1L;
         lastUploadedBaseOffsetMillis = -1L;
         adaptiveRestartOffsetMillis = -1L;
-        lastVisibleNanoTime = System.nanoTime();
+        boolean immediatelyVisible = consumers.hasGuiConsumer() || hasHolographicTurntableConsumer();
+        lastVisibleNanoTime = immediatelyVisible ? System.nanoTime() : 0L;
         offscreenSinceNanoTime = 0L;
-        prewarmVisible = true;
+        prewarmVisible = immediatelyVisible;
+        decodeAdmissionGranted = immediatelyVisible;
+        initialDecodeWorkerStarted = false;
         loggedOffscreenPause = false;
         networkFailure = false;
         terminalFailure = false;
@@ -181,10 +187,36 @@ final class VideoPlaybackInstance {
         performanceNoH264Logged = false;
         consecutiveBadUploads = 0;
         frameQueue.clear();
-        startNanoTime = System.nanoTime();
+        startNanoTime = immediatelyVisible ? System.nanoTime() : 0L;
         decoderGenerationStartedNanoTime = startNanoTime;
-        long gen = generation.incrementAndGet();
-        candidateDecodeRunner.start(gen, "bili-video-" + sessionId());
+        generation.incrementAndGet();
+        if (immediatelyVisible) {
+            grantDecodeAdmission();
+        }
+    }
+
+    synchronized void grantDecodeAdmission() {
+        if (!running || stopRequested) {
+            return;
+        }
+        if (!decodeAdmissionGranted) {
+            long now = System.nanoTime();
+            decodeAdmissionGranted = true;
+            startNanoTime = now;
+            decoderGenerationStartedNanoTime = now;
+        }
+        if (!initialDecodeWorkerStarted) {
+            initialDecodeWorkerStarted = true;
+            long gen = generation.get();
+            candidateDecodeRunner.start(gen, "bili-video-" + sessionId());
+        }
+    }
+
+    void resetFirstFrameWatchdogAfterVisibilityResume(long nowNanoTime) {
+        if (decodeAdmissionGranted && !hasFrame) {
+            startNanoTime = nowNanoTime;
+            decoderGenerationStartedNanoTime = nowNanoTime;
+        }
     }
 
     long playbackNanos() {
@@ -737,6 +769,7 @@ final class VideoPlaybackInstance {
             prewarmVisible = true;
             offscreenSinceNanoTime = 0L;
             lastVisibleNanoTime = System.nanoTime();
+            grantDecodeAdmission();
         }
     }
 
@@ -746,7 +779,8 @@ final class VideoPlaybackInstance {
 
     boolean hasHolographicTurntableConsumer() {
         Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft == null || minecraft.level == null) {
+        if (!ClientDisplayProperties.holographicWorldScreenEnabled()
+                || minecraft == null || minecraft.level == null) {
             return false;
         }
         for (HolographicGlassesItem.ScreenBinding binding : HolographicGlassesClient.screenBindings()) {
@@ -778,6 +812,11 @@ final class VideoPlaybackInstance {
     synchronized boolean ensureFirstFrameProgress() {
         if (!running || hasFrame || terminalFailure) {
             return false;
+        }
+        if (!decodeAdmissionGranted || !prewarmVisible) {
+            // A dormant invisible session is not a stalled decoder and must not trip the
+            // first-frame watchdog. Its decoder has not been opened yet.
+            return true;
         }
         long waitingMillis = startNanoTime > 0L
                 ? Math.max(0L, (System.nanoTime() - startNanoTime) / 1_000_000L) : 0L;
@@ -893,6 +932,14 @@ final class VideoPlaybackInstance {
 
     String restartStateForBench() {
         return restartState.name();
+    }
+
+    boolean prewarmVisibleForBench() {
+        return prewarmVisible;
+    }
+
+    boolean offscreenPauseActiveForBench() {
+        return candidateDecodeRunner.isOffscreenPauseActive();
     }
 
     VideoBillboardPreview.VideoStatus status() {

@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
 import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOwnerVolumes;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.client.Minecraft;
@@ -61,6 +62,7 @@ public final class ClientMediaPlaybackRegistry {
             ACTIVE.remove(PlaybackSourceId.of(sourceId));
             removeAudioStartedForSource(sourceId);
             ClientMediaTimelineView.forget(sourceId);
+            ClientAudioOwnerVolumes.remove(sourceId);
         }
     }
 
@@ -73,10 +75,18 @@ public final class ClientMediaPlaybackRegistry {
             return;
         }
         PlaybackSourceId parsedSourceId = PlaybackSourceId.of(sourceId);
+        boolean[] removed = new boolean[1];
         ACTIVE.computeIfPresent(parsedSourceId,
-                (ignored, active) -> active.playbackSessionId().filter(sessionId::equals).isPresent()
-                        ? null
-                        : active);
+                (ignored, active) -> {
+                    if (active.playbackSessionId().filter(sessionId::equals).isPresent()) {
+                        removed[0] = true;
+                        return null;
+                    }
+                    return active;
+                });
+        if (removed[0]) {
+            ClientAudioOwnerVolumes.remove(sourceId);
+        }
         STARTED_AUDIO_SESSIONS.remove(new SourceSessionKey(parsedSourceId, sessionId));
         ClientMediaTimelineView.forget(sourceId);
     }

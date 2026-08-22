@@ -18,6 +18,7 @@ import com.zhongbai233.net_music_can_play_bili.client.sync.ClientAiSubtitleRegis
 import com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackClock;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElement;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElementPosition;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.LiveSubtitleMetadata;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.AiSubtitleText;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.TimedTextResolver;
@@ -27,6 +28,7 @@ import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleRangeGate;
 import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackApproachPredictor;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -84,9 +86,17 @@ public final class ControlConsoleRenderer
         state.elements = console.document().elements();
         state.sourcePos = sourcePos(console.document(), console.getLevel());
         state.sourceKind = console.document().sourceKind();
-        if (state.sourcePos != null && state.sourceKind == ControlConsoleDocument.SourceKind.TURNTABLE) {
-            ClientLinkRegistry.link(state.consolePos, state.sourcePos);
-            ClientAudioOutputRegistry.bindConsoleRoute(state.consolePos, state.sourcePos);
+        if (state.sourcePos != null) {
+            if (state.sourceKind == ControlConsoleDocument.SourceKind.TURNTABLE) {
+                ClientLinkRegistry.linkSubtitleProjector(state.consolePos, state.sourcePos);
+            } else {
+                ClientLinkRegistry.link(state.consolePos, state.sourcePos);
+            }
+            if (state.sourceKind == ControlConsoleDocument.SourceKind.TURNTABLE) {
+                ClientAudioOutputRegistry.bindConsoleRoute(state.consolePos, state.sourcePos);
+            } else {
+                ClientAudioOutputRegistry.unbindConsoleRoute(state.consolePos);
+            }
         } else {
             ClientLinkRegistry.unlink(state.consolePos);
             ClientAudioOutputRegistry.unbindConsoleRoute(state.consolePos);
@@ -113,6 +123,13 @@ public final class ControlConsoleRenderer
         state.frame = video != null ? video.frame() : VideoBillboardPreview.ProjectorFrameSnapshot.empty();
         state.playbackSessionId = video != null
                 ? PlaybackSessionId.parse(video.sessionId()) : Optional.empty();
+        ConsumerState videoRuntime = CONSUMERS.get(state.consolePos);
+        boolean realVideoReady = state.videoState == ControlConsoleVideoStatePolicy.State.ACTIVE
+                && state.frame.hasFrame();
+        float videoEntryGain = videoRuntime != null
+                ? videoRuntime.videoEnvelope.gain(realVideoReady, System.nanoTime()) : 1.0F;
+        state.videoGain = realVideoReady ? videoEntryGain : 1.0F;
+
         state.currentLyric = "";
         state.translatedLyric = "";
         state.lyrics = null;
@@ -140,12 +157,6 @@ public final class ControlConsoleRenderer
                 || state.frame == null) {
             return;
         }
-        if ((state.videoState == ControlConsoleVideoStatePolicy.State.ACTIVE
-            || state.videoState == ControlConsoleVideoStatePolicy.State.BUFFERING)
-            && state.playbackSessionId.isPresent()) {
-            VideoBillboardPreview.markProjectorSubmittedByBer(
-                    state.playbackSessionId.orElseThrow(), state.consolePos);
-        }
         for (ControlConsoleElement element : state.elements) {
             if (!element.enabled()) {
                 continue;
@@ -157,11 +168,25 @@ public final class ControlConsoleRenderer
             poseStack.mulPose(element.editorTransform().matrix());
             Matrix4f pose = new Matrix4f(poseStack.last().pose());
             if (element.type() == ControlConsoleElement.Type.SCREEN) {
+                boolean screenPotentiallyVisible = VideoBillboardPreview
+                        .isControlConsoleScreenPotentiallyVisible(state.consolePos,
+                                element.editorTransform().matrix(), halfWidth, halfHeight);
+                if (!state.hideVideoForPrivacy
+                        && screenPotentiallyVisible
+                        && (state.videoState == ControlConsoleVideoStatePolicy.State.ACTIVE
+                            || state.videoState == ControlConsoleVideoStatePolicy.State.BUFFERING)
+                        && state.playbackSessionId.isPresent()) {
+                    // A console-level BER submission can be caused by subtitles, audio elements,
+                    // or an oversized owner bound. Only an enabled screen is visual video demand.
+                    VideoBillboardPreview.markProjectorSubmittedByBer(
+                            state.playbackSessionId.orElseThrow(), state.consolePos);
+                }
                 if (!state.hideVideoForPrivacy
                         && state.videoState == ControlConsoleVideoStatePolicy.State.ACTIVE
                         && state.playbackSessionId.isPresent()) {
                     VideoBillboardPreview.captureProjectorImmediatePose(
-                            state.playbackSessionId.orElseThrow(), state.consolePos, pose, halfHeight, state.exitGain);
+                            state.playbackSessionId.orElseThrow(), state.consolePos, pose, halfHeight,
+                            state.exitGain * state.videoGain);
                 }
                 if (state.hideVideoForPrivacy && state.frame.hasFrame()
                         && state.frame.width() > 0 && state.frame.height() > 0) {
@@ -170,7 +195,7 @@ public final class ControlConsoleRenderer
                 } else if (!state.hideVideoForPrivacy) {
                     VideoBillboardPreview.submitProjectorFrameOnPose(collector, poseStack, state.frame, halfWidth,
                         halfHeight, VideoBillboardPreview.cameraRelativeBackOffset(pose,
-                            state.frame.rgbaDepthOffset()), state.exitGain);
+                            state.frame.rgbaDepthOffset()), state.exitGain * state.videoGain);
                 }
             } else if (element.type() == ControlConsoleElement.Type.SUBTITLE) {
                 submitSubtitle(state, element, poseStack, collector);
@@ -342,28 +367,26 @@ public final class ControlConsoleRenderer
     public AABB getRenderBoundingBox(ControlConsoleBlockEntity console) {
         ControlConsoleDocument document = console.document();
         BlockPos pos = console.getBlockPos();
-        // Keep the BER alive through the range fade band. Without this margin,
-        // render culling stops submitting the screen exactly when the exit fade
-        // needs to be visible, so both video and subtitles disappear abruptly.
-        double renderRangeX = document.hardRangeX() + ControlConsoleRangeGate.FADE_BAND;
-        double renderRangeY = document.hardRangeY() + ControlConsoleRangeGate.FADE_BAND;
-        double renderRangeZ = document.hardRangeZ() + ControlConsoleRangeGate.FADE_BAND;
         double centerX = pos.getX() + 0.5D;
-        double centerY = pos.getY() + 0.5D;
         double centerZ = pos.getZ() + 0.5D;
-        double minX = saturatedSubtract(centerX, renderRangeX);
-        double minY = saturatedSubtract(centerY, renderRangeY);
-        double minZ = saturatedSubtract(centerZ, renderRangeZ);
-        double maxX = saturatedAdd(centerX, renderRangeX);
-        double maxY = saturatedAdd(centerY, renderRangeY);
-        double maxZ = saturatedAdd(centerZ, renderRangeZ);
+        // Consumer range is maintained by tickConsumers(), independently from BER culling.
+        // The render bound must describe only renderable geometry; otherwise a 64-block
+        // audience range makes an off-camera console look visible to the video decoder.
+        double minX = pos.getX();
+        double minY = pos.getY();
+        double minZ = pos.getZ();
+        double maxX = pos.getX() + 1.0D;
+        double maxY = pos.getY() + 1.0D;
+        double maxZ = pos.getZ() + 1.0D;
         for (ControlConsoleElement element : document.elements()) {
+            if (!element.enabled()) {
+                continue;
+            }
             Matrix4f transform = element.editorTransform().matrix();
             if (element.type() == ControlConsoleElement.Type.AUDIO) {
-                org.joml.Vector3f point = transform.transformPosition(new org.joml.Vector3f());
-                double worldX = centerX + point.x;
-                double worldY = pos.getY() + 1.55D + point.y;
-                double worldZ = centerZ + point.z;
+                org.joml.Vector3d worldPosition = ControlConsoleElementPosition.worldPosition(
+                        pos.getX(), pos.getY(), pos.getZ(), element);
+                double worldX = worldPosition.x, worldY = worldPosition.y, worldZ = worldPosition.z;
                 minX = Math.min(minX, worldX);
                 minY = Math.min(minY, worldY);
                 minZ = Math.min(minZ, worldZ);
@@ -396,16 +419,6 @@ public final class ControlConsoleRenderer
     @Override
     public boolean shouldRender(ControlConsoleBlockEntity console, Vec3 cameraPos) {
         return true;
-    }
-
-    private static double saturatedAdd(double value, double amount) {
-        double result = value + amount;
-        return Double.isFinite(result) ? result : Double.MAX_VALUE;
-    }
-
-    private static double saturatedSubtract(double value, double amount) {
-        double result = value - amount;
-        return Double.isFinite(result) ? result : -Double.MAX_VALUE;
     }
 
     private static BlockPos sourcePos(ControlConsoleDocument document, net.minecraft.world.level.Level level) {
@@ -468,8 +481,8 @@ public final class ControlConsoleRenderer
 
     public static void notifyConsoleRemoved(BlockPos consolePos, boolean bindingDestroyed) {
         if (consolePos != null) {
-            ClientLinkRegistry.unlink(consolePos);
             if (bindingDestroyed) {
+                ClientLinkRegistry.unlink(consolePos);
                 // Active relays keep suppression during their short exit fade. Once they are
                 // gone, an actually removed console no longer owns the source route.
                 ClientAudioOutputRegistry.unbindConsoleRoute(consolePos);
@@ -568,7 +581,16 @@ public final class ControlConsoleRenderer
     private static void reconcileRouteBinding(BlockPos consolePos, ControlConsoleDocument document,
             net.minecraft.world.level.Level level) {
         BlockPos source = sourcePos(document, level);
-        if (source != null && document.sourceKind() == ControlConsoleDocument.SourceKind.TURNTABLE) {
+        if (source != null) {
+            if (document.sourceKind() == ControlConsoleDocument.SourceKind.TURNTABLE) {
+                ClientLinkRegistry.linkSubtitleProjector(consolePos, source);
+            } else {
+                ClientLinkRegistry.link(consolePos, source);
+            }
+        } else {
+            ClientLinkRegistry.unlink(consolePos);
+        }
+        if (source != null && ControlConsoleAudioRoutePolicy.takesOverMainOutput(document)) {
             ClientAudioOutputRegistry.bindConsoleRoute(consolePos, source);
         } else {
             ClientAudioOutputRegistry.unbindConsoleRoute(consolePos);
@@ -642,6 +664,7 @@ public final class ControlConsoleRenderer
         if (!(minecraft.level.getBlockEntity(consolePos) instanceof ControlConsoleBlockEntity console)) {
             // The chunk is authoritative now: a console that disappeared while unloaded is an
             // actual removal, not another range exit. Release the persistent route owner.
+            ClientLinkRegistry.unlink(consolePos);
             ClientAudioOutputRegistry.unbindConsoleRoute(consolePos);
             CONSUMERS.remove(consolePos, runtime);
             releaseConsumerLease(consolePos, runtime);
@@ -650,6 +673,11 @@ public final class ControlConsoleRenderer
         }
         ControlConsoleDocument document = console.document();
         reconcileRouteBinding(consolePos, document, minecraft.level);
+        boolean rangeChanged = runtime.active && (runtime.halfX != document.hardRangeX()
+                || runtime.halfY != document.hardRangeY() || runtime.halfZ != document.hardRangeZ());
+        runtime.halfX = document.hardRangeX();
+        runtime.halfY = document.hardRangeY();
+        runtime.halfZ = document.hardRangeZ();
         BlockPos source = sourcePos(document, minecraft.level);
         double centerX = consolePos.getX() + 0.5D;
         double centerY = consolePos.getY() + 0.5D;
@@ -659,19 +687,28 @@ public final class ControlConsoleRenderer
         double playerZ = minecraft.player.getZ();
         boolean positionDiscontinuous = ControlConsoleExitPolicy.positionDiscontinuous(runtime.playerX,
             runtime.playerY, runtime.playerZ, playerX, playerY, playerZ);
-        var result = com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleRangeGate.evaluate(
+        var result = ControlConsoleRangeGate.evaluate(
             runtime.active, playerX - centerX, playerY - centerY,
             playerZ - centerZ, document.hardRangeX(), document.hardRangeY(),
                 document.hardRangeZ());
+        Vec3 movement = minecraft.player.getDeltaMovement();
+        boolean approachingHardRange = !result.active() && source != null
+                && PlaybackApproachPredictor.willEnterAabb(playerX, playerY, playerZ,
+                    movement.x, movement.y, movement.z, centerX, centerY, centerZ,
+                    document.hardRangeX(), document.hardRangeY(), document.hardRangeZ());
+        if (approachingHardRange) {
+            enterPredictivePrewarm(consolePos, runtime, source, document, minecraft);
+            logRangeTransition(consolePos, runtime, "PREWARM", playerX - centerX, playerY - centerY,
+                    playerZ - centerZ, document, 0.0F);
+            return;
+        }
         if (!result.active() || source == null) {
             logRangeTransition(consolePos, runtime, !result.active() ? "OUTSIDE" : "NO_SOURCE",
                     playerX - centerX, playerY - centerY, playerZ - centerZ,
                     document, result.gain());
             releaseConsumerLease(consolePos, runtime);
-            boolean rangeChanged = runtime.active && (runtime.halfX != document.hardRangeX()
-                    || runtime.halfY != document.hardRangeY() || runtime.halfZ != document.hardRangeZ());
-                    boolean abrupt = ControlConsoleExitPolicy.shouldFade(runtime.active, source != null, rangeChanged,
-                        positionDiscontinuous, runtime.lastRangeGain);
+            boolean abrupt = ControlConsoleExitPolicy.shouldFade(runtime.active, source != null, rangeChanged,
+                    positionDiscontinuous, runtime.lastRangeGain);
             if (abrupt) {
                 beginBurstExit(consolePos, runtime);
                 tickBurstExit(consolePos, runtime);
@@ -717,6 +754,7 @@ public final class ControlConsoleRenderer
             runtime.entryStartedNanos = System.nanoTime();
         }
         runtime.active = true;
+        runtime.prewarming = false;
         logRangeTransition(consolePos, runtime, "ACTIVE",
             playerX - centerX, playerY - centerY, playerZ - centerZ,
             document, result.gain());
@@ -729,14 +767,12 @@ public final class ControlConsoleRenderer
             runtime.entryStartedNanos = 0L;
         }
         runtime.lastRangeGain = result.gain();
-        runtime.halfX = document.hardRangeX();
-        runtime.halfY = document.hardRangeY();
-        runtime.halfZ = document.hardRangeZ();
         runtime.playerX = playerX;
         runtime.playerY = playerY;
         runtime.playerZ = playerZ;
         runtime.sourcePos = source;
         runtime.sourceKind = document.sourceKind();
+        boolean hasVideoSurface = ControlConsoleVideoSurfacePolicy.hasEnabledScreen(document.elements());
         int videoQualityCeiling = document.elements().stream()
             .filter(element -> element.enabled() && element.type() == ControlConsoleElement.Type.SCREEN)
             .mapToInt(element -> com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media
@@ -746,21 +782,81 @@ public final class ControlConsoleRenderer
                 .ControlConsoleMediaSettings.videoQualityCeiling(0));
         if (document.sourceKind() == ControlConsoleDocument.SourceKind.LIVE_STREAMER) {
             ClientAiSubtitleRegistry.release(consolePos);
-            LiveStreamerVideoClient.registerControlConsoleConsumer(source, consolePos, videoQualityCeiling);
+            ModernTurntableVideoClient.unregisterControlConsoleConsumer(consolePos);
+            if (hasVideoSurface) {
+                LiveStreamerVideoClient.registerControlConsoleConsumer(source, consolePos, videoQualityCeiling);
+            } else {
+                LiveStreamerVideoClient.unregisterControlConsoleConsumer(consolePos);
+                VideoBillboardPreview.detachControlConsoleConsumer(consolePos);
+            }
         } else {
-            ModernTurntableVideoClient.registerControlConsoleConsumer(source, consolePos, videoQualityCeiling);
-            boolean healthCheckDue = now >= runtime.nextVideoHealthCheckMillis;
-            if ((activating || healthCheckDue)
-                    && minecraft.level.getBlockEntity(source) instanceof ModernTurntableBlockEntity turntable) {
-                // 激活边沿立即恢复；稳态低频确认使首次恢复碰到 pending/decoder 竞态时仍能自愈。
-                ModernTurntableVideoClient.syncFromTurntableIfPossible(turntable);
-                runtime.nextVideoHealthCheckMillis = now + VIDEO_HEALTH_CHECK_MILLIS;
+            LiveStreamerVideoClient.unregisterControlConsoleConsumer(consolePos);
+            if (hasVideoSurface) {
+                ModernTurntableVideoClient.registerControlConsoleConsumer(source, consolePos, videoQualityCeiling);
+                boolean healthCheckDue = now >= runtime.nextVideoHealthCheckMillis;
+                if ((activating || healthCheckDue)
+                        && minecraft.level.getBlockEntity(source) instanceof ModernTurntableBlockEntity turntable) {
+                    // 激活边沿立即恢复；稳态低频确认使首次恢复碰到 pending/decoder 竞态时仍能自愈。
+                    ModernTurntableVideoClient.syncFromTurntableIfPossible(turntable);
+                    runtime.nextVideoHealthCheckMillis = now + VIDEO_HEALTH_CHECK_MILLIS;
+                }
+            } else {
+                ModernTurntableVideoClient.unregisterControlConsoleConsumer(consolePos);
+                VideoBillboardPreview.detachControlConsoleConsumer(consolePos);
             }
             reconcileAiSubtitleConsumer(consolePos, source, document, minecraft);
         }
-        registerAudioForConsole(consolePos, source, document.elements(), result.gain() * entryGain);
+        registerAudioForConsole(consolePos, source, document.elements(), result.gain() * entryGain, false);
     }
 
+
+    private static void enterPredictivePrewarm(BlockPos consolePos, ConsumerState runtime, BlockPos source,
+            ControlConsoleDocument document, Minecraft minecraft) {
+        if (runtime.active || runtime.fadingOut
+                || runtime.prewarming && (runtime.sourcePos == null || !runtime.sourcePos.equals(source)
+                    || runtime.sourceKind != document.sourceKind())) {
+            deactivateConsumer(consolePos);
+        }
+        if (runtime.leaseId != null) {
+            releaseConsumerLease(consolePos, runtime);
+        }
+        runtime.active = false;
+        runtime.fadingOut = false;
+        runtime.entering = false;
+        runtime.entryStartedNanos = 0L;
+        runtime.lastRangeGain = 0.0F;
+        runtime.playerX = minecraft.player.getX();
+        runtime.playerY = minecraft.player.getY();
+        runtime.playerZ = minecraft.player.getZ();
+        runtime.sourcePos = source;
+        runtime.sourceKind = document.sourceKind();
+        runtime.prewarming = true;
+        long now = System.currentTimeMillis();
+        boolean hasVideoSurface = ControlConsoleVideoSurfacePolicy.hasEnabledScreen(document.elements());
+        int videoQualityCeiling = document.elements().stream()
+                .filter(element -> element.enabled() && element.type() == ControlConsoleElement.Type.SCREEN)
+                .mapToInt(element -> com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media
+                    .ControlConsoleMediaSettings.videoQualityCeiling(element.channelIndex()))
+                .max().orElse(com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media
+                    .ControlConsoleMediaSettings.videoQualityCeiling(0));
+        if (document.sourceKind() == ControlConsoleDocument.SourceKind.LIVE_STREAMER) {
+            ModernTurntableVideoClient.unregisterControlConsoleConsumer(consolePos);
+            if (hasVideoSurface) {
+                LiveStreamerVideoClient.registerControlConsoleConsumer(source, consolePos, videoQualityCeiling);
+            }
+        } else {
+            LiveStreamerVideoClient.unregisterControlConsoleConsumer(consolePos);
+            if (hasVideoSurface) {
+                ModernTurntableVideoClient.registerControlConsoleConsumer(source, consolePos, videoQualityCeiling);
+                if (now >= runtime.nextVideoHealthCheckMillis
+                        && minecraft.level.getBlockEntity(source) instanceof ModernTurntableBlockEntity turntable) {
+                    ModernTurntableVideoClient.syncFromTurntableIfPossible(turntable);
+                    runtime.nextVideoHealthCheckMillis = now + VIDEO_HEALTH_CHECK_MILLIS;
+                }
+            }
+        }
+        registerAudioForConsole(consolePos, source, document.elements(), 0.0F, true);
+    }
     private static void reconcileAiSubtitleConsumer(BlockPos consolePos, BlockPos source,
             ControlConsoleDocument document, Minecraft minecraft) {
         boolean requested = document.elements().stream().anyMatch(element -> element.enabled()
@@ -811,11 +907,13 @@ public final class ControlConsoleRenderer
             state.active = false;
             state.fadingOut = false;
             state.entering = false;
+            state.prewarming = false;
             state.entryStartedNanos = 0L;
             state.sourcePos = null;
             state.sourceKind = null;
             state.fadeStartedNanos = 0L;
             state.nextVideoHealthCheckMillis = 0L;
+            state.videoEnvelope.reset();
         }
     }
 
@@ -827,6 +925,7 @@ public final class ControlConsoleRenderer
         // Fade may consume only already-owned short text state; it must not keep an AI HTTP request alive.
         ClientAiSubtitleRegistry.release(consolePos);
         runtime.active = false;
+        runtime.prewarming = false;
         runtime.entering = false;
         runtime.entryStartedNanos = 0L;
         runtime.fadingOut = true;
@@ -870,8 +969,8 @@ public final class ControlConsoleRenderer
         runtime.consumerGeneration++;
     }
 
-        private static void registerAudioForConsole(BlockPos consolePos, BlockPos sourcePos,
-            List<ControlConsoleElement> elements, float rangeGain) {
+    private static void registerAudioForConsole(BlockPos consolePos, BlockPos sourcePos,
+            List<ControlConsoleElement> elements, float rangeGain, boolean preparationDemand) {
         Set<BlockPos> keys = ConcurrentHashMap.newKeySet();
         BlockPos previousSource = CONSOLE_AUDIO_SOURCES.put(consolePos, sourcePos);
         if (previousSource != null && !previousSource.equals(sourcePos)) {
@@ -886,13 +985,14 @@ public final class ControlConsoleRenderer
             long identity = element.elementId().getMostSignificantBits() ^ element.elementId().getLeastSignificantBits();
             BlockPos key = new BlockPos(consolePos.getX() ^ (int) (identity >>> 32), consolePos.getY(),
                     consolePos.getZ() ^ (int) identity);
-            float[] worldPos = { (float) (consolePos.getX() + 0.5D + element.offsetX()),
-                    (float) (consolePos.getY() + 1.55D + element.offsetY()),
-                    (float) (consolePos.getZ() + 0.5D + element.distance()) };
             if (element.enabled()) {
+                org.joml.Vector3d position = ControlConsoleElementPosition.worldPosition(
+                        consolePos.getX(), consolePos.getY(), consolePos.getZ(), element);
+                float[] worldPos = { (float) position.x, (float) position.y, (float) position.z };
                 ClientAudioOutputRegistry.registerConsoleRelay(key, sourcePos, worldPos,
                     element.channelIndex(), element.volume(), element.autoMixJoc(), element.maxDistance());
                 ClientAudioOutputRegistry.updateRelayRangeGain(key, rangeGain);
+                ClientAudioOutputRegistry.updateRelayPreparationDemand(key, preparationDemand);
             } else {
                 ClientAudioOutputRegistry.unregisterConsoleRelay(key);
             }
@@ -929,6 +1029,7 @@ public final class ControlConsoleRenderer
         private boolean hideVideoForPrivacy;
         private boolean irisCompatibilityMode;
         private float exitGain = 1.0F;
+        private float videoGain = 1.0F;
     }
 
     private static final class ConsumerState {
@@ -937,12 +1038,15 @@ public final class ControlConsoleRenderer
         private ControlConsoleDocument.SourceKind sourceKind;
         private boolean active;
         private boolean fadingOut;
+        private boolean prewarming;
         private boolean entering;
         private long entryStartedNanos;
         private long fadeStartedNanos;
         private float fadeBaseGain = 1.0F;
         private float lastRangeGain = 1.0F;
         private double halfX;
+        private final com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackPresentationEnvelope
+                videoEnvelope = new com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackPresentationEnvelope();
         private double halfY;
         private double halfZ;
         private double playerX = Double.NaN;
@@ -960,10 +1064,56 @@ public final class ControlConsoleRenderer
         }
     }
 
+
+    public static boolean isPredictivePrewarmActive(BlockPos consolePos) {
+        ConsumerState state = consolePos != null ? CONSUMERS.get(consolePos) : null;
+        return state != null && state.prewarming;
+    }
     public record ConsumerLeaseDiagnostic(boolean registered, boolean active, boolean fadingOut,
             boolean leasePresent, long generation) {
         private static final ConsumerLeaseDiagnostic ABSENT = new ConsumerLeaseDiagnostic(
                 false, false, false, false, -1L);
+    }
+
+    public static java.util.List<RangeDebugSnapshot> rangeDebugSnapshots() {
+        return CONSUMERS.entrySet().stream().map(entry -> {
+            ConsumerState state = entry.getValue();
+            return new RangeDebugSnapshot(entry.getKey(), state.sourcePos, state.active, state.fadingOut,
+                    state.halfX, state.halfY, state.halfZ, state.lastRangeGain);
+        }).filter(snapshot -> snapshot.radiusX() > 0.0D && snapshot.radiusY() > 0.0D
+                && snapshot.radiusZ() > 0.0D).toList();
+    }
+
+    /** Configured virtual audio-element spheres; their effective area is clipped by the console hard range. */
+    public static java.util.List<ElementRangeDebugSnapshot> elementRangeDebugSnapshots() {
+        java.util.List<ElementRangeDebugSnapshot> snapshots = new java.util.ArrayList<>();
+        for (Map.Entry<BlockPos, ConsumerState> entry : CONSUMERS.entrySet()) {
+            ConsumerState state = entry.getValue();
+            if (!(state.level.getBlockEntity(entry.getKey()) instanceof ControlConsoleBlockEntity console)) {
+                continue;
+            }
+            for (ControlConsoleElement element : console.document().elements()) {
+                if (!element.enabled() || element.type() != ControlConsoleElement.Type.AUDIO) {
+                    continue;
+                }
+                org.joml.Vector3d position = ControlConsoleElementPosition.worldPosition(
+                        entry.getKey().getX(), entry.getKey().getY(), entry.getKey().getZ(), element);
+                snapshots.add(new ElementRangeDebugSnapshot(entry.getKey(), element.elementId(),
+                        new Vec3(position.x, position.y, position.z),
+                        element.maxDistance(), element.volume(), state.active, state.fadingOut,
+                        state.lastRangeGain));
+            }
+        }
+        return java.util.List.copyOf(snapshots);
+    }
+
+    public record ElementRangeDebugSnapshot(BlockPos consolePos, java.util.UUID elementId, Vec3 center,
+            float configuredDistance, float volume, boolean consoleActive, boolean consoleFadingOut,
+            float hardRangeGain) {
+    }
+
+    public record RangeDebugSnapshot(BlockPos consolePos, BlockPos sourcePos, boolean active,
+            boolean fadingOut, double radiusX, double radiusY, double radiusZ, float gain) {
     }
 
     private record SourceSnapshot(boolean playing, boolean videoExpected,

@@ -17,9 +17,11 @@ import net.minecraft.util.Util;
 
 import java.net.URL;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 
 /**
@@ -32,12 +34,16 @@ import org.slf4j.Logger;
  */
 public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
     private static final Logger LOGGER = LogUtils.getLogger();
+    private static final Set<SyncedMediaSound> PENDING_DECODE_ADMISSION = ConcurrentHashMap.newKeySet();
     protected final URL songUrl;
     protected final int tickTimes;
     protected final LyricRecord lyricRecord;
     private final PlaybackSessionId playbackSessionId;
     protected final long startOffsetMillis;
     protected int tick;
+    private volatile boolean streamCreationStarted;
+    private volatile boolean demandIdleRetired;
+    private final CompletableFuture<Void> decodeAdmission = new CompletableFuture<>();
 
     protected SyncedMediaSound(URL songUrl, int timeSecond, LyricRecord lyricRecord, String sessionId,
             long startOffsetMillis) {
@@ -63,15 +69,31 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
         return playbackSessionId.value();
     }
 
+    /**
+     * Indexed playback intentionally allocates the streaming channel before the first decoded frame and
+     * fades in only after the real output is ready. Minecraft otherwise rejects a zero-volume sound before
+     * {@link #getStream(SoundBufferLibrary, Sound, boolean)} can run, permanently deadlocking stream readiness.
+     */
+    @Override
+    public final boolean canStartSilent() {
+        return true;
+    }
+
     @Override
     public CompletableFuture<AudioStream> getStream(SoundBufferLibrary soundBuffers, Sound sound, boolean looping) {
-        onStreamStarting();
-        long started = System.currentTimeMillis();
-        return CompletableFuture.supplyAsync(() -> {
+        if (isStopped()) {
+            decodeAdmission.completeExceptionally(stoppedBeforeStreamReady());
+        } else if (!decodeAdmission.isDone()) {
+            PENDING_DECODE_ADMISSION.add(this);
+        }
+        return awaitDecodeAdmission().thenCompose(ignored -> CompletableFuture.supplyAsync(() -> {
             try {
                 if (isStopped()) {
                     throw stoppedBeforeStreamReady();
                 }
+                streamCreationStarted = true;
+                onStreamStarting();
+                long started = System.currentTimeMillis();
                 AudioStream stream = new NetMusicAudioStream(songUrl);
                 if (isStopped()) {
                     stream.close();
@@ -92,8 +114,50 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
                 // 声道正常挂载、播完即释放。
                 return errorCueStream(e);
             }
-        }, Util.backgroundExecutor());
+        }, Util.backgroundExecutor()));
     }
+
+    /** Called by each device tick with the common range policy's current decision. */
+    protected final void setDecodeDemand(boolean decodeDemand) {
+        if (decodeDemand) {
+            decodeAdmission.complete(null);
+            PENDING_DECODE_ADMISSION.remove(this);
+        }
+    }
+
+    protected final boolean streamCreationStarted() {
+        return streamCreationStarted;
+    }
+
+    private CompletableFuture<Void> awaitDecodeAdmission() {
+        return decodeAdmission;
+    }
+
+    /** Refreshes all not-yet-opened streams from the client thread. */
+    public static void tickPendingDecodeAdmissions() {
+        for (SyncedMediaSound sound : PENDING_DECODE_ADMISSION) {
+            if (sound.isStopped()) {
+                if (PENDING_DECODE_ADMISSION.remove(sound)) {
+                    sound.decodeAdmission.completeExceptionally(sound.stoppedBeforeStreamReady());
+                }
+                continue;
+            }
+            sound.refreshDecodeDemand();
+            if (sound.decodeAdmission.isDone()) {
+                PENDING_DECODE_ADMISSION.remove(sound);
+            }
+        }
+    }
+
+    public static void cancelPendingDecodeAdmissions() {
+        for (SyncedMediaSound sound : PENDING_DECODE_ADMISSION) {
+            if (PENDING_DECODE_ADMISSION.remove(sound)) {
+                sound.decodeAdmission.completeExceptionally(sound.stoppedBeforeStreamReady());
+            }
+        }
+    }
+
+    protected abstract void refreshDecodeDemand();
 
     private AudioStream errorCueStream(Exception cause) {
         try {
@@ -123,6 +187,19 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
         stopAndFinish();
     }
 
+    /** Retires only the physical stream; the metadata session remains available for on-demand restart. */
+    void stopForDemandIdle() {
+        demandIdleRetired = true;
+        PENDING_DECODE_ADMISSION.remove(this);
+        decodeAdmission.completeExceptionally(
+                new CancellationException(streamDebugName() + " sound retired while demand was idle"));
+        onDemandIdle();
+        stop();
+    }
+
+    protected void onDemandIdle() {
+    }
+
     protected void onStreamStarting() {
     }
 
@@ -138,7 +215,9 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
     protected abstract String streamDebugName();
 
     private CancellationException stoppedBeforeStreamReady() {
-        finishSession();
+        if (!demandIdleRetired) {
+            finishSession();
+        }
         return new CancellationException(streamDebugName() + " sound stopped before stream creation");
     }
 }

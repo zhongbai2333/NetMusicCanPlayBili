@@ -13,6 +13,8 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.level.ServerLevel;
+import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
@@ -66,6 +68,13 @@ public class LiveStreamerBlock extends HorizontalDirectionalBlock implements Ent
         }
         return (tickLevel, pos, tickState, blockEntity) -> LiveStreamerBlockEntity.tick(
                 tickLevel, pos, tickState, (LiveStreamerBlockEntity) blockEntity);
+    }
+
+    @Override
+    protected void affectNeighborsAfterRemoval(BlockState state, ServerLevel level, BlockPos pos,
+            boolean movedByPiston) {
+        AudioLinkIndex.removePlaybackSource(level, pos);
+        super.affectNeighborsAfterRemoval(state, level, pos, movedByPiston);
     }
 
     @Override

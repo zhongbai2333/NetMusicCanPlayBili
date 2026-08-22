@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.client;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkData;
 import com.zhongbai233.net_music_can_play_bili.link.EquippedMediaItems;
 import com.zhongbai233.net_music_can_play_bili.link.HeadphoneAbility;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioPlaybackRange;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.item.ItemStack;
@@ -11,8 +12,6 @@ import java.util.UUID;
 
 /** 客户端耳机路由状态。 */
 public final class HeadphoneClientState {
-    private static final double TURNTABLE_RANGE_SQUARED = 64.0D * 64.0D;
-
     private HeadphoneClientState() {
     }
 
@@ -69,7 +68,8 @@ public final class HeadphoneClientState {
         if (minecraft.player == null) {
             return false;
         }
-        return minecraft.player.distanceToSqr(turntablePos.getCenter()) <= TURNTABLE_RANGE_SQUARED;
+        return minecraft.player.distanceToSqr(turntablePos.getCenter())
+                <= AudioPlaybackRange.HEADPHONE_LINK_DISTANCE_SQUARED;
     }
 
     private static ItemStack equippedStack() {

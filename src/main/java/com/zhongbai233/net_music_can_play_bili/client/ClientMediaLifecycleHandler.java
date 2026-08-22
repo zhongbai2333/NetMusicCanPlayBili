@@ -102,8 +102,13 @@ public final class ClientMediaLifecycleHandler {
         com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryDiagnostics.tick();
         com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection
                 .tick(ClientMediaLifecycleHandler::emergencyCleanupClientPlayback);
-        // 切世界/单人存档重进时清掉旧 tracker 记录
         Minecraft mc = Minecraft.getInstance();
+        updateDemandListener(mc);
+        com.zhongbai233.net_music_can_play_bili.client.audio.SyncedMediaSound.tickPendingDecodeAdmissions();
+        com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackCoordinator
+                .tickIndexedPlaybackDemand();
+        com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaDemandScheduler.tick();
+        // 切世界/单人存档重进时清掉旧 tracker 记录
         if (mc.level != lastTrackedLevel) {
             lastTrackedLevel = mc.level;
             if (lastTrackedLevel == null) {
@@ -140,6 +145,22 @@ public final class ClientMediaLifecycleHandler {
         }
 
         updateListener(mc.player.getEyePosition());
+    }
+
+    private static void updateDemandListener(Minecraft mc) {
+        if (mc == null) {
+            return;
+        }
+        Camera camera = mc.gameRenderer.getMainCamera();
+        if (camera != null && camera.isInitialized()) {
+            Vec3 position = camera.position();
+            ClientAudioOutputRegistry.updateListenerPosition(new float[] {
+                    (float) position.x, (float) position.y, (float) position.z });
+        } else if (mc.player != null) {
+            Vec3 position = mc.player.getEyePosition();
+            ClientAudioOutputRegistry.updateListenerPosition(new float[] {
+                    (float) position.x, (float) position.y, (float) position.z });
+        }
     }
 
     private static boolean updateFromCamera(Minecraft mc) {
@@ -188,6 +209,8 @@ public final class ClientMediaLifecycleHandler {
         com.zhongbai233.net_music_can_play_bili.client.audio.SyncedStreamRecoveryRegistry.clear();
         com.zhongbai233.net_music_can_play_bili.media.stream.CdnHealthTracker.clear();
         com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker.stopAllSounds();
+        com.zhongbai233.net_music_can_play_bili.client.audio.SyncedMediaSound.cancelPendingDecodeAdmissions();
+        com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioEndpointIndex.clear();
         com.zhongbai233.net_music_can_play_bili.client.MP4Client.clearCachedStates();
         com.zhongbai233.net_music_can_play_bili.client.PadClient.clearCachedDocuments();
         com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackSessions.clearAll(

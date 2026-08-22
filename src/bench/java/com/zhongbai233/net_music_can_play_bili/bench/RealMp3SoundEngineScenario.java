@@ -393,12 +393,20 @@ final class RealMp3SoundEngineScenario implements BenchClientScenario {
             this.failure = failure;
             this.relative = true;
             this.attenuation = SoundInstance.Attenuation.NONE;
-            this.volume = 1.0F;
+            // Production indexed sounds are intentionally submitted silent and fade in only after stream readiness.
+            // Keeping the real SoundEngine/HTTP/PCM bench silent at submission prevents this regression from being
+            // hidden by a test-only non-zero volume.
+            this.volume = 0.0F;
         }
 
         @Override
         public void tick() {
             tick++;
+        }
+
+        @Override
+        protected void refreshDecodeDemand() {
+            setDecodeDemand(true);
         }
 
         @Override

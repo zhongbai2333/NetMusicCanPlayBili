@@ -5,10 +5,16 @@ import net.minecraft.world.item.ItemStack;
 import javax.annotation.Nonnull;
 import java.util.Objects;
 
-public record PadMediaEntry(int mediaId, @Nonnull ItemStack disc) {
+public record PadMediaEntry(int mediaId, ItemStack disc) {
     public PadMediaEntry {
         mediaId = Math.max(1, mediaId);
         disc = sanitizeDisc(disc);
+    }
+
+    @Override
+    @Nonnull
+    public ItemStack disc() {
+        return Objects.requireNonNull(disc, "disc");
     }
 
     @Nonnull

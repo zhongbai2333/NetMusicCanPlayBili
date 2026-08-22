@@ -1,14 +1,14 @@
 package com.zhongbai233.net_music_can_play_bili.blockentity;
 
-import com.github.tartaricacid.netmusic.network.NetworkHandler;
-import com.github.tartaricacid.netmusic.network.message.MusicToClientMessage;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliLiveRoomInput;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliLiveStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.block.LiveStreamerBlock;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
-import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.media.sync.ResolveGeneration;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
+import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
+import com.zhongbai233.net_music_can_play_bili.link.AudioPlaybackIndexSavedData;
 import com.zhongbai233.net_music_can_play_bili.server.BiliWhitelistManager;
 import com.zhongbai233.net_music_can_play_bili.server.PlaybackAuditManager;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.CancellableTaskFuture;
@@ -23,7 +23,6 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
-import net.minecraft.world.phys.AABB;
 import org.slf4j.Logger;
 
 import java.io.IOException;
@@ -50,7 +49,7 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
     private static final String STARTED_TIME_TAG = "StartedGameTime";
     private static final String OWNER_TAG = "PlaybackOwner";
     private static final String VOLUME_PER_MILLE_TAG = "VolumePerMille";
-    private static final int SYNC_RANGE = 96;
+    private static final String SOURCE_ID_TAG = "PlaybackSourceId";
     private static final int SYNC_INTERVAL_TICKS = 20;
     private static final int FULL_RESYNC_INTERVAL_TICKS = 60;
     private static final ExecutorService LIVE_STATUS_EXECUTOR = Executors.newFixedThreadPool(2,
@@ -76,9 +75,31 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
     private long lastFullSyncGameTime;
     private UUID playbackOwnerId;
     private int volumePerMille = 1000;
+    private UUID playbackSourceId = UUID.randomUUID();
 
     public LiveStreamerBlockEntity(BlockPos pos, BlockState blockState) {
         super(ModBlockEntities.LIVE_STREAMER.get(), pos, blockState);
+    }
+
+    public PlaybackSourceId getPlaybackSourceId() {
+        return PlaybackSourceId.of(playbackSourceId);
+    }
+
+    @Override
+    public void onLoad() {
+        super.onLoad();
+        if (level instanceof ServerLevel serverLevel) {
+            AudioLinkIndex.registerPlaybackSource(serverLevel, worldPosition, getPlaybackSourceId(),
+                    AudioPlaybackIndexSavedData.SourceKind.LIVE_STREAMER);
+        }
+    }
+
+    @Override
+    public void setRemoved() {
+        cancelLiveStatusProbe();
+        liveStatusRequestGeneration = liveStatusRequestGeneration.next();
+        liveStatusProbeId++;
+        super.setRemoved();
     }
 
     public static void tick(Level level, BlockPos pos, BlockState state, LiveStreamerBlockEntity streamer) {
@@ -292,6 +313,9 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
     }
 
     public void stopLive() {
+        if (level instanceof ServerLevel serverLevel) {
+            IndexedBlockPlaybackSessionManager.remove(serverLevel, getPlaybackSourceId());
+        }
         autoResumeRequested = false;
         liveStatusRequestGeneration = liveStatusRequestGeneration.next();
         cancelLiveStatusProbe();
@@ -304,6 +328,9 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
     private boolean stopForegroundPlayback() {
         if (!playing) {
             return false;
+        }
+        if (level instanceof ServerLevel serverLevel) {
+            IndexedBlockPlaybackSessionManager.remove(serverLevel, getPlaybackSourceId());
         }
         playing = false;
         startedGameTime = 0L;
@@ -333,21 +360,12 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
         }
 
         long elapsedMillis = Math.max(0L, (serverLevel.getGameTime() - startedGameTime) * 50L);
-        String syncedUrl = PlaybackSync.withSync(BiliLiveRoomInput.placeholderUrl(roomId),
-                playbackSessionId(), elapsedMillis, 0L);
         String songName = liveSongName();
-        AABB range = new AABB(worldPosition).inflate(SYNC_RANGE);
-        Set<UUID> nearby = new HashSet<>();
-        for (ServerPlayer player : serverLevel.getEntitiesOfClass(ServerPlayer.class, range)) {
-            nearby.add(player.getUUID());
-            if (syncedPlayers.add(player.getUUID())) {
-                @SuppressWarnings("null")
-                MusicToClientMessage message = new MusicToClientMessage(worldPosition, syncedUrl,
-                        whitelistSourceId(), LIVE_REMAINING_SECONDS, songName);
-                NetworkHandler.sendToClientPlayer(message, player);
-            }
-        }
-        syncedPlayers.retainAll(nearby);
+        Set<UUID> nearby = IndexedBlockPlaybackSessionManager.publishAndSync(serverLevel, serverLevel,
+                getPlaybackSourceId(), worldPosition, BiliLiveRoomInput.placeholderUrl(roomId),
+                whitelistSourceId(), songName, playbackSessionId(), elapsedMillis, 0L, LIVE_REMAINING_SECONDS);
+        syncedPlayers.clear();
+        syncedPlayers.addAll(nearby);
         PlaybackAuditManager.recordModernTurntable(serverLevel, worldPosition, songName,
                 whitelistSourceId(), 0, elapsedMillis, playbackOwnerId);
     }
@@ -396,6 +414,7 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
         output.putBoolean(AUTO_RESUME_TAG, autoResumeRequested);
         output.putLong(STARTED_TIME_TAG, startedGameTime);
         output.putInt(VOLUME_PER_MILLE_TAG, volumePerMille);
+        output.putString(SOURCE_ID_TAG, playbackSourceId.toString());
         if (playbackOwnerId != null) {
             output.putString(OWNER_TAG, playbackOwnerId.toString());
         }
@@ -415,6 +434,10 @@ public class LiveStreamerBlockEntity extends BlockEntity implements PlaybackAudi
         liveStatusProbeId++;
         startedGameTime = input.getLongOr(STARTED_TIME_TAG, 0L);
         volumePerMille = Math.max(0, Math.min(1000, input.getIntOr(VOLUME_PER_MILLE_TAG, 1000)));
+        playbackSourceId = parseUuid(input.getStringOr(SOURCE_ID_TAG, ""));
+        if (playbackSourceId == null) {
+            playbackSourceId = UUID.randomUUID();
+        }
         playbackOwnerId = parseUuid(input.getStringOr(OWNER_TAG, ""));
         syncedPlayers.clear();
     }

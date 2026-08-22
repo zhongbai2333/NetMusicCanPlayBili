@@ -23,16 +23,16 @@ class SpeakerRelayMutePolicyTest {
     }
 
     @Test
-    void ignoresMutedAndUnsupportedRelays() {
+    void linkedRelaysOwnTheRouteEvenWhenTheirCurrentConfigurationIsSilent() {
         SpeakerAudioRelay muted = new SpeakerAudioRelay();
         muted.setChannelIndex(-1);
         muted.setUserVolume(1.0F);
-        assertFalse(SpeakerRelayMutePolicy.shouldMuteMain(true, List.of(muted), false));
+        assertTrue(SpeakerRelayMutePolicy.shouldMuteMain(true, List.of(muted), false));
 
         SpeakerAudioRelay silent = new SpeakerAudioRelay();
         silent.setChannelIndex(0);
         silent.setUserVolume(0.0F);
-        assertFalse(SpeakerRelayMutePolicy.shouldMuteMain(true, List.of(silent), false));
+        assertTrue(SpeakerRelayMutePolicy.shouldMuteMain(true, List.of(silent), false));
     }
 
     @Test

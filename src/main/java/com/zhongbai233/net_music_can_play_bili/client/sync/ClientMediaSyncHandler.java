@@ -48,7 +48,7 @@ public final class ClientMediaSyncHandler {
             ClientMediaRetryHandler.onSessionRefreshed(sourceId, retainedSessionId);
             if (policy.shouldRebuildSound(sourceId, payload)) {
                 policy.onRebuildSound(payload, sourceId);
-                policy.preparePlayback(payload, sourceId);
+                schedulePlayback(payload, sourceId, policy);
             }
             return;
         }
@@ -59,7 +59,7 @@ public final class ClientMediaSyncHandler {
         ClientMediaPrepareLauncher.onSessionAccepted(sourceId, acceptedSessionId);
         ClientMediaSoundRegistry.onSessionAccepted(sourceId, acceptedSessionId);
         policy.afterRegisterPlayback(payload, sourceId);
-        policy.preparePlayback(payload, sourceId);
+        schedulePlayback(payload, sourceId, policy);
     }
 
     public static void handleTimeline(ClientMediaTimelinePayload payload, ClientMediaSyncPolicy policy) {
@@ -82,5 +82,15 @@ public final class ClientMediaSyncHandler {
                 previous.withServerElapsed(Math.max(0L, payload.elapsedMillis()),
                         previous.durationMillis()).withHeadphoneRouted(payload.headphoneRouted()));
         policy.updateVolume(payload.sourceId(), payload.volumePerMille() / 1000.0F);
+    }
+
+    private static void schedulePlayback(ClientMediaSyncPayload payload, UUID sourceId,
+            ClientMediaSyncPolicy policy) {
+        ClientMediaPreparePolicy preparePolicy = policy.preparePolicy(payload);
+        if (preparePolicy != null) {
+            ClientMediaDemandScheduler.schedule(payload, sourceId, preparePolicy);
+        } else {
+            policy.preparePlayback(payload, sourceId);
+        }
     }
 }

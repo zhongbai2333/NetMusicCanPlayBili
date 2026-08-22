@@ -88,8 +88,11 @@ public final class ClientMediaPrepareLauncher {
             loadLyricsAsync(keyFor(payload, sourceId), payload, sourceId, policy);
         }
         policy.onLaunch(payload, sourceId, startOffsetMillis, launch.playUrl());
-        SyncedMediaPlaybackLauncher.play(launch, payload.songName(),
+        boolean submitted = SyncedMediaPlaybackLauncher.play(launch, payload.songName(),
                 (url, lyricRecord) -> policy.createSound(sourceId, payload, url, lyricRecord, startOffsetMillis));
+        if (!submitted) {
+            ClientMediaDemandScheduler.markLaunchFailed(sourceId, payload.sessionId());
+        }
     }
 
     static void removeScheduledForDevice(UUID sourceId) {

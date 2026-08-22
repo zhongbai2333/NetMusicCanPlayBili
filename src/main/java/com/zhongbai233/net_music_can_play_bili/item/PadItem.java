@@ -376,6 +376,7 @@ public class PadItem extends Item {
     }
 
     @Override
+    @Deprecated
     public void appendHoverText(ItemStack stack, TooltipContext context, TooltipDisplay display,
             Consumer<Component> tooltip, TooltipFlag flag) {
         PadDocument document = readDocument(stack);

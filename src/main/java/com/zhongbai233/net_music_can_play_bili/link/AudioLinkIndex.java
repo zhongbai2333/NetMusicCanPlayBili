@@ -1,6 +1,10 @@
 package com.zhongbai233.net_music_can_play_bili.link;
 
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
+import com.zhongbai233.net_music_can_play_bili.media.audio.IndexedAudioEndpoint;
+import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.blockentity.IndexedBlockPlaybackSessionManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
@@ -27,6 +31,21 @@ public final class AudioLinkIndex {
     private AudioLinkIndex() {
     }
 
+    public static void registerPlaybackSource(ServerLevel level, BlockPos sourcePos, PlaybackSourceId sourceId,
+            AudioPlaybackIndexSavedData.SourceKind kind) {
+        if (level != null && sourcePos != null && sourceId != null && kind != null) {
+            AudioPlaybackIndexSavedData.get(level).upsertSource(sourcePos, sourceId, kind);
+        }
+    }
+
+    public static void removePlaybackSource(ServerLevel level, BlockPos sourcePos) {
+        if (level != null && sourcePos != null) {
+            AudioPlaybackIndexSavedData.get(level).sourceAt(sourcePos).ifPresent(source ->
+                    IndexedBlockPlaybackSessionManager.remove(level, source.playbackSourceId()));
+            AudioPlaybackIndexSavedData.get(level).removeSource(sourcePos);
+        }
+    }
+
     public static void registerSpeaker(ServerLevel level, BlockPos speakerPos, BlockPos turntablePos) {
         if (level == null || speakerPos == null || turntablePos == null) {
             return;
@@ -36,6 +55,73 @@ public final class AudioLinkIndex {
                 .computeIfAbsent(level.dimension(), ignored -> new ConcurrentHashMap<>())
                 .computeIfAbsent(turntablePos.immutable(), ignored -> ConcurrentHashMap.newKeySet())
                 .add(speakerPos.immutable());
+    }
+
+    public static void upsertSpeakerEndpoint(ServerLevel level, UUID endpointId, BlockPos speakerPos,
+            BlockPos sourcePos, int channelIndex, float volume, boolean autoMixJoc,
+            float maxDistance, long revision) {
+        if (level == null || endpointId == null || speakerPos == null || sourcePos == null) {
+            return;
+        }
+        registerSpeaker(level, speakerPos, sourcePos);
+        ensurePlaybackSourceAt(level, sourcePos);
+        AudioPlaybackIndexSavedData.SourceEntry source = AudioPlaybackIndexSavedData.get(level)
+                .sourceAt(sourcePos).orElse(null);
+        AudioPlaybackIndexSavedData.get(level).upsertEndpoint(new AudioPlaybackIndexSavedData.EndpointEntry(
+                endpointId, source != null ? source.sourceId() : "", sourcePos.asLong(), speakerPos.asLong(),
+                channelIndex, volume, autoMixJoc, maxDistance, revision));
+    }
+
+    public static PlaybackSourceId ensurePlaybackSourceAt(ServerLevel level, BlockPos sourcePos) {
+        if (level == null || sourcePos == null) {
+            return null;
+        }
+        Object blockEntity = level.getBlockEntity(sourcePos);
+        if (blockEntity instanceof ModernTurntableBlockEntity turntable) {
+            PlaybackSourceId sourceId = turntable.getPlaybackSourceId();
+            registerPlaybackSource(level, sourcePos, sourceId,
+                    AudioPlaybackIndexSavedData.SourceKind.TURNTABLE);
+            return sourceId;
+        }
+        if (blockEntity instanceof LiveStreamerBlockEntity liveStreamer) {
+            PlaybackSourceId sourceId = liveStreamer.getPlaybackSourceId();
+            registerPlaybackSource(level, sourcePos, sourceId,
+                    AudioPlaybackIndexSavedData.SourceKind.LIVE_STREAMER);
+            return sourceId;
+        }
+        return AudioPlaybackIndexSavedData.get(level).sourceAt(sourcePos)
+                .map(source -> source.playbackSourceId()).orElse(null);
+    }
+
+    public static void removeSpeakerEndpoint(ServerLevel level, UUID endpointId, BlockPos speakerPos) {
+        if (level == null) {
+            return;
+        }
+        if (endpointId != null) {
+            AudioPlaybackIndexSavedData.get(level).removeEndpoint(endpointId);
+        } else if (speakerPos != null) {
+            AudioPlaybackIndexSavedData.get(level).removeEndpointAt(speakerPos);
+        }
+        unregisterSpeaker(level, speakerPos);
+    }
+
+    public static java.util.List<AudioPlaybackIndexSavedData.EndpointEntry> speakerEndpointsFor(
+            ServerLevel level, PlaybackSourceId sourceId) {
+        return level != null && sourceId != null
+                ? AudioPlaybackIndexSavedData.get(level).endpointsFor(sourceId)
+                : java.util.List.of();
+    }
+
+    public static java.util.List<IndexedAudioEndpoint> indexedSpeakerEndpointsFor(
+            ServerLevel level, PlaybackSourceId sourceId) {
+        if (level == null || sourceId == null) {
+            return java.util.List.of();
+        }
+        String dimension = level.dimension().identifier().toString();
+        return speakerEndpointsFor(level, sourceId).stream()
+                .map(endpoint -> endpoint.toIndexed(dimension).orElse(null))
+                .filter(java.util.Objects::nonNull)
+                .toList();
     }
 
     public static void unregisterSpeaker(ServerLevel level, BlockPos speakerPos) {
@@ -59,6 +145,10 @@ public final class AudioLinkIndex {
     public static boolean hasSpeakerLinkedTo(ServerLevel level, BlockPos turntablePos) {
         if (level == null || turntablePos == null) {
             return false;
+        }
+        PlaybackSourceId sourceId = ensurePlaybackSourceAt(level, turntablePos);
+        if (sourceId != null && !AudioPlaybackIndexSavedData.get(level).endpointsFor(sourceId).isEmpty()) {
+            return true;
         }
         Map<BlockPos, Set<BlockPos>> byTurntable = SPEAKERS_BY_TURNTABLE.get(level.dimension());
         Set<BlockPos> speakers = byTurntable != null ? byTurntable.get(turntablePos) : null;

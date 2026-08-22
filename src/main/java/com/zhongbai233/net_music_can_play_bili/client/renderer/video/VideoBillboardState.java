@@ -172,9 +172,9 @@ abstract class VideoBillboardState {
         }
 
         public record BenchDecoderState(boolean present, long generation, long decoderStartOffsetMillis,
-                String restartState) {
+                String restartState, boolean prewarmVisible, boolean offscreenPauseActive, boolean hasFrame) {
             static BenchDecoderState empty() {
-                return new BenchDecoderState(false, -1L, -1L, "ABSENT");
+                return new BenchDecoderState(false, -1L, -1L, "ABSENT", false, false, false);
             }
         }
 
@@ -228,7 +228,7 @@ abstract class VideoBillboardState {
     protected record ProjectorImmediateKey(PlaybackSessionId playbackSessionId, BlockPos projectorPos) {
     }
 
-    protected record ProjectorImmediatePose(Matrix4f pose, float halfHeight) {
+    protected record ProjectorImmediatePose(Matrix4f pose, float halfHeight, float opacity) {
     }
 
     protected record VisibilitySample(long createdNanoTime, int thresholdKey, boolean visible) {

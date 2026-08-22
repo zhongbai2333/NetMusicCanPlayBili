@@ -8,7 +8,7 @@ public final class ModernTurntableNetwork {
     }
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        PayloadRegistrar registrar = event.registrar("1");
+        PayloadRegistrar registrar = event.registrar("2");
         registrar.playToServer(
                 ModernTurntableControlPacket.TYPE,
                 ModernTurntableControlPacket.STREAM_CODEC,
@@ -17,6 +17,10 @@ public final class ModernTurntableNetwork {
                 ModernTurntableStopPacket.TYPE,
                 ModernTurntableStopPacket.STREAM_CODEC,
                 ModernTurntableStopPacket::handle);
+        registrar.playToClient(
+                AudioEndpointSnapshotPacket.TYPE,
+                AudioEndpointSnapshotPacket.STREAM_CODEC,
+                AudioEndpointSnapshotPacket::handle);
         registrar.playToServer(
                 LiveStreamerControlPacket.TYPE,
                 LiveStreamerControlPacket.STREAM_CODEC,

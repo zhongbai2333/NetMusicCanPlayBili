@@ -8,6 +8,8 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.level.ServerLevel;
+import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
@@ -130,5 +132,12 @@ public class SpeakerBlock extends Block implements EntityBlock {
             com.zhongbai233.net_music_can_play_bili.client.SpeakerClient.openScreen(pos);
         }
         return InteractionResult.SUCCESS;
+    }
+
+    @Override
+    protected void affectNeighborsAfterRemoval(BlockState state, ServerLevel level, BlockPos pos,
+            boolean movedByPiston) {
+        AudioLinkIndex.removeSpeakerEndpoint(level, null, pos);
+        super.affectNeighborsAfterRemoval(state, level, pos, movedByPiston);
     }
 }

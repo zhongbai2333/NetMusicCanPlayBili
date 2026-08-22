@@ -5,6 +5,7 @@ import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 import com.zhongbai233.net_music_can_play_bili.media.audio.OpenALSpatialAudio;
 import com.zhongbai233.net_music_can_play_bili.media.sync.AudioSyncPolicy;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.LifecycleClose;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackPresentationEnvelope;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
@@ -41,6 +42,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     private final float[] forwardToMachine = new float[3];
     private final SpatialFrontSmoother frontSmoother = new SpatialFrontSmoother();
     private final Thread worker;
+    private final PlaybackPresentationEnvelope presentationEnvelope = new PlaybackPresentationEnvelope();
     private volatile boolean closed;
     private final AtomicBoolean cleanupStarted = new AtomicBoolean();
     private volatile boolean started;
@@ -274,10 +276,10 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
                 float gain = spatialGainForDistance(distance, userVolume);
                 lastDistance = distance;
                 lastGain = gain;
-                float gv = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays,
-                    followLocalPlayerFront, consoleRouteSuppressed)
-                                ? 0f
-                                : gain * gameVolume();
+                boolean routeMuted = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays,
+                        followLocalPlayerFront, consoleRouteSuppressed);
+                float entryGain = presentationEnvelope.gain(!routeMuted && gain > 0.0F, System.nanoTime());
+                float gv = routeMuted ? 0.0F : gain * entryGain * gameVolume();
                 spatialAudio.setBedGain(0, gv);
                 spatialAudio.setBedGain(1, gv);
             }
@@ -528,6 +530,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     public void hardStopOutput() {
         started = false;
         frameBudget = 0.0D;
+        presentationEnvelope.reset();
         lastFrameFeedNanos = 0L;
         totalSamplesFed = 0L;
         pcmQueue.clear();

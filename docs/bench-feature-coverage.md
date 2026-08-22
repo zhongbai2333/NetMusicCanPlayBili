@@ -7,17 +7,19 @@
 | --- | --- | --- |
 | Scene Editor JiJ | `ncpb.scene-editor-library-smoke`、`ncpb.editor-gui-lifecycle` | core/Minecraft adapter 加载、编辑会话、真实 Screen 生命周期 |
 | 唱片机方块 | `ncpb.turntable-block-interactions` | 插入、右键弹出、播放状态、自动化事务提取 |
-| 唱片机真实音频 | `ncpb.real-turntable-mp3-end-to-end`、三个 `real-mp3-*` | 服务端解析、同步包、MP3 解码、OpenAL、seek/retry/静音/范围停止 |
+| 唱片机真实音频 | `ncpb.real-turntable-mp3-end-to-end`、`ncpb.real-mp3-range-reentry`、`ncpb.real-turntable-volume-range-reentry`、其它 `real-mp3-*` | 服务端解析、同步包、MP3 解码、OpenAL、seek/retry/静音/范围停止；新场景通过真实唱片机 GUI 拖动音量滑块，再用 BenchMod 玩家位姿控制离开/返回，并要求服务端也观测到移动及两次真实非静音 PCM |
 | 固定媒体设备 | `ncpb.device-link-config-matrix` | 唱片机、视频投影仪、歌词投影仪、音响、直播机、中控台的真实 BE 创建与同步 |
 | 设备链接与配置 | `ncpb.device-link-config-matrix` | 视频质量/投影参数、歌词模式/AI、7.1.4 声道/JOC/音量、中控源绑定；运行期从唱片机 A 重绑到 B，并核对客户端链接和服务端反向索引迁移 |
 | 耳机/全息眼镜 | `ncpb.wearable-binding-topology` | 正式绑定服务、唱片机/MP4/Pad/投影仪拓扑、客户端耳机路由、全息屏幕绑定、四槽上限、按目标解绑和反向索引清理 |
 | 音响 relay | `ncpb.device-link-config-matrix` | 音响到唱片机的服务端反向索引、客户端音频 relay 注册以及 7.1.4/JOC/音量同步 |
+| 索引随用随播 | `ncpb.indexed-audio-on-demand`、`ncpb.indexed-server-session-unloaded`、`ncpb.device-link-config-matrix` | 跨区块端点发现、旧预热带不启动、多个端点共享单解码器、末端离开迟滞关闭、来源区块保持卸载且循环会话继续、持久端点随真实方块重绑 |
+| 播放范围调试 | `ncpb.playback-range-debug-visualization` | 端点快照驱动的标称/解析/提示/同步范围世界线框、生命周期 HUD 与开关状态 |
 | 播放中迟到投影仪 | `ncpb.device-link-config-matrix`、`ncpb.playback-session-races` | BE 更新后的客户端消费者登记，以及同一会话重试/替换状态机 |
 | 媒体 GUI | `ncpb.gui-screen-matrix` | 15 个离线安全生产 Screen 逐一打开、真实渲染、自动化快照、关闭；包括 MP4、Pad、地图、绑定/报告和白名单审核/预览 |
 | 手持 MP4/Pad | `ncpb.handheld-media-contracts`、`ncpb.playback-session-races` | 两种屏幕几何/缩放、Pad 逻辑会话身份、媒体会话竞态 |
 | Pad 地图/地形 | `ncpb.gui-screen-matrix`、`ncpb.terrain-lod-roundtrip` | 地图 Screen、采样/缓存使用路径、LOD/PIP/GPU/透明层与资源收敛 |
 | Bilibili 直播 | `ncpb.live-stream-contracts`、`ncpb.real-live-device-topology` | 房间号/链接/占位 URL、元数据 owner、健康重连与指数退避；真实 8178490 直播流的直播机、投影仪、中控台屏幕/音频元素和实体音响联合加载 |
-| 真实 Bilibili 点播 | `ncpb.real-bv-playback` | 真实 BV 分 P、DASH 音视频、AV1/H.264 候选、native decode、OpenAL、GPU 上传与清理 |
+| 真实 Bilibili 点播 | `ncpb.real-bv-playback`、`ncpb.real-video-range-reentry` | 真实 BV 分 P、DASH 音视频、AV1/H.264 候选、native decode、OpenAL、GPU 上传与清理；真实唱片机、物理投影仪和屏幕-only 中控台在 128 格离开后保持休眠会话；监听者坐标不依赖活跃输出，返回后视频时间继续推进且 MP3 再次输出真实 PCM |
 | AV1 回退/硬解 seek | `ncpb.real-av1-h264-fallback`、`ncpb.real-av1-hardware-seek`、`ncpb.frozen-real-av1-hardware-seek` | AV1 首帧失败转 H.264、同会话 continuity、Range seek、PTS、固定样本 |
 | GPU 视频上传 | `ncpb.deterministic-video-upload` | RGBA、YUV420P、NV12/PBO 上传与纹理释放 |
 | 资源生命周期 | `ncpb.media-resource-convergence`、`ncpb.real-media-lifecycle-100` | HTTP、native、GPU/PBO、OpenAL、owned memory 的静止基线 |
@@ -56,5 +58,6 @@ bash gradlew runBenchClient \
   --no-daemon
 ```
 
-房间当时未开播或 B站未返回可播地址时，该真实网络场景会明确失败，不会用假帧代替。真实点播仍使用
-`ncpb.real-bv-playback`，默认 BV 为 `BV1GJ411x7h7`。
+房间当时未开播或 B站未返回可播地址时，该真实网络场景会明确失败，不会用假帧代替。真实点播使用
+`ncpb.real-bv-playback`；离开/返回范围回归使用 `ncpb.real-video-range-reentry`，默认 BV 均为
+`BV1GJ411x7h7`。

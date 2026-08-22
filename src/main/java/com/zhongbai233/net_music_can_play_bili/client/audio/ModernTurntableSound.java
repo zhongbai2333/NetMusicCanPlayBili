@@ -9,6 +9,9 @@ import com.zhongbai233.net_music_can_play_bili.client.sync.ModernTurntableTimeli
 import com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackClock;
 import com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackRuntimeProperties;
 import com.zhongbai233.net_music_can_play_bili.media.sync.MediaRequestToken;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackPresentationEnvelope;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
@@ -33,10 +36,12 @@ public class ModernTurntableSound extends SyncedMediaSound {
     private final BlockPos pos;
     private final String rawUrl;
     private final String songName;
+    private final PlaybackSourceId sourceId;
     private final long totalMillis;
     private boolean sessionFinished;
     private int minecartMissingTicks;
     private final SyncedStreamRecoveryRegistry.Registration recoveryRegistration;
+    private final PlaybackPresentationEnvelope presentationEnvelope = new PlaybackPresentationEnvelope();
     private volatile int streamReadyTick = -1;
     private volatile int lastAudioProgressTick = -1;
     private volatile long lastObservedAudioMillis = -1L;
@@ -59,21 +64,29 @@ public class ModernTurntableSound extends SyncedMediaSound {
 
     public ModernTurntableSound(BlockPos pos, URL songUrl, int timeSecond, LyricRecord lyricRecord, String sessionId,
             long startOffsetMillis, String rawUrl, String songName, long totalMillis) {
+        this(pos, songUrl, timeSecond, lyricRecord, sessionId, startOffsetMillis, rawUrl, songName, totalMillis,
+                PlaybackSync.parsePlaybackSourceId(songUrl.toString()).orElse(null));
+    }
+
+    public ModernTurntableSound(BlockPos pos, URL songUrl, int timeSecond, LyricRecord lyricRecord, String sessionId,
+            long startOffsetMillis, String rawUrl, String songName, long totalMillis, PlaybackSourceId sourceId) {
         super(songUrl, timeSecond, lyricRecord, sessionId, startOffsetMillis);
         this.pos = pos;
         this.rawUrl = rawUrl != null ? rawUrl : "";
         this.songName = songName != null ? songName : "";
+        this.sourceId = sourceId;
         this.totalMillis = Math.max(0L, totalMillis);
         this.x = pos.getX() + 0.5D;
         this.y = pos.getY() + 0.5D;
         this.z = pos.getZ() + 0.5D;
-        this.volume = 4.0F;
+        this.volume = 0.0F;
         recoveryRegistration = SyncedStreamRecoveryRegistry.register(playbackSessionId(), this::recoverStream);
         if (!ModernTurntablePlaybackTracker.onCancel(pos, sessionId(),
                 () -> SyncedStreamRecoveryRegistry.unregister(recoveryRegistration))) {
             SyncedStreamRecoveryRegistry.unregister(recoveryRegistration);
         }
         ModernTurntablePlaybackTracker.registerSound(this, pos, sessionId());
+        refreshDecodeDemand();
     }
 
     @Override
@@ -99,7 +112,11 @@ public class ModernTurntableSound extends SyncedMediaSound {
         ModernTurntableBlockEntity turntable = level.getBlockEntity(pos) instanceof ModernTurntableBlockEntity modern
                 ? modern
                 : null;
-        this.volume = 4.0F * (turntable != null ? turntable.getVolume() : 1.0F);
+        float configuredVolume = 4.0F * (turntable != null ? turntable.getVolume() : 1.0F);
+        boolean audible = ClientAudioOutputRegistry.hasAudioDemand(pos, sourceId, sessionId());
+        this.volume = configuredVolume
+                * presentationEnvelope.gain(streamReadyTick >= 0 && audible, System.nanoTime());
+        refreshDecodeDemand();
         if (!ModernTurntablePlaybackTracker.isCurrent(pos, sessionId())) {
             stopAndFinish();
             return;
@@ -111,7 +128,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
 
         if (tick > BLOCK_STATE_GRACE_TICKS) {
             if (movingSource ? minecartMissingTicks > MINECART_MISSING_GRACE_TICKS
-                    : turntable == null || !turntable.isPlaying()) {
+                    : !fixedSourceAvailable(turntable)) {
                 stopAndFinish();
                 return;
             }
@@ -154,10 +171,22 @@ public class ModernTurntableSound extends SyncedMediaSound {
     }
 
     @Override
+    protected void refreshDecodeDemand() {
+        setDecodeDemand(ClientAudioOutputRegistry.hasPreparationDemand(pos, sourceId, sessionId()));
+    }
+
+    @Override
     protected void onStreamReady() {
+        ModernTurntablePlaybackCoordinator.markIndexedStreamPlaying(pos, sourceId, sessionId());
         ModernTurntablePlaybackTracker.markStreamStarted(pos, sessionId());
         streamReadyTick = tick;
         lastAudioProgressTick = tick;
+    }
+
+    @Override
+    protected void onDemandIdle() {
+        ModernTurntablePlaybackTracker.unregisterSound(this);
+        SyncedStreamRecoveryRegistry.unregister(recoveryRegistration);
     }
 
     private void showNowPlayingWhenAudible() {
@@ -189,7 +218,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
 
     private boolean recoverStream(SyncedStreamRecoveryRegistry.RecoveryRequest request) {
         if (sessionFinished || rawUrl.isBlank() || request.sessionId() == null
-                || !request.sessionId().equals(sessionId())) {
+                || !request.sessionId().equals(sessionId()) || !hasCurrentDemand()) {
             return false;
         }
         Minecraft minecraft = Minecraft.getInstance();
@@ -198,7 +227,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
         }
         ModernTurntableBlockEntity turntable = ModernTurntableTimeline.turntable(pos);
         boolean movingSource = ClientMinecartAudioAnchors.isMoving(sessionId());
-        if ((!movingSource && (turntable == null || !turntable.isPlaying()))
+        if ((!movingSource && !fixedSourceAvailable(turntable))
                 || (movingSource && !ClientMinecartAudioAnchors.isMoving(sessionId()))
                 || !ModernTurntablePlaybackTracker.isCurrent(pos, sessionId())) {
             return false;
@@ -216,12 +245,13 @@ public class ModernTurntableSound extends SyncedMediaSound {
     }
 
     private void retryPlaybackOnClient(int attempt) {
-        if (sessionFinished || !ModernTurntablePlaybackTracker.isCurrent(pos, sessionId())) {
+        if (sessionFinished || !ModernTurntablePlaybackTracker.isCurrent(pos, sessionId())
+                || !hasCurrentDemand()) {
             return;
         }
         ModernTurntableBlockEntity turntable = ModernTurntableTimeline.turntable(pos);
         boolean movingSource = ClientMinecartAudioAnchors.isMoving(sessionId());
-        if ((!movingSource && (turntable == null || !turntable.isPlaying()))
+        if ((!movingSource && !fixedSourceAvailable(turntable))
                 || (movingSource && !ClientMinecartAudioAnchors.isMoving(sessionId()))) {
             return;
         }
@@ -244,12 +274,13 @@ public class ModernTurntableSound extends SyncedMediaSound {
     }
 
     private void finishRetryPrepare(int attempt, ClientMediaPreparer.PreparedMedia prepared, Throwable error) {
-        if (sessionFinished || !ModernTurntablePlaybackTracker.isActiveSession(pos, sessionId())) {
+        if (sessionFinished || !ModernTurntablePlaybackTracker.isActiveSession(pos, sessionId())
+                || !hasCurrentDemand()) {
             return;
         }
         ModernTurntableBlockEntity turntable = ModernTurntableTimeline.turntable(pos);
         boolean movingSource = ClientMinecartAudioAnchors.isMoving(sessionId());
-        if ((!movingSource && (turntable == null || !turntable.isPlaying()))
+        if ((!movingSource && !fixedSourceAvailable(turntable))
                 || (movingSource && !ClientMinecartAudioAnchors.isMoving(sessionId()))) {
             return;
         }
@@ -286,7 +317,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
         SyncedMediaPlaybackLauncher.play(new SyncedMediaPlaybackLauncher.LaunchResult(launch.playUrl(), retryLyric,
                 launch.requestToken()),
                 songName, (url, ignoredLyric) -> new ModernTurntableSound(pos, url, Math.max(1, tickTimes / 20),
-                retryLyric, sessionId(), retryOffset, rawUrl, songName, durationMillis), false);
+                retryLyric, sessionId(), retryOffset, rawUrl, songName, durationMillis, sourceId), false);
         retireForRecovery();
         stop();
     }
@@ -300,7 +331,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
             lastAudioProgressTick = tick;
             return;
         }
-        if ((!movingSource && (turntable == null || !turntable.isPlaying()))
+        if ((!movingSource && !fixedSourceAvailable(turntable))
                 || !ModernTurntablePlaybackTracker.isCurrent(pos, sessionId())) {
             return;
         }
@@ -335,6 +366,15 @@ public class ModernTurntableSound extends SyncedMediaSound {
                     pos, sessionId());
             stopAndFinish();
         }
+    }
+
+    private boolean fixedSourceAvailable(ModernTurntableBlockEntity turntable) {
+        return turntable != null ? turntable.isPlaying()
+                : sourceId != null && ClientAudioEndpointIndex.sourcePosition(sourceId) != null;
+    }
+
+    private boolean hasCurrentDemand() {
+        return ClientAudioOutputRegistry.hasAudioDemand(pos, sourceId, sessionId());
     }
 
     private void retireForRecovery() {

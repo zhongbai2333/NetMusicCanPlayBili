@@ -145,6 +145,21 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
                 Set.of("client", "media", "playback", "session", "race"), Duration.ofSeconds(10)),
                 ignored -> new PlaybackSessionRaceScenario());
         registrar.register(new ScenarioDescriptor(
+                "ncpb.indexed-audio-on-demand",
+                "Chunk-independent endpoint discovery, no-prewarm admission and shared on-demand decoder restart",
+                Set.of("client", "audio", "index", "range", "chunk", "decoder", "lifecycle"),
+                Duration.ofSeconds(10)), ignored -> new IndexedAudioOnDemandScenario());
+        registrar.register(new ScenarioDescriptor(
+                "ncpb.indexed-server-session-unloaded",
+                "Server-indexed playback survives while the source chunk remains unloaded and unticketed",
+                Set.of("client", "server", "audio", "index", "chunk", "session", "lifecycle"),
+                Duration.ofSeconds(15)), ignored -> new IndexedServerSessionUnloadScenario());
+        registrar.register(new ScenarioDescriptor(
+                "ncpb.playback-range-debug-visualization",
+                "Playback range command state, world wireframes and HUD diagnostics render from endpoint snapshots",
+                Set.of("client", "audio", "debug", "range", "render", "hud", "command"),
+                Duration.ofSeconds(15)), ignored -> new PlaybackRangeDebugVisualizationScenario());
+        registrar.register(new ScenarioDescriptor(
                 "ncpb.turntable-block-interactions",
                 "Real modern-turntable right-click eject packet and transactional automation extraction",
                 Set.of("client", "server", "turntable", "block", "packet", "transfer"), Duration.ofSeconds(20)),
@@ -210,6 +225,19 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
                     Duration.ofSeconds(180)),
                     ignored -> new RealMp3SoundEngineScenario());
             registrar.register(new ScenarioDescriptor(
+                    "ncpb.real-mp3-range-reentry",
+                    "One indexed session emits real PCM, retires outside range, then emits real PCM again on re-entry",
+                    Set.of("client", "server", "media", "network", "mp3", "openal", "sound-engine",
+                            "range", "reentry", "decoder", "pcm"), Duration.ofSeconds(240)),
+                    ignored -> new RealMp3RangeReentryScenario());
+            registrar.register(new ScenarioDescriptor(
+                    "ncpb.real-turntable-volume-range-reentry",
+                    "A real turntable GUI volume drag is preserved while BenchMod moves the player out of range and back",
+                    Set.of("client", "server", "turntable", "gui", "slider", "volume", "movement", "network",
+                            "mp3", "openal", "sound-engine", "range", "reentry", "pcm"),
+                    Duration.ofSeconds(300)),
+                    ignored -> new RealTurntableVolumeRangeReentryScenario());
+            registrar.register(new ScenarioDescriptor(
                     "ncpb.real-mp3-retained-retry",
                     "Retained-session real MP3 refresh, world-unload cleanup and delayed-retry suppression",
                     Set.of("client", "media", "network", "mp3", "retry", "session", "sound-engine", "world"),
@@ -229,6 +257,12 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
                     Set.of("client", "media", "network", "native", "bilibili", "video", "audio", "openal"),
                     Duration.ofSeconds(180)),
                     ignored -> new RealBvPlaybackScenario());
+            registrar.register(new ScenarioDescriptor(
+                    "ncpb.real-video-range-reentry",
+                    "Real Bilibili native video pauses outside render range and resumes the retained session on re-entry",
+                    Set.of("client", "server", "media", "network", "native", "bilibili", "video",
+                            "projector", "range", "reentry", "decoder"), Duration.ofSeconds(240)),
+                    ignored -> new RealVideoRangeReentryScenario());
             registrar.register(new ScenarioDescriptor(
                     "ncpb.real-av1-h264-fallback",
                     "Real AV1/H.264 plan with injected AV1 startup failure, same-session fallback and physical resource convergence",

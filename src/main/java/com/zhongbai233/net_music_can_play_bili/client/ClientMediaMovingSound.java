@@ -11,6 +11,9 @@ import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundHandl
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundLifecyclePolicy;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaRetryHandler;
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioPlaybackRange;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackApproachPredictor;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackPresentationEnvelope;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
@@ -32,6 +35,8 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
     private final String debugName;
     private float mediaVolume;
     private final AtomicBoolean finished = new AtomicBoolean();
+    private final PlaybackPresentationEnvelope presentationEnvelope = new PlaybackPresentationEnvelope();
+    private volatile boolean streamReady;
     private final SyncedStreamRecoveryRegistry.Registration recoveryRegistration;
 
     public ClientMediaMovingSound(UUID sourceId, URL songUrl, int timeSecond, LyricRecord lyricRecord,
@@ -143,6 +148,9 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
 
     @Override
     protected void onStreamReady() {
+        com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaDemandScheduler
+                .markPlaying(sourceId, sessionId());
+        streamReady = true;
         ClientMediaPlayback.markAudioStarted(sourceId, sessionId(), startOffsetMillis, totalMillis);
         LOGGER.trace("{} 声音流已就绪: source={} session={} headphoneRouted={} offset={}ms urlHost={}",
                 debugName, sourceId, sessionId(), headphoneRouted, startOffsetMillis, songUrl.getHost());
@@ -161,13 +169,38 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
         boolean privateOrLocal = headphoneRouted || ClientMediaPlayback.isLocalPlayerSource(sourceId);
         attenuation = Attenuation.NONE;
         float perceivedGain = ClientMediaPlayback.perceivedGain(mediaVolume);
+        Minecraft minecraft = Minecraft.getInstance();
+        boolean gameAudioEnabled = minecraft.options != null
+                && minecraft.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.MASTER) > 0.0F
+                && minecraft.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.RECORDS) > 0.0F;
         if (privateOrLocal) {
-            volume = perceivedGain;
+            boolean audible = gameAudioEnabled && mediaVolume > 0.0F
+                    && ClientMediaAudioRouting.canHear(sourceId, headphoneRouted);
+            volume = perceivedGain * presentationEnvelope.gain(streamReady && audible, System.nanoTime());
+            setDecodeDemand(audible);
             return;
         }
-        Minecraft minecraft = Minecraft.getInstance();
         double distance = minecraft.player != null ? minecraft.player.position().distanceTo(pos) : Double.MAX_VALUE;
-        volume = AudioUtils.spatialGainForDistance((float) distance, mediaVolume, perceivedGain);
+        float spatialGain = AudioUtils.spatialGainForDistance((float) distance, mediaVolume, perceivedGain);
+        boolean allowed = gameAudioEnabled && ClientMediaAudioRouting.canHear(sourceId, headphoneRouted);
+        boolean spatialDemand = spatialGain > 0.0F;
+        volume = spatialGain * presentationEnvelope.gain(streamReady && allowed && spatialDemand,
+                System.nanoTime());
+        boolean predicted = false;
+        if (!spatialDemand && allowed && minecraft.player != null) {
+            Vec3 listener = minecraft.player.position();
+            Vec3 velocity = minecraft.player.getDeltaMovement();
+            AudioPlaybackRange.Profile profile = AudioPlaybackRange.profile(AudioPlaybackRange.DEFAULT_DISTANCE,
+                    mediaVolume, perceivedGain);
+            predicted = PlaybackApproachPredictor.willEnterSphere(listener.x, listener.y, listener.z,
+                    velocity.x, velocity.y, velocity.z, pos.x, pos.y, pos.z, profile.fadeEndDistance());
+        }
+        setDecodeDemand(allowed && (spatialDemand || predicted));
+    }
+
+    @Override
+    protected void refreshDecodeDemand() {
+        updatePositionAndAttenuation();
     }
 
     @Override

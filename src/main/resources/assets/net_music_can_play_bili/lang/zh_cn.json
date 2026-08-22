@@ -29,7 +29,7 @@
   "itemGroup.net_music_can_play_bili": "Net Music Can Play Bili",
   "message.net_music_can_play_bili.modern_turntable.need_cd": "请放入一张 NetMusic 唱片",
   "message.net_music_can_play_bili.modern_turntable.need_vip": "这张唱片需要可用的解析器",
-  "message.net_music_can_play_bili.modern_turntable.projected": "已连接投影仪",
+  "message.net_music_can_play_bili.modern_turntable.projected": "已链接到投影仪",
   "message.net_music_can_play_bili.lyric_projector.linked": "已连接唱片机",
   "message.net_music_can_play_bili.lyric_projector.unlinked": "已断开连接",
   "message.net_music_can_play_bili.lyric_projector.no_turntable": "未在附近找到唱片机",

@@ -55,6 +55,7 @@ public class InvisibleHeadphonesItem extends Item {
     }
 
     @Override
+    @Deprecated
     public void appendHoverText(ItemStack stack, TooltipContext context, TooltipDisplay display,
             Consumer<Component> tooltip, TooltipFlag flag) {
         BlockPos turntable = AudioLinkData.readHeadphoneTurntable(stack);

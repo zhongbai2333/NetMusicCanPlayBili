@@ -7,6 +7,7 @@ import com.zhongbai233.net_music_can_play_bili.media.audio.OpenALSpatialAudio;
 import com.zhongbai233.net_music_can_play_bili.media.codec.*;
 import com.zhongbai233.net_music_can_play_bili.media.sync.AudioSyncPolicy;
 import com.zhongbai233.net_music_can_play_bili.media.stream.AudioStreamProperties;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackPresentationEnvelope;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.LifecycleClose;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 
@@ -44,6 +45,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
     private final float[] forwardToMachine = new float[3];
     private final SpatialFrontSmoother frontSmoother = new SpatialFrontSmoother();
     private final Thread worker;
+    private final PlaybackPresentationEnvelope presentationEnvelope = new PlaybackPresentationEnvelope();
     private volatile boolean closed;
     private final AtomicBoolean cleanupStarted = new AtomicBoolean();
     private boolean playbackStarted;
@@ -424,6 +426,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
 
     public void hardStopOutput() {
         playbackStarted = false;
+        presentationEnvelope.reset();
         lastFrameFeedNanos = 0L;
         frameBudget = 0.0D;
         totalFramesFedToOpenAL = 0L;
@@ -862,10 +865,10 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         }
         sa.updatePositions(bedPositions, objectPositions, lp, forward);
         float d = distance(lp, mp), g = spatialGainForDistance(d, userVolume);
-        float gv = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays,
-            followLocalPlayerFront, consoleRouteSuppressed)
-                        ? 0f
-                        : g * gameVolume();
+        boolean routeMuted = SpeakerRelayMutePolicy.shouldMuteMain(MUTE_MAIN_WHEN_RELAYS_CONNECTED, relays,
+                followLocalPlayerFront, consoleRouteSuppressed);
+        float entryGain = presentationEnvelope.gain(!routeMuted && g > 0.0F, System.nanoTime());
+        float gv = routeMuted ? 0.0F : g * entryGain * gameVolume();
         for (int ch = 0; ch < numBedChannels; ch++)
             sa.setBedGain(ch, channelGain(ch, gv));
         for (int o = 0; o < numObjects; o++)

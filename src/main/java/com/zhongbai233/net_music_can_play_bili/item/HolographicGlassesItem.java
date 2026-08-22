@@ -286,6 +286,7 @@ public class HolographicGlassesItem extends Item {
     }
 
     @Override
+    @Deprecated
     public void appendHoverText(ItemStack stack, TooltipContext context, TooltipDisplay display,
             Consumer<Component> tooltip, TooltipFlag flag) {
         tooltip.accept(Component.translatable("tooltip.net_music_can_play_bili.holographic_glasses.protection")

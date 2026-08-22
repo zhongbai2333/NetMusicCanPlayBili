@@ -15,6 +15,7 @@ import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputReg
 import com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleRenderer;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
+import com.zhongbai233.net_music_can_play_bili.link.AudioPlaybackIndexSavedData;
 import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -103,6 +104,20 @@ final class DeviceLinkConfigMatrixScenario implements BenchClientScenario {
                 console.linkTo(level.dimension().identifier().toString(), turntablePos);
                 if (!AudioLinkIndex.hasSpeakerLinkedTo(level, turntablePos)) {
                     throw new AssertionError("Speaker reverse link index was not registered");
+                }
+                var persistedEndpoints = AudioPlaybackIndexSavedData.get(level)
+                        .endpointsFor(require(level, turntablePos, ModernTurntableBlockEntity.class)
+                                .getPlaybackSourceId());
+                if (persistedEndpoints.size() != 1
+                        || !persistedEndpoints.getFirst().endpointId().equals(speaker.getEndpointId())
+                        || persistedEndpoints.getFirst().channelIndex() != SpeakerBlockEntity.CH_LTF
+                        || Math.abs(persistedEndpoints.getFirst().volume() - 1.25F) > 0.0001F) {
+                    throw new AssertionError("Persistent speaker endpoint index did not mirror the real block: "
+                            + "expectedEndpoint=" + speaker.getEndpointId() + " source="
+                            + require(level, turntablePos, ModernTurntableBlockEntity.class).getPlaybackSourceId()
+                            + " sourceEntry=" + AudioPlaybackIndexSavedData.get(level).sourceAt(turntablePos)
+                            + " actual=" + persistedEndpoints + " all="
+                            + AudioPlaybackIndexSavedData.get(level).endpointSnapshot());
                 }
                 if (!AudioLinkIndex.hasVideoProjectorLinkedTo(level, turntablePos)) {
                     throw new AssertionError("Video-projector reverse link index was not registered");
@@ -201,6 +216,13 @@ final class DeviceLinkConfigMatrixScenario implements BenchClientScenario {
                             || !AudioLinkIndex.hasVideoProjectorLinkedTo(level, replacementTurntablePos)) {
                         throw new AssertionError("Server reverse indexes did not move atomically during rebind");
                     }
+                    var replacementSource = require(level, replacementTurntablePos,
+                            ModernTurntableBlockEntity.class).getPlaybackSourceId();
+                    if (AudioPlaybackIndexSavedData.get(level).endpointsFor(replacementSource).stream()
+                            .noneMatch(endpoint -> endpoint.endpointId().equals(
+                                    require(level, speakerPos, SpeakerBlockEntity.class).getEndpointId()))) {
+                        throw new AssertionError("Persistent endpoint index did not follow the source rebind");
+                    }
                     linkPhase.set(1);
                 } catch (Throwable error) {
                     failure.compareAndSet(null, error);
@@ -263,7 +285,7 @@ final class DeviceLinkConfigMatrixScenario implements BenchClientScenario {
     private void throwIfFailed() {
         Throwable error = failure.get();
         if (error != null) {
-            throw new AssertionError("Device link/config matrix failed", error);
+            throw new AssertionError("Device link/config matrix failed: " + error, error);
         }
     }
 

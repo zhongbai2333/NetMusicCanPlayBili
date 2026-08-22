@@ -12,6 +12,7 @@ import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapClientCache;
 import com.zhongbai233.net_music_can_play_bili.gui.HolographicScreenConfigTestScreen;
 import com.zhongbai233.net_music_can_play_bili.gui.VideoPlaceholderDebugScreen;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
+import com.zhongbai233.net_music_can_play_bili.client.debug.PlaybackRangeDebugRenderer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
@@ -45,8 +46,41 @@ public final class NetMusicClientCommands {
                 .then(hologlassCommands())
                 .then(padCommands())
                 .then(videoCommands())
+                .then(debugCommands())
                 .then(benchCommands())
                 .then(dolbyCommands());
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> debugCommands() {
+        return literal("debug")
+                .then(literal("playback")
+                        .executes(ctx -> togglePlaybackDebug())
+                        .then(literal("on").executes(ctx -> setPlaybackDebug(true)))
+                        .then(literal("off").executes(ctx -> setPlaybackDebug(false)))
+                        .then(literal("toggle").executes(ctx -> togglePlaybackDebug()))
+                        .then(literal("status").executes(ctx -> showPlaybackDebugStatus()))
+                        .then(literal("dump").executes(ctx -> dumpPlaybackDebugStatus())));
+    }
+
+    private static int setPlaybackDebug(boolean enabled) {
+        PlaybackRangeDebugRenderer.setEnabled(enabled);
+        feedback(Component.literal("播放范围可视化已" + (enabled ? "开启" : "关闭")));
+        return 1;
+    }
+
+    private static int togglePlaybackDebug() {
+        return setPlaybackDebug(PlaybackRangeDebugRenderer.toggle());
+    }
+
+    private static int showPlaybackDebugStatus() {
+        PlaybackRangeDebugRenderer.describe().stream().findFirst()
+                .ifPresent(line -> feedback(Component.literal(line)));
+        return 1;
+    }
+
+    private static int dumpPlaybackDebugStatus() {
+        PlaybackRangeDebugRenderer.describe().forEach(line -> feedback(Component.literal(line)));
+        return 1;
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> hologlassCommands() {

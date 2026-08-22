@@ -433,6 +433,11 @@ final class RealMp3RetainedRetryScenario implements BenchClientScenario {
         }
 
         @Override
+        protected void refreshDecodeDemand() {
+            setDecodeDemand(true);
+        }
+
+        @Override
         public boolean headphoneRouted() {
             return false;
         }

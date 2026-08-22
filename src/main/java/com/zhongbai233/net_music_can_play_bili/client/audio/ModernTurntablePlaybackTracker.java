@@ -14,6 +14,8 @@ public final class ModernTurntablePlaybackTracker {
     private static final long DUPLICATE_SUPPRESS_MILLIS = 1_500L;
     private static final ConcurrentHashMap<Object, ClientPlaybackSession> ACTIVE = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<SyncedMediaSound, Boolean> ACTIVE_SOUNDS = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<SyncedMediaSound, BlockPos> ACTIVE_SOUND_POSITIONS =
+            new ConcurrentHashMap<>();
 
     private ModernTurntablePlaybackTracker() {
     }
@@ -72,6 +74,9 @@ public final class ModernTurntablePlaybackTracker {
     public static void registerSound(SyncedMediaSound sound, BlockPos pos, String sessionId) {
         if (sound != null) {
             ACTIVE_SOUNDS.put(sound, Boolean.TRUE);
+            if (pos != null) {
+                ACTIVE_SOUND_POSITIONS.put(sound, AudioUtils.copyPos(pos));
+            }
             PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
             ClientPlaybackSession active = pos != null && parsedSessionId != null
                     ? ACTIVE.get(keyFor(pos, parsedSessionId))
@@ -88,6 +93,7 @@ public final class ModernTurntablePlaybackTracker {
     public static void unregisterSound(SyncedMediaSound sound) {
         if (sound != null) {
             ACTIVE_SOUNDS.remove(sound);
+            ACTIVE_SOUND_POSITIONS.remove(sound);
         }
     }
 
@@ -100,7 +106,26 @@ public final class ModernTurntablePlaybackTracker {
             }
         }
         ACTIVE_SOUNDS.clear();
+        ACTIVE_SOUND_POSITIONS.clear();
         clear();
+    }
+
+    public static void retireForDemandIdle(BlockPos pos, String sessionId) {
+        if (pos == null || PlaybackSessionId.parse(sessionId).isEmpty()) {
+            return;
+        }
+        Minecraft minecraft = Minecraft.getInstance();
+        for (SyncedMediaSound sound : ACTIVE_SOUNDS.keySet()) {
+            if (!sessionId.equals(sound.sessionId()) || !pos.equals(ACTIVE_SOUND_POSITIONS.get(sound))) {
+                continue;
+            }
+            ACTIVE_SOUNDS.remove(sound);
+            ACTIVE_SOUND_POSITIONS.remove(sound);
+            sound.stopForDemandIdle();
+            if (minecraft != null) {
+                minecraft.getSoundManager().stop(sound);
+            }
+        }
     }
 
     public static void finish(BlockPos pos, String sessionId) {
@@ -232,6 +257,7 @@ public final class ModernTurntablePlaybackTracker {
 
     private static void stopSound(SyncedMediaSound sound) {
         ACTIVE_SOUNDS.remove(sound);
+        ACTIVE_SOUND_POSITIONS.remove(sound);
         Minecraft minecraft = Minecraft.getInstance();
         Runnable stop = () -> {
             sound.stopFromTracker();

@@ -4,6 +4,9 @@ import java.util.UUID;
 
 /** Carrier-specific callbacks for the shared client media sync handler. */
 public interface ClientMediaSyncPolicy {
+    default ClientMediaPreparePolicy preparePolicy(ClientMediaSyncPayload payload) {
+        return null;
+    }
     boolean canHear(UUID sourceId, boolean headphoneRouted);
 
     void stop(UUID sourceId);

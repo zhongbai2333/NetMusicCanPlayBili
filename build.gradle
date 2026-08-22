@@ -156,7 +156,7 @@ neoForge {
             client()
 
             // Java 25 对 System.load 等 native 入口要求显式授权；FFmpeg/EAC3 解码器由本模组加载。
-            jvmArgument "--enable-native-access=${mod_id}"
+            jvmArgument '--enable-native-access=ALL-UNNAMED'
 
             def prop = { name, defaultValue -> providers.gradleProperty(name).orElse(defaultValue).get() }
             def jvmProp = { key, value -> jvmArgument "-D${key}=${value}" }
@@ -302,6 +302,10 @@ sourceSets.main.resources { srcDir 'src/generated/resources' }
 // 显式声明测试目录，确保 Gradle/Buildship 在多根工作区中稳定导入测试源码模型。
 sourceSets.test.java.setSrcDirs(['src/test/java'])
 sourceSets.test.resources.setSrcDirs(['src/test/resources'])
+// ModDev injects loader APIs (including Dist) directly into main's classpath rather than the
+// published NeoForge universal artifact. Tests compile against main bytecode, so they need the
+// same ABI-only classpath to inspect its annotations without javac "unknown enum constant" warnings.
+sourceSets.test.compileClasspath += sourceSets.main.compileClasspath
 // 云同步可能恢复 "SomeType 2.java" 之类冲突副本；它们不应成为第二份类型定义。
 sourceSets.main.java.exclude { details -> details.file.name ==~ /.* \d+\.java/ }
 sourceSets.test.java.exclude { details -> details.file.name ==~ /.* \d+\.java/ }
@@ -445,7 +449,7 @@ if (modBenchEnabled) {
         def benchProp = { name, defaultValue -> providers.gradleProperty(name).orElse(defaultValue).get() }
         ['benchClient', 'benchRemoteClient'].each { runName ->
             neoForge.runs.named(runName) {
-                jvmArgument "--enable-native-access=${mod_id}"
+                jvmArgument '--enable-native-access=ALL-UNNAMED'
                 sharedMediaRunProperties.each { spec ->
                     systemProperty spec.system, benchProp(spec.gradle, spec.fallback)
                 }

@@ -13,6 +13,10 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
 import com.zhongbai233.net_music_can_play_bili.media.sync.AudioStartupSync;
 import com.zhongbai233.net_music_can_play_bili.media.sync.MediaRequestToken;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioPlaybackDemandIndex;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
@@ -22,6 +26,11 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.UUID;
+import java.util.List;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.CancellableTaskFuture;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 
@@ -36,12 +45,17 @@ public final class ModernTurntablePlaybackCoordinator {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final long AUDIO_PREPARE_TIMEOUT_SECONDS =
             ClientMediaPrepareProperties.settings().modernPrepareTimeoutSeconds();
+    private static final long INDEXED_IDLE_GRACE_MILLIS = 1_500L;
     private static final AtomicLong COMPAT_PREPARE_SEQUENCE = new AtomicLong();
     private static final ConcurrentHashMap<BlockPos, Long> LATEST_COMPAT_PREPARE = new ConcurrentHashMap<>();
         private static final ConcurrentHashMap<BlockPos, CancellableTaskFuture<ClientMediaPreparer.PreparedMedia>> COMPAT_PREPARES =
             new ConcurrentHashMap<>();
     private static final ScheduledExecutorService VIDEO_RESYNC_EXECUTOR = Executors.newSingleThreadScheduledExecutor(
             NetMusicThreadFactory.daemon("ModernTurntableVideoResync"));
+    private static final AudioPlaybackDemandIndex<ClientPlaybackCommand> INDEXED_DEMAND =
+            new AudioPlaybackDemandIndex<>();
+    private static final ConcurrentHashMap<PlaybackSourceId,
+            CancellableTaskFuture<ClientMediaPreparer.PreparedMedia>> INDEXED_PREPARES = new ConcurrentHashMap<>();
 
     private ModernTurntablePlaybackCoordinator() {
     }
@@ -53,6 +67,9 @@ public final class ModernTurntablePlaybackCoordinator {
             }
         });
         LATEST_COMPAT_PREPARE.clear();
+        INDEXED_PREPARES.values().forEach(prepare -> prepare.cancel(true));
+        INDEXED_PREPARES.clear();
+        INDEXED_DEMAND.clear();
     }
 
     /** 普通唱片机的 B站选曲兼容入口；Mixin 只负责把协议消息冻结成命令。 */
@@ -134,16 +151,29 @@ public final class ModernTurntablePlaybackCoordinator {
         if (command.hasSession()
                 && !ModernTurntablePlaybackTracker.tryStart(sourcePos, command.sessionId(),
                         command.remainingSeconds())) {
+            announceIndexed(command);
             syncVideo(command);
+            tickIndexedPlaybackDemand();
             return;
         }
         if (command.hasSession()) {
             bindSessionResources(sourcePos, command.sessionId());
         }
         syncVideo(command);
+        announceIndexed(command);
+        tickIndexedPlaybackDemand();
+    }
+
+    private static void queueModernPrepare(ClientPlaybackCommand command, BlockPos sourcePos) {
+        Minecraft minecraft = Minecraft.getInstance();
         long prepareStartedNanos = System.nanoTime();
         CancellableTaskFuture<ClientMediaPreparer.PreparedMedia> prepare = ClientMediaPreparer.prepareAudioOnlyAsync(
-            command.rawUrl(), command.playUrl(), command.songName(), true);
+                command.rawUrl(), command.playUrl(), command.songName(), true);
+        PlaybackSourceId sourceId = sourceId(command);
+        CancellableTaskFuture<ClientMediaPreparer.PreparedMedia> replaced = INDEXED_PREPARES.put(sourceId, prepare);
+        if (replaced != null) {
+            replaced.cancel(true);
+        }
         var completion = prepare.completeOnTimeout(null, AUDIO_PREPARE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         if (command.hasSession() && !ModernTurntablePlaybackTracker.onCancel(sourcePos, command.sessionId(),
             () -> prepare.cancel(true))) {
@@ -151,6 +181,7 @@ public final class ModernTurntablePlaybackCoordinator {
             return;
         }
         completion.whenComplete((prepared, error) -> {
+            INDEXED_PREPARES.remove(sourceId, prepare);
             if (prepared == null || error != null) {
             prepare.cancelWorker();
             }
@@ -161,6 +192,12 @@ public final class ModernTurntablePlaybackCoordinator {
 
     private static void finishModernPrepare(ClientPlaybackCommand command, BlockPos sourcePos,
             long prepareStartedNanos, ClientMediaPreparer.PreparedMedia prepared, Throwable error) {
+        AudioPlaybackDemandIndex.Snapshot<ClientPlaybackCommand> demand = INDEXED_DEMAND
+                .snapshot(sourceId(command)).orElse(null);
+        if (demand == null || demand.state() != AudioPlaybackDemandIndex.State.STARTING
+                || demand.endpointIds().isEmpty()) {
+            return;
+        }
         if (command.hasSession()
                 && !ModernTurntablePlaybackTracker.isActiveSession(sourcePos, command.sessionId())) {
             return;
@@ -179,6 +216,7 @@ public final class ModernTurntablePlaybackCoordinator {
             LOGGER.debug("现代唱片机确认纯视频媒体，跳过音频提交: pos={} session={} song='{}'",
                     sourcePos, command.sessionId(), command.songName());
             syncVideo(command);
+            removeIndexed(command);
             return;
         }
         long prepareMillis = TimeUnit.NANOSECONDS.toMillis(Math.max(0L, System.nanoTime() - prepareStartedNanos));
@@ -219,10 +257,11 @@ public final class ModernTurntablePlaybackCoordinator {
         boolean submitted = SyncedMediaPlaybackLauncher.play(launch, command.songName(),
                 (url, lyricRecord) -> new ModernTurntableSound(sourcePos, url,
                         command.remainingSeconds(), lyricRecord, command.sessionId(), launchElapsedMillis,
-                        command.rawUrl(), command.songName(), command.durationMillis()),
+                        command.rawUrl(), command.songName(), command.durationMillis(), sourceId(command)),
                 false);
         if (!submitted) {
             ModernTurntablePlaybackTracker.finish(sourcePos, command.sessionId());
+            removeIndexed(command);
             return;
         }
         // 初次 play() 早于异步音频准备，视频会因 UNKNOWN AudioPresence 暂停 admission。
@@ -241,8 +280,19 @@ public final class ModernTurntablePlaybackCoordinator {
         if (command.hasSession()
                 && !ModernTurntablePlaybackTracker.tryStart(sourcePos, command.sessionId(),
                         command.remainingSeconds())) {
+            announceIndexed(command);
+            tickIndexedPlaybackDemand();
             return;
         }
+        if (command.hasSession()) {
+            bindSessionResources(sourcePos, command.sessionId());
+        }
+        syncVideo(command);
+        announceIndexed(command);
+        tickIndexedPlaybackDemand();
+    }
+
+    private static void launchLive(ClientPlaybackCommand command, BlockPos sourcePos, String roomId) {
         SyncedMediaPlaybackLauncher.LaunchResult launch;
         try {
             launch = SyncedMediaPlaybackLauncher.fromPrepared(command.rawUrl(), command.songName(),
@@ -274,10 +324,61 @@ public final class ModernTurntablePlaybackCoordinator {
         LOGGER.debug("直播机客户端接管播放: room={} session={} pos={}", roomId, command.sessionId(), sourcePos);
         boolean submitted = SyncedMediaPlaybackLauncher.play(launch, command.songName(),
                 (url, ignoredLyric) -> new LiveStreamerSound(sourcePos, url, command.remainingSeconds(),
-                        command.sessionId()),
+                        command.sessionId(), sourceId(command)),
                 false);
         if (!submitted) {
             ModernTurntablePlaybackTracker.finish(sourcePos, command.sessionId());
+            removeIndexed(command);
+        }
+    }
+
+    /** Client-tick entry: metadata remains idle until an indexed endpoint is actually audible. */
+    public static void tickIndexedPlaybackDemand() {
+        for (AudioPlaybackDemandIndex.SourceSnapshot<ClientPlaybackCommand> sourceSnapshot
+                : INDEXED_DEMAND.snapshots()) {
+            ClientPlaybackCommand command = sourceSnapshot.playback().payload();
+            PlaybackSessionId sessionId = sourceSnapshot.playback().sessionId();
+            BlockPos pos = sourcePos(command);
+            if (!ModernTurntablePlaybackTracker.isActiveSession(pos, sessionId.value())) {
+                LOGGER.debug("索引播放移除非活动会话: source={} pos={} session={} state={}",
+                        sourceSnapshot.sourceId(), pos, sessionId, sourceSnapshot.playback().state());
+                INDEXED_DEMAND.remove(sourceSnapshot.sourceId(), sessionId);
+                continue;
+            }
+            Set<UUID> demands = new HashSet<>(ClientAudioEndpointIndex.audibleDemands(sourceSnapshot.sourceId()));
+            demands.addAll(ClientAudioEndpointIndex.anticipatedDemands(sourceSnapshot.sourceId()));
+            if (ClientAudioOutputRegistry.hasPreparationDemand(pos, sourceSnapshot.sourceId(),
+                    sessionId.value())) {
+                demands.add(sourceSnapshot.sourceId().value());
+            }
+            INDEXED_DEMAND.updateDemand(sourceSnapshot.sourceId(), sessionId, demands,
+                    System.currentTimeMillis());
+            if (INDEXED_DEMAND.claimStopAfterIdle(sourceSnapshot.sourceId(), sessionId,
+                    System.currentTimeMillis(), INDEXED_IDLE_GRACE_MILLIS)) {
+                LOGGER.debug("索引播放范围外退役: source={} pos={} session={} demands={}",
+                        sourceSnapshot.sourceId(), pos, sessionId, demands.size());
+                CancellableTaskFuture<ClientMediaPreparer.PreparedMedia> prepare =
+                        INDEXED_PREPARES.remove(sourceSnapshot.sourceId());
+                if (prepare != null) {
+                    prepare.cancel(true);
+                }
+                ModernTurntablePlaybackTracker.retireForDemandIdle(pos, sessionId.value());
+                continue;
+            }
+            ClientPlaybackCommand admitted = INDEXED_DEMAND.claimStart(sourceSnapshot.sourceId(), sessionId)
+                    .orElse(null);
+            if (admitted == null) {
+                continue;
+            }
+            LOGGER.debug("索引播放需求重启: source={} pos={} session={} demands={}",
+                    sourceSnapshot.sourceId(), pos, sessionId, demands.size());
+            String roomId = com.zhongbai233.net_music_can_play_bili.bili.BiliLiveRoomInput.roomIdFromPlaceholder(
+                    PlaybackSync.strip(admitted.playUrl()));
+            if (!roomId.isEmpty()) {
+                launchLive(admitted, sourcePos(admitted), roomId);
+            } else {
+                queueModernPrepare(admitted, sourcePos(admitted));
+            }
         }
     }
 
@@ -380,6 +481,7 @@ public final class ModernTurntablePlaybackCoordinator {
             return;
         }
         ModernTurntablePlaybackTracker.finish(sourcePos, sessionId);
+        removeIndexed(sourcePos, sessionId);
     }
 
     private static void bindSessionResources(BlockPos sourcePos, String sessionId) {
@@ -419,5 +521,69 @@ public final class ModernTurntablePlaybackCoordinator {
 
     private static BlockPos sourcePos(ClientPlaybackCommand command) {
         return new BlockPos(command.sourceX(), command.sourceY(), command.sourceZ());
+    }
+
+    private static void announceIndexed(ClientPlaybackCommand command) {
+        PlaybackSessionId sessionId = command.playbackSessionId().orElse(null);
+        if (sessionId != null) {
+            INDEXED_DEMAND.announce(sourceId(command), sessionId, command);
+        }
+    }
+
+    static void markIndexedStreamPlaying(BlockPos pos, PlaybackSourceId sourceId, String sessionId) {
+        PlaybackSessionId parsed = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (parsed == null) {
+            return;
+        }
+        if (sourceId != null && INDEXED_DEMAND.markPlaying(sourceId, parsed)) {
+            LOGGER.debug("索引播放流已就绪: source={} pos={} session={}", sourceId, pos, parsed);
+            return;
+        }
+        INDEXED_DEMAND.snapshots().stream()
+                .filter(snapshot -> snapshot.playback().sessionId().equals(parsed)
+                        && sourcePos(snapshot.playback().payload()).equals(pos))
+                .findFirst()
+                .ifPresentOrElse(snapshot -> {
+                    boolean marked = INDEXED_DEMAND.markPlaying(snapshot.sourceId(), parsed);
+                    LOGGER.debug("索引播放流按位置就绪: source={} pos={} session={} marked={}",
+                            snapshot.sourceId(), pos, parsed, marked);
+                }, () -> LOGGER.debug("索引播放迟到流被拒绝: source={} pos={} session={}", sourceId, pos, parsed));
+    }
+
+    private static void removeIndexed(ClientPlaybackCommand command) {
+        command.playbackSessionId().ifPresent(sessionId ->
+                INDEXED_DEMAND.remove(sourceId(command), sessionId));
+    }
+
+    private static void removeIndexed(BlockPos pos, String sessionId) {
+        PlaybackSessionId parsed = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (parsed == null) {
+            return;
+        }
+        INDEXED_DEMAND.snapshots().stream()
+                .filter(snapshot -> snapshot.playback().sessionId().equals(parsed)
+                        && sourcePos(snapshot.playback().payload()).equals(pos))
+                .forEach(snapshot -> INDEXED_DEMAND.remove(snapshot.sourceId(), parsed));
+    }
+
+    private static PlaybackSourceId sourceId(ClientPlaybackCommand command) {
+        return PlaybackSync.parsePlaybackSourceId(command.playUrl()).orElseGet(() -> PlaybackSourceId.of(
+                UUID.nameUUIDFromBytes(("legacy-block:" + command.sourceX() + ':' + command.sourceY() + ':'
+                        + command.sourceZ()).getBytes(StandardCharsets.UTF_8))));
+    }
+
+    public static List<IndexedDemandDebug> indexedDemandDebugSnapshots() {
+        return INDEXED_DEMAND.snapshots().stream().map(snapshot -> {
+            ClientPlaybackCommand command = snapshot.playback().payload();
+            BlockPos pos = sourcePos(command);
+            return new IndexedDemandDebug(snapshot.sourceId(), snapshot.playback().sessionId(), pos,
+                    snapshot.playback().state(), snapshot.playback().endpointIds().size(),
+                    INDEXED_PREPARES.containsKey(snapshot.sourceId()), ClientAudioOutputPolicy.volume(pos));
+        }).toList();
+    }
+
+    public record IndexedDemandDebug(PlaybackSourceId sourceId, PlaybackSessionId sessionId,
+            BlockPos sourcePos, AudioPlaybackDemandIndex.State state, int demandCount,
+            boolean preparingUrl, float volume) {
     }
 }

@@ -3,6 +3,9 @@ package com.zhongbai233.net_music_can_play_bili.client.audio;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackRuntimeProperties;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackPresentationEnvelope;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
@@ -28,19 +31,29 @@ public class LiveStreamerSound extends SyncedMediaSound {
             PlaybackRuntimeProperties.watchdog().liveStallTicks();
 
     private final BlockPos pos;
+    private final PlaybackSourceId sourceId;
     private volatile int streamReadyTick = -1;
     private int lastAudioProgressTick = -1;
     private long lastObservedAudioMillis = -1L;
+    private final PlaybackPresentationEnvelope presentationEnvelope = new PlaybackPresentationEnvelope();
     private boolean sessionFinished;
 
     public LiveStreamerSound(BlockPos pos, URL streamUrl, int timeSecond, String sessionId) {
+        this(pos, streamUrl, timeSecond, sessionId,
+                PlaybackSync.parsePlaybackSourceId(streamUrl.toString()).orElse(null));
+    }
+
+    public LiveStreamerSound(BlockPos pos, URL streamUrl, int timeSecond, String sessionId,
+            PlaybackSourceId sourceId) {
         super(streamUrl, timeSecond, null, sessionId, 0L);
         this.pos = pos;
+        this.sourceId = sourceId;
         this.x = pos.getX() + 0.5D;
         this.y = pos.getY() + 0.5D;
         this.z = pos.getZ() + 0.5D;
-        this.volume = 4.0F;
+        this.volume = 0.0F;
         ModernTurntablePlaybackTracker.registerSound(this, pos, sessionId());
+        refreshDecodeDemand();
     }
 
     @Override
@@ -55,7 +68,11 @@ public class LiveStreamerSound extends SyncedMediaSound {
         LiveStreamerBlockEntity streamer = level.getBlockEntity(pos) instanceof LiveStreamerBlockEntity live
                 ? live
                 : null;
-        this.volume = 4.0F * (streamer != null ? streamer.getVolume() : 1.0F);
+        float configuredVolume = 4.0F * (streamer != null ? streamer.getVolume() : 1.0F);
+        boolean audible = ClientAudioOutputRegistry.hasAudioDemand(pos, sourceId, sessionId());
+        this.volume = configuredVolume
+                * presentationEnvelope.gain(streamReadyTick >= 0 && audible, System.nanoTime());
+        refreshDecodeDemand();
 
         if (!ModernTurntablePlaybackTracker.isCurrent(pos, sessionId())) {
             stopAndFinish();
@@ -66,7 +83,7 @@ public class LiveStreamerSound extends SyncedMediaSound {
             stopAndFinish();
             return;
         }
-        if (tick > BLOCK_STATE_GRACE_TICKS && (streamer == null || !streamer.isPlaying())) {
+        if (tick > BLOCK_STATE_GRACE_TICKS && !fixedSourceAvailable(streamer)) {
             stopAndFinish();
             return;
         }
@@ -91,6 +108,11 @@ public class LiveStreamerSound extends SyncedMediaSound {
                         random.nextInt(3));
             }
         }
+    }
+
+    @Override
+    protected void refreshDecodeDemand() {
+        setDecodeDemand(ClientAudioOutputRegistry.hasPreparationDemand(pos, sourceId, sessionId()));
     }
 
     /**
@@ -131,9 +153,15 @@ public class LiveStreamerSound extends SyncedMediaSound {
 
     @Override
     protected void onStreamReady() {
+        ModernTurntablePlaybackCoordinator.markIndexedStreamPlaying(pos, sourceId, sessionId());
         ModernTurntablePlaybackTracker.markStreamStarted(pos, sessionId());
         streamReadyTick = tick;
         lastAudioProgressTick = tick;
+    }
+
+    @Override
+    protected void onDemandIdle() {
+        ModernTurntablePlaybackTracker.unregisterSound(this);
     }
 
     @Override
@@ -144,6 +172,11 @@ public class LiveStreamerSound extends SyncedMediaSound {
             finishSession();
             stop();
         });
+    }
+
+    private boolean fixedSourceAvailable(LiveStreamerBlockEntity streamer) {
+        return streamer != null ? streamer.isPlaying()
+                : sourceId != null && ClientAudioEndpointIndex.sourcePosition(sourceId) != null;
     }
 
     @Override
