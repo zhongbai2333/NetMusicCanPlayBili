@@ -11,19 +11,14 @@ public final class ProjectorScreenBounds {
     private ProjectorScreenBounds() {
     }
 
-    /**
-     * 计算旋转后投影四边形的世界坐标 AABB，并包含投影仪方块本身。
-     */
+    /** 计算旋转后真实投影四边形的世界坐标 AABB。 */
     public static AABB aroundBlock(BlockPos blockPos, double offsetX, double height, double offsetZ,
             double yawDegrees, double pitchDegrees, double scale, double aspect, double margin) {
         double centerX = blockPos.getX() + 0.5D + offsetX;
         double centerY = blockPos.getY() + height;
         double centerZ = blockPos.getZ() + 0.5D + offsetZ;
-        ProjectorScreenGeometry.Bounds bounds = ProjectorScreenGeometry
-            .aroundCenter(centerX, centerY, centerZ, yawDegrees, pitchDegrees, scale, aspect, margin)
-            .include(blockPos.getX(), blockPos.getY(), blockPos.getZ(),
-                blockPos.getX() + 1.0D, blockPos.getY() + 1.0D, blockPos.getZ() + 1.0D);
-        return toAabb(bounds);
+        return toAabb(ProjectorScreenGeometry.aroundCenter(
+                centerX, centerY, centerZ, yawDegrees, pitchDegrees, scale, aspect, margin));
     }
 
     /** 计算以给定世界坐标为中心的旋转投影四边形 AABB。 */

@@ -404,6 +404,7 @@ Pad 最多保存 64 个媒体和 128 个点位，点位触发半径可设为 1�
 - `net_music_can_play_bili.audit.sources`
 - `net_music_can_play_bili.pad.refresh`
 - `net_music_can_play_bili.whitelist.manage`
+- `net_music_can_play_bili.control_console.admin`（中控台管理员；原版 OP2 及以上始终放行）
 
 公网服务器建议启用链接白名单，并通过举报与活跃媒体源审计管理玩家播放的内容。
 

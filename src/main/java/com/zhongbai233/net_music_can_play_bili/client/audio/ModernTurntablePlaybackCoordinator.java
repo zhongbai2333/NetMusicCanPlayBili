@@ -22,8 +22,6 @@ import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
 
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.nio.charset.StandardCharsets;
@@ -32,7 +30,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.List;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.CancellableTaskFuture;
-import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 
 /**
  * 现代唱片机客户端播放命令的唯一编排入口。
@@ -50,8 +47,6 @@ public final class ModernTurntablePlaybackCoordinator {
     private static final ConcurrentHashMap<BlockPos, Long> LATEST_COMPAT_PREPARE = new ConcurrentHashMap<>();
         private static final ConcurrentHashMap<BlockPos, CancellableTaskFuture<ClientMediaPreparer.PreparedMedia>> COMPAT_PREPARES =
             new ConcurrentHashMap<>();
-    private static final ScheduledExecutorService VIDEO_RESYNC_EXECUTOR = Executors.newSingleThreadScheduledExecutor(
-            NetMusicThreadFactory.daemon("ModernTurntableVideoResync"));
     private static final AudioPlaybackDemandIndex<ClientPlaybackCommand> INDEXED_DEMAND =
             new AudioPlaybackDemandIndex<>();
     private static final ConcurrentHashMap<PlaybackSourceId,
@@ -209,9 +204,6 @@ public final class ModernTurntablePlaybackCoordinator {
         if (prepared == null) {
             prepared = new ClientMediaPreparer.PreparedMedia(command.playUrl(), null);
         }
-        if (command.hasSession()) {
-            ModernTurntableVideoClient.publishAudioPresence(command.sessionId(), prepared.audioPresence());
-        }
         if (prepared.audioPresence() == ClientMediaPreparer.AudioPresence.ABSENT) {
             LOGGER.debug("现代唱片机确认纯视频媒体，跳过音频提交: pos={} session={} song='{}'",
                     sourcePos, command.sessionId(), command.songName());
@@ -264,11 +256,9 @@ public final class ModernTurntablePlaybackCoordinator {
             removeIndexed(command);
             return;
         }
-        // 初次 play() 早于异步音频准备，视频会因 UNKNOWN AudioPresence 暂停 admission。
-        // 音频已经提交后重新同步一次，允许视频在匹配的 audio timeline 就绪后启动。
+        // 视频准入由投影面可见性独立驱动，不等待 OpenAL 音频时间线。
         if (command.hasSession()) {
             syncVideo(command);
-            scheduleVideoResync(command);
         }
     }
 
@@ -415,23 +405,6 @@ public final class ModernTurntablePlaybackCoordinator {
 
     private static void syncVideo(ClientPlaybackCommand command) {
         ModernTurntableVideoClient.syncFromPlayback(command.rawUrl(), sourcePos(command), command.syncMetadata());
-    }
-
-    private static void scheduleVideoResync(ClientPlaybackCommand command) {
-        long[] delaysMillis = { 100L, 250L, 500L, 1_000L };
-        for (long delayMillis : delaysMillis) {
-            VIDEO_RESYNC_EXECUTOR.schedule(() -> {
-                Minecraft minecraft = Minecraft.getInstance();
-                if (!ModernTurntablePlaybackTracker.isActiveSession(sourcePos(command), command.sessionId())) {
-                    return;
-                }
-                minecraft.execute(() -> {
-                    if (ModernTurntablePlaybackTracker.isActiveSession(sourcePos(command), command.sessionId())) {
-                        syncVideo(command);
-                    }
-                });
-            }, delayMillis, TimeUnit.MILLISECONDS);
-        }
     }
 
     private static void loadLyricsAsync(ClientPlaybackCommand command) {

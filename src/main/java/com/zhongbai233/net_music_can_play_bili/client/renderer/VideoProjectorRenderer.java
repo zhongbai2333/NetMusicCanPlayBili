@@ -125,8 +125,8 @@ public class VideoProjectorRenderer
         if (!state.visible || state.linkedPos == null || state.projectorPos == null) {
             return;
         }
-        // submit 只会在 BER 通过引擎视锥/距离调度后执行；将这个逐帧事实与
-        // extractRenderState 中登记的持久 BER 管理状态分开，供离屏暂停使用。
+        // BER 提交先确认真实屏幕 AABB 进入视锥，再以 VISUAL 遮挡形状复核屏幕采样点；
+        // 玻璃和非完整碰撞方块不会再像 COLLIDER 射线那样误挡可见视频。
         if (!state.hideVideoForPrivacy
                 && VideoBillboardPreview.isProjectorScreenPotentiallyVisible(state.projectorPos)) {
             state.playbackSessionId.ifPresent(sessionId ->
@@ -165,11 +165,16 @@ public class VideoProjectorRenderer
 
     @Override
     public AABB getRenderBoundingBox(VideoProjectorBlockEntity blockEntity) {
+        VideoBillboardPreview.ProjectorFrameSnapshot frame =
+                VideoBillboardPreview.currentProjectorDisplayFrame(blockEntity.getBlockPos());
+        double aspect = frame.width() > 0 && frame.height() > 0
+                ? frame.width() / (double) frame.height() : 16.0D / 9.0D;
+        aspect = Math.min(RENDER_BOUNDS.maxAspect(), Math.max(1.0D / 8.0D, aspect));
         return ProjectorScreenBounds.aroundBlock(blockEntity.getBlockPos(),
                 blockEntity.getProjectionDistanceX(), blockEntity.getProjectionHeight(),
                 blockEntity.getProjectionDistanceZ(), blockEntity.getProjectionYaw(),
                 blockEntity.getProjectionPitch(), blockEntity.getProjectionScale(),
-                RENDER_BOUNDS.maxAspect(), RENDER_BOUNDS.margin());
+                aspect, RENDER_BOUNDS.margin());
     }
 
     @Override

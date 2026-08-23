@@ -937,7 +937,7 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
         output.putString(SONG_NAME_TAG, songName);
         output.putInt(DURATION_TAG, durationSeconds);
         output.putLong(STARTED_TIME_TAG, startedGameTime);
-        long elapsedTicks = level instanceof ServerLevel sl
+        long elapsedTicks = level instanceof ServerLevel
                 ? snapshotElapsedTicks()
                 : saveElapsedTicks(storedElapsedTicks());
         output.putInt(ELAPSED_SECONDS_TAG, (int) (elapsedTicks / 20L));

@@ -4,14 +4,10 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver.ResolvedVideoStream;
-import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
-import com.zhongbai233.net_music_can_play_bili.client.audio.ClientMediaPreparer;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.media.sync.ResolveGeneration;
-import com.zhongbai233.net_music_can_play_bili.client.sync.VideoAudioReadinessPolicy;
-import com.zhongbai233.net_music_can_play_bili.client.sync.VideoAudioPresenceRegistry;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
@@ -71,7 +67,6 @@ public final class ModernTurntableVideoClient {
             new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<PlaybackSessionId, VideoResolveRequestOwner<BlockPos>>
             PENDING_REQUEST_BY_SESSION = new ConcurrentHashMap<>();
-    private static final VideoAudioPresenceRegistry AUDIO_PRESENCE = new VideoAudioPresenceRegistry();
     private static final ConcurrentHashMap<PlaybackSessionId, String> LAST_DECISION_BY_SESSION =
             new ConcurrentHashMap<>();
     private static final AtomicReference<ResolveGeneration> REQUEST_SEQUENCE =
@@ -93,7 +88,6 @@ public final class ModernTurntableVideoClient {
         ACTIVE_QUALITY_CEILING_BY_SESSION.remove(key);
         ACTIVE_REQUEST_BY_SESSION.remove(key);
         cancelPendingRequest(key);
-        AUDIO_PRESENCE.forget(key);
         LAST_DECISION_BY_SESSION.remove(key);
         ACTIVE_SESSION_BY_TURNTABLE.entrySet().removeIf(entry -> key.equals(entry.getValue()));
         LATEST_SESSION_BY_TURNTABLE.entrySet().removeIf(entry -> key.equals(entry.getValue()));
@@ -111,7 +105,6 @@ public final class ModernTurntableVideoClient {
         LATEST_SESSION_BY_TURNTABLE.clear();
         ACTIVE_QUALITY_CEILING_BY_SESSION.clear();
         ACTIVE_REQUEST_BY_SESSION.clear();
-        AUDIO_PRESENCE.clear();
         LAST_DECISION_BY_SESSION.clear();
         CONTROL_CONSOLE_CONSUMERS.clear();
         CONTROL_CONSOLE_QUALITY.clear();
@@ -224,15 +217,6 @@ public final class ModernTurntableVideoClient {
         syncFromPlayback(rawUrl, turntablePos, sync, null);
     }
 
-    /** 发布客户端对当前媒体 session 的权威音频能力判定。 */
-    public static void publishAudioPresence(String sessionId, ClientMediaPreparer.AudioPresence presence) {
-        if (sessionId == null || sessionId.isBlank() || presence == null
-                || presence == ClientMediaPreparer.AudioPresence.UNKNOWN) {
-            return;
-        }
-        AUDIO_PRESENCE.publish(sessionId, presence);
-    }
-
     private static void syncFromPlayback(String rawUrl, BlockPos turntablePos, PlaybackSync.Metadata sync,
             List<VideoProjectorBlockEntity> explicitProjectors) {
         if (!VIDEO_PROPERTIES.enabled() || sync == null || !sync.hasSession()) {
@@ -286,16 +270,6 @@ public final class ModernTurntableVideoClient {
             .toList();
         List<BlockPos> consumerPositions = new ArrayList<>(projectorPositions);
         consumerPositions.addAll(consoleConsumers);
-        ClientMediaPreparer.AudioPresence audioPresence = AUDIO_PRESENCE.presence(playbackSessionId);
-        if (!audioGateAllowsVideo(turntablePos, sessionId, audioPresence)) {
-            // 这里只是 admission 尚未满足，不是 session 结束。stopIfSession/forgetSession 会删除
-            // 音频能力状态，使刚发布的 PRESENT 下一帧又退回 UNKNOWN，形成永久等待循环。
-            // 也不要停止已运行的同 session 视频：音频恢复/输出切换时 timeline 可能短暂不可见。
-            VideoBillboardPreview.beginPendingLoading(sessionId, consumerPositions);
-            logDecision(sessionId, "wait-audio-ready", turntablePos, sync.elapsedMillis(), 0, 0, 0L,
-                    "video waits until matching audio stream is ready");
-            return;
-        }
         long elapsedMillis = Math.max(0L, sync.elapsedMillis());
         int qualityCeiling = qualityCeiling(projectors, consoleConsumers);
         if (VideoBillboardPreview.hasTerminalFailure(sessionId)) {
@@ -576,25 +550,6 @@ public final class ModernTurntableVideoClient {
         boolean holographic = HolographicGlassesClient.handlesTurntable(turntablePos);
         boolean gui = VideoBillboardPreview.hasGuiConsumer(sessionId);
         return new LiveConsumers(List.copyOf(positions), holographic, gui);
-    }
-
-    private static boolean isAudioReady(BlockPos turntablePos, String sessionId) {
-        if (turntablePos == null || sessionId == null || sessionId.isBlank()) {
-            return false;
-        }
-        ClientAudioOutputRegistry.AudioTimeline timeline = ClientAudioOutputRegistry.getAudioTimeline(turntablePos);
-        String audioSessionId = timeline.audioSessionId();
-        if (audioSessionId != null && !audioSessionId.isBlank() && !audioSessionId.equals(sessionId)) {
-            return false;
-        }
-        return timeline.audibleMillis() >= 0L || timeline.fedMillis() >= 0L;
-    }
-
-    static boolean audioGateAllowsVideo(BlockPos turntablePos, String sessionId,
-            ClientMediaPreparer.AudioPresence presence) {
-        boolean validSession = turntablePos != null && sessionKey(sessionId) != null;
-        return validSession && VideoAudioReadinessPolicy.allowsVideo(presence,
-                presence == ClientMediaPreparer.AudioPresence.PRESENT && isAudioReady(turntablePos, sessionId));
     }
 
     private static void rememberActiveSession(BlockPos turntablePos, String sessionId) {

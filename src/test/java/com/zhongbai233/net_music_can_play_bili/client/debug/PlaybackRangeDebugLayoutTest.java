@@ -51,4 +51,55 @@ class PlaybackRangeDebugLayoutTest {
         assertEquals("过深", PlaybackRangeDebugRenderer.bufferHealth(2_100L));
         assertEquals(-1L, PlaybackRangeDebugRenderer.bufferLeadMillis(-1L, 10_000L));
     }
+
+    @Test
+    void panelBudgetKeepsCenterViewClearAtLargeGuiScale() {
+        assertEquals(211, DebugHudLayout.widthBudget(480, false, 5));
+        assertEquals(182, DebugHudLayout.widthBudget(480, true, 5));
+    }
+
+    @Test
+    void smallScreenPanelScalesWithoutRemovingContent() {
+        DebugHudLayout.Plan plan = DebugHudLayout.plan(480, 240, false, 430, 384, 5);
+
+        assertTrue(plan.visible());
+        assertTrue(plan.scale() < 1.0F);
+        assertTrue(plan.renderedWidth() <= Math.floor(480 * DebugHudLayout.SINGLE_PANEL_WIDTH_RATIO));
+        assertTrue(plan.renderedHeight() <= Math.floor(240 * DebugHudLayout.PANEL_HEIGHT_RATIO));
+    }
+
+    @Test
+    void proportionalScalePreservesPanelAspectRatio() {
+        DebugHudLayout.Plan plan = DebugHudLayout.plan(480, 240, true, 430, 332, 5);
+
+        assertEquals(430.0F / 332.0F,
+                plan.renderedWidth() / plan.renderedHeight(), 1.0e-5F);
+    }
+
+    @Test
+    void largeScreenRetainsNominalScale() {
+        DebugHudLayout.Plan plan = DebugHudLayout.plan(1920, 1080, false, 430, 384, 5);
+
+        assertEquals(1.0F, plan.scale(), 1.0e-6F);
+        assertEquals(430.0F, plan.renderedWidth(), 1.0e-6F);
+        assertEquals(384.0F, plan.renderedHeight(), 1.0e-6F);
+    }
+
+    @Test
+    void debugModesKeepHudAndWorldRangesIndependent() {
+        assertTrue(PlaybackDebugMode.UI.hudEnabled());
+        assertTrue(!PlaybackDebugMode.UI.rangeEnabled());
+        assertTrue(!PlaybackDebugMode.RANGE.hudEnabled());
+        assertTrue(PlaybackDebugMode.RANGE.rangeEnabled());
+        assertTrue(PlaybackDebugMode.BOTH.hudEnabled());
+        assertTrue(PlaybackDebugMode.BOTH.rangeEnabled());
+        assertTrue(!PlaybackDebugMode.OFF.enabled());
+    }
+
+    @Test
+    void videoSyncDeltaIsSignedAndHandlesMissingSamples() {
+        assertEquals("+250ms", VideoPlaybackDebugRenderer.signedDelta(1_250L, 1_000L));
+        assertEquals("-250ms", VideoPlaybackDebugRenderer.signedDelta(750L, 1_000L));
+        assertEquals("-", VideoPlaybackDebugRenderer.signedDelta(-1L, 1_000L));
+    }
 }

@@ -32,8 +32,8 @@ public final class NetMusicPermissions {
     public static final PermissionNode<Boolean> CONTROL_CONSOLE_ADMIN = booleanNode(
             "control_console.admin",
             "NetMusic Bili control console admin",
-            "允许绕过中控台 owner/accessMode 编辑限制并恢复无人认领的中控台。",
-            NetMusicPermissions::defaultOpLevelFour);
+            "允许绕过中控台 owner/accessMode 编辑限制并恢复无人认领的中控台；OP2 及以上始终允许。",
+            NetMusicPermissions::defaultOpLevelTwo);
 
     private NetMusicPermissions() {
     }
@@ -55,6 +55,32 @@ public final class NetMusicPermissions {
                 return true;
             }
             return PermissionAPI.getPermission(player, node);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * 中控台管理员判定。原版 OP2 及以上是不可被外部权限处理器否决的兜底，
+     * 非 OP 玩家仍可通过 NeoForge/LuckPerms 权限节点获得管理能力。
+     */
+    public static boolean canAdministerControlConsole(CommandSourceStack source) {
+        if (source == null) {
+            return false;
+        }
+        try {
+            ServerPlayer player = source.getPlayer();
+            if (player == null) {
+                return true;
+            }
+            boolean singleplayerOwner = isSingleplayerOwner(source, player);
+            boolean opLevelTwoOrHigher = hasVanillaPermission(player, PermissionLevel.GAMEMASTERS);
+            if (ControlConsolePermissionPolicy.grantsAdministrator(
+                    singleplayerOwner, opLevelTwoOrHigher, false)) {
+                return true;
+            }
+            return ControlConsolePermissionPolicy.grantsAdministrator(
+                    false, false, PermissionAPI.getPermission(player, CONTROL_CONSOLE_ADMIN));
         } catch (Exception ignored) {
             return false;
         }

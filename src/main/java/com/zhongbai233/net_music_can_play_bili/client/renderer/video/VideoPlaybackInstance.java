@@ -30,7 +30,6 @@ import java.util.concurrent.atomic.AtomicLong;
 final class VideoPlaybackInstance {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final VideoPipelineProperties.Timing TIMING = VideoPipelineProperties.timing();
-    private static final VideoPipelineProperties.Offscreen OFFSCREEN = VideoPipelineProperties.offscreen();
     private static final VideoPipelineProperties.Presentation PRESENTATION = VideoPipelineProperties.presentation();
     /**
      * 可选视频相位补偿。默认不补偿，避免掩盖 OpenAL 音频 pacing 问题；需要按设备/驱动微调时再通过
@@ -46,7 +45,6 @@ final class VideoPlaybackInstance {
     private static final long DECODER_RESTART_CLOSE_TIMEOUT_MILLIS = TIMING.decoderRestartCloseTimeoutMillis();
     private static final long FIRST_FRAME_TIMEOUT_MILLIS = TIMING.firstFrameTimeoutMillis();
     private static final int MAX_FIRST_FRAME_RECOVERY_ATTEMPTS = TIMING.firstFrameRecoveryAttempts();
-    private static final boolean OFFSCREEN_PAUSE_DECODE = OFFSCREEN.pauseDecode();
     volatile int targetWidth;
     volatile int targetHeight;
     private final int fps;
@@ -87,6 +85,7 @@ final class VideoPlaybackInstance {
     volatile long lastVisibleNanoTime;
     volatile long offscreenSinceNanoTime;
     private volatile long runtimeLagSinceNanoTime;
+    private volatile boolean visualSyncSuspended;
     private volatile long lastRuntimeLagRestartNanoTime;
     volatile boolean restartInProgress;
     volatile VideoDecoderRestartState restartState = VideoDecoderRestartState.ACTIVE;
@@ -174,6 +173,7 @@ final class VideoPlaybackInstance {
         decodeAdmissionGranted = immediatelyVisible;
         initialDecodeWorkerStarted = false;
         loggedOffscreenPause = false;
+        visualSyncSuspended = !immediatelyVisible;
         networkFailure = false;
         terminalFailure = false;
         networkFailureNotified = false;
@@ -251,10 +251,11 @@ final class VideoPlaybackInstance {
 
     void pumpUploadOnRenderThread() {
         lastUploadPumpNanoTime = System.nanoTime();
-        if (VideoRestartSuppressionPolicy.shouldPauseOffscreen(liveSource, OFFSCREEN_PAUSE_DECODE)
-                && candidateDecodeRunner.isOffscreenPauseActive()) {
+        if (!visualSyncActive()) {
+            suspendVisualSync();
             return;
         }
+        visualSyncSuspended = false;
         if (!running && frameQueue.isEmpty()) {
             return;
         }
@@ -360,8 +361,8 @@ final class VideoPlaybackInstance {
     }
 
     private void maybeRestartForRuntimeLag() {
-        if (!presentation.restartAllowed() || !hasFrame || !hasVideoConsumer()
-                || RUNTIME_LAG_RESTART_MILLIS <= 0L) {
+        if (!visualSyncActive() || !presentation.restartAllowed() || !hasFrame
+                || !hasVideoConsumer() || RUNTIME_LAG_RESTART_MILLIS <= 0L) {
             runtimeLagSinceNanoTime = 0L;
             return;
         }
@@ -920,6 +921,23 @@ final class VideoPlaybackInstance {
         long baseOffsetMillis = Math.max(startOffsetMillis, decoderStartOffsetMillis);
         long value = Math.max(0L, baseOffsetMillis + latestPts / 1_000_000L);
         return totalMillis > 0L ? Math.min(totalMillis, value) : value;
+    }
+
+    boolean visualSyncActive() {
+        return VideoVisualSyncPolicy.active(running, terminalFailure, prewarmVisible,
+                candidateDecodeRunner.isOffscreenPauseActive());
+    }
+
+    private void suspendVisualSync() {
+        runtimeLagSinceNanoTime = 0L;
+        if (!visualSyncSuspended) {
+            visualSyncSuspended = true;
+            performanceMonitor.resetSyncDriftWindow();
+        }
+    }
+
+    boolean visualSyncActiveForBench() {
+        return visualSyncActive();
     }
 
     long generationForBench() {

@@ -12,9 +12,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.ClipContext;
-import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import org.joml.Matrix4fStack;
@@ -338,10 +335,14 @@ abstract class VideoBillboardQuadSupport extends VideoBillboardState {
         double centerY = pos.getY() + projector.getProjectionHeight();
         double centerZ = pos.getZ() + 0.5D + projector.getProjectionDistanceZ();
         Vec3 cameraPos = camera.position();
-        if (!isProjectorWithinRenderDistance(cameraPos, projector, centerX, centerY, centerZ, 16.0D / 9.0D)) {
+        VideoBillboardPreview.ProjectorFrameSnapshot frame =
+                VideoBillboardPreview.currentProjectorDisplayFrame(pos);
+        double aspect = frame.width() > 0 && frame.height() > 0
+                ? frame.width() / (double) frame.height() : 16.0D / 9.0D;
+        if (!isProjectorWithinRenderDistance(cameraPos, projector, centerX, centerY, centerZ, aspect)) {
             return false;
         }
-        for (Vec3 sample : projectorVisibilitySamples(projector, centerX, centerY, centerZ)) {
+        for (Vec3 sample : projectorVisibilitySamples(projector, centerX, centerY, centerZ, aspect)) {
             if (isScreenInView(camera, sample.x, sample.y, sample.z, dotThreshold)
                     && !isOccluded(minecraft, cameraPos, sample, pos)) {
                 return true;
@@ -359,10 +360,10 @@ abstract class VideoBillboardQuadSupport extends VideoBillboardState {
     }
 
     protected static List<Vec3> projectorVisibilitySamples(VideoProjectorBlockEntity projector,
-            double centerX, double centerY, double centerZ) {
+            double centerX, double centerY, double centerZ, double aspect) {
         float scale = Math.abs(projector.getProjectionScale());
         double halfHeight = HEIGHT * scale * 0.5D * VIEW_SAMPLE_EDGE_SCALE;
-        double halfWidth = halfHeight * 16.0D / 9.0D;
+        double halfWidth = halfHeight * Math.max(0.125D, Math.min(8.0D, aspect));
         double yawRad = Math.toRadians(projector.getProjectionYaw());
         double pitchRad = Math.toRadians(projector.getProjectionPitch());
         double rightX = Math.cos(yawRad);
@@ -386,15 +387,29 @@ abstract class VideoBillboardQuadSupport extends VideoBillboardState {
         if (!VIEW_OCCLUSION_CHECK || minecraft.level == null) {
             return false;
         }
-        BlockHitResult hit = minecraft.level.clip(new ClipContext(cameraPos, target,
-                ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, minecraft.player));
-        if (hit == null || hit.getType() == HitResult.Type.MISS) {
+        return VideoScreenOcclusion.isOccluded(minecraft.level, cameraPos, target, projectorPos);
+    }
+
+    protected static boolean isProjectorScreenPredictedVisible(Minecraft minecraft, Camera camera,
+            VideoProjectorBlockEntity projector) {
+        if (minecraft == null || camera == null || projector == null || minecraft.player == null) {
             return false;
         }
-        if (hit.getBlockPos().equals(projectorPos)) {
-            return false;
-        }
-        return hit.getLocation().distanceToSqr(cameraPos) + 1.0e-4D < target.distanceToSqr(cameraPos);
+        BlockPos pos = projector.getBlockPos();
+        double centerX = pos.getX() + 0.5D + projector.getProjectionDistanceX();
+        double centerY = pos.getY() + projector.getProjectionHeight();
+        double centerZ = pos.getZ() + 0.5D + projector.getProjectionDistanceZ();
+        var bounds = ProjectorScreenBounds.aroundCenter(centerX, centerY, centerZ,
+                projector.getProjectionYaw(), projector.getProjectionPitch(),
+                projector.getProjectionScale(), 16.0D / 9.0D, 0.0D);
+        Vec3 cameraPos = camera.position();
+        Vec3 velocity = minecraft.player.getDeltaMovement();
+        return VideoVisibilityTrendPredictor.shouldPrewarm(
+                cameraPos.x, cameraPos.y, cameraPos.z, velocity.x, velocity.y, velocity.z,
+                minecraft.player.getYRot(), minecraft.player.getXRot(),
+                minecraft.player.yRotO, minecraft.player.xRotO,
+                bounds.minX, bounds.minY, bounds.minZ, bounds.maxX, bounds.maxY, bounds.maxZ,
+                VISIBILITY_PROPERTIES.maxRenderDistance(), VIEW_DOT_THRESHOLD);
     }
 
     static double viewDotThreshold() {

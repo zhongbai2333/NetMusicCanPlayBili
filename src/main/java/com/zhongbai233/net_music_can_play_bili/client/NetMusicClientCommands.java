@@ -12,7 +12,9 @@ import com.zhongbai233.net_music_can_play_bili.client.pad.PadMapClientCache;
 import com.zhongbai233.net_music_can_play_bili.gui.HolographicScreenConfigTestScreen;
 import com.zhongbai233.net_music_can_play_bili.gui.VideoPlaceholderDebugScreen;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
+import com.zhongbai233.net_music_can_play_bili.client.debug.PlaybackDebugMode;
 import com.zhongbai233.net_music_can_play_bili.client.debug.PlaybackRangeDebugRenderer;
+import com.zhongbai233.net_music_can_play_bili.client.debug.VideoPlaybackDebugRenderer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
@@ -57,29 +59,124 @@ public final class NetMusicClientCommands {
                         .executes(ctx -> togglePlaybackDebug())
                         .then(literal("on").executes(ctx -> setPlaybackDebug(true)))
                         .then(literal("off").executes(ctx -> setPlaybackDebug(false)))
+                        .then(literal("ui").executes(ctx -> setPlaybackDebugMode(PlaybackDebugMode.UI)))
+                        .then(literal("range").executes(ctx -> setPlaybackDebugMode(PlaybackDebugMode.RANGE)))
+                        .then(literal("both").executes(ctx -> setPlaybackDebugMode(PlaybackDebugMode.BOTH)))
                         .then(literal("toggle").executes(ctx -> togglePlaybackDebug()))
                         .then(literal("status").executes(ctx -> showPlaybackDebugStatus()))
-                        .then(literal("dump").executes(ctx -> dumpPlaybackDebugStatus())));
+                        .then(literal("dump").executes(ctx -> dumpPlaybackDebugStatus()))
+                        .then(audioDebugCommands())
+                        .then(videoDebugCommands()));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> audioDebugCommands() {
+        return literal("audio")
+                .executes(ctx -> toggleAudioDebug())
+                .then(literal("on").executes(ctx -> setAudioDebug(true)))
+                .then(literal("off").executes(ctx -> setAudioDebug(false)))
+                .then(literal("ui").executes(ctx -> setAudioDebugMode(PlaybackDebugMode.UI)))
+                .then(literal("range").executes(ctx -> setAudioDebugMode(PlaybackDebugMode.RANGE)))
+                .then(literal("both").executes(ctx -> setAudioDebugMode(PlaybackDebugMode.BOTH)))
+                .then(literal("toggle").executes(ctx -> toggleAudioDebug()))
+                .then(literal("status").executes(ctx -> showAudioDebugStatus()))
+                .then(literal("dump").executes(ctx -> dumpAudioDebugStatus()));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> videoDebugCommands() {
+        return literal("video")
+                .executes(ctx -> toggleVideoDebug())
+                .then(literal("on").executes(ctx -> setVideoDebug(true)))
+                .then(literal("off").executes(ctx -> setVideoDebug(false)))
+                .then(literal("ui").executes(ctx -> setVideoDebugMode(PlaybackDebugMode.UI)))
+                .then(literal("range").executes(ctx -> setVideoDebugMode(PlaybackDebugMode.RANGE)))
+                .then(literal("both").executes(ctx -> setVideoDebugMode(PlaybackDebugMode.BOTH)))
+                .then(literal("toggle").executes(ctx -> toggleVideoDebug()))
+                .then(literal("status").executes(ctx -> showVideoDebugStatus()))
+                .then(literal("dump").executes(ctx -> dumpVideoDebugStatus()));
     }
 
     private static int setPlaybackDebug(boolean enabled) {
         PlaybackRangeDebugRenderer.setEnabled(enabled);
-        feedback(Component.literal("播放范围可视化已" + (enabled ? "开启" : "关闭")));
+        VideoPlaybackDebugRenderer.setEnabled(enabled);
+        feedback(Component.literal("音频与视频调试已" + (enabled ? "开启" : "关闭")));
+        return 1;
+    }
+
+    private static int setPlaybackDebugMode(PlaybackDebugMode mode) {
+        PlaybackRangeDebugRenderer.setMode(mode);
+        VideoPlaybackDebugRenderer.setMode(mode);
+        feedback(Component.literal("音频与视频调试模式：" + mode.name()));
         return 1;
     }
 
     private static int togglePlaybackDebug() {
-        return setPlaybackDebug(PlaybackRangeDebugRenderer.toggle());
+        return setPlaybackDebug(!(PlaybackRangeDebugRenderer.enabled()
+                && VideoPlaybackDebugRenderer.enabled()));
     }
 
     private static int showPlaybackDebugStatus() {
+        showAudioDebugStatus();
+        showVideoDebugStatus();
+        return 1;
+    }
+
+    private static int dumpPlaybackDebugStatus() {
+        dumpAudioDebugStatus();
+        dumpVideoDebugStatus();
+        return 1;
+    }
+
+    private static int setAudioDebug(boolean enabled) {
+        PlaybackRangeDebugRenderer.setEnabled(enabled);
+        feedback(Component.literal("音频范围调试已" + (enabled ? "开启" : "关闭")));
+        return 1;
+    }
+
+    private static int setAudioDebugMode(PlaybackDebugMode mode) {
+        PlaybackRangeDebugRenderer.setMode(mode);
+        feedback(Component.literal("音频调试模式：" + mode.name()));
+        return 1;
+    }
+
+    private static int toggleAudioDebug() {
+        return setAudioDebug(PlaybackRangeDebugRenderer.toggle());
+    }
+
+    private static int showAudioDebugStatus() {
         PlaybackRangeDebugRenderer.describe().stream().findFirst()
                 .ifPresent(line -> feedback(Component.literal(line)));
         return 1;
     }
 
-    private static int dumpPlaybackDebugStatus() {
+    private static int dumpAudioDebugStatus() {
         PlaybackRangeDebugRenderer.describe().forEach(line -> feedback(Component.literal(line)));
+        return 1;
+    }
+
+    private static int setVideoDebug(boolean enabled) {
+        VideoPlaybackDebugRenderer.setEnabled(enabled);
+        feedback(Component.literal("视频视锥与解码调试已" + (enabled ? "开启" : "关闭")));
+        return 1;
+    }
+
+    private static int setVideoDebugMode(PlaybackDebugMode mode) {
+        VideoPlaybackDebugRenderer.setMode(mode);
+        feedback(Component.literal("视频调试模式：" + mode.name()));
+        return 1;
+    }
+
+    private static int toggleVideoDebug() {
+        return setVideoDebug(VideoPlaybackDebugRenderer.toggle());
+    }
+
+    private static int showVideoDebugStatus() {
+        VideoPlaybackDebugRenderer.describe().stream().findFirst()
+                .ifPresent(line -> feedback(Component.literal(line)));
+        return 1;
+    }
+
+    private static int dumpVideoDebugStatus() {
+        VideoPlaybackDebugRenderer.describe().forEach(line -> feedback(Component.literal(line)));
         return 1;
     }
 

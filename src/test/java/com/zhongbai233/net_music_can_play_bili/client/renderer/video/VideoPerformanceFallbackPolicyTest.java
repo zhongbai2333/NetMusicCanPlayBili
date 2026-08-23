@@ -88,6 +88,21 @@ class VideoPerformanceFallbackPolicyTest {
         assertEquals(0L, snapshot.syncDriftGrowthMillis());
         assertEquals(0, snapshot.consecutiveDriftGrowthSamples());
     }
+    @Test
+    void offscreenSuspensionResetsDriftGrowthBeforeVisibleResume() {
+        VideoPerformanceMonitor monitor = new VideoPerformanceMonitor();
+        monitor.start(0L, 30, "videotoolbox");
+        monitor.recordSyncDriftMillis(100L);
+        monitor.recordSyncDriftMillis(200L);
+        monitor.resetSyncDriftWindow();
+        monitor.recordSyncDriftMillis(50L);
+
+        VideoPerformanceFallbackPolicy.Snapshot snapshot = monitor.snapshot(5_000_000_000L);
+        assertEquals(50L, snapshot.latestSyncDriftMillis());
+        assertEquals(0L, snapshot.syncDriftGrowthMillis());
+        assertEquals(0, snapshot.consecutiveDriftGrowthSamples());
+    }
+
 
     private static VideoPerformanceFallbackPolicy.Decision decide(
             VideoPerformanceFallbackPolicy.Snapshot snapshot, boolean av1, boolean h264, boolean locked) {

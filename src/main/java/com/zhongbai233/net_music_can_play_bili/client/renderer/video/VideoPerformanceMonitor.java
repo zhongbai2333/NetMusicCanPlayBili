@@ -110,6 +110,13 @@ public final class VideoPerformanceMonitor {
         }
         previousSyncDriftMagnitudeMillis = magnitude;
     }
+    public synchronized void resetSyncDriftWindow() {
+        firstSyncDriftMagnitudeMillis = Long.MIN_VALUE;
+        latestSyncDriftMillis = 0L;
+        previousSyncDriftMagnitudeMillis = Long.MIN_VALUE;
+        consecutiveDriftGrowthSamples = 0;
+    }
+
 
     /** Samples process-wide native counters at most twice per second. */
     public void sampleNativeResources(long nowNanos) {

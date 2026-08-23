@@ -148,6 +148,9 @@ final class VideoCandidateDecodeRunner {
                 if (frameIndex > 0L) {
                     waitForDecodeLead(frameIntervalNs, generation);
                 }
+                if (frameIndex > 0L && !owner.visualSyncActive()) {
+                    continue;
+                }
                 long waitStartNs = System.nanoTime();
                 boolean boundedAv1Probe = !candidateCommitted
                         && VideoStartupFallbackPolicy.requiresBoundedFirstFrameProbe(candidate);
@@ -364,8 +367,8 @@ final class VideoCandidateDecodeRunner {
     private void waitForDecodeLead(long frameIntervalNs, long generation) throws InterruptedException {
         long maxLeadNs = Math.max(frameIntervalNs * owner.frameQueue.capacity(),
                 VideoPipelineProperties.maxDecodeLeadMillis() * 1_000_000L);
-        while (owner.running && generation == owner.generation.get() && owner.frameQueue.isFull()
-                && owner.frameQueue.latestPtsNanos() - owner.playbackNanos() > maxLeadNs) {
+        while (owner.running && generation == owner.generation.get() && owner.visualSyncActive()
+                && owner.frameQueue.isFull() && owner.frameQueue.latestPtsNanos() - owner.playbackNanos() > maxLeadNs) {
             warnIfUploadPumpStalled();
             TimeUnit.MILLISECONDS.sleep(5L);
         }
@@ -373,6 +376,9 @@ final class VideoCandidateDecodeRunner {
 
     private void warnIfUploadPumpStalled() {
         long thresholdNs = VideoPipelineProperties.uploadPumpWarnMillis() * 1_000_000L;
+        if (!owner.visualSyncActive()) {
+            return;
+        }
         long idleNs = System.nanoTime() - owner.lastUploadPumpNanoTime;
         if (thresholdNs > 0L && owner.frameQueue.isFull() && idleNs > thresholdNs) {
             owner.lastUploadPumpNanoTime = System.nanoTime();

@@ -13,6 +13,7 @@ import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.docume
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElement;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleGeometryValidator;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleRangeMigration;
+import com.zhongbai233.net_music_can_play_bili.server.NetMusicPermissions;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -145,9 +146,7 @@ public final class ControlConsoleBlockEntity extends SyncedBlockEntity {
         if (player == null || !player.mayBuild() || isDocumentReadOnly()) {
             return false;
         }
-        boolean administrator = com.zhongbai233.net_music_can_play_bili.server.NetMusicPermissions.has(
-                player.createCommandSourceStack(),
-                com.zhongbai233.net_music_can_play_bili.server.NetMusicPermissions.CONTROL_CONSOLE_ADMIN);
+        boolean administrator = NetMusicPermissions.canAdministerControlConsole(player.createCommandSourceStack());
         return document.canEdit(player.getUUID(), administrator);
     }
 
@@ -157,9 +156,7 @@ public final class ControlConsoleBlockEntity extends SyncedBlockEntity {
         if (player == null || !player.mayBuild() || isDocumentReadOnly()) {
             return isDocumentReadOnly() ? ReplaceResult.READ_ONLY : ReplaceResult.REJECTED;
         }
-        boolean administrator = com.zhongbai233.net_music_can_play_bili.server.NetMusicPermissions.has(
-                player.createCommandSourceStack(),
-                com.zhongbai233.net_music_can_play_bili.server.NetMusicPermissions.CONTROL_CONSOLE_ADMIN);
+        boolean administrator = NetMusicPermissions.canAdministerControlConsole(player.createCommandSourceStack());
         if (!administrator && !player.getUUID().equals(document.ownerId())) {
             return ReplaceResult.REJECTED;
         }

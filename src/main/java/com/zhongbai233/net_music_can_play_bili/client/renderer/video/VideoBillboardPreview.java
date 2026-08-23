@@ -18,6 +18,7 @@ import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.Identifier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.AABB;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -46,6 +47,21 @@ import java.util.concurrent.ExecutionException;
  */
 @EventBusSubscriber(modid = NetMusicCanPlayBili.MODID, value = Dist.CLIENT)
 public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
+    public record VideoDebugSnapshot(String sessionId, boolean running, boolean failed,
+            boolean decodeAdmission, boolean prewarm, boolean offscreenPaused, boolean syncActive, boolean hasFrame,
+            long generation, String restartState, long mediaMillis, long queuedMediaMillis,
+            long expectedMediaMillis, long visualMillis, long pacingMillis,
+            int width, int height, int fps, String backend, List<ProjectorVideoDebugSnapshot> projectors) {
+        public VideoDebugSnapshot {
+            backend = backend == null || backend.isBlank() ? "unknown" : backend;
+            projectors = List.copyOf(projectors);
+        }
+    }
+
+    public record ProjectorVideoDebugSnapshot(BlockPos projectorPos, boolean berManaged,
+            boolean submittedByFrustum, boolean geometryVisible, boolean predictedVisible) {
+    }
+
     private static final double VIDEO_PREWARM_DOT_THRESHOLD =
             VideoPipelineProperties.offscreen().prewarmDotThreshold();
 
@@ -376,6 +392,57 @@ public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
                 instance.decoderStartOffsetMillisForBench(), instance.restartStateForBench(),
                 instance.prewarmVisibleForBench(), instance.offscreenPauseActiveForBench(), instance.hasFrame())
                 : BenchDecoderState.empty();
+    }
+
+    public static boolean isScreenAabbPredictedVisible(AABB bounds) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (bounds == null || minecraft.player == null || minecraft.level == null) {
+            return false;
+        }
+        Vec3 cameraPos = minecraft.gameRenderer.getMainCamera().position();
+        Vec3 velocity = minecraft.player.getDeltaMovement();
+        return VideoVisibilityTrendPredictor.shouldPrewarm(
+                cameraPos.x, cameraPos.y, cameraPos.z, velocity.x, velocity.y, velocity.z,
+                minecraft.player.getYRot(), minecraft.player.getXRot(),
+                minecraft.player.yRotO, minecraft.player.xRotO,
+                bounds.minX, bounds.minY, bounds.minZ, bounds.maxX, bounds.maxY, bounds.maxZ,
+                VISIBILITY_PROPERTIES.maxRenderDistance(), VIEW_DOT_THRESHOLD);
+    }
+
+    public static double maxRenderDistance() {
+        return VISIBILITY_PROPERTIES.maxRenderDistance();
+    }
+
+    public static List<VideoDebugSnapshot> videoDebugSnapshots() {
+        Minecraft minecraft = Minecraft.getInstance();
+        Camera camera = minecraft.gameRenderer.getMainCamera();
+        return SESSION_INSTANCES.instances().stream().map(instance -> {
+            List<ProjectorVideoDebugSnapshot> projectors = instance.consumers.projectors().stream().map(pos -> {
+                boolean berManaged = isProjectorRenderedByBer(pos);
+                boolean submitted = wasProjectorRecentlySubmittedByBer(instance.sessionId(), pos);
+                boolean geometryVisible = false;
+                boolean predicted = false;
+                if (minecraft.level != null
+                        && minecraft.level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector) {
+                    geometryVisible = isProjectorScreenRenderable(minecraft, camera, projector, VIEW_DOT_THRESHOLD);
+                    predicted = isProjectorScreenPredictedVisible(minecraft, camera, projector);
+                } else if (minecraft.level != null) {
+                    geometryVisible = submitted;
+                    predicted = com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleRenderer
+                            .isPredictivePrewarmActive(pos);
+                }
+                return new ProjectorVideoDebugSnapshot(pos, berManaged, submitted, geometryVisible, predicted);
+            }).toList();
+            VideoStatus status = instance.status();
+            MediaVideoTimeline timeline = instance.anchor.timeline();
+            return new VideoDebugSnapshot(instance.sessionId(), instance.isRunning(),
+                    instance.hasTerminalFailure(), instance.decodeAdmissionGranted, instance.prewarmVisible,
+                    instance.offscreenPauseActiveForBench(), instance.visualSyncActiveForBench(),
+                    instance.hasFrame(), instance.generationForBench(),
+                    instance.restartStateForBench(), instance.mediaMillis(), instance.queuedMediaMillis(),
+                    timeline.mediaMillis(), timeline.visualMillis(), timeline.pacingMillis(),
+                    status.width(), status.height(), status.fps(), status.backend(), projectors);
+        }).toList();
     }
 
     public static long uploadFrameOnClientThreadForBench(BenchUploadFormat format, byte[] frame,

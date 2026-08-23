@@ -191,7 +191,7 @@ public final class MP4PlaybackSyncManager {
     }
 
     public static int currentProgressPerMille(ServerPlayer owner, int fallback) {
-        if (owner == null || !(owner.level() instanceof ServerLevel serverLevel)) {
+        if (owner == null || !(owner.level() instanceof ServerLevel)) {
             return fallback;
         }
         ItemStack stack = MP4Item.findPlayableInInventory(owner);

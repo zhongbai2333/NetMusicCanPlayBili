@@ -833,6 +833,8 @@ public final class ControlConsoleRenderer
         runtime.prewarming = true;
         long now = System.currentTimeMillis();
         boolean hasVideoSurface = ControlConsoleVideoSurfacePolicy.hasEnabledScreen(document.elements());
+        boolean videoPrewarm = hasVideoSurface
+                && isVideoPrewarmPredicted(consolePos, document, minecraft);
         int videoQualityCeiling = document.elements().stream()
                 .filter(element -> element.enabled() && element.type() == ControlConsoleElement.Type.SCREEN)
                 .mapToInt(element -> com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media
@@ -841,18 +843,22 @@ public final class ControlConsoleRenderer
                     .ControlConsoleMediaSettings.videoQualityCeiling(0));
         if (document.sourceKind() == ControlConsoleDocument.SourceKind.LIVE_STREAMER) {
             ModernTurntableVideoClient.unregisterControlConsoleConsumer(consolePos);
-            if (hasVideoSurface) {
+            if (videoPrewarm) {
                 LiveStreamerVideoClient.registerControlConsoleConsumer(source, consolePos, videoQualityCeiling);
+            } else {
+                LiveStreamerVideoClient.unregisterControlConsoleConsumer(consolePos);
             }
         } else {
             LiveStreamerVideoClient.unregisterControlConsoleConsumer(consolePos);
-            if (hasVideoSurface) {
+            if (videoPrewarm) {
                 ModernTurntableVideoClient.registerControlConsoleConsumer(source, consolePos, videoQualityCeiling);
                 if (now >= runtime.nextVideoHealthCheckMillis
                         && minecraft.level.getBlockEntity(source) instanceof ModernTurntableBlockEntity turntable) {
                     ModernTurntableVideoClient.syncFromTurntableIfPossible(turntable);
                     runtime.nextVideoHealthCheckMillis = now + VIDEO_HEALTH_CHECK_MILLIS;
                 }
+            } else {
+                ModernTurntableVideoClient.unregisterControlConsoleConsumer(consolePos);
             }
         }
         registerAudioForConsole(consolePos, source, document.elements(), 0.0F, true);
@@ -1067,8 +1073,46 @@ public final class ControlConsoleRenderer
 
     public static boolean isPredictivePrewarmActive(BlockPos consolePos) {
         ConsumerState state = consolePos != null ? CONSUMERS.get(consolePos) : null;
-        return state != null && state.prewarming;
+        if (state == null || !state.prewarming
+                || !(state.level.getBlockEntity(consolePos) instanceof ControlConsoleBlockEntity console)) {
+            return false;
+        }
+        return isVideoPrewarmPredicted(consolePos, console.document(), Minecraft.getInstance());
     }
+
+    private static boolean isVideoPrewarmPredicted(BlockPos consolePos, ControlConsoleDocument document,
+            Minecraft minecraft) {
+        if (consolePos == null || document == null || minecraft == null || minecraft.player == null) {
+            return false;
+        }
+        for (ControlConsoleElement element : document.elements()) {
+            if (!element.enabled() || element.type() != ControlConsoleElement.Type.SCREEN) {
+                continue;
+            }
+            float halfHeight = element.height() * 0.5F;
+            float halfWidth = halfHeight * element.aspect();
+            Matrix4f transform = element.editorTransform().matrix();
+            double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
+            double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+            for (int ySign : new int[] { -1, 1 }) {
+                for (int xSign : new int[] { -1, 1 }) {
+                    org.joml.Vector3f corner = transform.transformPosition(
+                            new org.joml.Vector3f(xSign * halfWidth, ySign * halfHeight, 0.0F));
+                    double x = consolePos.getX() + 0.5D + corner.x;
+                    double y = consolePos.getY() + 1.55D + corner.y;
+                    double z = consolePos.getZ() + 0.5D + corner.z;
+                    minX = Math.min(minX, x); minY = Math.min(minY, y); minZ = Math.min(minZ, z);
+                    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); maxZ = Math.max(maxZ, z);
+                }
+            }
+            if (VideoBillboardPreview.isScreenAabbPredictedVisible(
+                    new AABB(minX, minY, minZ, maxX, maxY, maxZ).inflate(0.05D))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public record ConsumerLeaseDiagnostic(boolean registered, boolean active, boolean fadingOut,
             boolean leasePresent, long generation) {
         private static final ConsumerLeaseDiagnostic ABSENT = new ConsumerLeaseDiagnostic(
@@ -1105,6 +1149,43 @@ public final class ControlConsoleRenderer
             }
         }
         return java.util.List.copyOf(snapshots);
+    }
+
+    /** Enabled console video screen quads for the independent video debug overlay. */
+    public static java.util.List<VideoElementRangeDebugSnapshot> videoElementRangeDebugSnapshots() {
+        java.util.List<VideoElementRangeDebugSnapshot> snapshots = new java.util.ArrayList<>();
+        for (Map.Entry<BlockPos, ConsumerState> entry : CONSUMERS.entrySet()) {
+            ConsumerState state = entry.getValue();
+            if (!(state.level.getBlockEntity(entry.getKey()) instanceof ControlConsoleBlockEntity console)) {
+                continue;
+            }
+            for (ControlConsoleElement element : console.document().elements()) {
+                if (!element.enabled() || element.type() != ControlConsoleElement.Type.SCREEN) {
+                    continue;
+                }
+                float halfHeight = element.height() * 0.5F;
+                float halfWidth = halfHeight * element.aspect();
+                Matrix4f transform = element.editorTransform().matrix();
+                java.util.List<Vec3> corners = new java.util.ArrayList<>(4);
+                int[][] signs = { { -1, 1 }, { -1, -1 }, { 1, -1 }, { 1, 1 } };
+                for (int[] sign : signs) {
+                    org.joml.Vector3f corner = transform.transformPosition(
+                            new org.joml.Vector3f(sign[0] * halfWidth, sign[1] * halfHeight, 0.0F));
+                    corners.add(new Vec3(entry.getKey().getX() + 0.5D + corner.x,
+                            entry.getKey().getY() + 1.55D + corner.y,
+                            entry.getKey().getZ() + 0.5D + corner.z));
+                }
+                snapshots.add(new VideoElementRangeDebugSnapshot(entry.getKey(), element.elementId(), corners,
+                        state.active, state.prewarming && isVideoPrewarmPredicted(
+                                entry.getKey(), console.document(), Minecraft.getInstance())));
+            }
+        }
+        return java.util.List.copyOf(snapshots);
+    }
+
+    public record VideoElementRangeDebugSnapshot(BlockPos consolePos, java.util.UUID elementId,
+            java.util.List<Vec3> corners, boolean consoleActive, boolean predictedPrewarm) {
+        public VideoElementRangeDebugSnapshot { corners = java.util.List.copyOf(corners); }
     }
 
     public record ElementRangeDebugSnapshot(BlockPos consolePos, java.util.UUID elementId, Vec3 center,

@@ -112,7 +112,7 @@ OpenAL source/buffer 的关闭也已按 native batch 分配纯标量 operationId
 ### 已实现
 
 - schema v3 `Document` Compound、schema 1/2 根字段兼容读取、未来 schema 子树只读保留、方块实体镜像、revision 和最近 64 个 operationId 去重；
-- 放置者所有权、旧世界首次合法使用认领、`OWNER_ONLY / TRUSTED / PUBLIC_EDIT`、最多 256 个可信 UUID、独立 ACL 配置包和管理员恢复权限节点；
+- 放置者所有权、旧世界首次合法使用认领、`OWNER_ONLY / TRUSTED / PUBLIC_EDIT`、最多 256 个可信 UUID、独立 ACL 配置包，以及 OP2+ 或管理员权限节点恢复访问；
 - 三栏编辑器、统一相机矩阵、orbit/pan/dolly/fly、正交/透视视图、聚焦、元素拾取和三轴 Gizmo；
 - schema v6 完整 position/rotation/非均匀 scale/pivot/skew、本地/世界 Gizmo，以及数值、内容、集合和漫游编辑统一命令栈；
 - 纯客户端灵魂漫游、硬范围相机约束、1/2/3 放置和完整元素内容快照返回；
@@ -1109,7 +1109,7 @@ PIP/compiler 只消费不可变快照，不持有 `ClientLevel`、chunk 或活�
 
 ### Phase 7：安全、多人和性能收敛
 
-状态：**当前设计纵切与固定设备多人门槛已完成**。`mayBuild`、owner/accessMode/trusted ACL、管理员恢复权限节点、服务端授权打开、10 秒独占编辑租约、每玩家 3 秒消费租约、revision、operationId 去重、基础限流、编辑距离、字段级安全上限、按元素类型的 contentMode、64 KiB 包体限制、schema v6 稳定身份/锁定元素和未来文档只读保留已完成；ModBench 已覆盖 consumer 引用、GUI 生命周期、terrain LOD 往返、固定第三方 Iris/shaderpack 组合、空闲资源/HTTP 收敛、确定性 RGBA/YUV420P/NV12 GPU 上传释放、两个物理客户端独立消费者、同 UUID 断线重连、真实媒体 Iris 运行和有负载 100 轮资源基线。尚未覆盖的是跨操作系统/GPU/驱动的更广矩阵。
+状态：**当前设计纵切与固定设备多人门槛已完成**。`mayBuild`、owner/accessMode/trusted ACL、OP2+ 不可被外部权限处理器否决的管理员恢复权限、服务端授权打开、10 秒独占编辑租约、每玩家 3 秒消费租约、revision、operationId 去重、基础限流、编辑距离、字段级安全上限、按元素类型的 contentMode、64 KiB 包体限制、schema v6 稳定身份/锁定元素和未来文档只读保留已完成；ModBench 已覆盖 consumer 引用、GUI 生命周期、terrain LOD 往返、固定第三方 Iris/shaderpack 组合、空闲资源/HTTP 收敛、确定性 RGBA/YUV420P/NV12 GPU 上传释放、两个物理客户端独立消费者、同 UUID 断线重连、真实媒体 Iris 运行和有负载 100 轮资源基线。尚未覆盖的是跨操作系统/GPU/驱动的更广矩阵。
 
 - 完成权限、revision、操作去重、限流和包大小限制。
 - 验证多人独立消费者和共享源引用计数。

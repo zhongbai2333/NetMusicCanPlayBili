@@ -40,6 +40,7 @@ public final class PlaybackRangeDebugRenderer {
     private static final int PANEL_MARGIN = 5;
     private static final int PANEL_PADDING = 7;
     private static final int CARD_HEIGHT = 72;
+    private static final int FULL_HEADER_HEIGHT = 86;
     private static final int PANEL_BACKGROUND = 0xD8111620;
     private static final int CARD_BACKGROUND = 0xCC1A2230;
     private static final int BAR_BACKGROUND = 0xFF303A49;
@@ -49,22 +50,38 @@ public final class PlaybackRangeDebugRenderer {
     private static final int STATE_STARTING = 0xFFFFC857;
     private static final int STATE_PLAYING = 0xFF55D878;
     private static final int STATE_INACTIVE = 0xFF394454;
-    private static volatile boolean enabled;
+    private static volatile PlaybackDebugMode mode = PlaybackDebugMode.OFF;
 
     private PlaybackRangeDebugRenderer() {
     }
 
     public static boolean enabled() {
-        return enabled;
+        return mode.enabled();
+    }
+
+    public static boolean hudEnabled() {
+        return mode.hudEnabled();
+    }
+
+    public static boolean rangeEnabled() {
+        return mode.rangeEnabled();
+    }
+
+    public static PlaybackDebugMode mode() {
+        return mode;
+    }
+
+    public static PlaybackDebugMode setMode(PlaybackDebugMode value) {
+        mode = value != null ? value : PlaybackDebugMode.OFF;
+        return mode;
     }
 
     public static boolean setEnabled(boolean value) {
-        enabled = value;
-        return enabled;
+        return setMode(value ? PlaybackDebugMode.BOTH : PlaybackDebugMode.OFF).enabled();
     }
 
     public static boolean toggle() {
-        return setEnabled(!enabled);
+        return setEnabled(!enabled());
     }
 
     public static List<String> describe() {
@@ -74,7 +91,7 @@ public final class PlaybackRangeDebugRenderer {
         var endpoints = ClientAudioEndpointIndex.endpointSnapshot();
         var consoles = ControlConsoleRenderer.rangeDebugSnapshots();
         var consoleElements = ControlConsoleRenderer.elementRangeDebugSnapshots();
-        lines.add("播放范围可视化=" + (enabled ? "开启" : "关闭") + " 来源=" + indexed.size()
+        lines.add("音频调试模式=" + mode.name() + " 来源=" + indexed.size()
                 + " 端点=" + endpoints.size() + " 中控音频元素=" + consoleElements.size()
                 + " 移动媒体=" + handheld.size() + " 中控硬范围=" + consoles.size());
         for (var source : indexed.stream().limit(12).toList()) {
@@ -104,7 +121,7 @@ public final class PlaybackRangeDebugRenderer {
 
     @SubscribeEvent
     public static void onSubmitCustomGeometry(SubmitCustomGeometryEvent event) {
-        if (!enabled) {
+        if (!rangeEnabled()) {
             return;
         }
         Minecraft minecraft = Minecraft.getInstance();
@@ -120,7 +137,7 @@ public final class PlaybackRangeDebugRenderer {
 
     @SubscribeEvent
     public static void onRenderGui(RenderGuiEvent.Post event) {
-        if (!enabled) {
+        if (!hudEnabled()) {
             return;
         }
         Minecraft minecraft = Minecraft.getInstance();
@@ -132,23 +149,27 @@ public final class PlaybackRangeDebugRenderer {
         if (screenWidth <= PANEL_MARGIN * 2 + 80 || screenHeight <= PANEL_MARGIN * 2 + 40) {
             return;
         }
-        int panelWidth = Math.min(PANEL_MAX_WIDTH, screenWidth - PANEL_MARGIN * 2);
-        int innerWidth = panelWidth - PANEL_PADDING * 2;
+        boolean dualPanels = VideoPlaybackDebugRenderer.hudEnabled();
         List<HudEntry> entries = hudEntries();
-        int fixedHeight = 86;
-        int maxCards = Math.max(0, Math.min(4,
-                (screenHeight - PANEL_MARGIN * 2 - fixedHeight) / CARD_HEIGHT));
-        int visibleCards = Math.min(maxCards, entries.size());
+        int visibleCards = Math.min(4, entries.size());
         boolean hasOverflow = entries.size() > visibleCards;
-        int panelHeight = fixedHeight + visibleCards * CARD_HEIGHT + (hasOverflow ? 10 : 0);
+        int panelHeight = FULL_HEADER_HEIGHT + visibleCards * CARD_HEIGHT + (hasOverflow ? 10 : 0);
+        DebugHudLayout.Plan layout = DebugHudLayout.plan(screenWidth, screenHeight, dualPanels,
+                PANEL_MAX_WIDTH, panelHeight, PANEL_MARGIN);
+        if (!layout.visible()) return;
 
         var graphics = event.getGuiGraphics();
         var font = minecraft.font;
-        int left = PANEL_MARGIN;
-        int top = PANEL_MARGIN;
-        graphics.fill(left, top, left + panelWidth, top + panelHeight, PANEL_BACKGROUND);
+        var pose = graphics.pose();
+        pose.pushMatrix();
+        pose.translate(PANEL_MARGIN, PANEL_MARGIN);
+        pose.scale(layout.scale(), layout.scale());
+        int left = 0;
+        int top = 0;
+        int innerWidth = PANEL_MAX_WIDTH - PANEL_PADDING * 2;
+        graphics.fill(left, top, left + PANEL_MAX_WIDTH, top + panelHeight, PANEL_BACKGROUND);
         graphics.fill(left, top, left + 3, top + panelHeight, 0xFF60C8FF);
-        graphics.text(font, "播放范围调试", left + PANEL_PADDING, top + 6, TEXT_PRIMARY, false);
+        graphics.text(font, "音频播放范围调试", left + PANEL_PADDING, top + 6, TEXT_PRIMARY, false);
 
         DebugCounts counts = debugCounts();
         String summary = "来源 " + counts.sources() + "  端点 " + counts.endpoints()
@@ -161,7 +182,7 @@ public final class PlaybackRangeDebugRenderer {
         legendY = drawLegend(graphics, font, left + PANEL_PADDING, legendY, innerWidth);
         drawLifecycleGuide(graphics, font, left + PANEL_PADDING, legendY + 3, innerWidth);
 
-        int cardY = top + fixedHeight;
+        int cardY = top + FULL_HEADER_HEIGHT;
         for (int index = 0; index < visibleCards; index++) {
             drawEntryCard(graphics, font, entries.get(index), left + PANEL_PADDING, cardY,
                     innerWidth, index);
@@ -169,10 +190,11 @@ public final class PlaybackRangeDebugRenderer {
         }
         if (hasOverflow) {
             String overflow = "还有 " + (entries.size() - visibleCards)
-                    + " 项，使用 /ncpb playbackdebug status 查看详情";
+                    + " 项，使用 /ncpbc debug playback audio dump 查看详情";
             drawWrapped(graphics, font::width, font, overflow, left + PANEL_PADDING,
                     top + panelHeight - 9, innerWidth, TEXT_SECONDARY, 9, 1);
         }
+        pose.popMatrix();
     }
 
     private static DebugCounts debugCounts() {
