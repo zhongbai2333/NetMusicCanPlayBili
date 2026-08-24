@@ -225,6 +225,9 @@ abstract class HolographicConsoleInspectorScreen extends HolographicEditorLifecy
                 }, GOLD_DIM);
             qualityButton.active = !selected.locked;
             addRenderableWidget(qualityButton);
+            elementBrightnessSlider = new ElementBrightnessSlider(x, y + 44, 132, 18, selected.brightness);
+            elementBrightnessSlider.active = !selected.locked;
+            addRenderableWidget(elementBrightnessSlider);
         }
         }
 
@@ -519,6 +522,7 @@ abstract class HolographicConsoleInspectorScreen extends HolographicEditorLifecy
                 restored.pivotZ = element.pivotZ();
                 restored.skewXByY = element.skewXByY();
                 restored.skewYByX = element.skewYByX();
+                restored.brightness = element.brightness();
             screens.add(restored);
         }
         consoleElementsLoaded = true;
@@ -556,7 +560,7 @@ abstract class HolographicConsoleInspectorScreen extends HolographicEditorLifecy
                     screen.autoMixJoc, screen.translationColor, screen.backgroundColor, screen.alignment,
                     screen.maxWidth, screen.wrap, screen.enabled, screen.locked,
                     screen.scaleX, screen.scaleY, screen.scaleZ, screen.pivotX, screen.pivotY, screen.pivotZ,
-                    screen.skewXByY, screen.skewYByX));
+                    screen.skewXByY, screen.skewYByX, screen.brightness));
         }
         return List.copyOf(elements);
     }

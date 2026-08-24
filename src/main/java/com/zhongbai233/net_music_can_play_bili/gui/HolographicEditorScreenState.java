@@ -136,6 +136,7 @@ abstract class HolographicEditorScreenState extends Screen {
     protected EditBox elementTextBox;
     protected EditBox elementTextScaleBox;
     protected ElementVolumeSlider elementVolumeSlider;
+    protected ElementBrightnessSlider elementBrightnessSlider;
     protected EditBox elementMaxDistanceBox;
     protected EditBox elementColorBox;
     protected EditBox elementTranslationColorBox;
@@ -195,7 +196,7 @@ abstract class HolographicEditorScreenState extends Screen {
                 screen.skewXByY, screen.skewYByX, screen.contentMode, screen.text, screen.followLyrics,
                 screen.showTranslation, screen.textScale, screen.color, screen.volume, screen.channelIndex,
                 screen.maxDistance, screen.autoMixJoc, screen.translationColor, screen.backgroundColor,
-                screen.alignment, screen.maxWidth, screen.wrap, screen.enabled, screen.locked);
+                screen.alignment, screen.maxWidth, screen.wrap, screen.enabled, screen.locked, screen.brightness);
     }
 
     protected static ScreenSnapshot snapshot(ControlConsoleElement element) {
@@ -211,7 +212,7 @@ abstract class HolographicEditorScreenState extends Screen {
                 element.followLyrics(), element.showTranslation(), element.textScale(), element.color(),
                 element.volume(), element.channelIndex(), element.maxDistance(), element.autoMixJoc(),
                 element.translationColor(), element.backgroundColor(), element.alignment(), element.maxWidth(),
-                element.wrap(), element.enabled(), element.locked());
+                element.wrap(), element.enabled(), element.locked(), element.brightness());
     }
 
     protected static EditorCameraState legacyOrbitCamera(double yawDegrees, double pitchDegrees, double distance,
@@ -281,6 +282,7 @@ abstract class HolographicEditorScreenState extends Screen {
         final ControlConsoleElement.Alignment alignment;
         final float maxWidth;
         final boolean wrap, enabled, locked;
+        final float brightness;
 
         ScreenSnapshot(UUID elementId, ElementType type, String name, float distance, float offsetX, float offsetY,
                 float height, float aspect, float yaw, float pitch, float roll, float scaleX, float scaleY,
@@ -288,7 +290,7 @@ abstract class HolographicEditorScreenState extends Screen {
                 String contentMode, String text, boolean followLyrics, boolean showTranslation, float textScale,
                 int color, float volume, int channelIndex, float maxDistance, boolean autoMixJoc,
                 int translationColor, int backgroundColor, ControlConsoleElement.Alignment alignment,
-                float maxWidth, boolean wrap, boolean enabled, boolean locked) {
+                float maxWidth, boolean wrap, boolean enabled, boolean locked, float brightness) {
             this.elementId = elementId;
             this.type = type;
             this.name = name;
@@ -325,6 +327,7 @@ abstract class HolographicEditorScreenState extends Screen {
             this.wrap = wrap;
             this.enabled = enabled;
             this.locked = locked;
+            this.brightness = brightness;
         }
     }
 
@@ -486,6 +489,32 @@ abstract class HolographicEditorScreenState extends Screen {
         }
     }
 
+    protected final class ElementBrightnessSlider extends AbstractSliderButton {
+        protected ElementBrightnessSlider(int x, int y, int width, int height, float brightness) {
+            super(x, y, width, height, Component.empty(),
+                    Math.clamp(brightness, ControlConsoleElement.MIN_BRIGHTNESS,
+                            ControlConsoleElement.MAX_BRIGHTNESS));
+            updateMessage();
+        }
+
+        @Override
+        protected void updateMessage() {
+            setMessage(Component.literal("亮度：" + Math.round(value * 100.0D) + "%"));
+        }
+
+        @Override
+        protected void applyValue() {
+            updateMessage();
+        }
+
+        @Override
+        public void onRelease(MouseButtonEvent event) {
+            super.onRelease(event);
+            float brightness = (float) Math.clamp(value, 0.0D, 1.0D);
+            editSelected("设置屏幕亮度", item -> item.brightness = brightness);
+        }
+    }
+
     protected enum ElementType {
         SCREEN("▣", "屏幕", "Screen"),
         SUBTITLE("T", "字幕", "Subtitle"),
@@ -539,6 +568,7 @@ abstract class HolographicEditorScreenState extends Screen {
         protected boolean wrap;
         protected boolean enabled;
         protected boolean locked;
+        protected float brightness;
 
         protected PreviewScreenSpec(ElementType type, String name, float distance, float offsetX, float offsetY, float height,
                 float aspect, float roll) {
@@ -577,6 +607,7 @@ abstract class HolographicEditorScreenState extends Screen {
             this.maxWidth = ControlConsoleElement.DEFAULT_MAX_WIDTH;
             this.wrap = false;
             this.enabled = true;
+            this.brightness = ControlConsoleElement.DEFAULT_BRIGHTNESS;
         }
 
         protected static PreviewScreenSpec defaults() {
@@ -619,6 +650,7 @@ abstract class HolographicEditorScreenState extends Screen {
             screen.wrap = value.wrap;
             screen.enabled = value.enabled;
             screen.locked = value.locked;
+            screen.brightness = value.brightness;
             return screen;
         }
 
@@ -652,6 +684,7 @@ abstract class HolographicEditorScreenState extends Screen {
             copy.wrap = wrap;
             copy.enabled = enabled;
             copy.locked = false;
+            copy.brightness = brightness;
             return copy;
         }
 

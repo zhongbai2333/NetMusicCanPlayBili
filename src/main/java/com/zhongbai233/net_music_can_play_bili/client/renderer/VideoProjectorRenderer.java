@@ -59,6 +59,7 @@ public class VideoProjectorRenderer
         state.projectionHeight = projector.getProjectionHeight();
         state.projectionDistanceX = projector.getProjectionDistanceX();
         state.projectionDistanceZ = projector.getProjectionDistanceZ();
+        state.projectionBrightness = projector.getProjectionBrightness();
         state.frame = VideoBillboardPreview.ProjectorFrameSnapshot.empty();
         state.playbackSessionId = Optional.empty();
         state.hideVideoForPrivacy = com.zhongbai233.net_music_can_play_bili.client.renderer.video
@@ -151,14 +152,15 @@ public class VideoProjectorRenderer
 
         if (state.playbackSessionId.isPresent() && !state.hideVideoForPrivacy) {
             VideoBillboardPreview.captureProjectorImmediatePose(state.playbackSessionId.orElseThrow(),
-                    state.projectorPos, screenPose, halfHeight);
+                    state.projectorPos, screenPose, halfHeight, 1.0F, state.projectionBrightness);
         }
 
         if (state.hideVideoForPrivacy) {
             VideoBillboardPreview.submitProjectorPrivacyOverlayOnPose(collector, poseStack, halfWidth, halfHeight);
         } else {
             VideoBillboardPreview.submitProjectorFrameOnPose(collector, poseStack, frame, halfWidth, halfHeight,
-                    VideoBillboardPreview.cameraRelativeBackOffset(screenPose, frame.rgbaDepthOffset()));
+                    VideoBillboardPreview.cameraRelativeBackOffset(screenPose, frame.rgbaDepthOffset()),
+                    1.0F, state.projectionBrightness);
         }
         poseStack.popPose();
     }
@@ -218,6 +220,7 @@ public class VideoProjectorRenderer
         public float projectionHeight;
         public float projectionDistanceX;
         public float projectionDistanceZ;
+        public float projectionBrightness = 1.0F;
         public boolean hideVideoForPrivacy;
         private Optional<PlaybackSessionId> playbackSessionId = Optional.empty();
 

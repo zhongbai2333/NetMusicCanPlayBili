@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.client.renderer;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.zhongbai233.net_music_can_play_bili.media.VideoSurfaceBrightness;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 
 /**
@@ -16,13 +17,17 @@ public final class RenderVertexUtils {
     public static void texturedVertex(VertexConsumer buffer, PoseStack.Pose pose, float x, float y, float z,
             float u, float v) {
         texturedVertex(buffer, pose, x, y, z, u, v, 1.0F);
-        }
+    }
 
-        public static void texturedVertex(VertexConsumer buffer, PoseStack.Pose pose, float x, float y, float z,
+    public static void texturedVertex(VertexConsumer buffer, PoseStack.Pose pose, float x, float y, float z,
             float u, float v, float opacity) {
+        texturedVertex(buffer, pose, x, y, z, u, v, opacity, VideoSurfaceBrightness.DEFAULT);
+    }
+
+    public static void texturedVertex(VertexConsumer buffer, PoseStack.Pose pose, float x, float y, float z,
+            float u, float v, float opacity, float brightness) {
         buffer.addVertex(pose, x, y, z)
-            .setColor(com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoOpacityRoute
-                .whiteVertexColor(opacity))
+                .setColor(VideoSurfaceBrightness.vertexColor(brightness, opacity))
                 .setUv(u, v)
                 .setOverlay(OverlayTexture.NO_OVERLAY)
                 .setLight(FULL_BRIGHT)

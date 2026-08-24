@@ -283,16 +283,28 @@ abstract class VideoBillboardQuadSupport extends VideoBillboardState {
             float p3x, float p3y, float p3z,
             boolean reverse,
             float opacity) {
+        emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
+                reverse, opacity, 1.0F);
+    }
+
+    protected static void emitQuad(VertexConsumer buffer, PoseStack.Pose pose,
+            float p0x, float p0y, float p0z,
+            float p1x, float p1y, float p1z,
+            float p2x, float p2y, float p2z,
+            float p3x, float p3y, float p3z,
+            boolean reverse,
+            float opacity,
+            float brightness) {
         if (reverse) {
-            vertex(buffer, pose, p3x, p3y, p3z, 1.0F, 0.0F, opacity);
-            vertex(buffer, pose, p2x, p2y, p2z, 1.0F, 1.0F, opacity);
-            vertex(buffer, pose, p1x, p1y, p1z, 0.0F, 1.0F, opacity);
-            vertex(buffer, pose, p0x, p0y, p0z, 0.0F, 0.0F, opacity);
+            vertex(buffer, pose, p3x, p3y, p3z, 1.0F, 0.0F, opacity, brightness);
+            vertex(buffer, pose, p2x, p2y, p2z, 1.0F, 1.0F, opacity, brightness);
+            vertex(buffer, pose, p1x, p1y, p1z, 0.0F, 1.0F, opacity, brightness);
+            vertex(buffer, pose, p0x, p0y, p0z, 0.0F, 0.0F, opacity, brightness);
         } else {
-            vertex(buffer, pose, p0x, p0y, p0z, 0.0F, 0.0F, opacity);
-            vertex(buffer, pose, p1x, p1y, p1z, 0.0F, 1.0F, opacity);
-            vertex(buffer, pose, p2x, p2y, p2z, 1.0F, 1.0F, opacity);
-            vertex(buffer, pose, p3x, p3y, p3z, 1.0F, 0.0F, opacity);
+            vertex(buffer, pose, p0x, p0y, p0z, 0.0F, 0.0F, opacity, brightness);
+            vertex(buffer, pose, p1x, p1y, p1z, 0.0F, 1.0F, opacity, brightness);
+            vertex(buffer, pose, p2x, p2y, p2z, 1.0F, 1.0F, opacity, brightness);
+            vertex(buffer, pose, p3x, p3y, p3z, 1.0F, 0.0F, opacity, brightness);
         }
     }
 
@@ -307,7 +319,12 @@ abstract class VideoBillboardQuadSupport extends VideoBillboardState {
 
     protected static void vertex(VertexConsumer buffer, PoseStack.Pose pose, float x, float y, float z, float u,
             float v, float opacity) {
-        RenderVertexUtils.texturedVertex(buffer, pose, x, y, z, u, v, opacity);
+        vertex(buffer, pose, x, y, z, u, v, opacity, 1.0F);
+    }
+
+    protected static void vertex(VertexConsumer buffer, PoseStack.Pose pose, float x, float y, float z, float u,
+            float v, float opacity, float brightness) {
+        RenderVertexUtils.texturedVertex(buffer, pose, x, y, z, u, v, opacity, brightness);
     }
 
     static boolean isProjectorScreenRenderable(Minecraft minecraft, Camera camera,

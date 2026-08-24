@@ -17,7 +17,7 @@ public record ControlConsoleElement(UUID elementId, Type type, String name,
     boolean enabled, boolean locked,
     float scaleX, float scaleY, float scaleZ,
     float pivotX, float pivotY, float pivotZ,
-    float skewXByY, float skewYByX) {
+    float skewXByY, float skewYByX, float brightness) {
     public static final int MAX_NAME_LENGTH = 64;
     public static final int DEFAULT_TRANSLATION_COLOR = 0xFFB8D8FF;
     public static final int DEFAULT_BACKGROUND_COLOR = 0x40000000;
@@ -27,6 +27,9 @@ public record ControlConsoleElement(UUID elementId, Type type, String name,
     public static final float MAX_SCALE = 16.0F;
     public static final float MIN_SKEW = -1.0F;
     public static final float MAX_SKEW = 1.0F;
+    public static final float MIN_BRIGHTNESS = 0.0F;
+    public static final float MAX_BRIGHTNESS = 1.0F;
+    public static final float DEFAULT_BRIGHTNESS = 1.0F;
 
     /** 新放置中控台的正式初始元素，不是编辑器预览占位。 */
     public static ControlConsoleElement defaultScreen() {
@@ -80,6 +83,27 @@ public record ControlConsoleElement(UUID elementId, Type type, String name,
         validateFinite(pivotZ, "pivotZ");
         validateSkew(skewXByY, "skewXByY");
         validateSkew(skewYByX, "skewYByX");
+        if (!Float.isFinite(brightness) || brightness < MIN_BRIGHTNESS || brightness > MAX_BRIGHTNESS) {
+            throw new IllegalArgumentException("brightness must be within [0, 1]");
+        }
+    }
+
+    /** schema v6 及更早的完整元素构造面；画面亮度使用 100% 默认值。 */
+    public ControlConsoleElement(UUID elementId, Type type, String name,
+            float distance, float offsetX, float offsetY, float height, float aspect,
+            float yaw, float pitch, float roll,
+            String contentMode, String text, boolean followLyrics, boolean showTranslation,
+            float textScale, int color, float volume, int channelIndex, float maxDistance, boolean autoMixJoc,
+            int translationColor, int backgroundColor, Alignment alignment, float maxWidth, boolean wrap,
+            boolean enabled, boolean locked,
+            float scaleX, float scaleY, float scaleZ,
+            float pivotX, float pivotY, float pivotZ,
+            float skewXByY, float skewYByX) {
+        this(elementId, type, name, distance, offsetX, offsetY, height, aspect, yaw, pitch, roll,
+                contentMode, text, followLyrics, showTranslation, textScale, color, volume, channelIndex,
+                maxDistance, autoMixJoc, translationColor, backgroundColor, alignment, maxWidth, wrap,
+                enabled, locked, scaleX, scaleY, scaleZ, pivotX, pivotY, pivotZ, skewXByY, skewYByX,
+                DEFAULT_BRIGHTNESS);
     }
 
     /** schema v5 及更早的完整元素构造面；高级变换使用恒等默认值。 */

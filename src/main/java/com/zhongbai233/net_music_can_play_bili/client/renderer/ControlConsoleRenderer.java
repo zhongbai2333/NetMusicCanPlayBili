@@ -186,7 +186,7 @@ public final class ControlConsoleRenderer
                         && state.playbackSessionId.isPresent()) {
                     VideoBillboardPreview.captureProjectorImmediatePose(
                             state.playbackSessionId.orElseThrow(), state.consolePos, pose, halfHeight,
-                            state.exitGain * state.videoGain);
+                            state.exitGain * state.videoGain, element.brightness());
                 }
                 if (state.hideVideoForPrivacy && state.frame.hasFrame()
                         && state.frame.width() > 0 && state.frame.height() > 0) {
@@ -195,7 +195,7 @@ public final class ControlConsoleRenderer
                 } else if (!state.hideVideoForPrivacy) {
                     VideoBillboardPreview.submitProjectorFrameOnPose(collector, poseStack, state.frame, halfWidth,
                         halfHeight, VideoBillboardPreview.cameraRelativeBackOffset(pose,
-                            state.frame.rgbaDepthOffset()), state.exitGain * state.videoGain);
+                            state.frame.rgbaDepthOffset()), state.exitGain * state.videoGain, element.brightness());
                 }
             } else if (element.type() == ControlConsoleElement.Type.SUBTITLE) {
                 submitSubtitle(state, element, poseStack, collector);

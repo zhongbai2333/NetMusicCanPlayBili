@@ -28,7 +28,7 @@ public class VideoProjectorScreen extends BlackGoldScreen {
 
     @Override
     protected int boxH() {
-        return 318;
+        return 344;
     }
 
     @Override
@@ -91,6 +91,15 @@ public class VideoProjectorScreen extends BlackGoldScreen {
                         be.setProjectionScale(v);
                 });
         addResetButton(resetX, rowY, 1.0f, scaleS);
+        rowY += 26;
+
+        ConfigSlider brightnessS = addConfigSlider(sliderX, rowY, 0.0F, 100.0F,
+                (be != null ? be.getProjectionBrightness() : 1.0F) * 100.0F,
+                v -> {
+                    if (be != null)
+                        be.setProjectionBrightness(v / 100.0F);
+                });
+        addResetButton(resetX, rowY, 100.0F, brightnessS);
         rowY += 30;
 
         int qualityIndex = qualityIndex(be != null ? be.getPreferredQuality()
@@ -119,7 +128,7 @@ public class VideoProjectorScreen extends BlackGoldScreen {
                     blockPos,
                     be.getProjectionYaw(), be.getProjectionPitch(), be.getProjectionScale(),
                     be.getProjectionHeight(), be.getProjectionDistanceX(), be.getProjectionDistanceZ(),
-                    be.getPreferredQuality()));
+                    be.getProjectionBrightness(), be.getPreferredQuality()));
         }
     }
 
@@ -189,7 +198,7 @@ public class VideoProjectorScreen extends BlackGoldScreen {
 
     private void drawLabels(GuiGraphicsExtractor g, int bx, int by) {
         int lx = bx + PAD, ry = by + HEADER_H + 58;
-        String[] labels = { "水平朝向", "俯仰角度", "投影高度", "投影X轴", "投影Z轴", "画面大小", "请求画质" };
+        String[] labels = { "水平朝向", "俯仰角度", "投影高度", "投影X轴", "投影Z轴", "画面大小", "画面亮度", "请求画质" };
         for (String lb : labels) {
             g.centeredText(font, Component.literal(lb), lx + 27, ry, TEXT_SECONDARY);
             ry += 26;

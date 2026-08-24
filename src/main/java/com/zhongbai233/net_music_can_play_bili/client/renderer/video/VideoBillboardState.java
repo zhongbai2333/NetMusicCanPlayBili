@@ -228,7 +228,7 @@ abstract class VideoBillboardState {
     protected record ProjectorImmediateKey(PlaybackSessionId playbackSessionId, BlockPos projectorPos) {
     }
 
-    protected record ProjectorImmediatePose(Matrix4f pose, float halfHeight, float opacity) {
+    protected record ProjectorImmediatePose(Matrix4f pose, float halfHeight, float opacity, float brightness) {
     }
 
     protected record VisibilitySample(long createdNanoTime, int thresholdKey, boolean visible) {

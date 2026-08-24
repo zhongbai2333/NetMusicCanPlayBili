@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.blockentity;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
+import com.zhongbai233.net_music_can_play_bili.media.VideoSurfaceBrightness;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponentMap;
 import net.minecraft.core.component.DataComponents;
@@ -24,6 +25,7 @@ public class VideoProjectorBlockEntity extends SyncedBlockEntity {
     private static final String PROJ_HEIGHT = "ProjHeight";
     private static final String PROJ_DISTANCE_X = "ProjDistanceX";
     private static final String PROJ_DISTANCE_Z = "ProjDistanceZ";
+    private static final String PROJ_BRIGHTNESS = "ProjBrightness";
     private static final String PREFERRED_QUALITY = "PreferredQuality";
     public static final int DEFAULT_PREFERRED_QUALITY = 116;
 
@@ -35,6 +37,7 @@ public class VideoProjectorBlockEntity extends SyncedBlockEntity {
     private float projectionHeight = 1.8F;
     private float projectionDistanceX = 0.0F;
     private float projectionDistanceZ = 0.0F;
+    private float projectionBrightness = VideoSurfaceBrightness.DEFAULT;
     /** B站 qn：默认尝试 1080P60；实际会受登录/VIP/接口返回限制自动降级 */
     private int preferredQuality = DEFAULT_PREFERRED_QUALITY;
 
@@ -136,6 +139,15 @@ public class VideoProjectorBlockEntity extends SyncedBlockEntity {
         setChanged();
     }
 
+    public float getProjectionBrightness() {
+        return projectionBrightness;
+    }
+
+    public void setProjectionBrightness(float value) {
+        this.projectionBrightness = VideoSurfaceBrightness.normalize(value);
+        setChanged();
+    }
+
     public int getPreferredQuality() {
         return preferredQuality;
     }
@@ -169,6 +181,7 @@ public class VideoProjectorBlockEntity extends SyncedBlockEntity {
         output.putFloat(PROJ_HEIGHT, projectionHeight);
         output.putFloat(PROJ_DISTANCE_X, projectionDistanceX);
         output.putFloat(PROJ_DISTANCE_Z, projectionDistanceZ);
+        output.putFloat(PROJ_BRIGHTNESS, projectionBrightness);
         output.putInt(PREFERRED_QUALITY, preferredQuality);
     }
 
@@ -185,6 +198,8 @@ public class VideoProjectorBlockEntity extends SyncedBlockEntity {
         this.projectionHeight = input.getFloatOr(PROJ_HEIGHT, 1.8F);
         this.projectionDistanceX = input.getFloatOr(PROJ_DISTANCE_X, 0.0F);
         this.projectionDistanceZ = input.getFloatOr(PROJ_DISTANCE_Z, 0.0F);
+        this.projectionBrightness = VideoSurfaceBrightness.normalize(
+                input.getFloatOr(PROJ_BRIGHTNESS, VideoSurfaceBrightness.DEFAULT));
         this.preferredQuality = input.getIntOr(PREFERRED_QUALITY, DEFAULT_PREFERRED_QUALITY);
         refreshClientLinkRegistration();
         if (level instanceof ServerLevel serverLevel && linkedTurntablePos != null) {

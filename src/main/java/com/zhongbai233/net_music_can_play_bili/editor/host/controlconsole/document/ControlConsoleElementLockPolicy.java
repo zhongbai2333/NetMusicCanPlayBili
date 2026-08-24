@@ -34,6 +34,7 @@ public final class ControlConsoleElementLockPolicy {
                 right.volume(), right.channelIndex(), right.maxDistance(), right.autoMixJoc(),
                 right.translationColor(), right.backgroundColor(), right.alignment(), right.maxWidth(), right.wrap(),
                 right.enabled(), left.locked(), right.scaleX(), right.scaleY(), right.scaleZ(),
-                right.pivotX(), right.pivotY(), right.pivotZ(), right.skewXByY(), right.skewYByX()));
+                right.pivotX(), right.pivotY(), right.pivotZ(), right.skewXByY(), right.skewYByX(),
+                right.brightness()));
     }
 }

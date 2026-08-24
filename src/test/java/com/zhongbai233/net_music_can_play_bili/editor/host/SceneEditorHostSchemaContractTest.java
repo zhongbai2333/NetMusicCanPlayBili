@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 class SceneEditorHostSchemaContractTest {
     @Test
     void hostSchemasAreExplicitAndNotDerivedFromLibraryApiVersion() {
-        assertEquals(6, ControlConsoleDocument.CURRENT_SCHEMA_VERSION);
+        assertEquals(7, ControlConsoleDocument.CURRENT_SCHEMA_VERSION);
         assertEquals(1, HolographicGlassesItem.PERSISTENCE_SCHEMA_VERSION);
 
         // This intentionally prevents a future library-major bump from being mechanically copied into host data.

@@ -2,7 +2,7 @@
 
 > 本文档由原始混合设计文档于 2026-08-05 无损迁移而来，保留实现过程、Phase 0–8、历史方案和详细技术记录，避免拆分时丢失上下文。稳定产品与架构规格见 [`control-console-design.md`](control-console-design.md)；可重复的测试、Bench 和实测证据见 [`control-console-validation.md`](control-console-validation.md)。
 >
-> 本文后半仍保留部分原始规格作为历史上下文；如与稳定设计文档冲突，以稳定设计文档为目标规格，以本文顶部“当前实现状态”为当前代码状态。schema v3/v4/v5、固定 ±25 terrain、Scene Editor 同仓子项目等文字仅代表历史阶段；当前实现为 schema v6、权威 hardRange，以及从 JitPack 外部 JiJ 的独立 SceneEditor 项目。
+> 本文后半仍保留部分原始规格作为历史上下文；如与稳定设计文档冲突，以稳定设计文档为目标规格，以本文顶部“当前实现状态”为当前代码状态。schema v3/v4/v5、固定 ±25 terrain、Scene Editor 同仓子项目等文字仅代表历史阶段；当前实现为 schema v7、权威 hardRange，以及从 JitPack 外部 JiJ 的独立 SceneEditor 项目。
 
 中控台是一个绑定现代化唱片机或直播机的**空间媒体场景编排方块**。玩家可以在类似 Unity / BlockBench 的三栏编辑器中，以中控台附近地形为参照，添加并布置屏幕、字幕和音源元素。
 
@@ -47,7 +47,7 @@
 - 中控台 IDLE/BUFFERING/ERROR 已接入三张独立 320×180 像素风状态纹理；ACTIVE 继续显示真实共享帧。资源尺寸、不透明性、内容差异和状态映射已有自动回归。
 - 白名单纯音频时长探测现在持有 exact 可取消 worker、根 HTTP future 和已发布响应体；条目换代、删除、Screen 关闭/移除都会取消请求并拒绝迟到回调。
 - 直播解析现在把标题、房间号、父/子分区和状态发布为 source/session 级有界快照；字幕元素可选择直播标题、房间信息或直播状态，旧 session cleanup 不能删除新会话快照。
-- 中控台文档升级为 schema v6：屏幕/字幕元素的 `scaleX/Y/Z`、`pivotX/Y/Z` 与 `skewXByY/YByX` 已贯通旧文档恒等迁移、NBT、配置/冲突网络快照、服务端字段域与四角 hardRange 校验、世界 renderer、PIP、灵魂漫游、拾取和安全渲染包围盒。旋转在文档入口规范化到 `[-180°,180°)`，scale 限制 `[0.05,16]`，skew 限制 `[-1,1]`；音源继续只消费位置。
+- 中控台文档升级为 schema v7：屏幕/字幕元素的 `scaleX/Y/Z`、`pivotX/Y/Z` 与 `skewXByY/YByX` 已贯通旧文档恒等迁移、NBT、配置/冲突网络快照、服务端字段域与四角 hardRange 校验、世界 renderer、PIP、灵魂漫游、拾取和安全渲染包围盒。旋转在文档入口规范化到 `[-180°,180°)`，scale 限制 `[0.05,16]`，skew 限制 `[-1,1]`；屏幕另新增 0–100% 画面亮度并贯通持久化、快照、编辑器和 RGBA/YUV 渲染。视频专用 RGBA/YUV 管线禁用方向光照，屏幕朝向不再改变画面明暗；该亮度仅调制视频自身颜色，不产生方块光。音源继续只消费位置。
 - 编辑器工具栏可在本地/世界坐标 Gizmo 间切换；世界旋转采用四元数前乘，世界非均匀缩放对变换后平面基做 QR 分解并在无法落回 schema 域时拒绝该步，不会用“只换轴显示”伪装世界变换。高级变换和类型内容使用右栏分页，避免小视口把内容控件推出屏幕。
 - 场景编辑历史现以完整不可变草稿快照为单位：连续 Gizmo 拖动合并为一步，数值/内容字段、锁定、添加、复制、删除、预设、中控台名称/硬范围和世界漫游返回均进入同一 128 步命令栈；Ctrl+Z/Ctrl+Y 同时恢复元素集合、选择和中控台草稿属性。
 - AI 字幕已实现 B站 AI CC 独立来源选择，并以绑定源和 `PlaybackSessionId` 共享单飞任务；中控台字幕与歌词投影仪复用结果，最后消费者退出、区块卸载和客户端总清理会取消精确任务，旧会话迟到结果不能复活。显示继续使用权威媒体时钟，AI 不可用或失败时降级到人工歌词，再降级到固定文本；状态计数进入 `/ncpbc video status`。
@@ -89,13 +89,13 @@
 - 中控台按 `sourceKind` 统一适配唱片机与直播机。直播机把中控台坐标和实体投影仪坐标合并进同一 session consumer 集合，仍只创建一个 decoder/texture；直播音频 relay 复用 source-position 主输出。服务端消费租约会拒绝跨维度、源区块未加载及 kind/方块实体不匹配的绑定。直播标题、房间信息和状态元数据字幕已接入 source/session 级共享快照。
 - terrain bounds 已由固定入口窗口切换为权威 hardRange，并裁剪世界高度。覆盖使用不预分配完整范围的距离优先游标，每 tick 最多检查 64 个候选，pending 上限 512，UNKNOWN 表示上限 256；未加载 chunk 不触发强载，以裁切到 hardRange 的 UNKNOWN 线框表示。chunk unload 会清理 CPU snapshot/pending、发布持久 tombstone、释放 GPU TLSF allocation并拒绝迟到编译复活；自然 load 后重新捕获。
 - terrain 已完成 hardRange 覆盖、UNKNOWN、chunk load/unload tombstone、NEAR 原版全材质、MID 4³/FAR 8³ 代表材质简化网格和随相机/选择目标可逆重评。LOD 降级会释放旧 NEAR GPU section，迟到编译仍由 generation/epoch/source identity 拒绝。方块实体 render state、注册方块 tint 冻结和 quad 级透明索引重排已接入；vanilla 与固定第三方资源包/模组/Iris shaderpack integrated-client PIP 均已通过。
-- 当前完整 Gradle 回归为 **109 suites / 373 tests / 0 failures / 0 errors / 0 skipped**；`git diff --check` 无 whitespace error。ModBench 在 Windows 11、Java 25、Minecraft 26.1.2、NeoForge 26.1.2.76 和 RTX 5070 Ti Laptop GPU 上完成五条 integrated-client 场景：100 轮共享中控台 consumer 引用生命周期、30 轮编辑器 Screen 初始化/渲染/interaction-tree 快照/关闭、terrain NEAR→FAR→NEAR 往返、40 tick 视频/OpenAL/HTTP/自有内存空闲收敛，以及各 30 帧的 640×360 RGBA/YUV420P/NV12 确定性本地 GPU 上传和显式释放，统一报告 `PASSED`。GPU 场景确实命中 YUV staging 与三槽 NV12 PBO；最新 90 次上传整体均值 0.737 ms、P95 1.558 ms，staging 峰值 345,600 bytes、PBO 峰值 1,036,800 bytes，释放后均回到场景基线。上传耗时是单次机器观测而非硬阈值。这些证据仍不替代 Iris/shaderpack、多客户端、真实 HTTP/decoder/OpenAL 有负载启停和跨硬范围 100 次系统基线。
+- 当前完整 Gradle 回归为 **246 suites / 919 tests / 0 failures / 0 errors / 0 skipped**；`git diff --check` 无 whitespace error。ModBench 在 Windows 11、Java 25、Minecraft 26.1.2、NeoForge 26.1.2.76 和 RTX 5070 Ti Laptop GPU 上完成五条 integrated-client 场景：100 轮共享中控台 consumer 引用生命周期、30 轮编辑器 Screen 初始化/渲染/interaction-tree 快照/关闭、terrain NEAR→FAR→NEAR 往返、40 tick 视频/OpenAL/HTTP/自有内存空闲收敛，以及各 30 帧的 640×360 RGBA/YUV420P/NV12 确定性本地 GPU 上传和显式释放，统一报告 `PASSED`。GPU 场景确实命中 YUV staging 与三槽 NV12 PBO；最新 90 次上传整体均值 0.737 ms、P95 1.558 ms，staging 峰值 345,600 bytes、PBO 峰值 1,036,800 bytes，释放后均回到场景基线。上传耗时是单次机器观测而非硬阈值。这些证据仍不替代 Iris/shaderpack、多客户端、真实 HTTP/decoder/OpenAL 有负载启停和跨硬范围 100 次系统基线。
 
 上述段落记录的是 Phase 56 时的旧证据范围；Phase 66 已补齐真实媒体有负载的 100 次资源基线、物理多客户端、
 断线重连、客户端退出和固定 Iris/shaderpack 真实媒体系统验收。terrain 固定第三方矩阵和 Phase 8 也已完成；
 当前仅保留跨操作系统/GPU/驱动与更广第三方组合的矩阵扩展。
 
-当前中控台已经形成可运行纵切：可放置并绑定现代化唱片机或直播机，使用 schema v6 文档持久化稳定身份、完整仿射变换、锁定状态、所有者、访问模式、可信玩家、名称、源 kind/坐标、三轴硬范围和屏幕/字幕/音源元素；三栏编辑器支持三类元素的添加、选择、复制、完整变换、本地/世界 Gizmo 与统一撤销/重做，并通过带 revision 和 operationId 的完整快照进行约 10 tick 防抖自动保存。服务端已校验玩家 `mayBuild`、owner/accessMode/trusted ACL、8 格编辑距离、目标区块与方块实体类型、字段有限值、变换域、变换后四角/音源中心 hardRange、4096 元素防御阈值、64 KiB 完整快照、基础限流和 revision 乐观并发。
+当前中控台已经形成可运行纵切：可放置并绑定现代化唱片机或直播机，使用 schema v7 文档持久化稳定身份、完整仿射变换、锁定状态、所有者、访问模式、可信玩家、名称、源 kind/坐标、三轴硬范围和屏幕/字幕/音源元素；三栏编辑器支持三类元素的添加、选择、复制、完整变换、本地/世界 Gizmo 与统一撤销/重做，并通过带 revision 和 operationId 的完整快照进行约 10 tick 防抖自动保存。服务端对普通玩家校验 `mayBuild`、owner/accessMode/trusted ACL；OP2+ 管理员绕过 ACL 和 `mayBuild`，但仍受 8 格编辑距离、目标区块与方块实体类型、字段有限值、变换域、变换后四角/音源中心 hardRange、4096 元素防御阈值、64 KiB 完整快照、基础限流和 revision 乐观并发。
 
 唱片机媒体纵切已经接通：多个屏幕复用同一唱片机视频 session 和帧；字幕可使用固定文本、静态歌词、主轨滚动和翻译轨滚动；多个音源通过独立 OpenAL relay 复用主 PCM，并支持音量、逻辑声道、独立最大听距和自动混合 JOC。上述能力已经贯通编辑草稿、NBT、网络和客户端运行时。
 
@@ -114,7 +114,7 @@ OpenAL source/buffer 的关闭也已按 native batch 分配纯标量 operationId
 - schema v3 `Document` Compound、schema 1/2 根字段兼容读取、未来 schema 子树只读保留、方块实体镜像、revision 和最近 64 个 operationId 去重；
 - 放置者所有权、旧世界首次合法使用认领、`OWNER_ONLY / TRUSTED / PUBLIC_EDIT`、最多 256 个可信 UUID、独立 ACL 配置包，以及 OP2+ 或管理员权限节点恢复访问；
 - 三栏编辑器、统一相机矩阵、orbit/pan/dolly/fly、正交/透视视图、聚焦、元素拾取和三轴 Gizmo；
-- schema v6 完整 position/rotation/非均匀 scale/pivot/skew、本地/世界 Gizmo，以及数值、内容、集合和漫游编辑统一命令栈；
+- schema v7 完整 position/rotation/非均匀 scale/pivot/skew、本地/世界 Gizmo，以及数值、内容、集合和漫游编辑统一命令栈；
 - 纯客户端灵魂漫游、硬范围相机约束、1/2/3 放置和完整元素内容快照返回；
 - 唱片机多屏共享视频 session、歌词统一时间线和共享 PCM 空间音源；
 - 字幕静态/滚动模式及音源音量、声道、最大听距和 autoMixJoc；
@@ -1006,7 +1006,7 @@ Phase 1 已完成第一人称统一 `CameraFrame`、GUI/PIP 运行时接线和�
 - 注册中控台方块、方块实体、菜单和基础资源。
 - 实现版本化 `ControlConsoleDocument`、元素联合类型和 NBT 迁移。
 - 实现带维度的唱片机/直播机绑定验证。
-- 当前已注册中控台方块、方块实体、创造标签物品、专属模型和三栏编辑器；方块实体持久化 schema v6 文档、稳定身份、锁定状态及完整空间元素变换，兼容迁移旧 schema，不设屏幕、字幕、音源的产品数量上限；4096 仅作为异常 NBT/网络包的防御性阈值，不代表产品级数量配额。
+- 当前已注册中控台方块、方块实体、创造标签物品、专属模型和三栏编辑器；方块实体持久化 schema v7 文档、稳定身份、锁定状态及完整空间元素变换，兼容迁移旧 schema，不设屏幕、字幕、音源的产品数量上限；4096 仅作为异常 NBT/网络包的防御性阈值，不代表产品级数量配额。
 
 ### Phase 3：中控台三栏编辑器
 
@@ -1019,7 +1019,7 @@ Phase 1 已完成第一人称统一 `CameraFrame`、GUI/PIP 运行时接线和�
 
 当前选择交互进一步收紧为：只有在真正空白区域完成一次短距离左键单击，才会在松开时取消元素选择；从空白区域开始的左键相机拖动、右键平移、点击中控台主体或操作 Gizmo 均保持当前元素选择。按下阶段不再提前清空选择。
 
-上述三类元素在编辑期间仍以客户端 `PreviewScreenSpec` 作为可编辑草稿，但保存时会转换为 `ControlConsoleElement` 列表并写入 schema v6 `ControlConsoleDocument`。服务端已完成缺失字段兼容读取、网络编解码、字段/变换域与派生几何校验、元素数量防御、64 KiB 场景快照上限、revision 乐观并发控制和未来 schema 只读保护。自动保存冲突会保留本地草稿，并在结果包中直接携带同 revision 的权威文档；“重新加载服务器版”使用该精确快照。空间布局已能驱动真实视频、普通/AI 字幕和空间音频输出；音源声道、音量、独立听距和 autoMixJoc 已接通。
+上述三类元素在编辑期间仍以客户端 `PreviewScreenSpec` 作为可编辑草稿，但保存时会转换为 `ControlConsoleElement` 列表并写入 schema v7 `ControlConsoleDocument`。服务端已完成缺失字段兼容读取、网络编解码、字段/变换域与派生几何校验、元素数量防御、64 KiB 场景快照上限、revision 乐观并发控制和未来 schema 只读保护。自动保存冲突会保留本地草稿，并在结果包中直接携带同 revision 的权威文档；“重新加载服务器版”使用该精确快照。空间布局已能驱动真实视频、普通/AI 字幕和空间音频输出；屏幕亮度已接通，音源声道、音量、独立听距和 autoMixJoc 已接通。
 
 元素内容检查器当前提供：
 
@@ -1109,7 +1109,7 @@ PIP/compiler 只消费不可变快照，不持有 `ClientLevel`、chunk 或活�
 
 ### Phase 7：安全、多人和性能收敛
 
-状态：**当前设计纵切与固定设备多人门槛已完成**。`mayBuild`、owner/accessMode/trusted ACL、OP2+ 不可被外部权限处理器否决的管理员恢复权限、服务端授权打开、10 秒独占编辑租约、每玩家 3 秒消费租约、revision、operationId 去重、基础限流、编辑距离、字段级安全上限、按元素类型的 contentMode、64 KiB 包体限制、schema v6 稳定身份/锁定元素和未来文档只读保留已完成；ModBench 已覆盖 consumer 引用、GUI 生命周期、terrain LOD 往返、固定第三方 Iris/shaderpack 组合、空闲资源/HTTP 收敛、确定性 RGBA/YUV420P/NV12 GPU 上传释放、两个物理客户端独立消费者、同 UUID 断线重连、真实媒体 Iris 运行和有负载 100 轮资源基线。尚未覆盖的是跨操作系统/GPU/驱动的更广矩阵。
+状态：**当前设计纵切与固定设备多人门槛已完成**。普通玩家 `mayBuild`、owner/accessMode/trusted ACL、OP2+ 不可被外部权限处理器否决且不受 `mayBuild` 前置门槛影响的管理员恢复权限、服务端授权打开、10 秒独占编辑租约、每玩家 3 秒消费租约、revision、operationId 去重、基础限流、编辑距离、字段级安全上限、按元素类型的 contentMode、64 KiB 包体限制、schema v7 稳定身份/锁定元素和未来文档只读保留已完成；ModBench 已覆盖 consumer 引用、GUI 生命周期、terrain LOD 往返、固定第三方 Iris/shaderpack 组合、空闲资源/HTTP 收敛、确定性 RGBA/YUV420P/NV12 GPU 上传释放、两个物理客户端独立消费者、同 UUID 断线重连、真实媒体 Iris 运行和有负载 100 轮资源基线。尚未覆盖的是跨操作系统/GPU/驱动的更广矩阵。
 
 - 完成权限、revision、操作去重、限流和包大小限制。
 - 验证多人独立消费者和共享源引用计数。

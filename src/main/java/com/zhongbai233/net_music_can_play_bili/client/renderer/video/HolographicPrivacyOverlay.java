@@ -5,7 +5,6 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.RenderVertexUtils;
 import net.minecraft.client.renderer.SubmitNodeCollector;
-import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.resources.Identifier;
 
 /** 全息眼镜隐私保护提示层：替代视频画面，避免直播露出敏感内容。 */
@@ -30,9 +29,7 @@ public final class HolographicPrivacyOverlay {
             float p3x, float p3y, float p3z) {
         collector.submitCustomGeometry(
                 poseStack,
-                IrisShaderpackCompat.isShaderPackInUse()
-                        ? YuvVideoRenderTypes.videoRgbaEmissiveEntity(textureId())
-                        : RenderTypes.itemCutout(textureId()),
+                YuvVideoRenderTypes.videoRgbaEmissiveEntity(textureId()),
                 (pose, buffer) -> {
                     emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
                             false);

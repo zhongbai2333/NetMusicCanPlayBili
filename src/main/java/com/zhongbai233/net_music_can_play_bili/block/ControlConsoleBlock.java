@@ -6,6 +6,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.permissions.Permissions;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
@@ -116,7 +117,8 @@ public final class ControlConsoleBlock extends Block implements EntityBlock {
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
             BlockHitResult hitResult) {
-        if (!player.mayBuild()) {
+        if (!player.mayBuild()
+                && !player.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER)) {
             return InteractionResult.FAIL;
         }
         if (!(level.getBlockEntity(pos) instanceof ControlConsoleBlockEntity console)) {

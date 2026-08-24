@@ -4,6 +4,8 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.ControlConsoleBlockEn
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElement;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleSnapshotBudget;
+import com.zhongbai233.net_music_can_play_bili.server.ControlConsolePermissionPolicy;
+import com.zhongbai233.net_music_can_play_bili.server.NetMusicPermissions;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -99,7 +101,8 @@ public record ControlConsoleConfigPacket(BlockPos pos, UUID leaseId, UUID operat
 
     public static void handle(ControlConsoleConfigPacket payload, IPayloadContext context) {
         if (!(context.player() instanceof ServerPlayer player) || !(player.level() instanceof ServerLevel level)
-            || !player.mayBuild()
+            || !ControlConsolePermissionPolicy.passesBuildGate(player.mayBuild(),
+                NetMusicPermissions.canAdministerControlConsole(player.createCommandSourceStack()))
                 || !NetworkRateLimiter.allow(player.getUUID(), "control_console_config", 4)
                 || player.position().distanceToSqr(Vec3.atCenterOf(payload.pos())) > 64.0D
                 || !level.hasChunk(Math.floorDiv(payload.pos().getX(), 16),
@@ -152,7 +155,7 @@ public record ControlConsoleConfigPacket(BlockPos pos, UUID leaseId, UUID operat
             buf.readBoolean(), buf.readBoolean(),
             buf.readFloat(), buf.readFloat(), buf.readFloat(),
             buf.readFloat(), buf.readFloat(), buf.readFloat(),
-            buf.readFloat(), buf.readFloat());
+            buf.readFloat(), buf.readFloat(), buf.readFloat());
     }
 
     static void writeElement(RegistryFriendlyByteBuf buf, ControlConsoleElement element) {
@@ -192,5 +195,6 @@ public record ControlConsoleConfigPacket(BlockPos pos, UUID leaseId, UUID operat
         buf.writeFloat(element.pivotZ());
         buf.writeFloat(element.skewXByY());
         buf.writeFloat(element.skewYByX());
+        buf.writeFloat(element.brightness());
     }
 }

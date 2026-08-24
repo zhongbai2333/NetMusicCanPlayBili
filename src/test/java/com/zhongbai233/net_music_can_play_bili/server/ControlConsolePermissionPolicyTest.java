@@ -30,4 +30,11 @@ class ControlConsolePermissionPolicyTest {
     void externalDenialCannotOverrideVanillaOrOwnerFallbacks() {
         assertTrue(ControlConsolePermissionPolicy.grantsAdministrator(true, true, false));
     }
+
+    @Test
+    void administratorBypassesAdventureModeBuildGate() {
+        assertTrue(ControlConsolePermissionPolicy.passesBuildGate(false, true));
+        assertTrue(ControlConsolePermissionPolicy.passesBuildGate(true, false));
+        assertFalse(ControlConsolePermissionPolicy.passesBuildGate(false, false));
+    }
 }

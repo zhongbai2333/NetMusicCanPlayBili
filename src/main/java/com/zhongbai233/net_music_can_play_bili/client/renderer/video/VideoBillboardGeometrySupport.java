@@ -9,7 +9,6 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEn
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.rendertype.RenderType;
-import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
@@ -171,9 +170,9 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
                 renderType,
                 (pose, buffer) -> {
                     emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
-                            false);
+                            false, 1.0F, projector.getProjectionBrightness());
                     emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
-                            true);
+                            true, 1.0F, projector.getProjectionBrightness());
                 });
     }
 
@@ -246,6 +245,19 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
             float halfHeight,
             float rgbaDepthOffset,
             float opacity) {
+        return submitProjectorFrameOnPose(collector, poseStack, frame, halfWidth, halfHeight, rgbaDepthOffset,
+                opacity, 1.0F);
+    }
+
+    public static boolean submitProjectorFrameOnPose(
+            net.minecraft.client.renderer.SubmitNodeCollector collector,
+            PoseStack poseStack,
+            ProjectorFrameSnapshot frame,
+            float halfWidth,
+            float halfHeight,
+            float rgbaDepthOffset,
+            float opacity,
+            float brightness) {
         VideoOpacityRoute opacityRoute = VideoOpacityRoute.choose(opacity);
         if (opacityRoute == VideoOpacityRoute.SKIP) {
             return false;
@@ -261,7 +273,7 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
                 return false;
             }
             submitLocalTexturedQuadSingle(collector, poseStack, yuvRenderTypeForSnapshot(frame), halfWidth, halfHeight,
-                    0.0F, normalizedOpacity);
+                    0.0F, normalizedOpacity, brightness);
             return true;
         }
         if (frame.rgbaTexture() == null) {
@@ -275,9 +287,9 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
                 : (opacityRoute == VideoOpacityRoute.TRANSLUCENT
                     ? shaderpackSafeTranslucentRgba(frame.rgbaTexture())
                     : YuvVideoRenderTypes.videoRgbaEntity(frame.rgbaTexture())),
-                -halfWidth, halfHeight, halfWidth, -halfHeight, rgbaDepthOffset, normalizedOpacity);
+                -halfWidth, halfHeight, halfWidth, -halfHeight, rgbaDepthOffset, normalizedOpacity, brightness);
         if (frame.loadingProgressOverlay()) {
-            submitLoadingProgressOnPose(collector, poseStack, halfWidth, halfHeight, normalizedOpacity);
+            submitLoadingProgressOnPose(collector, poseStack, halfWidth, halfHeight, normalizedOpacity, brightness);
         }
         return true;
     }
@@ -296,6 +308,16 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
             float halfWidth,
             float halfHeight,
             float opacity) {
+        return submitLoadingProgressOnPose(collector, poseStack, halfWidth, halfHeight, opacity, 1.0F);
+    }
+
+    protected static boolean submitLoadingProgressOnPose(
+            net.minecraft.client.renderer.SubmitNodeCollector collector,
+            PoseStack poseStack,
+            float halfWidth,
+            float halfHeight,
+            float opacity,
+            float brightness) {
         if (collector == null || poseStack == null || halfWidth <= 0.0F || halfHeight <= 0.0F) {
             return false;
         }
@@ -315,13 +337,13 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
                 pixelTop(LOADING_PROGRESS_Y, halfHeight),
                 pixelRight(LOADING_PROGRESS_X + LOADING_PROGRESS_W, halfWidth),
                 pixelBottom(LOADING_PROGRESS_Y + LOADING_PROGRESS_H, halfHeight),
-                0.004F, normalizedOpacity);
+                0.004F, normalizedOpacity, brightness);
         submitLocalTexturedQuad(collector, poseStack, frameRenderType,
                 pixelLeft(LOADING_PROGRESS_X, halfWidth),
                 pixelTop(LOADING_PROGRESS_Y, halfHeight),
                 pixelRight(LOADING_PROGRESS_X + LOADING_PROGRESS_W, halfWidth),
                 pixelBottom(LOADING_PROGRESS_Y + LOADING_PROGRESS_H, halfHeight),
-                -0.004F, normalizedOpacity);
+                -0.004F, normalizedOpacity, brightness);
         int movingX = LOADING_PROGRESS_X + 2 + (int) (((System.nanoTime() / 12_000_000L)
                 % Math.max(1, LOADING_PROGRESS_W - LOADING_PROGRESS_SEGMENT_W - 4)));
         submitLocalTexturedQuad(collector, poseStack, segmentRenderType,
@@ -329,26 +351,22 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
                 pixelTop(LOADING_PROGRESS_Y + 2, halfHeight),
                 pixelRight(movingX + LOADING_PROGRESS_SEGMENT_W, halfWidth),
                 pixelBottom(LOADING_PROGRESS_Y + 2 + LOADING_PROGRESS_SEGMENT_H, halfHeight),
-                0.006F, normalizedOpacity);
+                0.006F, normalizedOpacity, brightness);
         submitLocalTexturedQuad(collector, poseStack, segmentRenderType,
                 pixelLeft(movingX, halfWidth),
                 pixelTop(LOADING_PROGRESS_Y + 2, halfHeight),
                 pixelRight(movingX + LOADING_PROGRESS_SEGMENT_W, halfWidth),
                 pixelBottom(LOADING_PROGRESS_Y + 2 + LOADING_PROGRESS_SEGMENT_H, halfHeight),
-                -0.006F, normalizedOpacity);
+                -0.006F, normalizedOpacity, brightness);
         return true;
     }
 
     protected static RenderType shaderpackSafeEmissiveRgba(Identifier texture) {
-        return IrisShaderpackCompat.isShaderPackInUse()
-                ? YuvVideoRenderTypes.videoRgbaEmissiveEntity(texture)
-                : RenderTypes.itemCutout(texture);
+        return YuvVideoRenderTypes.videoRgbaEmissiveEntity(texture);
     }
 
     protected static RenderType shaderpackSafeTranslucentRgba(Identifier texture) {
-        return IrisShaderpackCompat.isShaderPackInUse()
-                ? YuvVideoRenderTypes.videoRgbaTranslucentEntity(texture)
-                : RenderTypes.itemTranslucent(texture);
+        return YuvVideoRenderTypes.videoRgbaTranslucentEntity(texture);
     }
 
     public static boolean submitProjectorPrivacyOverlayOnPose(
@@ -377,6 +395,20 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
             float bottom,
             float z,
             float opacity) {
+        submitLocalTexturedQuad(collector, poseStack, renderType, left, top, right, bottom, z, opacity, 1.0F);
+    }
+
+    protected static void submitLocalTexturedQuad(
+            net.minecraft.client.renderer.SubmitNodeCollector collector,
+            PoseStack poseStack,
+            RenderType renderType,
+            float left,
+            float top,
+            float right,
+            float bottom,
+            float z,
+            float opacity,
+            float brightness) {
         collector.submitCustomGeometry(
                 poseStack,
                 renderType,
@@ -386,13 +418,13 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
                             left, bottom, z,
                             right, bottom, z,
                             right, top, z,
-                            false, opacity);
+                            false, opacity, brightness);
                     emitQuad(buffer, pose,
                             left, top, z,
                             left, bottom, z,
                             right, bottom, z,
                             right, top, z,
-                            true, opacity);
+                            true, opacity, brightness);
                 });
     }
 
@@ -405,6 +437,18 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
             float halfHeight,
             float z,
             float opacity) {
+        submitLocalTexturedQuadSingle(collector, poseStack, renderType, halfWidth, halfHeight, z, opacity, 1.0F);
+    }
+
+    protected static void submitLocalTexturedQuadSingle(
+            net.minecraft.client.renderer.SubmitNodeCollector collector,
+            PoseStack poseStack,
+            RenderType renderType,
+            float halfWidth,
+            float halfHeight,
+            float z,
+            float opacity,
+            float brightness) {
         collector.submitCustomGeometry(
                 poseStack,
                 renderType,
@@ -413,7 +457,7 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
                         -halfWidth, -halfHeight, z,
                         halfWidth, -halfHeight, z,
                         halfWidth, halfHeight, z,
-                        false, opacity));
+                        false, opacity, brightness));
     }
 
     protected static float pixelLeft(int x, float halfWidth) {
@@ -528,9 +572,9 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
                 renderType,
                 (pose, buffer) -> {
                     emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
-                            false);
+                            false, 1.0F, projector.getProjectionBrightness());
                     emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
-                            true);
+                            true, 1.0F, projector.getProjectionBrightness());
                 });
     }
 

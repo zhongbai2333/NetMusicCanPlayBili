@@ -7,9 +7,9 @@ import java.util.List;
 public final class ControlConsoleSnapshotBudget {
     public static final int MAX_BYTES = 64 * 1024;
     private static final int FIXED_PACKET_BYTES = 8 + 16 + 16 + 8 + 3 * 8;
-    // UUID 16 bytes + locked 1 byte + v6 advanced transform (8 floats) are fixed per element.
+    // UUID 16 bytes + locked 1 byte + v7 advanced transform and brightness (9 floats) are fixed per element.
     private static final int FIXED_ELEMENT_BYTES = 8 * 4 + 2 + 3 * 4 + 2 * 4 + 2 + 16 + 1
-            + 2 * 4 + 1 + 4 + 1 + 8 * 4;
+            + 2 * 4 + 1 + 4 + 1 + 9 * 4;
 
     private ControlConsoleSnapshotBudget() {
     }

@@ -518,7 +518,7 @@ abstract class HolographicEditorInputScreen extends HolographicEditorRenderScree
                 screen.skewXByY, screen.skewYByX, screen.contentMode, screen.text, screen.followLyrics,
                 screen.showTranslation, screen.textScale, screen.color, screen.volume, screen.channelIndex,
                 screen.maxDistance, screen.autoMixJoc, screen.translationColor, screen.backgroundColor,
-                screen.alignment, screen.maxWidth, screen.wrap, screen.enabled, screen.locked);
+                screen.alignment, screen.maxWidth, screen.wrap, screen.enabled, screen.locked, screen.brightness);
     }
 
     protected static ScreenSnapshot snapshot(ControlConsoleElement element) {
@@ -534,7 +534,7 @@ abstract class HolographicEditorInputScreen extends HolographicEditorRenderScree
                 element.followLyrics(), element.showTranslation(), element.textScale(), element.color(),
                 element.volume(), element.channelIndex(), element.maxDistance(), element.autoMixJoc(),
                 element.translationColor(), element.backgroundColor(), element.alignment(), element.maxWidth(),
-                element.wrap(), element.enabled(), element.locked());
+                element.wrap(), element.enabled(), element.locked(), element.brightness());
     }
 
     protected void presetRight() {

@@ -67,7 +67,7 @@ jarJar(implementation("com.github.zhongbai2333.SceneEditor:scene-editor-minecraf
 
 Scene Editor 采用独立语义版本。主模组版本、世界数据与物品数据不会随库版本自动提升：
 
-- 中控台当前为 `ControlConsoleDocument.CURRENT_SCHEMA_VERSION = 6`；
+- 中控台当前为 `ControlConsoleDocument.CURRENT_SCHEMA_VERSION = 7`；
 - 全息眼镜当前为 `HolographicGlassesItem.PERSISTENCE_SCHEMA_VERSION = 1`；
 - core 的 `SceneDocument` 不包含主模组持久化 schema。
 

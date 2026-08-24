@@ -864,22 +864,32 @@ public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
 
     public static void captureProjectorImmediatePose(String sessionId, BlockPos projectorPos, Matrix4f pose,
             float halfHeight) {
-        captureProjectorImmediatePose(sessionId, projectorPos, pose, halfHeight, 1.0F);
+        captureProjectorImmediatePose(sessionId, projectorPos, pose, halfHeight, 1.0F, 1.0F);
     }
 
     public static void captureProjectorImmediatePose(PlaybackSessionId playbackSessionId, BlockPos projectorPos,
             Matrix4f pose, float halfHeight) {
-        captureProjectorImmediatePose(playbackSessionId, projectorPos, pose, halfHeight, 1.0F);
+        captureProjectorImmediatePose(playbackSessionId, projectorPos, pose, halfHeight, 1.0F, 1.0F);
     }
 
     public static void captureProjectorImmediatePose(String sessionId, BlockPos projectorPos, Matrix4f pose,
             float halfHeight, float opacity) {
+        captureProjectorImmediatePose(sessionId, projectorPos, pose, halfHeight, opacity, 1.0F);
+    }
+
+    public static void captureProjectorImmediatePose(String sessionId, BlockPos projectorPos, Matrix4f pose,
+            float halfHeight, float opacity, float brightness) {
         PlaybackSessionId.parse(sessionId).ifPresent(playbackSessionId ->
-                captureProjectorImmediatePose(playbackSessionId, projectorPos, pose, halfHeight, opacity));
+                captureProjectorImmediatePose(playbackSessionId, projectorPos, pose, halfHeight, opacity, brightness));
     }
 
     public static void captureProjectorImmediatePose(PlaybackSessionId playbackSessionId, BlockPos projectorPos,
             Matrix4f pose, float halfHeight, float opacity) {
+        captureProjectorImmediatePose(playbackSessionId, projectorPos, pose, halfHeight, opacity, 1.0F);
+    }
+
+    public static void captureProjectorImmediatePose(PlaybackSessionId playbackSessionId, BlockPos projectorPos,
+            Matrix4f pose, float halfHeight, float opacity, float brightness) {
         VideoOpacityRoute opacityRoute = VideoOpacityRoute.choose(opacity);
         if (playbackSessionId == null || projectorPos == null || pose == null || halfHeight <= 0.0F
                 || opacityRoute == VideoOpacityRoute.SKIP) {
@@ -887,7 +897,8 @@ public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
         }
         PROJECTOR_IMMEDIATE_POSES.put(new ProjectorImmediateKey(playbackSessionId, projectorPos.immutable()),
                 new ProjectorImmediatePose(new Matrix4f(pose), halfHeight,
-                        VideoOpacityRoute.normalize(opacity)));
+                        VideoOpacityRoute.normalize(opacity),
+                        com.zhongbai233.net_music_can_play_bili.media.VideoSurfaceBrightness.normalize(brightness)));
     }
 
     static boolean drawCapturedProjectorYuvImmediate(RenderLevelStageEvent event, String sessionId,
@@ -909,9 +920,11 @@ public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
         BufferBuilder builder = Tesselator.getInstance().begin(renderType.mode(), renderType.format());
         PoseStack.Pose identityPose = new PoseStack().last();
         emitQuad(builder, identityPose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),
-                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), false, captured.opacity());
+                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), false, captured.opacity(),
+                captured.brightness());
         emitQuad(builder, identityPose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),
-                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), true, captured.opacity());
+                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), true, captured.opacity(),
+                captured.brightness());
         MeshData mesh = builder.build();
         if (mesh == null) {
             return false;
@@ -939,9 +952,11 @@ public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
         PoseStack poseStack = "identity".equals(YUV_IMMEDIATE_POSE) ? new PoseStack() : event.getPoseStack();
         PoseStack.Pose pose = poseStack.last();
         emitQuad(builder, pose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),
-                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), false);
+                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), false, 1.0F,
+                projector.getProjectionBrightness());
         emitQuad(builder, pose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),
-                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), true);
+                quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), true, 1.0F,
+                projector.getProjectionBrightness());
         MeshData mesh = builder.build();
         if (mesh == null) {
             return false;

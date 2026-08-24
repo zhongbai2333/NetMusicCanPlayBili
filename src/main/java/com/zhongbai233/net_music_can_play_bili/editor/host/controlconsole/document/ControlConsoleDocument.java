@@ -36,7 +36,7 @@ public record ControlConsoleDocument(
         double hardRangeY,
         double hardRangeZ,
         List<ControlConsoleElement> elements) {
-    public static final int CURRENT_SCHEMA_VERSION = 6;
+    public static final int CURRENT_SCHEMA_VERSION = 7;
     public static final double DEFAULT_HARD_RANGE_X = 64.0D;
     public static final double DEFAULT_HARD_RANGE_Y = 32.0D;
     public static final double DEFAULT_HARD_RANGE_Z = 64.0D;
