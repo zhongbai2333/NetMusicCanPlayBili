@@ -71,9 +71,10 @@ public class LiveStreamerSound extends SyncedMediaSound {
                 ? live
                 : null;
         float configuredVolume = 4.0F * (streamer != null ? streamer.getVolume() : 1.0F);
-        boolean audible = ClientAudioOutputRegistry.hasAudioDemand(pos, sourceId, sessionId());
-        this.volume = configuredVolume
-                * presentationEnvelope.gain(streamReadyTick >= 0 && audible, System.nanoTime());
+        boolean presentationDemand = ClientAudioOutputRegistry.hasGeometricAudioDemand(pos, sourceId, sessionId());
+        long nowNanos = System.nanoTime();
+        this.volume = configuredVolume * ClientAudioOutputRegistry.areaGainForSource(pos, nowNanos)
+                * presentationEnvelope.gain(streamReadyTick >= 0 && presentationDemand, nowNanos);
         refreshDecodeDemand();
 
         if (!ModernTurntablePlaybackTracker.isCurrent(pos, sessionId())) {

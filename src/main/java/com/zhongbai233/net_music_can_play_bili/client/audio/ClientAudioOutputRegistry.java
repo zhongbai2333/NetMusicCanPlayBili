@@ -169,12 +169,16 @@ public class ClientAudioOutputRegistry {
 
         float[] currentListenerPos = AudioUtils.copyPos3(listenerPos);
         ClientAudioOutputRegistry.listenerPos = currentListenerPos;
+        long nowNanos = System.nanoTime();
+        RELAYS.forEach((outputKey, relay) -> relay.setAreaGain(
+                ClientAreaAudioZoneRegistry.gain(outputKey, nowNanos)));
         for (AudioEntry entry : OUTPUTS.values()) {
             if (discardIfStaleOutput(entry)) {
                 continue;
             }
             if (entry.ownerId() == null) {
-                entry.output().setUserVolume(ClientAudioOutputPolicy.volume(entry.pos()));
+                entry.output().setUserVolume(ClientAudioOutputPolicy.volume(entry.pos())
+                        * areaGainForMainOutput(entry.pos(), nowNanos));
             }
             if (isRealWorldKey(entry.pos())
                     && com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
@@ -465,6 +469,34 @@ public class ClientAudioOutputRegistry {
         }
     }
 
+    /**
+     * Gain used by Minecraft SoundEngine carrier sounds. It follows the loudest real public
+     * output so a source spanning multiple AreaControl rooms stays audible in each local room.
+     */
+    public static float areaGainForSource(BlockPos sourcePos, long nowNanos) {
+        if (sourcePos == null || com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
+                .handlesTurntable(sourcePos)) {
+            return 1.0F;
+        }
+        float best = isMainRouteSuppressed(sourcePos) ? 0.0F
+                : ClientAreaAudioZoneRegistry.gain(sourcePos, nowNanos);
+        for (var entry : RELAY_TURNTABLE.entrySet()) {
+            if (sourcePos.equals(entry.getValue())) {
+                best = Math.max(best, ClientAreaAudioZoneRegistry.gain(entry.getKey(), nowNanos));
+            }
+        }
+        return best;
+    }
+
+    private static float areaGainForMainOutput(BlockPos sourcePos, long nowNanos) {
+        if (sourcePos != null && com.zhongbai233.net_music_can_play_bili.client.HeadphoneClientState
+                .handlesTurntable(sourcePos)) {
+            return 1.0F;
+        }
+        return sourcePos != null && isRealWorldKey(sourcePos)
+                ? ClientAreaAudioZoneRegistry.gain(sourcePos, nowNanos) : 1.0F;
+    }
+
 
     /** 将音响配置（声道掩码/音量/JOC 静态化）应用到对应唱片机的 handler */
     public static void applySpeakerConfig(BlockPos turntablePos, int channelMask, float volume, boolean autoMixJoc) {
@@ -490,6 +522,43 @@ public class ClientAudioOutputRegistry {
         return audioDemandDebug(sourcePos, sourceId, sessionId).demand();
     }
 
+    /** Actual range/route demand without AreaControl, used only to keep entry fades continuous. */
+    public static boolean hasGeometricAudioDemand(BlockPos sourcePos, PlaybackSourceId sourceId, String sessionId) {
+        AudioDemandDebug actual = audioDemandDebug(sourcePos, sourceId, sessionId);
+        if (!actual.audioEnabled() || !actual.listenerPresent() || sourcePos == null) {
+            return false;
+        }
+        if (actual.headphone()
+                || sourceId != null && !ClientAudioEndpointIndex.geometricDemands(sourceId).isEmpty()) {
+            return true;
+        }
+        float[] listener = currentListenerPosition();
+        if (listener == null) {
+            return false;
+        }
+        if (!actual.mainSuppressed() && actual.sourceVolume() > 0.0F) {
+            float[] sourcePosition = AudioUtils.centerFor(sourcePos);
+            var movingPosition = ClientMinecartAudioAnchors.position(sessionId);
+            if (movingPosition != null) {
+                sourcePosition = new float[] { (float) movingPosition.x, (float) movingPosition.y,
+                        (float) movingPosition.z };
+            }
+            if (AudioPlaybackRange.evaluateSphere(AudioUtils.distance(listener, sourcePosition),
+                    AudioPlaybackRange.DEFAULT_DISTANCE, actual.sourceVolume(), false).audible()) {
+                return true;
+            }
+        }
+        for (var entry : RELAY_TURNTABLE.entrySet()) {
+            if (sourcePos.equals(entry.getValue())) {
+                SpeakerAudioRelay relay = RELAYS.get(entry.getKey());
+                if (relay != null && relay.hasGeometricDemand(listener)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /**
      * Decode preparation may lead audibility by a bounded movement projection. It never changes
      * output gain; the spatial outputs remain silent until the real range test succeeds.
@@ -508,6 +577,29 @@ public class ClientAudioOutputRegistry {
         float[] listener = currentListenerPosition();
         if (listener == null) {
             return false;
+        }
+        if (sourceId != null && !ClientAudioEndpointIndex.geometricDemands(sourceId).isEmpty()) {
+            return true;
+        }
+        if (!actual.mainSuppressed() && actual.sourceVolume() > 0.0F) {
+            float[] sourcePosition = AudioUtils.centerFor(sourcePos);
+            var movingPosition = ClientMinecartAudioAnchors.position(sessionId);
+            if (movingPosition != null) {
+                sourcePosition = new float[] { (float) movingPosition.x, (float) movingPosition.y,
+                        (float) movingPosition.z };
+            }
+            if (AudioPlaybackRange.evaluateSphere(AudioUtils.distance(listener, sourcePosition),
+                    AudioPlaybackRange.DEFAULT_DISTANCE, actual.sourceVolume(), false).audible()) {
+                return true;
+            }
+        }
+        for (var entry : RELAY_TURNTABLE.entrySet()) {
+            if (sourcePos.equals(entry.getValue())) {
+                SpeakerAudioRelay relay = RELAYS.get(entry.getKey());
+                if (relay != null && relay.hasGeometricDemand(listener)) {
+                    return true;
+                }
+            }
         }
         if (sourceId != null && !ClientAudioEndpointIndex.anticipatedDemands(sourceId).isEmpty()) {
             return true;
@@ -559,7 +651,8 @@ public class ClientAudioOutputRegistry {
                         (float) movingPosition.z };
             }
             mainDistance = AudioUtils.distance(listener, sourcePosition);
-            mainAudible = AudioPlaybackRange.evaluateSphere(mainDistance,
+            mainAudible = ClientAreaAudioZoneRegistry.audible(sourcePos, System.nanoTime())
+                    && AudioPlaybackRange.evaluateSphere(mainDistance,
                     AudioPlaybackRange.DEFAULT_DISTANCE, sourceVolume, false).audible();
         }
         int matchingRelays = 0;
@@ -599,6 +692,7 @@ public class ClientAudioOutputRegistry {
                 (float) minecraft.player.getZ() };
         AudioEntry mainOutput = turntablePos != null ? OUTPUTS.get(keyFor(turntablePos)) : null;
         if (mainOutput != null && !isMainRouteSuppressed(turntablePos)
+                && ClientAreaAudioZoneRegistry.audible(turntablePos, System.nanoTime())
                 && mainOutput.output().getPositionMillis() >= 0L
                 && AudioPlaybackRange.evaluateSphere(
                         AudioUtils.distance(listener, AudioUtils.centerFor(turntablePos)),
@@ -936,6 +1030,7 @@ public class ClientAudioOutputRegistry {
         ClientMinecartAudioAnchors.clear();
         ClientAudioOwnerVolumes.clear();
         MINECART_KEYS.clear();
+        ClientAreaAudioZoneRegistry.clear();
         runCleanupTasks(cleanupTasks);
     }
 

@@ -2,6 +2,7 @@ package com.zhongbai233.net_music_can_play_bili.network;
 
 import com.zhongbai233.net_music_can_play_bili.client.MP4ClientMediaSync;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AreaAudioZone;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -12,7 +13,7 @@ import java.util.UUID;
 public record MP4PlaybackSyncPacket(UUID ownerId, UUID sourceId, int sourceType, int sourceEntityId,
         double sourceX, double sourceY, double sourceZ, boolean playing, int queueIndex, String playUrl, String rawUrl,
         String songName, int durationSeconds, int volumePerMille, String sessionId, long elapsedMillis,
-        boolean headphoneRouted)
+        boolean headphoneRouted, AreaAudioZone areaAudioZone)
         implements CustomPacketPayload, ClientMediaSyncPayload {
     public static final int SOURCE_PLAYER = ClientMediaSyncPayload.SOURCE_PLAYER;
     public static final int SOURCE_ITEM = ClientMediaSyncPayload.SOURCE_ITEM;
@@ -54,7 +55,8 @@ public record MP4PlaybackSyncPacket(UUID ownerId, UUID sourceId, int sourceType,
                     buffer.readInt(),
                     buffer.readUtf(),
                     buffer.readVarLong(),
-                    buffer.readBoolean());
+                    buffer.readBoolean(),
+                    AreaAudioZoneCodec.decode(buffer));
         }
 
         @Override
@@ -76,8 +78,22 @@ public record MP4PlaybackSyncPacket(UUID ownerId, UUID sourceId, int sourceType,
             buffer.writeUtf(packet.sessionId());
             buffer.writeVarLong(packet.elapsedMillis());
             buffer.writeBoolean(packet.headphoneRouted());
+            AreaAudioZoneCodec.encode(buffer, packet.areaAudioZone());
         }
     };
+
+    public MP4PlaybackSyncPacket(UUID ownerId, UUID sourceId, int sourceType, int sourceEntityId,
+            double sourceX, double sourceY, double sourceZ, boolean playing, int queueIndex, String playUrl,
+            String rawUrl, String songName, int durationSeconds, int volumePerMille, String sessionId,
+            long elapsedMillis, boolean headphoneRouted) {
+        this(ownerId, sourceId, sourceType, sourceEntityId, sourceX, sourceY, sourceZ, playing, queueIndex,
+                playUrl, rawUrl, songName, durationSeconds, volumePerMille, sessionId, elapsedMillis,
+                headphoneRouted, AreaAudioZone.unrestricted());
+    }
+
+    public MP4PlaybackSyncPacket {
+        areaAudioZone = areaAudioZone != null ? areaAudioZone : AreaAudioZone.unrestricted();
+    }
 
     public static MP4PlaybackSyncPacket stop(UUID ownerId, int queueIndex) {
         return stop(ownerId, ownerId, queueIndex);

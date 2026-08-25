@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.client;
 import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.client.audio.SyncedMediaSound;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAreaAudioZoneRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.audio.SyncedStreamRecoveryRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaAudioRouting;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
@@ -184,8 +185,10 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
         float spatialGain = AudioUtils.spatialGainForDistance((float) distance, mediaVolume, perceivedGain);
         boolean allowed = gameAudioEnabled && ClientMediaAudioRouting.canHear(sourceId, headphoneRouted);
         boolean spatialDemand = spatialGain > 0.0F;
-        volume = spatialGain * presentationEnvelope.gain(streamReady && allowed && spatialDemand,
-                System.nanoTime());
+        long nowNanos = System.nanoTime();
+        float areaGain = ClientAreaAudioZoneRegistry.gain(sourceId, nowNanos);
+        volume = spatialGain * areaGain * presentationEnvelope.gain(streamReady && allowed && spatialDemand,
+                nowNanos);
         boolean predicted = false;
         if (!spatialDemand && allowed && minecraft.player != null) {
             Vec3 listener = minecraft.player.position();

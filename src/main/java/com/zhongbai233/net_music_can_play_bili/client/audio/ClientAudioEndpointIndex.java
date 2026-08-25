@@ -44,12 +44,14 @@ public final class ClientAudioEndpointIndex {
         packet.removals().forEach(ClientAudioEndpointIndex::removeEndpoint);
         if (!packet.subscribed()) {
             SOURCE_POSITIONS.remove(sourceId);
+            ClientAreaAudioZoneRegistry.removeOutput(packet.sourcePos());
             if (packet.generation() > 0L) {
                 SOURCE_GENERATIONS.put(sourceId, packet.generation());
             }
             return;
         }
         SOURCE_POSITIONS.put(sourceId, packet.sourcePos().immutable());
+        ClientAreaAudioZoneRegistry.setOutputZone(packet.sourcePos(), packet.sourceZone());
         String dimension = minecraft.level.dimension().identifier().toString();
         for (AudioEndpointSnapshotPacket.Endpoint endpoint : packet.endpoints()) {
             Long currentRevision = ENDPOINT_REVISIONS.get(endpoint.endpointId());
@@ -62,6 +64,7 @@ public final class ClientAudioEndpointIndex {
                 ClientAudioOutputRegistry.clearMachineOverrideForSpeaker(oldPos);
             }
             ENDPOINT_REVISIONS.put(endpoint.endpointId(), endpoint.revision());
+            ClientAreaAudioZoneRegistry.setOutputZone(pos, endpoint.zone());
             ensureRelay(pos, packet.sourcePos(), endpoint);
             INDEX.upsert(new IndexedAudioEndpoint(endpoint.endpointId(), sourceId, dimension,
                     pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D,
@@ -74,6 +77,29 @@ public final class ClientAudioEndpointIndex {
     }
 
     public static Set<UUID> audibleDemands(PlaybackSourceId sourceId) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null || minecraft.player == null) {
+            return Set.of();
+        }
+        long nowNanos = System.nanoTime();
+        Set<UUID> geometric = INDEX.audibleDemands(sourceId,
+                minecraft.level.dimension().identifier().toString(),
+                minecraft.player.getX(), minecraft.player.getEyeY(), minecraft.player.getZ());
+        if (geometric.isEmpty()) {
+            return Set.of();
+        }
+        Set<UUID> audible = ConcurrentHashMap.newKeySet();
+        for (UUID endpointId : geometric) {
+            BlockPos pos = ENDPOINT_POSITIONS.get(endpointId);
+            if (pos != null && ClientAreaAudioZoneRegistry.audible(pos, nowNanos)) {
+                audible.add(endpointId);
+            }
+        }
+        return Set.copyOf(audible);
+    }
+
+    /** Geometric demand intentionally ignores AreaControl so a boundary crossing never restarts decoding. */
+    public static Set<UUID> geometricDemands(PlaybackSourceId sourceId) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level == null || minecraft.player == null) {
             return Set.of();
@@ -107,6 +133,8 @@ public final class ClientAudioEndpointIndex {
 
     public static void clear() {
         ENDPOINT_POSITIONS.values().forEach(ClientAudioOutputRegistry::clearMachineOverrideForSpeaker);
+        ENDPOINT_POSITIONS.values().forEach(ClientAreaAudioZoneRegistry::removeOutput);
+        SOURCE_POSITIONS.values().forEach(ClientAreaAudioZoneRegistry::removeOutput);
         ENDPOINT_POSITIONS.clear();
         ENDPOINT_REVISIONS.clear();
         SOURCE_POSITIONS.clear();
@@ -119,7 +147,8 @@ public final class ClientAudioEndpointIndex {
             removeEndpoint(endpoint.endpointId());
         }
         INDEX.removeSource(sourceId);
-        SOURCE_POSITIONS.remove(sourceId);
+        BlockPos sourcePos = SOURCE_POSITIONS.remove(sourceId);
+        ClientAreaAudioZoneRegistry.removeOutput(sourcePos);
     }
 
     private static void removeEndpoint(UUID endpointId) {
@@ -128,6 +157,7 @@ public final class ClientAudioEndpointIndex {
         INDEX.remove(endpointId);
         if (oldPos != null) {
             ClientAudioOutputRegistry.clearMachineOverrideForSpeaker(oldPos);
+            ClientAreaAudioZoneRegistry.removeOutput(oldPos);
         }
     }
 

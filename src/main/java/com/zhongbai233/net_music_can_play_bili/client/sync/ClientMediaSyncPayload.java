@@ -1,6 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AreaAudioZone;
 
 import java.util.UUID;
 import java.util.Optional;
@@ -54,4 +55,8 @@ public interface ClientMediaSyncPayload {
     long elapsedMillis();
 
     boolean headphoneRouted();
+
+    default AreaAudioZone areaAudioZone() {
+        return AreaAudioZone.unrestricted();
+    }
 }

@@ -150,6 +150,12 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
                 Set.of("client", "audio", "index", "range", "chunk", "decoder", "lifecycle"),
                 Duration.ofSeconds(10)), ignored -> new IndexedAudioOnDemandScenario());
         registrar.register(new ScenarioDescriptor(
+                "ncpb.area-control-audio-boundaries",
+                "Real AreaControl parent/child/sibling/wildness isolation with physical, virtual and moving outputs",
+                Set.of("client", "server", "audio", "area-control", "compat", "boundary", "fade",
+                        "speaker", "console", "mp4", "runtime"), Duration.ofSeconds(45)),
+                ignored -> new AreaControlAudioBoundaryScenario());
+        registrar.register(new ScenarioDescriptor(
                 "ncpb.indexed-server-session-unloaded",
                 "Server-indexed playback survives while the source chunk remains unloaded and unticketed",
                 Set.of("client", "server", "audio", "index", "chunk", "session", "lifecycle"),

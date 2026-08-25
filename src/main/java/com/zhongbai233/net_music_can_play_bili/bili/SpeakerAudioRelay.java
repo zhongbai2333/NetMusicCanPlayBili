@@ -27,6 +27,7 @@ public class SpeakerAudioRelay {
     private volatile boolean takeOverMainOutput = true;
     private volatile float userVolume = 1.0f;
     private volatile float rangeGain = 1.0f;
+    private volatile float areaGain = 1.0f;
     private volatile float maxDistance = AudioUtils.MAX_AUDIBLE_DISTANCE;
     private volatile boolean preparationDemand;
     private volatile float[] speakerPos;
@@ -73,6 +74,10 @@ public class SpeakerAudioRelay {
 
     public void setRangeGain(float gain) {
         this.rangeGain = AudioUtils.clampGain(gain);
+    }
+
+    public void setAreaGain(float gain) {
+        this.areaGain = AudioUtils.clampGain(gain);
     }
     public void setPreparationDemand(boolean preparationDemand) {
         this.preparationDemand = preparationDemand;
@@ -165,9 +170,9 @@ public class SpeakerAudioRelay {
         }
         sa.updatePositions(new float[][] { MONO_POS }, new float[0][0], listenerPos,
                 forward(speakerPos, listenerPos));
-        float baseGain = muted ? 0.0F : rangeAt(listenerPos).gain() * rangeGain;
-        float entryGain = presentationEnvelope.gain(baseGain > 0.0F, System.nanoTime());
-        float g = baseGain * entryGain * gameVol();
+        float geometricGain = muted ? 0.0F : rangeAt(listenerPos).gain() * rangeGain;
+        float entryGain = presentationEnvelope.gain(geometricGain > 0.0F, System.nanoTime());
+        float g = geometricGain * areaGain * entryGain * gameVol();
         sa.setBedGain(0, g);
         if (sa.isDeviceLost()) {
             sa.cleanup();
@@ -195,6 +200,11 @@ public class SpeakerAudioRelay {
 
     /** Whether this relay currently contributes a non-zero acoustic gain. */
     public boolean isAudibleAt(float[] listenerPos) {
+        return rangeGain > 0.0F && areaGain > 0.001F && hasOutputIntent() && rangeAt(listenerPos).audible();
+    }
+
+    /** Preparation stays alive behind an acoustic wall while the listener remains in physical range. */
+    public boolean hasGeometricDemand(float[] listenerPos) {
         return rangeGain > 0.0F && hasOutputIntent() && rangeAt(listenerPos).audible();
     }
 

@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.blockentity;
 import com.github.tartaricacid.netmusic.network.NetworkHandler;
 import com.github.tartaricacid.netmusic.network.message.MusicToClientMessage;
 import com.zhongbai233.net_music_can_play_bili.compat.minecartrevolution.MinecartTurntableCompat;
+import com.zhongbai233.net_music_can_play_bili.compat.areacontrol.AreaControlAudioCompat;
 import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
@@ -40,7 +41,7 @@ final class ModernTurntableAudienceSync {
                     player.getUUID(), sourceId, sessionId, sourcePos.asLong(),
                     player.getX(), player.getY(), player.getZ(), range, spatialEndpoints);
             if (update.packetRequired()) {
-                sendEndpointDelta(player, sourceId, sourcePos, update);
+                sendEndpointDelta(serverLevel, player, sourceId, sourcePos, update);
             }
             if (!update.playbackRecipient()) {
                 continue;
@@ -70,7 +71,7 @@ final class ModernTurntableAudienceSync {
                     player.getUUID(), sourceId, sessionId, sourcePos.asLong(),
                     player.getX(), player.getY(), player.getZ(), range, spatialEndpoints);
             if (update.packetRequired()) {
-                sendEndpointDelta(player, sourceId, sourcePos, update);
+                sendEndpointDelta(serverLevel, player, sourceId, sourcePos, update);
             }
             if (!update.playbackRecipient()) {
                 continue;
@@ -98,12 +99,15 @@ final class ModernTurntableAudienceSync {
                 : result;
     }
 
-    private static void sendEndpointDelta(ServerPlayer player, PlaybackSourceId sourceId, BlockPos sourcePos,
+    private static void sendEndpointDelta(ServerLevel level, ServerPlayer player, PlaybackSourceId sourceId,
+            BlockPos sourcePos,
             AudioEndpointSubscriptionTracker.Update update) {
         var upserts = update.upserts().stream().map(endpoint -> new AudioEndpointSnapshotPacket.Endpoint(
                 endpoint.endpointId(), BlockPos.of(endpoint.endpointPos()), endpoint.channelIndex(),
-                endpoint.volume(), endpoint.autoMixJoc(), endpoint.maxDistance(), endpoint.revision())).toList();
+                endpoint.volume(), endpoint.autoMixJoc(), endpoint.maxDistance(), endpoint.revision(),
+                AreaControlAudioCompat.zoneAt(level, BlockPos.of(endpoint.endpointPos())))).toList();
         PacketDistributor.sendToPlayer(player, new AudioEndpointSnapshotPacket(sourceId.value(), sourcePos,
+                AreaControlAudioCompat.zoneAt(level, sourcePos),
                 update.generation(), update.reset(), update.subscribed(), upserts, update.removals()));
     }
 

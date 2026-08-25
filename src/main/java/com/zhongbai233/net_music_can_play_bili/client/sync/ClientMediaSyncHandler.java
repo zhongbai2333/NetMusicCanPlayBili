@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.client.sync;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRegistry.ActivePlayback;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import net.minecraft.client.Minecraft;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAreaAudioZoneRegistry;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -20,10 +21,12 @@ public final class ClientMediaSyncHandler {
         UUID sourceId = payload.sourceId() != null ? payload.sourceId() : payload.ownerId();
         policy.onSyncReceived(payload, sourceId);
         if (!payload.playing()) {
+            ClientAreaAudioZoneRegistry.removeMovingZone(sourceId);
             policy.stop(sourceId);
             return;
         }
         if (!policy.canHear(sourceId, payload.headphoneRouted())) {
+            ClientAreaAudioZoneRegistry.removeMovingZone(sourceId);
             policy.stop(sourceId);
             policy.onIgnoredCannotHear(payload, sourceId);
             return;
@@ -32,6 +35,7 @@ public final class ClientMediaSyncHandler {
         if (payload.playUrl() == null || payload.playUrl().isBlank() || playbackSessionId.isEmpty()) {
             return;
         }
+        ClientAreaAudioZoneRegistry.setMovingZone(sourceId, payload.areaAudioZone());
 
         ClientMediaPlaybackRegistry.SourceLocation sourceLocation = ClientMediaPlaybackRegistry.SourceLocation
                 .from(payload);
@@ -69,6 +73,7 @@ public final class ClientMediaSyncHandler {
             return;
         }
         if (!policy.canHear(payload.sourceId(), payload.headphoneRouted())) {
+            ClientAreaAudioZoneRegistry.removeMovingZone(payload.sourceId());
             policy.stop(payload.sourceId());
             return;
         }
@@ -78,6 +83,7 @@ public final class ClientMediaSyncHandler {
                 || !playbackSessionId.equals(previous.playbackSessionId())) {
             return;
         }
+        ClientAreaAudioZoneRegistry.setMovingZone(payload.sourceId(), payload.areaAudioZone());
         ClientMediaPlaybackRegistry.put(payload.sourceId(),
                 previous.withServerElapsed(Math.max(0L, payload.elapsedMillis()),
                         previous.durationMillis()).withHeadphoneRouted(payload.headphoneRouted()));

@@ -123,6 +123,21 @@ repositories {
             includeGroup "maven.modrinth"
         }
     }
+    // AreaControl 26.1 is distributed as an immutable official GitHub Release asset rather than
+    // through Modrinth/Maven Central. The synthetic Ivy group keeps this repository narrowly scoped.
+    ivy {
+        name = 'AreaControlGitHubReleases'
+        url = 'https://github.com/teaconmc/AreaControl/releases/download'
+        patternLayout {
+            artifact '[revision]/[artifact]-[revision].[ext]'
+        }
+        metadataSources {
+            artifact()
+        }
+        content {
+            includeGroup 'org.teacon.github-release'
+        }
+    }
 }
 
 base {
@@ -372,6 +387,12 @@ tasks.register("runWithRenderDoc", Exec) {
 }
 
 
+configurations {
+    // Development-only optional mods: visible to normal userdev runs, never published or embedded.
+    localRuntimeOnly
+    runtimeClasspath.extendsFrom localRuntimeOnly
+}
+
 dependencies {
     // 通用场景编辑器核心的公开 API 暴露 JOML 只读/值类型，不能依赖 Minecraft 的传递 classpath。
     api 'org.joml:joml:1.10.8'
@@ -393,10 +414,14 @@ dependencies {
     compileOnly "maven.modrinth:net-music:mCrjhdSq"
     // neoforge.mods.toml declares NetMusic mandatory; every dev client/server run must therefore load it as well.
     runtimeOnly "maven.modrinth:net-music:mCrjhdSq"
+    // Optional TeaCon-only integration runtime. It is deliberately absent from API, compile and production JiJ.
+    localRuntimeOnly "org.teacon.github-release:AreaControl-NeoForge-26.1:${area_control_runtime_version}@jar"
     if (modBenchEnabled) {
         benchCompileOnly "maven.modrinth:net-music:mCrjhdSq"
         // Real LuckPerms -> NeoForge PermissionAPI integration; never enters the production JAR.
         benchRuntimeMod "maven.modrinth:Vebnzrzj:${luckperms_bench_version}"
+        // ModBench launches from its own runtime-mod bucket and does not inherit localRuntimeOnly.
+        benchRuntimeMod "org.teacon.github-release:AreaControl-NeoForge-26.1:${area_control_runtime_version}@jar"
     }
     compileOnly "maven.modrinth:iris:YEGDGnJM"
 
@@ -423,7 +448,7 @@ if (modBenchEnabled) {
         expectedProviderCount = 1
         seed = 233
         phaseTimeoutTicks = realMediaLifecycleEnabled ? 72000 : terrainCompatMatrixEnabled ? 3600 : 1200
-        clientWorldPreset = 'void'
+        clientWorldPreset = providers.gradleProperty('ncpbBenchWorldPreset').orElse('void').get()
         clientRequireWindowFocus = false
         pairedClientCount = providers.gradleProperty('ncpbPairedClientCount')
                 .map { Integer.parseInt(it) }.orElse(1).get()
@@ -629,8 +654,9 @@ tasks.register('verifySceneEditorJiJ') {
         ]
         new java.util.zip.ZipFile(archive).withCloseable { zip ->
             def outerClasses = zip.entries().findAll { entry ->
-                !entry.directory && entry.name.endsWith('.class')
-                        && entry.name.startsWith('com/zhongbai233/scene_editor/')
+                !entry.directory &&
+                        entry.name.endsWith('.class') &&
+                        entry.name.startsWith('com/zhongbai233/scene_editor/')
             }.collect { it.name }
             if (!outerClasses.isEmpty()) {
                 throw new GradleException("Scene Editor classes must only exist in nested JiJ artifacts: ${outerClasses}")

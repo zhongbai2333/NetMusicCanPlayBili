@@ -3,6 +3,7 @@ package com.zhongbai233.net_music_can_play_bili.network;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioEndpointIndex;
 import com.zhongbai233.net_music_can_play_bili.link.AudioPlaybackIndexSavedData;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AreaAudioZone;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -15,8 +16,8 @@ import java.util.Objects;
 import java.util.UUID;
 
 /** Spatial subscription snapshot/delta for one playback source. */
-public record AudioEndpointSnapshotPacket(UUID sourceId, BlockPos sourcePos, long generation,
-        boolean reset, boolean subscribed, List<Endpoint> endpoints, List<UUID> removals)
+public record AudioEndpointSnapshotPacket(UUID sourceId, BlockPos sourcePos, AreaAudioZone sourceZone,
+        long generation, boolean reset, boolean subscribed, List<Endpoint> endpoints, List<UUID> removals)
         implements CustomPacketPayload {
     private static final int MAX_ENDPOINTS = 4096;
     public static final Type<AudioEndpointSnapshotPacket> TYPE = new Type<>(
@@ -27,6 +28,7 @@ public record AudioEndpointSnapshotPacket(UUID sourceId, BlockPos sourcePos, lon
                 public AudioEndpointSnapshotPacket decode(RegistryFriendlyByteBuf buffer) {
                     UUID sourceId = buffer.readUUID();
                     BlockPos sourcePos = BlockPos.STREAM_CODEC.decode(buffer);
+                    AreaAudioZone sourceZone = AreaAudioZoneCodec.decode(buffer);
                     long generation = buffer.readVarLong();
                     boolean reset = buffer.readBoolean();
                     boolean subscribed = buffer.readBoolean();
@@ -46,7 +48,7 @@ public record AudioEndpointSnapshotPacket(UUID sourceId, BlockPos sourcePos, lon
                     for (int index = 0; index < removalCount; index++) {
                         removals.add(buffer.readUUID());
                     }
-                    return new AudioEndpointSnapshotPacket(sourceId, sourcePos, generation,
+                    return new AudioEndpointSnapshotPacket(sourceId, sourcePos, sourceZone, generation,
                             reset, subscribed, endpoints, removals);
                 }
 
@@ -54,6 +56,7 @@ public record AudioEndpointSnapshotPacket(UUID sourceId, BlockPos sourcePos, lon
                 public void encode(RegistryFriendlyByteBuf buffer, AudioEndpointSnapshotPacket packet) {
                     buffer.writeUUID(packet.sourceId());
                     BlockPos.STREAM_CODEC.encode(buffer, packet.sourcePos());
+                    AreaAudioZoneCodec.encode(buffer, packet.sourceZone());
                     buffer.writeVarLong(packet.generation());
                     buffer.writeBoolean(packet.reset());
                     buffer.writeBoolean(packet.subscribed());
@@ -67,6 +70,7 @@ public record AudioEndpointSnapshotPacket(UUID sourceId, BlockPos sourcePos, lon
     public AudioEndpointSnapshotPacket {
         Objects.requireNonNull(sourceId, "sourceId");
         sourcePos = Objects.requireNonNull(sourcePos, "sourcePos").immutable();
+        sourceZone = Objects.requireNonNull(sourceZone, "sourceZone");
         endpoints = List.copyOf(Objects.requireNonNull(endpoints, "endpoints"));
         removals = List.copyOf(Objects.requireNonNull(removals, "removals"));
         generation = Math.max(0L, generation);
@@ -77,7 +81,13 @@ public record AudioEndpointSnapshotPacket(UUID sourceId, BlockPos sourcePos, lon
 
     /** Compatibility constructor for bench fixtures and complete local snapshots. */
     public AudioEndpointSnapshotPacket(UUID sourceId, BlockPos sourcePos, List<Endpoint> endpoints) {
-        this(sourceId, sourcePos, 0L, true, true, endpoints, List.of());
+        this(sourceId, sourcePos, AreaAudioZone.unrestricted(), 0L, true, true, endpoints, List.of());
+    }
+
+    /** Compatibility constructor for callers that do not provide AreaControl metadata. */
+    public AudioEndpointSnapshotPacket(UUID sourceId, BlockPos sourcePos, long generation,
+            boolean reset, boolean subscribed, List<Endpoint> endpoints, List<UUID> removals) {
+        this(sourceId, sourcePos, AreaAudioZone.unrestricted(), generation, reset, subscribed, endpoints, removals);
     }
 
     public static AudioEndpointSnapshotPacket from(PlaybackSourceId sourceId, BlockPos sourcePos,
@@ -88,7 +98,8 @@ public record AudioEndpointSnapshotPacket(UUID sourceId, BlockPos sourcePos, lon
     public static AudioEndpointSnapshotPacket delta(PlaybackSourceId sourceId, BlockPos sourcePos,
             long generation, boolean reset, boolean subscribed,
             List<AudioPlaybackIndexSavedData.EndpointEntry> upserts, List<UUID> removals) {
-        return new AudioEndpointSnapshotPacket(sourceId.value(), sourcePos, generation, reset, subscribed,
+        return new AudioEndpointSnapshotPacket(sourceId.value(), sourcePos, AreaAudioZone.unrestricted(),
+                generation, reset, subscribed,
                 upserts.stream().map(Endpoint::from).toList(), removals);
     }
 
@@ -102,23 +113,32 @@ public record AudioEndpointSnapshotPacket(UUID sourceId, BlockPos sourcePos, lon
     }
 
     public record Endpoint(UUID endpointId, BlockPos pos, int channelIndex, float volume,
-            boolean autoMixJoc, float maxDistance, long revision) {
+            boolean autoMixJoc, float maxDistance, long revision, AreaAudioZone zone) {
         public Endpoint {
             Objects.requireNonNull(endpointId, "endpointId");
             pos = Objects.requireNonNull(pos, "pos").immutable();
             volume = Math.clamp(volume, 0.0F, 2.0F);
             maxDistance = Math.clamp(maxDistance, 1.0F, 256.0F);
             revision = Math.max(0L, revision);
+            zone = Objects.requireNonNull(zone, "zone");
+        }
+
+        public Endpoint(UUID endpointId, BlockPos pos, int channelIndex, float volume,
+                boolean autoMixJoc, float maxDistance, long revision) {
+            this(endpointId, pos, channelIndex, volume, autoMixJoc, maxDistance, revision,
+                    AreaAudioZone.unrestricted());
         }
 
         static Endpoint from(AudioPlaybackIndexSavedData.EndpointEntry entry) {
             return new Endpoint(entry.endpointId(), BlockPos.of(entry.endpointPos()), entry.channelIndex(),
-                    entry.volume(), entry.autoMixJoc(), entry.maxDistance(), entry.revision());
+                    entry.volume(), entry.autoMixJoc(), entry.maxDistance(), entry.revision(),
+                    AreaAudioZone.unrestricted());
         }
 
         static Endpoint decode(RegistryFriendlyByteBuf buffer) {
             return new Endpoint(buffer.readUUID(), BlockPos.STREAM_CODEC.decode(buffer), buffer.readVarInt(),
-                    buffer.readFloat(), buffer.readBoolean(), buffer.readFloat(), buffer.readVarLong());
+                    buffer.readFloat(), buffer.readBoolean(), buffer.readFloat(), buffer.readVarLong(),
+                    AreaAudioZoneCodec.decode(buffer));
         }
 
         void encode(RegistryFriendlyByteBuf buffer) {
@@ -129,6 +149,7 @@ public record AudioEndpointSnapshotPacket(UUID sourceId, BlockPos sourcePos, lon
             buffer.writeBoolean(autoMixJoc);
             buffer.writeFloat(maxDistance);
             buffer.writeVarLong(revision);
+            AreaAudioZoneCodec.encode(buffer, zone);
         }
     }
 }

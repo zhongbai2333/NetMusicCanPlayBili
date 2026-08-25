@@ -4,7 +4,11 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.ControlConsoleBlockEn
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleAudioElementKey;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElement;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElementPosition;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleRangeGate;
+import com.zhongbai233.net_music_can_play_bili.compat.areacontrol.AreaControlAudioCompat;
 import com.zhongbai233.net_music_can_play_bili.server.ControlConsoleConsumerLeaseRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -16,6 +20,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 import java.util.Objects;
+import java.util.List;
 import java.util.UUID;
 
 /** 玩家申请、续期或释放中控台媒体消费资格。 */
@@ -117,7 +122,7 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
             leaseId = ControlConsoleConsumerLeaseRegistry.acquireOrRenew(key, now);
         }
         send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.GRANTED, leaseId,
-            payload.consumerGeneration());
+            payload.consumerGeneration(), audioOutputZones(level, payload.pos(), document));
     }
 
     public static ControlConsoleConsumerLeaseRegistry.Key key(ServerLevel level, BlockPos pos, UUID playerId) {
@@ -143,8 +148,31 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
 
     private static void send(ServerPlayer player, BlockPos pos,
             ControlConsoleConsumerLeaseResultPacket.Status status, UUID leaseId, long consumerGeneration) {
+        send(player, pos, status, leaseId, consumerGeneration, List.of());
+    }
+
+    private static void send(ServerPlayer player, BlockPos pos,
+            ControlConsoleConsumerLeaseResultPacket.Status status, UUID leaseId, long consumerGeneration,
+            List<ControlConsoleConsumerLeaseResultPacket.AudioOutputZone> audioOutputZones) {
         PacketDistributor.sendToPlayer(player,
-                new ControlConsoleConsumerLeaseResultPacket(pos, status, leaseId, consumerGeneration));
+                new ControlConsoleConsumerLeaseResultPacket(pos, status, leaseId, consumerGeneration,
+                        audioOutputZones));
+    }
+
+    private static List<ControlConsoleConsumerLeaseResultPacket.AudioOutputZone> audioOutputZones(
+            ServerLevel level, BlockPos consolePos, ControlConsoleDocument document) {
+        return document.elements().stream()
+                .filter(element -> element != null && element.enabled())
+                .filter(element -> element.type() == ControlConsoleElement.Type.AUDIO)
+                .map(element -> {
+                    var world = ControlConsoleElementPosition.worldPosition(
+                            consolePos.getX(), consolePos.getY(), consolePos.getZ(), element);
+                    BlockPos outputPos = BlockPos.containing(world.x, world.y, world.z);
+                    return new ControlConsoleConsumerLeaseResultPacket.AudioOutputZone(
+                            ControlConsoleAudioElementKey.of(consolePos, element),
+                            AreaControlAudioCompat.zoneAt(level, outputPos));
+                })
+                .toList();
     }
 
     public enum Action {

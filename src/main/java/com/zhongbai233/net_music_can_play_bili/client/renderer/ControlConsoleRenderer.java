@@ -11,6 +11,7 @@ import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient
 import com.zhongbai233.net_music_can_play_bili.client.LiveStreamerVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAreaAudioZoneRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
 import com.zhongbai233.net_music_can_play_bili.client.sync.LiveRoomMetadataRegistry;
@@ -19,6 +20,7 @@ import com.zhongbai233.net_music_can_play_bili.client.sync.PlaybackClock;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElement;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElementPosition;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleAudioElementKey;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.LiveSubtitleMetadata;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.AiSubtitleText;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.TimedTextResolver;
@@ -468,6 +470,7 @@ public final class ControlConsoleRenderer
         if (keys != null) {
             keys.forEach(ClientAudioOutputRegistry::unregisterConsoleRelay);
         }
+        ClientAreaAudioZoneRegistry.clearConsoleOutputs(consolePos);
     }
 
     public static void unregisterConsumer(BlockPos consolePos) {
@@ -554,6 +557,10 @@ public final class ControlConsoleRenderer
             }
             runtime.leaseId = result.leaseId();
             runtime.leaseExpiresAtMillis = System.currentTimeMillis() + CONSUMER_LEASE_MILLIS;
+            java.util.Map<BlockPos, com.zhongbai233.net_music_can_play_bili.media.audio.AreaAudioZone> zones =
+                    new java.util.HashMap<>();
+            result.audioOutputZones().forEach(zone -> zones.put(zone.outputKey(), zone.zone()));
+            ClientAreaAudioZoneRegistry.replaceConsoleOutputs(result.pos(), zones);
             return;
         }
         runtime.leaseId = null;
@@ -988,9 +995,7 @@ public final class ControlConsoleRenderer
             if (element.type() != ControlConsoleElement.Type.AUDIO) {
                 continue;
             }
-            long identity = element.elementId().getMostSignificantBits() ^ element.elementId().getLeastSignificantBits();
-            BlockPos key = new BlockPos(consolePos.getX() ^ (int) (identity >>> 32), consolePos.getY(),
-                    consolePos.getZ() ^ (int) identity);
+            BlockPos key = ControlConsoleAudioElementKey.of(consolePos, element);
             if (element.enabled()) {
                 org.joml.Vector3d position = ControlConsoleElementPosition.worldPosition(
                         consolePos.getX(), consolePos.getY(), consolePos.getZ(), element);

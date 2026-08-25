@@ -7,6 +7,9 @@ import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
 import com.zhongbai233.net_music_can_play_bili.link.EquippedMediaItems;
 import com.zhongbai233.net_music_can_play_bili.link.HeadphoneAbility;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.compat.areacontrol.AreaControlAudioCompat;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AreaAudioZone;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -54,16 +57,18 @@ final class MP4PlaybackAudienceBroadcaster {
             return;
         }
         MP4PlaybackSyncManager.SourcePosition pos = session.sourcePosition(level);
+        AreaAudioZone sourceZone = AreaControlAudioCompat.zoneAt(level,
+                BlockPos.containing(pos.x(), pos.y(), pos.z()));
         MP4PlaybackSyncPacket packet = new MP4PlaybackSyncPacket(
                 session.ownerId(), session.sourceId(), session.sourceType(), pos.entityId(), pos.x(), pos.y(), pos.z(),
                 true, session.queueIndex(), session.playUrl(), session.rawUrl(), session.songName(),
                 session.durationSeconds(), session.volumePerMille(), session.sessionId(),
-                session.elapsedMillis(gameTime), false);
+                session.elapsedMillis(gameTime), false, sourceZone);
         MP4PlaybackSyncPacket headphonePacket = new MP4PlaybackSyncPacket(
                 packet.ownerId(), packet.sourceId(), packet.sourceType(), packet.sourceEntityId(), packet.sourceX(),
                 packet.sourceY(), packet.sourceZ(), packet.playing(), packet.queueIndex(), packet.playUrl(),
                 packet.rawUrl(), packet.songName(), packet.durationSeconds(), packet.volumePerMille(),
-                packet.sessionId(), packet.elapsedMillis(), true);
+                packet.sessionId(), packet.elapsedMillis(), true, AreaAudioZone.unrestricted());
         Set<UUID> headphoneRecipients = sendToHeadphoneListeners(level, session, pos, headphonePacket);
         routePublicPacket(level, session, pos, owner, headphoneRecipients, packet);
         if (session.sourceType() != ClientMediaSyncPayload.SOURCE_PLAYER) {
@@ -80,10 +85,13 @@ final class MP4PlaybackAudienceBroadcaster {
             return;
         }
         MP4PlaybackSyncManager.SourcePosition pos = session.sourcePosition(level);
+        AreaAudioZone sourceZone = AreaControlAudioCompat.zoneAt(level,
+                BlockPos.containing(pos.x(), pos.y(), pos.z()));
         MP4PlaybackTimelinePacket packet = new MP4PlaybackTimelinePacket(session.sourceId(), session.sessionId(),
-                session.elapsedMillis(gameTime), session.volumePerMille(), false);
+                session.elapsedMillis(gameTime), session.volumePerMille(), false, sourceZone);
         MP4PlaybackTimelinePacket headphonePacket = new MP4PlaybackTimelinePacket(session.sourceId(),
-                session.sessionId(), session.elapsedMillis(gameTime), session.volumePerMille(), true);
+                session.sessionId(), session.elapsedMillis(gameTime), session.volumePerMille(), true,
+                AreaAudioZone.unrestricted());
         Set<UUID> headphoneRecipients = sendTimelineToHeadphoneListeners(level, session, pos, headphonePacket);
         ServerPlayer owner = level.getServer().getPlayerList().getPlayer(session.ownerId());
         routePublicTimeline(level, session, pos, owner, headphoneRecipients, packet);
