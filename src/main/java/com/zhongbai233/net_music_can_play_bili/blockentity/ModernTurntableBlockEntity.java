@@ -748,6 +748,7 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
             return;
         }
         if (playing) {
+            IndexedBlockPlaybackSessionManager.remove(serverLevel, getPlaybackSourceId());
             notifyPlaybackStopped();
             snapshotElapsedTicks();
         }

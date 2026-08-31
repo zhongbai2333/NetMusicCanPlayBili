@@ -171,6 +171,12 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
                 Set.of("client", "server", "turntable", "block", "packet", "transfer"), Duration.ofSeconds(20)),
                 ignored -> new TurntableBlockInteractionScenario());
         registrar.register(new ScenarioDescriptor(
+                "ncpb.turntable-redstone-system",
+                "Real high, low, pulse and ignore modes with automation insertion and comparator output",
+                Set.of("client", "server", "turntable", "redstone", "automation", "comparator", "resume"),
+                Duration.ofSeconds(45)), ignored -> new TurntableRedstoneSystemScenario());
+
+        registrar.register(new ScenarioDescriptor(
                 "ncpb.cross-dimension-media-cleanup",
                 "Real respawn packet, loading UI and exact media cleanup across a round-trip dimension change",
                 Set.of("client", "server", "dimension", "packet", "gui", "media", "lifecycle"),

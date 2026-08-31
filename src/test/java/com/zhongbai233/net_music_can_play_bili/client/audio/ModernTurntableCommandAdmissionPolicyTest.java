@@ -26,6 +26,15 @@ class ModernTurntableCommandAdmissionPolicyTest {
     }
 
     @Test
+    void rejectsDelayedPlaybackWhenTheAuthoritativeTurntableIsPresentButStopped() {
+        assertEquals(ModernTurntableCommandAdmissionPolicy.Decision.DROP_AUTHORITATIVE_STOPPED,
+                ModernTurntableCommandAdmissionPolicy.decide("session-1", "", "", true));
+        assertEquals(ModernTurntableCommandAdmissionPolicy.Decision.DROP_AUTHORITATIVE_STOPPED,
+                ModernTurntableCommandAdmissionPolicy.decide("session-1", "", "session-1", true));
+    }
+
+
+    @Test
     void allowsTheTrackedSessionWhileAuthoritativeStateIsTemporarilyUnavailable() {
         assertEquals(ModernTurntableCommandAdmissionPolicy.Decision.ACCEPT_TRACKED,
                 ModernTurntableCommandAdmissionPolicy.decide("session-2", "", "session-2"));

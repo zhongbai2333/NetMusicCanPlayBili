@@ -387,14 +387,17 @@ public final class ModernTurntablePlaybackCoordinator {
 
     private static boolean admitsCommand(Minecraft minecraft, ClientPlaybackCommand command, BlockPos sourcePos) {
         String authoritativeSessionId = "";
+        boolean authoritativeSourcePresent = false;
         var level = minecraft.level;
-        if (level != null && level.getBlockEntity(sourcePos) instanceof ModernTurntableBlockEntity turntable
-                && turntable.isPlaying()) {
-            authoritativeSessionId = turntable.getPlaybackSyncMetadata().sessionId();
+        if (level != null && level.getBlockEntity(sourcePos) instanceof ModernTurntableBlockEntity turntable) {
+            authoritativeSourcePresent = true;
+            if (turntable.isPlaying()) {
+                authoritativeSessionId = turntable.getPlaybackSyncMetadata().sessionId();
+            }
         }
         String trackedSessionId = ModernTurntablePlaybackTracker.currentSessionId(sourcePos, command.sessionId());
         ModernTurntableCommandAdmissionPolicy.Decision decision = ModernTurntableCommandAdmissionPolicy.decide(
-                command.sessionId(), authoritativeSessionId, trackedSessionId);
+                command.sessionId(), authoritativeSessionId, trackedSessionId, authoritativeSourcePresent);
         if (!decision.accepted()) {
             LOGGER.debug(
                     "丢弃乱序现代唱片机播放命令: pos={} incomingSession={} authoritativeSession={} trackedSession={} decision={}",
