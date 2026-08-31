@@ -14,6 +14,8 @@ import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackCoordinator;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntableSound;
+import com.zhongbai233.net_music_can_play_bili.media.stream.AudioStreamProperties;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
@@ -24,11 +26,14 @@ import net.minecraft.world.level.block.ComparatorBlock;
 import net.minecraft.world.level.block.entity.ComparatorBlockEntity;
 import net.neoforged.neoforge.transfer.item.ItemResource;
 import net.neoforged.neoforge.transfer.transaction.Transaction;
+import net.neoforged.neoforge.client.event.sound.PlayStreamingSourceEvent;
+import net.neoforged.neoforge.common.NeoForge;
 
 import java.util.EnumSet;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -43,8 +48,13 @@ final class TurntableRedstoneSystemScenario implements BenchClientScenario {
             "ncpb.turntable_redstone.signal_transitions", "transitions", MetricDirection.NEUTRAL);
     private static final BenchMetricDescriptor COMPARATOR_OUTPUT = new BenchMetricDescriptor(
             "ncpb.turntable_redstone.comparator_output", "signal", MetricDirection.NEUTRAL);
+    private static final BenchMetricDescriptor AUDIO_CHANNEL_STARTS = new BenchMetricDescriptor(
+            "ncpb.turntable_redstone.audio_channel_starts", "channels", MetricDirection.NEUTRAL);
+    private static final BenchMetricDescriptor SOUND_INSTANCES = new BenchMetricDescriptor(
+            "ncpb.turntable_redstone.sound_instances", "instances", MetricDirection.NEUTRAL);
 
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
+    private final AudioStreamProperties.RealMp3Bench realMp3 = AudioStreamProperties.realMp3Bench();
     private final AtomicReference<String> lastObservation = new AtomicReference<>("not started");
     private final AtomicBoolean serverTaskPending = new AtomicBoolean();
     private final AtomicBoolean setupComplete = new AtomicBoolean();
@@ -52,28 +62,42 @@ final class TurntableRedstoneSystemScenario implements BenchClientScenario {
     private final AtomicInteger signalTransitions = new AtomicInteger();
     private final AtomicInteger comparatorOutput = new AtomicInteger();
     private final AtomicLong pausedElapsedMillis = new AtomicLong();
+    private final AtomicInteger streamingChannelStarts = new AtomicInteger();
+    private final AtomicInteger channelStartsAtPause = new AtomicInteger();
+    private final AtomicLong soundInstancesAtPause = new AtomicLong();
+    private final AtomicReference<String> stoppedSessionId = new AtomicReference<>("");
     private final Set<Check> checks = ConcurrentHashMap.newKeySet();
 
     private BlockPos turntablePos;
+    private final Consumer<PlayStreamingSourceEvent> streamingListener = event -> {
+        if (event.getSound() instanceof ModernTurntableSound) {
+            streamingChannelStarts.incrementAndGet();
+        }
+    };
     private BlockPos powerPos;
     private BlockPos comparatorPos;
     private UUID playerId;
+    private long soundInstancesBaseline;
     private int phase;
     private int phaseTicks;
+    private boolean listenerRegistered;
 
     @Override
     public void setup(BenchClientContext context) {
         ModernTurntablePlaybackCoordinator.clearPendingPrepares();
         ModernTurntablePlaybackTracker.stopAllSounds();
         ClientAudioOutputRegistry.cleanup();
+        soundInstancesBaseline = ModernTurntableSound.instancesCreated();
         playerId = context.player().getUUID();
         turntablePos = context.player().blockPosition().offset(6, 0, 6).immutable();
+        NeoForge.EVENT_BUS.addListener(PlayStreamingSourceEvent.class, streamingListener);
+        listenerRegistered = true;
         powerPos = turntablePos.north().immutable();
         comparatorPos = turntablePos.east().immutable();
         submitServer(context, (level, player) -> {
             clearFixture(level);
             level.setBlockAndUpdate(turntablePos, ModBlocks.MODERN_TURNTABLE.get().defaultBlockState());
-            turntable(level).setVolumePerMille(0);
+            turntable(level).setVolumePerMille(realMp3.enabled() ? 1_000 : 0);
             setupComplete.set(true);
         });
     }
@@ -98,6 +122,8 @@ final class TurntableRedstoneSystemScenario implements BenchClientScenario {
         context.metrics().record(CHECKS, checks.size());
         context.metrics().record(SIGNAL_TRANSITIONS, signalTransitions.get());
         context.metrics().record(COMPARATOR_OUTPUT, comparatorOutput.get());
+        context.metrics().record(AUDIO_CHANNEL_STARTS, streamingChannelStarts.get());
+        context.metrics().record(SOUND_INSTANCES, ModernTurntableSound.instancesCreated() - soundInstancesBaseline);
 
         switch (phase) {
             case 0 -> configureHighModeAndInsertDisc(context);
@@ -149,6 +175,10 @@ final class TurntableRedstoneSystemScenario implements BenchClientScenario {
 
     @Override
     public void teardown(BenchClientContext context) {
+        if (listenerRegistered) {
+            NeoForge.EVENT_BUS.unregister(streamingListener);
+            listenerRegistered = false;
+        }
         ModernTurntablePlaybackCoordinator.clearPendingPrepares();
         ModernTurntablePlaybackTracker.stopAllSounds();
         ClientAudioOutputRegistry.cleanup();
@@ -222,11 +252,18 @@ final class TurntableRedstoneSystemScenario implements BenchClientScenario {
         submitServer(context, (level, player) -> {
             ModernTurntableBlockEntity turntable = turntable(level);
             long elapsed = turntable.getPlaybackElapsedMillis();
-            if (!turntable.isPlaying() || elapsed < 250L) {
+            if (!turntable.isPlaying() || elapsed < 250L || streamingChannelStarts.get() < 1
+                    || ModernTurntableSound.instancesCreated() <= soundInstancesBaseline) {
                 lastObservation.set("waiting for powered high-mode playback: " + describe(level, turntable));
                 return;
             }
             require(level.hasNeighborSignal(turntablePos), "high-mode playback started without sampled power");
+            String sessionId = turntable.getPlaybackSyncMetadata().sessionId();
+            require(!sessionId.isBlank(), "powered high mode did not publish a playback session");
+            stoppedSessionId.set(sessionId);
+            channelStartsAtPause.set(streamingChannelStarts.get());
+            soundInstancesAtPause.set(ModernTurntableSound.instancesCreated());
+
             checks.add(Check.HIGH_POWERED_AUTOMATION_STARTS);
             turntable.pauseFromControl(level);
             require(turntable.isPlaying(), "manual pause overrode powered high-signal mode");
@@ -271,6 +308,21 @@ final class TurntableRedstoneSystemScenario implements BenchClientScenario {
                 "paused turntable recreated client audio demand after the server resync interval: "
                         + ModernTurntablePlaybackCoordinator.indexedDemandDebugSnapshots());
         checks.add(Check.CLIENT_AUDIO_RETRY_QUIESCENT);
+        require(streamingChannelStarts.get() == channelStartsAtPause.get(),
+                "paused turntable started new audio channels: before=" + channelStartsAtPause.get()
+                        + " after=" + streamingChannelStarts.get());
+        checks.add(Check.AUDIO_CHANNEL_STARTS_QUIESCENT);
+        require(ModernTurntableSound.instancesCreated() == soundInstancesAtPause.get(),
+                "paused turntable created new sound attempts: before=" + soundInstancesAtPause.get()
+                        + " after=" + ModernTurntableSound.instancesCreated());
+        checks.add(Check.SOUND_INSTANCE_CREATION_QUIESCENT);
+        String stoppedSession = stoppedSessionId.get();
+        require(!stoppedSession.isBlank(), "redstone bench did not capture the stopped session");
+        require(ModernTurntablePlaybackTracker.wasExplicitlyStopped(turntablePos, stoppedSession),
+                "client did not retain an explicit-stop tombstone for " + stoppedSession);
+        require(!ModernTurntablePlaybackTracker.tryStart(turntablePos, stoppedSession, 60),
+                "explicitly stopped session was admitted for delayed restart");
+        checks.add(Check.EXPLICIT_STOP_TOMBSTONE_BLOCKS_RESTART);
         submitServer(context, (level, player) -> {
             ModernTurntableBlockEntity turntable = turntable(level);
             long elapsed = turntable.getPlaybackElapsedMillis();
@@ -496,10 +548,11 @@ final class TurntableRedstoneSystemScenario implements BenchClientScenario {
                 ? turntable : null;
     }
 
-    private static ItemStack disc(String name) {
+    private ItemStack disc(String name) {
         ItemStack stack = new ItemStack(InitItems.MUSIC_CD.get());
         return ItemMusicCD.setSongInfo(new ItemMusicCD.SongInfo(
-                "https://example.test/bench-redstone.mp3", name, 120, false), stack);
+                realMp3.enabled() ? realMp3.url() : "https://example.test/bench-redstone.mp3",
+                name, 120, false), stack);
     }
 
     private static void require(boolean condition, String message) {
@@ -545,6 +598,9 @@ final class TurntableRedstoneSystemScenario implements BenchClientScenario {
         COMPARATOR_HALF_PROGRESS_OUTPUT,
         SERVER_INDEX_RETIRED_ON_PAUSE,
         CLIENT_AUDIO_RETRY_QUIESCENT,
+        EXPLICIT_STOP_TOMBSTONE_BLOCKS_RESTART,
+        AUDIO_CHANNEL_STARTS_QUIESCENT,
+        SOUND_INSTANCE_CREATION_QUIESCENT,
         CLIENT_STATE_SYNCED
     }
 

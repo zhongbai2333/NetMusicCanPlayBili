@@ -33,6 +33,13 @@ class ModernTurntableCommandAdmissionPolicyTest {
                 ModernTurntableCommandAdmissionPolicy.decide("session-1", "", "session-1", true));
     }
 
+    @Test
+    void explicitStopDominatesStaleAuthoritativeAndTrackedState() {
+        assertEquals(ModernTurntableCommandAdmissionPolicy.Decision.DROP_EXPLICITLY_STOPPED,
+                ModernTurntableCommandAdmissionPolicy.decide(
+                        "session-1", "session-1", "session-1", true, true));
+    }
+
 
     @Test
     void allowsTheTrackedSessionWhileAuthoritativeStateIsTemporarilyUnavailable() {

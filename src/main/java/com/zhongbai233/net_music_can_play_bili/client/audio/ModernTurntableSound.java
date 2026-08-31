@@ -25,6 +25,7 @@ import java.net.URL;
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.sounds.SoundSource;
 
 public class ModernTurntableSound extends SyncedMediaSound {
@@ -34,6 +35,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
     private static final long STREAM_RETRY_DELAY_MILLIS = 750L;
     private static final PlaybackRuntimeProperties.Watchdog WATCHDOG =
             PlaybackRuntimeProperties.watchdog();
+    private static final AtomicLong INSTANCES_CREATED = new AtomicLong();
 
     private final BlockPos pos;
     private final String rawUrl;
@@ -73,6 +75,7 @@ public class ModernTurntableSound extends SyncedMediaSound {
     public ModernTurntableSound(BlockPos pos, URL songUrl, int timeSecond, LyricRecord lyricRecord, String sessionId,
             long startOffsetMillis, String rawUrl, String songName, long totalMillis, PlaybackSourceId sourceId) {
         super(songUrl, timeSecond, lyricRecord, sessionId, startOffsetMillis);
+        INSTANCES_CREATED.incrementAndGet();
         this.pos = pos;
         this.rawUrl = rawUrl != null ? rawUrl : "";
         this.songName = songName != null ? songName : "";
@@ -89,6 +92,11 @@ public class ModernTurntableSound extends SyncedMediaSound {
         }
         ModernTurntablePlaybackTracker.registerSound(this, pos, sessionId());
         refreshDecodeDemand();
+    }
+
+    /** Monotonic diagnostic counter used by lifecycle Bench scenarios. */
+    public static long instancesCreated() {
+        return INSTANCES_CREATED.get();
     }
 
     @Override

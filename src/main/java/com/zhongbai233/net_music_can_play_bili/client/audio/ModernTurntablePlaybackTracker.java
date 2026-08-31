@@ -12,10 +12,13 @@ import java.util.UUID;
 public final class ModernTurntablePlaybackTracker {
     private static final long STOP_GRACE_MILLIS = 5_000L;
     private static final long DUPLICATE_SUPPRESS_MILLIS = 1_500L;
+    private static final long STOP_TOMBSTONE_MILLIS = 30_000L;
     private static final ConcurrentHashMap<Object, ClientPlaybackSession> ACTIVE = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<SyncedMediaSound, Boolean> ACTIVE_SOUNDS = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<SyncedMediaSound, BlockPos> ACTIVE_SOUND_POSITIONS =
             new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<StoppedKey, Long> EXPLICITLY_STOPPED = new ConcurrentHashMap<>();
+
 
     private ModernTurntablePlaybackTracker() {
     }
@@ -27,6 +30,9 @@ public final class ModernTurntablePlaybackTracker {
         }
         long now = System.currentTimeMillis();
         cleanup(now);
+        if (isExplicitlyStopped(pos, parsedSessionId, now)) {
+            return false;
+        }
         long expiresAt = now + Math.max(1, remainingSeconds) * 1000L + STOP_GRACE_MILLIS;
         Object key = keyFor(pos, parsedSessionId);
         ClientPlaybackSession previous = ACTIVE.get(key);
@@ -128,6 +134,18 @@ public final class ModernTurntablePlaybackTracker {
         }
     }
 
+    /** Records a server-authoritative stop before cancelling the matching physical/logical session. */
+    public static void explicitStop(BlockPos pos, String sessionId) {
+        PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (pos == null || parsedSessionId == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        cleanup(now);
+        EXPLICITLY_STOPPED.put(stoppedKey(pos, parsedSessionId), now + STOP_TOMBSTONE_MILLIS);
+        finish(pos, parsedSessionId.value());
+    }
+
     public static void finish(BlockPos pos, String sessionId) {
         PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
         if (pos == null || parsedSessionId == null) {
@@ -149,6 +167,7 @@ public final class ModernTurntablePlaybackTracker {
             session.cancel();
         }
         ACTIVE.clear();
+        EXPLICITLY_STOPPED.clear();
         ClientMinecartAudioAnchors.clear();
     }
 
@@ -159,8 +178,22 @@ public final class ModernTurntablePlaybackTracker {
         }
         long now = System.currentTimeMillis();
         cleanup(now);
+        if (isExplicitlyStopped(pos, parsedSessionId, now)) {
+            return false;
+        }
         ClientPlaybackSession active = ACTIVE.get(keyFor(pos, parsedSessionId));
         return active == null || active.playbackSessionId().equals(parsedSessionId);
+    }
+
+    /** Explicit server stops dominate delayed playback packets and scheduled recovery for the same session. */
+    public static boolean wasExplicitlyStopped(BlockPos pos, String sessionId) {
+        PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (pos == null || parsedSessionId == null) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        cleanup(now);
+        return isExplicitlyStopped(pos, parsedSessionId, now);
     }
 
     /** 指定 session 必须仍被登记且未取消；用于异步任务提交结果前的严格校验。 */
@@ -253,6 +286,19 @@ public final class ModernTurntablePlaybackTracker {
             entry.getValue().cancel();
             return true;
         });
+        EXPLICITLY_STOPPED.entrySet().removeIf(entry -> entry.getValue() <= now);
+    }
+
+    private static boolean isExplicitlyStopped(BlockPos pos, PlaybackSessionId sessionId, long now) {
+        Long expiresAt = EXPLICITLY_STOPPED.get(stoppedKey(pos, sessionId));
+        return expiresAt != null && expiresAt > now;
+    }
+
+    private static StoppedKey stoppedKey(BlockPos pos, PlaybackSessionId sessionId) {
+        return new StoppedKey(AudioUtils.copyPos(pos), sessionId);
+    }
+
+    private record StoppedKey(BlockPos pos, PlaybackSessionId sessionId) {
     }
 
     private static void stopSound(SyncedMediaSound sound) {

@@ -396,8 +396,11 @@ public final class ModernTurntablePlaybackCoordinator {
             }
         }
         String trackedSessionId = ModernTurntablePlaybackTracker.currentSessionId(sourcePos, command.sessionId());
+        boolean explicitlyStopped = ModernTurntablePlaybackTracker.wasExplicitlyStopped(
+                sourcePos, command.sessionId());
         ModernTurntableCommandAdmissionPolicy.Decision decision = ModernTurntableCommandAdmissionPolicy.decide(
-                command.sessionId(), authoritativeSessionId, trackedSessionId, authoritativeSourcePresent);
+                command.sessionId(), authoritativeSessionId, trackedSessionId, authoritativeSourcePresent,
+                explicitlyStopped);
         if (!decision.accepted()) {
             LOGGER.debug(
                     "丢弃乱序现代唱片机播放命令: pos={} incomingSession={} authoritativeSession={} trackedSession={} decision={}",
@@ -456,7 +459,7 @@ public final class ModernTurntablePlaybackCoordinator {
             minecraft.execute(() -> stop(sourcePos, sessionId));
             return;
         }
-        ModernTurntablePlaybackTracker.finish(sourcePos, sessionId);
+        ModernTurntablePlaybackTracker.explicitStop(sourcePos, sessionId);
         removeIndexed(sourcePos, sessionId);
     }
 
