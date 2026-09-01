@@ -136,6 +136,12 @@ public final class ModernTurntablePlaybackTracker {
 
     /** Records a server-authoritative stop before cancelling the matching physical/logical session. */
     public static void explicitStop(BlockPos pos, String sessionId) {
+        suppressRestart(pos, sessionId);
+        finish(pos, sessionId);
+    }
+
+    /** Temporarily rejects delayed network commands for a session that cannot be safely played. */
+    public static void suppressRestart(BlockPos pos, String sessionId) {
         PlaybackSessionId parsedSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
         if (pos == null || parsedSessionId == null) {
             return;
@@ -143,7 +149,6 @@ public final class ModernTurntablePlaybackTracker {
         long now = System.currentTimeMillis();
         cleanup(now);
         EXPLICITLY_STOPPED.put(stoppedKey(pos, parsedSessionId), now + STOP_TOMBSTONE_MILLIS);
-        finish(pos, parsedSessionId.value());
     }
 
     public static void finish(BlockPos pos, String sessionId) {

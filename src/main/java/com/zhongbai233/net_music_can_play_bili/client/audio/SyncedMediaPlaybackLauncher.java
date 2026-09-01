@@ -60,6 +60,10 @@ public final class SyncedMediaPlaybackLauncher {
             return null;
         }
         String playUrl = prepared != null ? prepared.playUrl() : fallbackPlayUrl;
+        if (!PlayableMediaUrl.isHttp(playUrl)) {
+            LOGGER.warn("拒绝注册非 HTTP(S) 同步媒体地址: song='{}' value='{}'", songName, playUrl);
+            return null;
+        }
         LyricRecord lyricRecord = prepared != null ? prepared.lyricRecord() : null;
         PlaybackRequest playbackRequest = PlaybackRequest.now(playUrl, pos, sessionId,
                 Math.max(0L, elapsedMillis), Math.max(0L, totalMillis), ownerId,
@@ -80,23 +84,47 @@ public final class SyncedMediaPlaybackLauncher {
                 || launch == null || launch.playUrl() == null || launch.playUrl().isBlank()) {
             return false;
         }
+        if (!PlayableMediaUrl.isHttp(launch.playUrl())) {
+            LOGGER.warn("拒绝播放非 HTTP(S) 同步媒体地址: song='{}' value='{}'", songName, launch.playUrl());
+            return false;
+        }
         LyricRecord lyricRecord = launch.lyricRecord();
         if (announceImmediately) {
-            MusicPlayManager.play(launch.playUrl(), songName, url -> soundFactory.apply(url, lyricRecord));
-            return true;
+            try {
+                MusicPlayManager.play(launch.playUrl(), songName, url -> soundFactory.apply(url, lyricRecord));
+                return true;
+            } catch (RuntimeException error) {
+                LOGGER.warn("同步媒体立即提交失败: song='{}' value='{}' reason={}", songName,
+                        launch.playUrl(), error.toString());
+                return false;
+            }
         }
-        var finalUrl = MusicPlayManager.getFinalUrl(launch.playUrl());
+        Optional<String> finalUrl;
+        try {
+            finalUrl = MusicPlayManager.getFinalUrl(launch.playUrl());
+        } catch (RuntimeException error) {
+            LOGGER.warn("NetMusic 最终地址解析失败: song='{}' value='{}' reason={}", songName,
+                    launch.playUrl(), error.toString());
+            return false;
+        }
         if (finalUrl.isEmpty()) {
             return false;
         }
+        String resolved = finalUrl.get();
+        if (!PlayableMediaUrl.isHttp(resolved)) {
+            LOGGER.warn("NetMusic 返回非 HTTP(S) 最终地址: song='{}' value='{}'", songName, resolved);
+            return false;
+        }
         try {
-            URL url = new URI(finalUrl.get()).toURL();
+            URL url = new URI(resolved).toURL();
             net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
             if (minecraft.isSameThread()) {
                 return submitSound(minecraft, soundFactory.apply(url, lyricRecord), songName);
             }
             minecraft.execute(() -> submitSound(minecraft, soundFactory.apply(url, lyricRecord), songName));
-        } catch (MalformedURLException | URISyntaxException error) {
+        } catch (MalformedURLException | URISyntaxException | RuntimeException error) {
+            LOGGER.warn("同步媒体地址解析/提交失败: song='{}' value='{}' reason={}", songName,
+                    resolved, error.toString());
             return false;
         }
         return true;

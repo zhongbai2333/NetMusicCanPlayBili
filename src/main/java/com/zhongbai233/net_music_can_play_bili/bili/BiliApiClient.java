@@ -358,7 +358,7 @@ public final class BiliApiClient {
 
         HttpResponse<String> resp = sendApi(BiliWbiSigner.HTTP, req,
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), "bili-api-view");
-        JsonObject body = JsonParser.parseString(resp.body()).getAsJsonObject();
+        JsonObject body = BiliApiResponseParser.parse(resp, "view");
 
         int code = body.get("code").getAsInt();
         if (code != 0) {
@@ -441,7 +441,7 @@ public final class BiliApiClient {
 
         HttpResponse<String> resp = sendApi(BiliWbiSigner.HTTP, req,
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), "bili-api-audio-playurl");
-        JsonObject body = JsonParser.parseString(resp.body()).getAsJsonObject();
+        JsonObject body = BiliApiResponseParser.parse(resp, "audio playurl");
 
         int code = body.get("code").getAsInt();
         if (code != 0) {
@@ -449,7 +449,14 @@ public final class BiliApiClient {
             throw new RuntimeException("B站 playurl API 返回 code=" + code + ": " + msg);
         }
 
-        JsonObject dash = body.getAsJsonObject("data").getAsJsonObject("dash");
+        JsonObject data = body.getAsJsonObject("data");
+        JsonObject dash = data != null && data.has("dash") && data.get("dash").isJsonObject()
+                ? data.getAsJsonObject("dash") : null;
+        if (dash == null) {
+            boolean legacyDurl = data != null && data.has("durl") && data.get("durl").isJsonArray();
+            throw new BiliApiResponseException("B站 audio playurl API 未返回 DASH 数据"
+                    + (legacyDurl ? "（仅返回 legacy durl）" : ""));
+        }
 
         Map<Integer, List<String>> streams = new HashMap<>();
 
@@ -652,7 +659,8 @@ public final class BiliApiClient {
 
         HttpResponse<String> resp = sendApi(BiliWbiSigner.HTTP, req,
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), "bili-api-video-playurl");
-        List<VideoStream> streams = parseVideoStreams(resp.body());
+        List<VideoStream> streams = parseVideoStreams(
+                BiliApiResponseParser.parse(resp, "video playurl").toString());
 
         VideoStreamPlan plan = buildVideoStreamPlan(streams, preferredQuality);
         VideoStream selected = plan.preferred();

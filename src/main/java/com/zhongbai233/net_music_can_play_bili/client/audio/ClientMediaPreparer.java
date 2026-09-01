@@ -96,7 +96,7 @@ public final class ClientMediaPreparer {
             return new AudioResolution(playUrl, AudioPresence.ABSENT);
         } catch (Exception e) {
             NetMusic.LOGGER.error("B站客户端本地解析播放直链失败: {}", storedSelection, e);
-            return new AudioResolution(playUrl, AudioPresence.FAILED);
+            return new AudioResolution("", AudioPresence.FAILED);
         }
     }
 

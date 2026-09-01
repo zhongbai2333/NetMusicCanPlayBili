@@ -103,19 +103,31 @@ public final class ModernTurntablePlaybackCoordinator {
         if (!LATEST_COMPAT_PREPARE.remove(sourcePos, generation)) {
             return;
         }
-        if (error != null) {
-            LOGGER.warn("普通唱片机 B站音频后台准备失败，使用同步消息中的直链: song='{}' reason={}",
-                    command.songName(), error.toString());
+        if (error != null || prepared == null) {
+            LOGGER.warn("普通唱片机 B站音频后台准备失败，停止音频提交: song='{}' reason={}",
+                    command.songName(), error != null ? error.toString() : "timeout-or-empty-result");
+            return;
         }
-        if (prepared == null) {
-            prepared = new ClientMediaPreparer.PreparedMedia(command.playUrl(), null);
+        if (prepared.audioPresence() != ClientMediaPreparer.AudioPresence.PRESENT) {
+            LOGGER.warn("普通唱片机 B站音频不可提交: song='{}' presence={}",
+                    command.songName(), prepared.audioPresence());
+            return;
         }
         String playUrl = prepared.playUrl();
+        if (!PlayableMediaUrl.isHttp(playUrl)) {
+            LOGGER.warn("普通唱片机拒绝非 HTTP(S) 解析结果: song='{}' value='{}'", command.songName(), playUrl);
+            return;
+        }
         BiliPlaybackDiagnostics.beginPlayback(command.songName(), command.rawUrl(), playUrl);
         LOGGER.debug("B站/NetMusic 普通唱片机兼容播放: song='{}' audioHost={}", command.songName(),
                 ClientMediaPreparer.hostOf(playUrl));
-        MusicPlayManager.play(playUrl, command.songName(),
-                url -> new NetMusicSound(sourcePos, url, command.remainingSeconds(), null));
+        try {
+            MusicPlayManager.play(playUrl, command.songName(),
+                    url -> new NetMusicSound(sourcePos, url, command.remainingSeconds(), null));
+        } catch (RuntimeException launchError) {
+            LOGGER.warn("普通唱片机音频提交失败: song='{}' value='{}' reason={}", command.songName(), playUrl,
+                    launchError.toString());
+        }
     }
 
     public static void play(ClientPlaybackCommand command) {
@@ -198,12 +210,22 @@ public final class ModernTurntablePlaybackCoordinator {
             return;
         }
         if (error != null) {
-            LOGGER.warn("现代唱片机 B站音频后台准备失败，使用同步消息中的直链: pos={} session={} song='{}' reason={}",
+            LOGGER.warn("现代唱片机 B站音频后台准备失败，停止音频提交: pos={} session={} song='{}' reason={}",
                     sourcePos, command.sessionId(), command.songName(), error.toString());
         }
         if (prepared == null) {
-            prepared = new ClientMediaPreparer.PreparedMedia(command.playUrl(), null);
+            prepared = new ClientMediaPreparer.PreparedMedia("", null, ClientMediaPreparer.AudioPresence.FAILED);
         }
+        if (prepared.audioPresence() == ClientMediaPreparer.AudioPresence.FAILED) {
+            LOGGER.warn("现代唱片机音频解析失败，跳过无效回退并暂缓同会话重试: pos={} session={} song='{}'",
+                    sourcePos, command.sessionId(), command.songName());
+            syncVideo(command);
+            ModernTurntablePlaybackTracker.suppressRestart(sourcePos, command.sessionId());
+            ModernTurntablePlaybackTracker.finish(sourcePos, command.sessionId());
+            removeIndexed(command);
+            return;
+        }
+
         if (prepared.audioPresence() == ClientMediaPreparer.AudioPresence.ABSENT) {
             LOGGER.debug("现代唱片机确认纯视频媒体，跳过音频提交: pos={} session={} song='{}'",
                     sourcePos, command.sessionId(), command.songName());
