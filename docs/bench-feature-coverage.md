@@ -7,7 +7,7 @@
 | --- | --- | --- |
 | Scene Editor JiJ | `ncpb.scene-editor-library-smoke`、`ncpb.editor-gui-lifecycle` | core/Minecraft adapter 加载、编辑会话、真实 Screen 生命周期 |
 | 唱片机方块 | `ncpb.turntable-block-interactions` | 插入、右键弹出、播放状态、自动化事务提取 |
-| 唱片机真实音频 | `ncpb.real-turntable-mp3-end-to-end`、`ncpb.real-mp3-range-reentry`、`ncpb.real-turntable-volume-range-reentry`、其它 `real-mp3-*` | 服务端解析、同步包、MP3 解码、OpenAL、seek/retry/静音/范围停止；新场景通过真实唱片机 GUI 拖动音量滑块，再用 BenchMod 玩家位姿控制离开/返回，并要求服务端也观测到移动及两次真实非静音 PCM |
+| 唱片机真实音频 | `ncpb.real-turntable-mp3-end-to-end`、`ncpb.real-mp3-range-reentry`、`ncpb.real-turntable-volume-range-reentry`、`ncpb.real-media-channel-recovery`、其它 `real-mp3-*` | 服务端解析、同步包、MP3 解码、OpenAL、seek/retry/静音/范围停止；连续 12 次“流式声道已分配、解码未开始”取消后，第 13 次仍须产生真实声道、PCM 和视频帧；音量场景通过真实唱片机 GUI 拖动音量滑块，再用 BenchMod 玩家位姿控制离开/返回，并要求服务端也观测到移动及两次真实非静音 PCM |
 | 固定媒体设备 | `ncpb.device-link-config-matrix` | 唱片机、视频投影仪、歌词投影仪、音响、直播机、中控台的真实 BE 创建与同步 |
 | 设备链接与配置 | `ncpb.device-link-config-matrix` | 视频质量/投影参数、歌词模式/AI、7.1.4 声道/JOC/音量、中控源绑定；运行期从唱片机 A 重绑到 B，并核对客户端链接和服务端反向索引迁移 |
 | 耳机/全息眼镜 | `ncpb.wearable-binding-topology` | 正式绑定服务、唱片机/MP4/Pad/投影仪拓扑、客户端耳机路由、全息屏幕绑定、四槽上限、按目标解绑和反向索引清理 |
@@ -61,3 +61,16 @@ bash gradlew runBenchClient \
 房间当时未开播或 B站未返回可播地址时，该真实网络场景会明确失败，不会用假帧代替。真实点播使用
 `ncpb.real-bv-playback`；离开/返回范围回归使用 `ncpb.real-video-range-reentry`，默认 BV 均为
 `BV1GJ411x7h7`。
+
+流式声道耗尽回归需要同时打开真实 MP3 与真实 Bilibili 开关。它连续取消 12 条尚未创建解码器的
+Minecraft streaming channel，再要求第 13 条真实 MP3、OpenAL PCM 与 H.264 native 视频帧成功启动，
+并等待声音、HTTP、GPU/owned memory 与 native 视频关闭操作全部回到基线：
+
+```bash
+bash gradlew runBenchClient \
+  -PenableModBench=true \
+  -PncpbRealMp3Bench=true \
+  -PncpbRealBench=true \
+  -PmodBench.scenarios=ncpb.real-media-channel-recovery \
+  --no-daemon
+```

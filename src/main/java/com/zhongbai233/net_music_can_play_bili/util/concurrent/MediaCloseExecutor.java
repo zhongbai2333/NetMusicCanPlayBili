@@ -18,6 +18,11 @@ public final class MediaCloseExecutor {
         return AsyncCloseExecutor.closeAsyncStrict(resource, description, message -> logger().warn(message));
     }
 
+    /** Isolates an unbounded close from the shared media-close pool. */
+    public static CompletableFuture<Void> closeAsyncIsolatedStrict(AutoCloseable resource, String description) {
+        return AsyncCloseExecutor.closeAsyncIsolatedStrict(resource, description, message -> logger().warn(message));
+    }
+
     private static Logger logger() {
         return LoggerHolder.INSTANCE;
     }

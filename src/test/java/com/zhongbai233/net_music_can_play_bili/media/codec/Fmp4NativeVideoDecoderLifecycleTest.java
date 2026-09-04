@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.media.codec;
 
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.MediaCloseExecutor;
+
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -10,13 +12,20 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class Fmp4NativeVideoDecoderLifecycleTest {
     @Test
@@ -112,6 +121,39 @@ class Fmp4NativeVideoDecoderLifecycleTest {
         assertEquals(List.of(7L, 14L), delays);
     }
 
+    @Test
+    void nativeHandleCloseDoesNotWaitForStuckTrackedInput() throws Exception {
+        Fmp4NativeVideoDecoder.TrackedInputRegistry inputs = new Fmp4NativeVideoDecoder.TrackedInputRegistry(
+                MediaCloseExecutor::closeAsyncIsolatedStrict);
+        CountDownLatch inputCloseStarted = new CountDownLatch(1);
+        CountDownLatch releaseInputClose = new CountDownLatch(1);
+        BlockingCloseInputStream input = new BlockingCloseInputStream(inputCloseStarted, releaseInputClose);
+        inputs.track(input);
+        inputs.beginClose();
+        assertTrue(inputCloseStarted.await(5L, TimeUnit.SECONDS));
+
+        CompletableFuture<Void> workerExit = new CompletableFuture<>();
+        AtomicReference<String> nativeCloseThread = new AtomicReference<>();
+        CompletableFuture<Void> nativeTermination = Fmp4NativeVideoDecoder.completeAfter(workerExit,
+                () -> MediaCloseExecutor.closeAsyncIsolatedStrict(
+                        () -> nativeCloseThread.set(Thread.currentThread().getName()),
+                        "test native video handle"));
+        Thread worker = new Thread(() -> workerExit.complete(null), "test-native-video-worker");
+        try {
+            worker.start();
+            assertTimeoutPreemptively(Duration.ofSeconds(2), () -> worker.join());
+            assertFalse(worker.isAlive());
+            assertTimeoutPreemptively(Duration.ofSeconds(2), nativeTermination::join);
+            assertNotNull(nativeCloseThread.get());
+            assertNotEquals(worker.getName(), nativeCloseThread.get());
+            assertFalse(inputs.completionSnapshot().isDone());
+        } finally {
+            releaseInputClose.countDown();
+        }
+        assertTimeoutPreemptively(Duration.ofSeconds(2), () -> inputs.completionSnapshot().join());
+        assertEquals(1, input.closeCount.get());
+    }
+
     private static Throwable rootCause(Throwable error) {
         Throwable current = error;
         while (current.getCause() != null) {
@@ -129,6 +171,34 @@ class Fmp4NativeVideoDecoderLifecycleTest {
                         throw new CompletionException(error);
                     }
                 }));
+    }
+
+    private static final class BlockingCloseInputStream extends InputStream {
+        private final CountDownLatch started;
+        private final CountDownLatch release;
+        private final AtomicInteger closeCount = new AtomicInteger();
+
+        private BlockingCloseInputStream(CountDownLatch started, CountDownLatch release) {
+            this.started = started;
+            this.release = release;
+        }
+
+        @Override
+        public int read() {
+            return -1;
+        }
+
+        @Override
+        public void close() throws IOException {
+            closeCount.incrementAndGet();
+            started.countDown();
+            try {
+                release.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("blocking close interrupted", e);
+            }
+        }
     }
 
     private static final class CountingInputStream extends InputStream {

@@ -33,6 +33,26 @@ final class AsyncCloseExecutor {
         return closeAsync(resource, description, warning, true);
     }
 
+    /**
+     * Runs a close on its own daemon thread so an uncooperative provider cannot
+     * permanently occupy one of the shared media-close workers.
+     */
+    static CompletableFuture<Void> closeAsyncIsolatedStrict(AutoCloseable resource, String description,
+            Consumer<String> warning) {
+        if (resource == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        String safeDescription = description != null ? description : "media resource";
+        CompletableFuture<Void> completion = new CompletableFuture<>();
+        Runnable task = closeTask(resource, safeDescription, warning, true, completion);
+        try {
+            NetMusicThreadFactory.daemonThread("media-close-isolated", task).start();
+        } catch (RuntimeException | Error startFailure) {
+            completion.completeExceptionally(startFailure);
+        }
+        return completion;
+    }
+
     private static CompletableFuture<Void> closeAsync(AutoCloseable resource, String description,
             Consumer<String> warning, boolean preserveFailure) {
         if (resource == null) {
@@ -40,7 +60,19 @@ final class AsyncCloseExecutor {
         }
         String safeDescription = description != null ? description : "media resource";
         CompletableFuture<Void> completion = new CompletableFuture<>();
-        Runnable task = () -> {
+        Runnable task = closeTask(resource, safeDescription, warning, preserveFailure, completion);
+        try {
+            EXECUTOR.execute(task);
+        } catch (RejectedExecutionException error) {
+            warning.accept("媒体关闭队列已满，改用独立后台线程关闭 " + safeDescription);
+            NetMusicThreadFactory.daemonThread("media-close-emergency", task).start();
+        }
+        return completion;
+    }
+
+    private static Runnable closeTask(AutoCloseable resource, String safeDescription, Consumer<String> warning,
+            boolean preserveFailure, CompletableFuture<Void> completion) {
+        return () -> {
             try {
                 resource.close();
             } catch (Throwable error) {
@@ -65,12 +97,5 @@ final class AsyncCloseExecutor {
                 }
             }
         };
-        try {
-            EXECUTOR.execute(task);
-        } catch (RejectedExecutionException error) {
-            warning.accept("媒体关闭队列已满，改用独立后台线程关闭 " + safeDescription);
-            NetMusicThreadFactory.daemonThread("media-close-emergency", task).start();
-        }
-        return completion;
     }
 }

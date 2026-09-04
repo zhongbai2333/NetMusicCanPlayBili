@@ -4,6 +4,10 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -49,5 +53,36 @@ class AsyncCloseExecutorTest {
 
         assertThrows(CompletionException.class, result::join);
         assertTrue(result.isCompletedExceptionally());
+    }
+
+    @Test
+    void isolatedCloseStartsWhileAllSharedWorkersAreBlocked() throws Exception {
+        int workers = MediaCloseProperties.executor().threads();
+        CountDownLatch sharedStarted = new CountDownLatch(workers);
+        CountDownLatch releaseShared = new CountDownLatch(1);
+        List<CompletableFuture<Void>> sharedCloses = new ArrayList<>();
+        try {
+            for (int index = 0; index < workers; index++) {
+                sharedCloses.add(AsyncCloseExecutor.closeAsyncStrict(() -> {
+                    sharedStarted.countDown();
+                    releaseShared.await();
+                }, "blocked shared close", ignored -> {
+                }));
+            }
+            assertTrue(sharedStarted.await(5L, TimeUnit.SECONDS));
+
+            AtomicReference<String> isolatedThread = new AtomicReference<>();
+            CompletableFuture<Void> isolated = AsyncCloseExecutor.closeAsyncIsolatedStrict(
+                    () -> isolatedThread.set(Thread.currentThread().getName()),
+                    "isolated close", ignored -> {
+                    });
+
+            assertTimeoutPreemptively(Duration.ofSeconds(2), isolated::join);
+            assertNotNull(isolatedThread.get());
+            assertTrue(isolatedThread.get().startsWith("media-close-isolated"));
+        } finally {
+            releaseShared.countDown();
+            CompletableFuture.allOf(sharedCloses.toArray(CompletableFuture[]::new)).join();
+        }
     }
 }

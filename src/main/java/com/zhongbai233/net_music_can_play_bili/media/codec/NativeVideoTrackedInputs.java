@@ -19,7 +19,7 @@ class NativeVideoTrackedInputs {
     private boolean closing;
 
     NativeVideoTrackedInputs() {
-        this(MediaCloseExecutor::closeAsyncStrict);
+        this(MediaCloseExecutor::closeAsyncIsolatedStrict);
     }
 
     NativeVideoTrackedInputs(InputCloseScheduler closeScheduler) {

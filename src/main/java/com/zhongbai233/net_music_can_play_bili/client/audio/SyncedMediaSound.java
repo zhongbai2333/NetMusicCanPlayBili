@@ -15,13 +15,17 @@ import net.minecraft.client.sounds.SoundBufferLibrary;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Util;
 
+import javax.sound.sampled.AudioFormat;
+import java.io.IOException;
 import java.net.URL;
+import java.nio.ByteBuffer;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 
 /**
@@ -43,7 +47,8 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
     protected int tick;
     private volatile boolean streamCreationStarted;
     private volatile boolean demandIdleRetired;
-    private final CompletableFuture<Void> decodeAdmission = new CompletableFuture<>();
+    private final DeferredAudioStreamAdmission decodeAdmission = new DeferredAudioStreamAdmission();
+    private final Set<OwnedAudioStream> ownedStreams = ConcurrentHashMap.newKeySet();
 
     protected SyncedMediaSound(URL songUrl, int timeSecond, LyricRecord lyricRecord, String sessionId,
             long startOffsetMillis) {
@@ -82,45 +87,69 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
     @Override
     public CompletableFuture<AudioStream> getStream(SoundBufferLibrary soundBuffers, Sound sound, boolean looping) {
         if (isStopped()) {
-            decodeAdmission.completeExceptionally(stoppedBeforeStreamReady());
-        } else if (!decodeAdmission.isDone()) {
+            retireBeforeStreamReady();
+        } else if (!decodeAdmission.isDecided()) {
             PENDING_DECODE_ADMISSION.add(this);
-        }
-        return awaitDecodeAdmission().thenCompose(ignored -> CompletableFuture.supplyAsync(() -> {
-            try {
-                if (isStopped()) {
-                    throw stoppedBeforeStreamReady();
-                }
-                streamCreationStarted = true;
-                onStreamStarting();
-                long started = System.currentTimeMillis();
-                AudioStream stream = new NetMusicAudioStream(songUrl);
-                if (isStopped()) {
-                    stream.close();
-                    throw stoppedBeforeStreamReady();
-                }
-                LOGGER.debug("{} audio stream ready: cost={}ms host={}", streamDebugName(),
-                        System.currentTimeMillis() - started, songUrl.getHost());
-                onStreamReady();
-                return stream;
-            } catch (CancellationException e) {
-                throw e;
-            } catch (Exception e) {
-                BiliPlaybackDiagnostics.markFailed(songUrl, e);
-                onStreamFailure(e);
-                NetMusic.LOGGER.error("Failed to create {} audio stream for URL: {}", streamDebugName(), songUrl, e);
-                // 不向声音引擎抛异常：future 异常完成会让已分配的流式声道悬空，
-                // 反复失败（如直播间未开播）会耗尽 8 个流式句柄。改为返回提示音，
-                // 声道正常挂载、播完即释放。
-                return errorCueStream(e);
+            // Close the add/approve race without waiting for the next client tick to prune the set.
+            if (decodeAdmission.isDecided()) {
+                PENDING_DECODE_ADMISSION.remove(this);
             }
-        }, Util.backgroundExecutor()));
+        }
+        return decodeAdmission.future().thenCompose(decision -> {
+            if (decision == DeferredAudioStreamAdmission.Decision.ATTACH_DRAINED_STREAM) {
+                return CompletableFuture.completedFuture(new DrainedAudioStream());
+            }
+            return CompletableFuture.supplyAsync(this::openMediaOrTerminalStream, Util.backgroundExecutor());
+        });
+    }
+
+    private AudioStream openMediaOrTerminalStream() {
+        OwnedAudioStream openedStream = null;
+        try {
+            if (isStopped()) {
+                retireBeforeStreamReady();
+                return new DrainedAudioStream();
+            }
+            streamCreationStarted = true;
+            onStreamStarting();
+            if (isStopped()) {
+                retireBeforeStreamReady();
+                return new DrainedAudioStream();
+            }
+            long started = System.currentTimeMillis();
+            OwnedAudioStream stream = openedStream = own(new NetMusicAudioStream(songUrl));
+            if (isStopped()) {
+                closeWithoutFailure(stream);
+                retireBeforeStreamReady();
+                return new DrainedAudioStream();
+            }
+            LOGGER.debug("{} audio stream ready: cost={}ms host={}", streamDebugName(),
+                    System.currentTimeMillis() - started, songUrl.getHost());
+            onStreamReady();
+            return stream;
+        } catch (CancellationException e) {
+            closeWithoutFailure(openedStream);
+            retireBeforeStreamReady();
+            return new DrainedAudioStream();
+        } catch (Exception e) {
+            closeWithoutFailure(openedStream);
+            BiliPlaybackDiagnostics.markFailed(songUrl, e);
+            onStreamFailure(e);
+            NetMusic.LOGGER.error("Failed to create {} audio stream for URL: {}", streamDebugName(), songUrl, e);
+            // A genuine media error still uses the audible failure cue. It is owned as well because an
+            // asynchronous stop can win the race before SoundEngine attaches the completed future.
+            try {
+                return errorCueStream(e);
+            } catch (CompletionException cueFailure) {
+                throw cueFailure;
+            }
+        }
     }
 
     /** Called by each device tick with the common range policy's current decision. */
     protected final void setDecodeDemand(boolean decodeDemand) {
         if (decodeDemand) {
-            decodeAdmission.complete(null);
+            decodeAdmission.approveMediaStream();
             PENDING_DECODE_ADMISSION.remove(this);
         }
     }
@@ -129,21 +158,15 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
         return streamCreationStarted;
     }
 
-    private CompletableFuture<Void> awaitDecodeAdmission() {
-        return decodeAdmission;
-    }
-
     /** Refreshes all not-yet-opened streams from the client thread. */
     public static void tickPendingDecodeAdmissions() {
         for (SyncedMediaSound sound : PENDING_DECODE_ADMISSION) {
             if (sound.isStopped()) {
-                if (PENDING_DECODE_ADMISSION.remove(sound)) {
-                    sound.decodeAdmission.completeExceptionally(sound.stoppedBeforeStreamReady());
-                }
+                sound.retireBeforeStreamReady();
                 continue;
             }
             sound.refreshDecodeDemand();
-            if (sound.decodeAdmission.isDone()) {
+            if (sound.decodeAdmission.isDecided()) {
                 PENDING_DECODE_ADMISSION.remove(sound);
             }
         }
@@ -151,9 +174,7 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
 
     public static void cancelPendingDecodeAdmissions() {
         for (SyncedMediaSound sound : PENDING_DECODE_ADMISSION) {
-            if (PENDING_DECODE_ADMISSION.remove(sound)) {
-                sound.decodeAdmission.completeExceptionally(sound.stoppedBeforeStreamReady());
-            }
+            sound.retireBeforeStreamReady();
         }
     }
 
@@ -164,7 +185,7 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
             java.io.InputStream errorSound = net.minecraft.client.Minecraft.getInstance()
                     .getResourceManager()
                     .open(com.github.tartaricacid.netmusic.client.audio.NetMusicSound.ERROR_SOUND);
-            return new net.minecraft.client.sounds.JOrbisAudioStream(errorSound);
+            return own(new net.minecraft.client.sounds.JOrbisAudioStream(errorSound));
         } catch (Exception fallbackError) {
             CompletionException failure = new CompletionException(cause);
             failure.addSuppressed(fallbackError);
@@ -180,6 +201,8 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
     protected void stopAndFinish() {
         finishSession();
         stop();
+        drainAllocatedChannel();
+        closeOwnedStreams();
     }
 
     /** 供播放 tracker 在会话被取消/替换时停止本声音实例。 */
@@ -191,10 +214,10 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
     void stopForDemandIdle() {
         demandIdleRetired = true;
         PENDING_DECODE_ADMISSION.remove(this);
-        decodeAdmission.completeExceptionally(
-                new CancellationException(streamDebugName() + " sound retired while demand was idle"));
         onDemandIdle();
         stop();
+        drainAllocatedChannel();
+        closeOwnedStreams();
     }
 
     protected void onDemandIdle() {
@@ -214,10 +237,101 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
 
     protected abstract String streamDebugName();
 
-    private CancellationException stoppedBeforeStreamReady() {
+    private void retireBeforeStreamReady() {
+        PENDING_DECODE_ADMISSION.remove(this);
         if (!demandIdleRetired) {
             finishSession();
         }
-        return new CancellationException(streamDebugName() + " sound stopped before stream creation");
+        drainAllocatedChannel();
+        closeOwnedStreams();
+    }
+
+    private void drainAllocatedChannel() {
+        PENDING_DECODE_ADMISSION.remove(this);
+        decodeAdmission.drainAllocatedChannel();
+    }
+
+    private OwnedAudioStream own(AudioStream stream) {
+        OwnedAudioStream owned = new OwnedAudioStream(stream);
+        ownedStreams.add(owned);
+        return owned;
+    }
+
+    private void closeOwnedStreams() {
+        for (OwnedAudioStream stream : ownedStreams) {
+            closeWithoutFailure(stream);
+        }
+    }
+
+    private void closeWithoutFailure(OwnedAudioStream stream) {
+        if (stream == null) {
+            return;
+        }
+        try {
+            stream.close();
+        } catch (IOException closeError) {
+            LOGGER.debug("Failed to close cancelled {} audio stream", streamDebugName(), closeError);
+        }
+    }
+
+    /** A tiny silent buffer makes OpenAL enter PLAYING and then STOPPED so its reserved channel is reclaimed. */
+    private static final class DrainedAudioStream implements AudioStream {
+        private static final AudioFormat FORMAT = new AudioFormat(
+                AudioFormat.Encoding.PCM_SIGNED, 44_100.0F, 16, 1, 2, 44_100.0F, false);
+        private static final int SILENT_BYTES = 882; // 10 ms of mono 16-bit PCM at 44.1 kHz.
+        private final AtomicBoolean delivered = new AtomicBoolean();
+        private final AtomicBoolean closed = new AtomicBoolean();
+
+        @Override
+        public AudioFormat getFormat() {
+            return FORMAT;
+        }
+
+        @Override
+        public ByteBuffer read(int size) {
+            if (closed.get() || size < FORMAT.getFrameSize() || !delivered.compareAndSet(false, true)) {
+                return null;
+            }
+            int byteCount = Math.min(size, SILENT_BYTES);
+            byteCount -= byteCount % FORMAT.getFrameSize();
+            return ByteBuffer.allocateDirect(byteCount);
+        }
+
+        @Override
+        public void close() {
+            closed.set(true);
+        }
+    }
+
+    /**
+     * Makes a decoded stream safe across the stop/future-attachment race. If SoundEngine has already attached it,
+     * its later channel cleanup may close the wrapper again; only the first close reaches the underlying stream.
+     */
+    private static final class OwnedAudioStream implements AudioStream {
+        private final AudioStream delegate;
+        private final AudioFormat format;
+        private final AtomicBoolean closed = new AtomicBoolean();
+
+        private OwnedAudioStream(AudioStream delegate) {
+            this.delegate = delegate;
+            this.format = delegate.getFormat();
+        }
+
+        @Override
+        public AudioFormat getFormat() {
+            return format;
+        }
+
+        @Override
+        public ByteBuffer read(int size) throws IOException {
+            return closed.get() ? null : delegate.read(size);
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (closed.compareAndSet(false, true)) {
+                delegate.close();
+            }
+        }
     }
 }

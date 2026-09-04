@@ -45,7 +45,6 @@ public class WhitelistPreviewScreen extends Screen {
     private boolean closeHovered;
     private String durationProbeKey = "";
     private CancellableTaskFuture<OptionalLong> durationProbeTask;
-    private String pendingVideoSessionId = "";
     private String resolvingVideoKey = "";
     private boolean videoResolveFailed;
     private boolean videoResolveNetworkFailure;
@@ -142,7 +141,6 @@ public class WhitelistPreviewScreen extends Screen {
 
     @Override
     public void tick() {
-        maybeStartPendingVideo();
         if (!scrubbing) {
             float live = liveProgress();
             if (live >= 0.0F) {
@@ -334,28 +332,10 @@ public class WhitelistPreviewScreen extends Screen {
             return;
         }
         String sessionId = WhitelistPreviewPacket.sessionId(packet.previewId(), packet.elapsedMillis());
-        pendingVideoSessionId = sessionId;
-        if (!MP4ClientMediaSync.hasStartedSound(packet.previewId(), sessionId)) {
-            return;
-        }
         startPreviewVideo(packet, sessionId);
     }
 
-    private void maybeStartPendingVideo() {
-        if (payload == null || locallyPaused || !payload.playing() || !hasVideo(payload)
-                || pendingVideoSessionId == null || pendingVideoSessionId.isBlank()) {
-            return;
-        }
-        String sessionId = WhitelistPreviewPacket.sessionId(payload.previewId(), payload.elapsedMillis());
-        if (!sessionId.equals(pendingVideoSessionId)
-                || !MP4ClientMediaSync.hasStartedSound(payload.previewId(), sessionId)) {
-            return;
-        }
-        startPreviewVideo(payload, sessionId);
-    }
-
     private void startPreviewVideo(WhitelistPreviewPacket packet, String sessionId) {
-        pendingVideoSessionId = "";
         videoResolveFailed = false;
         videoResolveNetworkFailure = false;
         if (BiliVideoStreamResolver.isStoredVideoSelection(packet.videoUrl())) {
@@ -422,7 +402,6 @@ public class WhitelistPreviewScreen extends Screen {
         UUID previewId = payload != null ? payload.previewId() : null;
         if (previewId != null) {
             String sessionId = WhitelistPreviewPacket.sessionId(previewId, payload.elapsedMillis());
-            pendingVideoSessionId = "";
             MP4ClientMediaSync.handleSync(WhitelistPreviewPacket.stopAudio(previewId));
             ClientMediaAudioRouting.unregisterLocalPrivateSource(previewId);
             VideoBillboardPreview.stopIfSession(sessionId);

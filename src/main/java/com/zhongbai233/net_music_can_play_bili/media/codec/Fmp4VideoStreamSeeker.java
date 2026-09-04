@@ -515,15 +515,6 @@ final class Fmp4VideoStreamSeeker {
         }
     }
 
-    private static void awaitInputClose(CompletableFuture<Void> closeOutcome) throws IOException {
-        try {
-            closeOutcome.join();
-        } catch (java.util.concurrent.CompletionException error) {
-            Throwable cause = error.getCause() != null ? error.getCause() : error;
-            throw new IOException("native video input close failed", cause);
-        }
-    }
-
     private final class TrackedInputLease implements AutoCloseable {
         private final InputStream stream;
 
@@ -536,8 +527,8 @@ final class Fmp4VideoStreamSeeker {
         }
 
         @Override
-        public void close() throws IOException {
-            awaitInputClose(trackedInputs.closeAsync(stream));
+        public void close() {
+            trackedInputs.closeAsync(stream);
         }
     }
 

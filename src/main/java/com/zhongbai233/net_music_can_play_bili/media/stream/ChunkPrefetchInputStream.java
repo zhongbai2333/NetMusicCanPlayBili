@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class ChunkPrefetchInputStream extends InputStream {
@@ -43,6 +44,7 @@ public final class ChunkPrefetchInputStream extends InputStream {
     private final int highWater;
     private final Object demandLock = new Object();
     private final AtomicReference<InputStream> activeBody = new AtomicReference<>();
+    private final AtomicBoolean closeStarted = new AtomicBoolean();
     private final AtomicReference<URL> activeRequestUrl = new AtomicReference<>();
     private final AtomicReference<URL> startupFailoverUrl = new AtomicReference<>();
     private final long startupPrebufferBytes;
@@ -150,11 +152,19 @@ public final class ChunkPrefetchInputStream extends InputStream {
 
     @Override
     public void close() throws IOException {
+        if (!closeStarted.compareAndSet(false, true)) {
+            return;
+        }
         closed = true;
         notifyDemand();
-        closeActiveBody();
+        // Wake both the parser and downloader before provider close; an HTTP
+        // body is allowed to take arbitrarily long to close.
         downloader.interrupt();
-        spool.close();
+        try {
+            spool.close();
+        } finally {
+            closeActiveBody();
+        }
     }
 
     private void awaitStartupPrebufferIfNeeded() throws IOException {

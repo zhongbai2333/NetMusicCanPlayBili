@@ -19,6 +19,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 /**
  * Java fMP4/DASH 解复用 + FFmpeg JNI 视频解码器。
@@ -46,11 +47,11 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean finished = new AtomicBoolean(false);
-    private final AtomicBoolean physicalCloseScheduled = new AtomicBoolean(false);
+    private final CompletableFuture<Void> workerExit = new CompletableFuture<>();
     private final AtomicReference<DecoderCloseState> decoderCloseState = new AtomicReference<>(
             DecoderCloseState.OPEN);
     private final CompletableFuture<Void> decoderCloseCompletion = new CompletableFuture<>();
-    private final CompletableFuture<Void> termination = new CompletableFuture<>();
+    private final CompletableFuture<Void> termination;
     private final TrackedInputRegistry trackedInputs = new TrackedInputRegistry();
     private final VideoNativeDecoder decoder;
     private final Fmp4NativeVideoDecodePump decodePump;
@@ -149,6 +150,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         this.decoder = new VideoNativeDecoder(this.codecId, targetWidth, targetHeight);
         this.decodePump = new Fmp4NativeVideoDecodePump(this.decoder, this.codecId, targetWidth, targetHeight,
                 this.maxFrames, outputFrames, this.outputFormat, this.startOffsetMillis, this.fps, closed);
+        this.termination = completeAfter(workerExit, this::startNativeDecoderClose);
         if (requestedHwaccel != null) {
             this.decoder.setRequestedHwaccel(requestedHwaccel);
         }
@@ -228,7 +230,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
                 } finally {
                     finished.set(true);
                     closed.set(true);
-                    schedulePhysicalTermination(Thread.currentThread());
+                    trackedInputs.beginClose();
+                    workerExit.complete(null);
                 }
             });
             worker = created;
@@ -237,7 +240,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             } catch (RuntimeException | Error startFailure) {
                 finished.set(true);
                 closed.set(true);
-                schedulePhysicalTermination(created);
+                trackedInputs.beginClose();
+                workerExit.complete(null);
                 throw startFailure;
             }
         }
@@ -316,7 +320,6 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
     private void parseStreamOnce(long offsetMillis) throws IOException, UnsupportedAudioFileException {
         Fmp4VideoStreamSeeker.StreamStart seekStart = streamSeeker.open(offsetMillis);
         InputStream stream = trackInput(seekStart.stream());
-        Throwable streamFailure = null;
         try {
             logger().debug("视频 fMP4 解码流开始: offset={}ms fragment={}s residual={}s output={} target={}x{} codecId={}",
                     offsetMillis, seekStart.fragmentSeconds(), seekStart.residualSeconds(), outputFormat,
@@ -396,20 +399,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             if (containerKind == Fmp4StreamParser.ContainerKind.OTHER_AUDIO) {
                 throw new UnsupportedAudioFileException("video stream is not fMP4 video");
             }
-        } catch (IOException | UnsupportedAudioFileException | RuntimeException | Error error) {
-            streamFailure = error;
-            throw error;
         } finally {
-            CompletableFuture<Void> closeOutcome = closeInputTracked(stream);
-            try {
-                closeOutcome.join();
-            } catch (java.util.concurrent.CompletionException closeError) {
-                if (streamFailure != null) {
-                    streamFailure.addSuppressed(closeError.getCause());
-                } else {
-                    throw new IOException("native video input close failed", closeError.getCause());
-                }
-            }
+            closeInputTracked(stream);
         }
     }
 
@@ -422,8 +413,8 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
         return tracked;
     }
 
-    private CompletableFuture<Void> closeInputTracked(InputStream stream) {
-        return trackedInputs.closeAsync(stream);
+    private void closeInputTracked(InputStream stream) {
+        trackedInputs.closeAsync(stream);
     }
 
     private long estimateCurrentOffsetMillis() {
@@ -485,7 +476,7 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             }
         }
         if (thread == null || !thread.isAlive()) {
-            schedulePhysicalTermination(thread);
+            workerExit.complete(null);
         }
         decodePump.releaseResources();
     }
@@ -502,10 +493,11 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             }
         }
         // Every stream opened during init/range/seek is registered before use.
-        // Provider close calls stay off the cancellation caller thread.
+        // Provider close calls run on isolated daemon threads, never the bounded
+        // media-close pool or the decoder worker.
         trackedInputs.beginClose();
         if (thread == null || !thread.isAlive()) {
-            schedulePhysicalTermination(thread);
+            workerExit.complete(null);
         }
     }
 
@@ -515,57 +507,45 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
 
     /**
      * Completes only after the native decoder worker has exited and its decoder
-     * handle is closed.
+     * handle is closed. Detached HTTP input cleanup is deliberately not an
+     * admission barrier.
      */
     public CompletableFuture<Void> terminationFuture() {
         return termination.copy();
     }
 
-    private void schedulePhysicalTermination(Thread workerToObserve) {
-        trackedInputs.beginClose();
-        if (!physicalCloseScheduled.compareAndSet(false, true)) {
-            return;
-        }
-        CompletableFuture<Void> closeTask = MediaCloseExecutor.closeAsyncStrict(() -> {
-            awaitWorkerExit(workerToObserve);
-            completeTerminationAfterDecoderClose();
-        }, "native video physical termination");
-        closeTask.whenComplete((ignored, error) -> {
-            if (error != null) {
-                termination.completeExceptionally(error);
-            }
-        });
+    private CompletableFuture<Void> startNativeDecoderClose() {
+        return MediaCloseExecutor.closeAsyncIsolatedStrict(this::closeDecoderOnce,
+                "native video decoder handle").thenCompose(ignored -> decoderCloseCompletion);
     }
 
-    private static void awaitWorkerExit(Thread thread) {
-        if (thread == null || thread == Thread.currentThread()) {
-            return;
-        }
-        boolean interrupted = false;
-        while (thread.isAlive()) {
+    static CompletableFuture<Void> completeAfter(CompletableFuture<Void> prerequisite,
+            Supplier<CompletableFuture<Void>> completionStarter) {
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        prerequisite.whenComplete((ignored, prerequisiteError) -> {
+            if (prerequisiteError != null) {
+                result.completeExceptionally(prerequisiteError);
+                return;
+            }
+            CompletableFuture<Void> completion;
             try {
-                thread.join();
-            } catch (InterruptedException ignored) {
-                interrupted = true;
+                completion = completionStarter.get();
+                if (completion == null) {
+                    throw new IllegalStateException("native video completion starter returned null");
+                }
+            } catch (Throwable startFailure) {
+                result.completeExceptionally(startFailure);
+                return;
             }
-        }
-        if (interrupted) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    private void completeTerminationAfterDecoderClose() {
-        trackedInputs.beginClose();
-        closeDecoderOnce();
-        CompletableFuture<Void> physicalClose = CompletableFuture.allOf(
-                decoderCloseCompletion, trackedInputs.completionSnapshot());
-        physicalClose.whenComplete((ignored, error) -> {
-            if (error == null) {
-                termination.complete(null);
-            } else {
-                termination.completeExceptionally(error);
-            }
+            completion.whenComplete((closeIgnored, closeError) -> {
+                if (closeError == null) {
+                    result.complete(null);
+                } else {
+                    result.completeExceptionally(closeError);
+                }
+            });
         });
+        return result;
     }
 
     private void closeDecoderOnce() {

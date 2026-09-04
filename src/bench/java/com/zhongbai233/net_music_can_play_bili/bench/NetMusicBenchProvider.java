@@ -236,6 +236,14 @@ public final class NetMusicBenchProvider implements BenchClientProvider, BenchSe
                     Set.of("client", "media", "network", "mp3", "openal", "sound-engine", "channel", "mute", "range"),
                     Duration.ofSeconds(180)),
                     ignored -> new RealMp3SoundEngineScenario());
+            if (VideoFeatureProperties.realBenchEnabled()) {
+                registrar.register(new ScenarioDescriptor(
+                        "ncpb.real-media-channel-recovery",
+                        "Twelve pre-stream cancellations preserve the next real MP3 channel and native video session",
+                        Set.of("client", "media", "network", "mp3", "sound-engine", "channel", "cancel",
+                                "video", "native", "resources"), Duration.ofMinutes(4)),
+                        ignored -> new RealMediaChannelRecoveryScenario());
+            }
             registrar.register(new ScenarioDescriptor(
                     "ncpb.real-mp3-range-reentry",
                     "One indexed session emits real PCM, retires outside range, then emits real PCM again on re-entry",

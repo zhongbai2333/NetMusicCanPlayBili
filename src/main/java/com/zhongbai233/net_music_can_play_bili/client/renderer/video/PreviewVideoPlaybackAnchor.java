@@ -1,6 +1,8 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTimelineView;
+import com.zhongbai233.net_music_can_play_bili.client.sync.MediaTimelineClock;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -31,10 +33,21 @@ final class PreviewVideoPlaybackAnchor implements VideoPlaybackAnchor {
         if (!sessionId().equals(view.sessionId()) || !view.hasTimeline()) {
             return MediaVideoTimeline.EMPTY;
         }
-        if (!view.started()) {
-            return new FrozenTimeline();
+        if (view.started()) {
+            return new SnapshotTimeline(view);
         }
-        return new SnapshotTimeline(view);
+        ClientMediaPlaybackRegistry.ActivePlayback active = ClientMediaPlaybackRegistry.get(sourceId);
+        MediaTimelineClock.TimelineSnapshot visualSnapshot = active != null ? active.timelineSnapshot() : null;
+        if (visualSnapshot != null && PreviewVideoTimelineSelection.useRegistryTimeline(
+                playbackSessionId, view.started(), visualSnapshot.playbackSessionId(),
+                visualSnapshot.mediaMillis())) {
+            // A GUI preview must not consume an OpenAL streaming handle merely to
+            // advance its picture. Until audio becomes available, use the already
+            // authoritative client/server timeline; once audio starts, the normal
+            // smoothed/audio-anchored view above takes over.
+            return new RegistrySnapshotTimeline(visualSnapshot);
+        }
+        return new FrozenTimeline();
     }
 
     @Override
@@ -97,6 +110,44 @@ final class PreviewVideoPlaybackAnchor implements VideoPlaybackAnchor {
         @Override
         public long totalMillis() {
             return view.totalMillis();
+        }
+
+        @Override
+        public Optional<PlaybackSessionId> playbackSessionId() {
+            return Optional.of(PreviewVideoPlaybackAnchor.this.playbackSessionId);
+        }
+    }
+
+    private final class RegistrySnapshotTimeline implements MediaVideoTimeline {
+        private final MediaTimelineClock.TimelineSnapshot snapshot;
+
+        private RegistrySnapshotTimeline(MediaTimelineClock.TimelineSnapshot snapshot) {
+            this.snapshot = snapshot;
+        }
+
+        @Override
+        public long mediaMillis() {
+            return snapshot.mediaMillis();
+        }
+
+        @Override
+        public long visualMillis() {
+            return snapshot.visualMillis();
+        }
+
+        @Override
+        public long pacingMillis() {
+            return snapshot.pacingMillis();
+        }
+
+        @Override
+        public long relativeNanos(long absoluteStartMillis) {
+            return Math.max(0L, snapshot.mediaMillis() - Math.max(0L, absoluteStartMillis)) * 1_000_000L;
+        }
+
+        @Override
+        public long totalMillis() {
+            return snapshot.totalMillis() > 0L ? snapshot.totalMillis() : totalMillis;
         }
 
         @Override
