@@ -38,9 +38,8 @@ final class PreviewVideoPlaybackAnchor implements VideoPlaybackAnchor {
         }
         ClientMediaPlaybackRegistry.ActivePlayback active = ClientMediaPlaybackRegistry.get(sourceId);
         MediaTimelineClock.TimelineSnapshot visualSnapshot = active != null ? active.timelineSnapshot() : null;
-        if (visualSnapshot != null && PreviewVideoTimelineSelection.useRegistryTimeline(
-                playbackSessionId, view.started(), visualSnapshot.playbackSessionId(),
-                visualSnapshot.mediaMillis())) {
+        if (visualSnapshot != null && visualSnapshot.mediaMillis() >= 0L
+                && visualSnapshot.playbackSessionId().filter(playbackSessionId::equals).isPresent()) {
             // A GUI preview must not consume an OpenAL streaming handle merely to
             // advance its picture. Until audio becomes available, use the already
             // authoritative client/server timeline; once audio starts, the normal

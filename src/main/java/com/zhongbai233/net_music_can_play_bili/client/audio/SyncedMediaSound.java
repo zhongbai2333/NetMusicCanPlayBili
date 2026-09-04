@@ -274,6 +274,38 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
         }
     }
 
+    /**
+     * One-shot decision for a streaming sound whose OpenAL handle is allocated before decoding may start.
+     *
+     * <p>The decision future deliberately never completes exceptionally. Once Minecraft has reserved a streaming
+     * handle, cancellation still has to deliver an {@code AudioStream} so the handle can attach, observe EOF and be
+     * released by the normal sound-engine lifecycle.</p>
+     */
+    static final class DeferredAudioStreamAdmission {
+        private final CompletableFuture<Decision> decision = new CompletableFuture<>();
+
+        CompletableFuture<Decision> future() {
+            return decision;
+        }
+
+        boolean approveMediaStream() {
+            return decision.complete(Decision.OPEN_MEDIA_STREAM);
+        }
+
+        boolean drainAllocatedChannel() {
+            return decision.complete(Decision.ATTACH_DRAINED_STREAM);
+        }
+
+        boolean isDecided() {
+            return decision.isDone();
+        }
+
+        enum Decision {
+            OPEN_MEDIA_STREAM,
+            ATTACH_DRAINED_STREAM
+        }
+    }
+
     /** A tiny silent buffer makes OpenAL enter PLAYING and then STOPPED so its reserved channel is reclaimed. */
     private static final class DrainedAudioStream implements AudioStream {
         private static final AudioFormat FORMAT = new AudioFormat(

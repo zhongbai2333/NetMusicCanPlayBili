@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.client.audio;
 
+import com.zhongbai233.net_music_can_play_bili.client.audio.SyncedMediaSound.DeferredAudioStreamAdmission;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CompletableFuture;
