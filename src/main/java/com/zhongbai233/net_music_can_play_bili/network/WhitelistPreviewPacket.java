@@ -23,7 +23,7 @@ import java.util.UUID;
 /** 白名单审核“查看”预览所需的音视频播放信息。 */
 public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl, String audioUrl, String videoUrl,
         int videoWidth, int videoHeight, int fps, int codecId, int durationSeconds, long elapsedMillis,
-        boolean playing) implements CustomPacketPayload {
+        boolean playing, long requestId) implements CustomPacketPayload {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_URL_LENGTH = 8192;
     private static final int MAX_TITLE_LENGTH = 256;
@@ -37,7 +37,7 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
             return new WhitelistPreviewPacket(buffer.readUUID(), buffer.readUtf(MAX_TITLE_LENGTH),
                     buffer.readUtf(MAX_URL_LENGTH), buffer.readUtf(MAX_URL_LENGTH), buffer.readUtf(MAX_URL_LENGTH),
                     buffer.readVarInt(), buffer.readVarInt(), buffer.readVarInt(), buffer.readVarInt(),
-                    buffer.readVarInt(), buffer.readVarLong(), buffer.readBoolean());
+                    buffer.readVarInt(), buffer.readVarLong(), buffer.readBoolean(), readRequestId(buffer));
         }
 
         @Override
@@ -54,8 +54,16 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
             buffer.writeVarInt(Math.max(0, packet.durationSeconds()));
             buffer.writeVarLong(Math.max(0L, packet.elapsedMillis()));
             buffer.writeBoolean(packet.playing());
+            buffer.writeVarLong(Math.max(0L, packet.requestId()));
         }
     };
+
+    public WhitelistPreviewPacket(UUID previewId, String title, String rawUrl, String audioUrl, String videoUrl,
+            int videoWidth, int videoHeight, int fps, int codecId, int durationSeconds, long elapsedMillis,
+            boolean playing) {
+        this(previewId, title, rawUrl, audioUrl, videoUrl, videoWidth, videoHeight, fps, codecId,
+                durationSeconds, elapsedMillis, playing, 0L);
+    }
 
     @Override
     public Type<? extends CustomPacketPayload> type() {
@@ -63,18 +71,23 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
     }
 
     public static void resolveAndSend(ServerPlayer player, String idOrLink, long elapsedMillis, boolean playing) {
+        resolveAndSend(player, idOrLink, elapsedMillis, playing, 0L);
+    }
+
+    public static void resolveAndSend(ServerPlayer player, String idOrLink, long elapsedMillis, boolean playing,
+            long requestId) {
         if (player == null || idOrLink == null || idOrLink.isBlank()) {
             return;
         }
         String audioOnlyUrl = audioOnlyUrl(idOrLink);
         if (audioOnlyUrl != null) {
             player.sendSystemMessage(Component.literal("正在准备音频预览...").withStyle(ChatFormatting.GRAY));
-            MediaIoExecutor.supply(() -> audioOnlyPacket(audioOnlyUrl, elapsedMillis, playing))
+            MediaIoExecutor.supply(() -> audioOnlyPacket(audioOnlyUrl, elapsedMillis, playing, requestId))
                     .whenComplete((packet, error) -> player.level().getServer().execute(() -> {
                         if (error != null) {
                             LOGGER.warn("白名单审核音频预览解析失败，将使用未知时长: {}", audioOnlyUrl, error);
                             PacketDistributor.sendToPlayer(player,
-                                    fallbackAudioOnlyPacket(audioOnlyUrl, elapsedMillis, playing));
+                                    fallbackAudioOnlyPacket(audioOnlyUrl, elapsedMillis, playing, requestId));
                             return;
                         }
                         PacketDistributor.sendToPlayer(player, packet);
@@ -103,7 +116,7 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
                 String syncedSelection = PlaybackSync.withSync(storedSelection, sessionId, startMillis,
                         durationMillis);
                 return new WhitelistPreviewPacket(previewId, info.displayTitle(), storedSelection, syncedSelection,
-                        storedSelection, 1, 1, 30, 0, Math.max(0, info.duration()), startMillis, playing);
+                        storedSelection, 1, 1, 30, 0, Math.max(0, info.duration()), startMillis, playing, requestId);
             } catch (Exception e) {
                 throw new IllegalStateException(e);
             }
@@ -143,7 +156,8 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
         return previewId + "-whitelist-preview-" + Math.max(0L, elapsedMillis);
     }
 
-    private static WhitelistPreviewPacket audioOnlyPacket(String rawUrl, long elapsedMillis, boolean playing) {
+    private static WhitelistPreviewPacket audioOnlyPacket(String rawUrl, long elapsedMillis, boolean playing,
+            long requestId) {
         String safeRawUrl = Objects.requireNonNull(rawUrl, "rawUrl");
         ItemMusicCD.SongInfo original = new ItemMusicCD.SongInfo(safeRawUrl,
                 Objects.requireNonNull(audioTitle(safeRawUrl)), 0, false);
@@ -155,15 +169,16 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
                 ? resolved.songName
                 : audioTitle(safeRawUrl);
         int durationSeconds = resolved != null ? Math.max(0, resolved.songTime) : 0;
-        return audioOnlyPacket(safeRawUrl, playUrl, title, durationSeconds, elapsedMillis, playing);
+        return audioOnlyPacket(safeRawUrl, playUrl, title, durationSeconds, elapsedMillis, playing, requestId);
     }
 
-    private static WhitelistPreviewPacket fallbackAudioOnlyPacket(String rawUrl, long elapsedMillis, boolean playing) {
-        return audioOnlyPacket(rawUrl, rawUrl, audioTitle(rawUrl), 0, elapsedMillis, playing);
+    private static WhitelistPreviewPacket fallbackAudioOnlyPacket(String rawUrl, long elapsedMillis, boolean playing,
+            long requestId) {
+        return audioOnlyPacket(rawUrl, rawUrl, audioTitle(rawUrl), 0, elapsedMillis, playing, requestId);
     }
 
     private static WhitelistPreviewPacket audioOnlyPacket(String rawUrl, String playUrl, String title,
-            int durationSeconds, long elapsedMillis, boolean playing) {
+            int durationSeconds, long elapsedMillis, boolean playing, long requestId) {
         UUID previewId = UUID.nameUUIDFromBytes(("whitelist-preview-audio:" + rawUrl)
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8));
         long durationMillis = Math.max(0, durationSeconds) * 1000L;
@@ -171,7 +186,7 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
         String sessionId = previewSession(previewId, startMillis);
         String syncedAudioUrl = PlaybackSync.withSync(playUrl, sessionId, startMillis, durationMillis);
         return new WhitelistPreviewPacket(previewId, title, rawUrl, syncedAudioUrl, "",
-                1, 1, 30, 0, Math.max(0, durationSeconds), startMillis, playing);
+                1, 1, 30, 0, Math.max(0, durationSeconds), startMillis, playing, requestId);
     }
 
     private static String audioOnlyUrl(String idOrLink) {
@@ -201,6 +216,15 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
     private static long clampMillis(long value, long totalMillis) {
         long safe = Math.max(0L, value);
         return totalMillis > 0L ? Math.min(totalMillis, safe) : safe;
+    }
+
+    private static long readRequestId(RegistryFriendlyByteBuf buffer) {
+        long value = buffer.readVarLong();
+        if (value < 0L) {
+            throw new io.netty.handler.codec.DecoderException(
+                    "Invalid whitelist preview request id: " + value);
+        }
+        return value;
     }
 
     private static String safe(String value) {

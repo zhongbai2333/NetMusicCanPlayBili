@@ -1,6 +1,6 @@
 # NetMusicCanPlayBili 网络包全景图
 
-> 当前协议：NeoForge payload registrar `1`，短命名空间 `ncpb`。共 **28 个本地 payload**（17 C→S、11 S→C），另有上游 NetMusic 的刻录/播放兼容消息链。
+> 当前协议：NeoForge payload registrar `6`，短命名空间 `ncpb`。共 **42 个本地 payload**（24 C→S、18 S→C），另有上游 NetMusic 的刻录/播放兼容消息链。
 
 ```mermaid
 flowchart LR
@@ -14,21 +14,21 @@ flowchart LR
 
     subgraph CLIENT["① 客户端：UI、Tick 与自动策略"]
         direction TB
-        C_CFG["方块/装备 UI<br/>唱片机 · 歌词投影 · 音箱<br/>视频投影 · 全息眼镜"]:::client
+        C_CFG["方块/装备 UI<br/>唱片机 · 直播机 · 中控台 · 音箱<br/>歌词/视频投影 · 全息眼镜"]:::client
         C_TOOL["媒体管理工具 UI<br/>绑定 · 清除 · 举报"]:::client
-        C_WL["白名单管理 UI<br/>刷新 · 删除 · 导出 · 预览/拖动"]:::client
+        C_WL["白名单管理 UI<br/>活动/历史 · 备注删除 · 评论 · 导出 · 预览<br/>请求号关联 · 幂等重试 · 失败保留输入 · 键盘操作"]:::client
         C_MP4["MP4 客户端<br/>状态脏合并 · 控制 · 自动恢复<br/>失败重试 · 队列完成"]:::client
         C_PAD["Pad 客户端<br/>10t 文档合并 · 发布 · 播放控制"]:::client
         C_CD["上游刻录 UI Mixin<br/>异步解析 B 站信息"]:::upstream
     end
 
-    subgraph C2S["② C → S：17 个本地请求包"]
+    subgraph C2S["② C → S：24 个本地请求包"]
         direction TB
-        P_CFG["配置/控制（6）<br/>ModernTurntableControlPacket<br/>LyricProjectorConfigPacket<br/>SpeakerConfigPacket<br/>VideoProjectorConfigPacket<br/>HolographicGlassesConfigPacket<br/>ClearEquippedBindingPacket *"]:::c2s
+        P_CFG["配置/控制（11）<br/>ModernTurntableControlPacket · LiveStreamerControlPacket<br/>LyricProjectorConfigPacket · SpeakerConfigPacket<br/>VideoProjectorConfigPacket · HolographicGlassesConfigPacket<br/>ControlConsoleConfigPacket · ControlConsoleAccessPacket<br/>ControlConsoleEditLeasePacket · ControlConsoleConsumerLeasePacket<br/>ClearEquippedBindingPacket *"]:::c2s
         P_TOOL["媒体工具（3）<br/>MediaToolConfirmBindingPacket<br/>MediaToolClearBindingPacket<br/>MediaToolReportPacket"]:::c2s
-        P_WL["白名单（1）<br/>WhitelistReviewActionPacket"]:::c2s
-        P_MP4["MP4（4）<br/>MP4StatePacket<br/>MP4PlaybackControlPacket<br/>MP4EnsureDeviceIdPacket<br/>MP4EnsureInventoryDeviceIdPacket"]:::c2s
-        P_PAD["Pad（3）<br/>PadStatePacket<br/>PadPublishPacket<br/>PadPlaybackControlPacket"]:::c2s
+        P_WL["白名单（1）<br/>WhitelistReviewActionPacket<br/>REMOVE 备注 / COMMENT 评论"]:::c2s
+        P_MP4["MP4（5）<br/>MP4StatePacket · MP4PlaybackControlPacket<br/>MP4PlaybackRetryPacket<br/>MP4EnsureDeviceIdPacket · MP4EnsureInventoryDeviceIdPacket"]:::c2s
+        P_PAD["Pad（4）<br/>PadStatePacket · PadPublishPacket<br/>PadPlaybackControlPacket · PadPlaybackRetryPacket"]:::c2s
     end
 
     GATE["③ 服务端信任边界<br/><br/>主线程 handler / 异步解析后回 server executor<br/>按包执行：1 秒窗口限流（2/3/4/8/12 次）<br/>距离 ≤ 8 格 · 方块实体类型 · 菜单上下文<br/>必须持有对应 deviceId · timestamp + sequence 去旧<br/>索引/音量/时间钳制 · VIP/白名单校验<br/>白名单管理权限默认 OP4"]:::gate
@@ -45,12 +45,14 @@ flowchart LR
         S_SCOPE["Pad 地图世界作用域<br/>PadMapScopeSavedData<br/>玩家登录时推送"]:::server
     end
 
-    subgraph S2C["⑤ S → C：11 个本地回包/广播包"]
+    subgraph S2C["⑤ S → C：18 个本地回包/广播包"]
         direction TB
+        R_AUDIO["音频/区域（3）<br/>ModernTurntableStopPacket<br/>AudioEndpointSnapshotPacket · AreaAudioListenerPacket"]:::s2c
+        R_CONSOLE["中控台结果（3）<br/>ControlConsoleEditLeaseResultPacket<br/>ControlConsoleConsumerLeaseResultPacket<br/>ControlConsoleConfigResultPacket"]:::s2c
         R_ID["身份（3）<br/>MP4DeviceIdPacket<br/>MP4InventoryDeviceIdPacket<br/>MP4ContainerDeviceIdPacket *"]:::s2c
         R_STATE["权威镜像（2）<br/>MP4DeviceStateMirrorPacket<br/>PadStateMirrorPacket"]:::s2c
         R_PLAY["播放同步（2）<br/>MP4PlaybackSyncPacket：完整会话<br/>MP4PlaybackTimelinePacket：轻量校时"]:::s2c
-        R_WL["白名单结果（3）<br/>WhitelistReviewPacket<br/>WhitelistPreviewPacket<br/>WhitelistCsvExportPacket"]:::s2c
+        R_WL["白名单结果（4）<br/>WhitelistReviewPacket（活动/历史分页 + 评论）<br/>WhitelistReviewMutationResultPacket（删除/评论明确回执）<br/>WhitelistPreviewPacket<br/>WhitelistCsvExportPacket（64 KiB 分块）"]:::s2c
         R_SCOPE["地图作用域（1）<br/>PadMapWorldScopePacket"]:::s2c
     end
 
@@ -60,7 +62,7 @@ flowchart LR
         D_MP4["MP4Client<br/>device state · queue · headphone link"]:::client
         D_PAD["PadClient 文档缓存"]:::client
         D_PLAY["ClientMediaPlaybackRegistry<br/>ClientMediaSoundRegistry<br/>sourceId + sessionId 防串台<br/>timeline 不匹配则丢弃"]:::client
-        D_WL["审核/预览 Screen<br/>客户端 CSV 文件"]:::client
+        D_WL["审核/预览 Screen<br/>删除后保持页码/滚动邻域<br/>失败保稿与客户端 CSV 文件"]:::client
         D_MAP["地图磁盘缓存<br/>world scope / dimension"]:::client
     end
 
@@ -92,6 +94,8 @@ flowchart LR
     GATE --> S_PAD
     GATE --> S_MEDIA
 
+    S_BLOCK --> R_CONSOLE
+    S_MEDIA --> R_AUDIO
     S_ID --> R_ID
     S_ID --> R_STATE
     S_MP4 --> R_STATE
@@ -101,6 +105,8 @@ flowchart LR
     S_SCOPE --> R_SCOPE
 
     S_BLOCK -. "原版 BlockEntity 更新" .-> D_BLOCK
+    R_AUDIO --> D_PLAY
+    R_CONSOLE --> D_BLOCK
     R_ID --> D_MP4
     R_STATE --> D_MP4
     R_STATE --> D_PAD
@@ -127,6 +133,6 @@ flowchart LR
 
 ## 读图顺序
 
-从左向右看：客户端行为产生 C→S payload，经服务端信任边界验证后修改权威状态；服务端再通过身份回包、状态镜像、完整播放同步、轻量时间轴或管理结果回到客户端。MP4 与 Pad 的数据模型彼此独立，但两者最终共用同一套媒体会话同步与客户端播放器。
+从左向右看：客户端行为产生 C→S payload，经服务端信任边界验证后修改权威状态；服务端再通过身份回包、状态镜像、完整播放同步、轻量时间轴或管理结果回到客户端。白名单审核操作会额外返回 `WhitelistReviewMutationResultPacket`：删除和评论明确区分成功、限频、无权限、条目不存在、输入无效、必填缺失、条目过期和保存失败，刷新、预览及拖动被拒绝或限频时也会立即结束客户端等待；客户端只有收到成功变更回执才清除输入，失败或超时会保留原备注/评论供重试。同一请求号的成功变更会在服务端短期幂等回放，避免确认丢失后重复追加评论；预览及拖动请求也使用独立请求号，服务器校正时间点后仍能安全匹配最新回包。MP4 与 Pad 的数据模型彼此独立，但两者最终共用同一套媒体会话同步与客户端播放器。
 
 图中 `*` 表示包已注册且 handler 完整，但当前源码没有发现主动发送点。方块实体常规数据使用 Minecraft 原生 BlockEntity 同步，不会额外占用一个 `ncpb` payload。刻录和现代唱片机播放还复用了上游 NetMusic 消息，因此单独画在最下方。

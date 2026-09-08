@@ -11,7 +11,6 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
-import net.neoforged.neoforge.network.PacketDistributor;
 import org.slf4j.Logger;
 
 import java.io.IOException;
@@ -59,9 +58,17 @@ public final class NetMusicBiliServerCommands {
                         .then(literal("list")
                                 .executes(ctx -> listWhitelist(ctx.getSource())))
                         .then(literal("remove")
-                                .then(argument("idOrLink", StringArgumentType.greedyString())
-                                        .executes(ctx -> removeWhitelist(ctx.getSource(),
-                                                StringArgumentType.getString(ctx, "idOrLink")))))
+                                .then(argument("idOrLink", StringArgumentType.string())
+                                        .then(argument("note", StringArgumentType.greedyString())
+                                                .executes(ctx -> removeWhitelist(ctx.getSource(),
+                                                        StringArgumentType.getString(ctx, "idOrLink"),
+                                                        StringArgumentType.getString(ctx, "note"))))))
+                        .then(literal("comment")
+                                .then(argument("idOrLink", StringArgumentType.string())
+                                        .then(argument("text", StringArgumentType.greedyString())
+                                                .executes(ctx -> commentWhitelist(ctx.getSource(),
+                                                        StringArgumentType.getString(ctx, "idOrLink"),
+                                                        StringArgumentType.getString(ctx, "text"))))))
                         .then(literal("export")
                                 .executes(ctx -> exportWhitelist(ctx.getSource())))
                         .then(literal("review")
@@ -179,9 +186,10 @@ public final class NetMusicBiliServerCommands {
         return entries.size();
     }
 
-    private static int removeWhitelist(CommandSourceStack source, String raw) {
+    private static int removeWhitelist(CommandSourceStack source, String raw, String note) {
         try {
-            BiliWhitelistManager.RemoveResult result = BiliWhitelistManager.remove(source.getServer(), raw);
+            BiliWhitelistManager.RemoveResult result = BiliWhitelistManager.remove(source.getServer(), raw,
+                    source.getPlayer(), note);
             return switch (result.status()) {
                 case REMOVED -> {
                     source.sendSuccess(() -> Component.literal("已删除链接白名单：")
@@ -199,9 +207,57 @@ public final class NetMusicBiliServerCommands {
                             .withStyle(ChatFormatting.RED));
                     yield 0;
                 }
+                case NOTE_REQUIRED -> {
+                    source.sendFailure(Component.literal("移除白名单必须填写备注，例如：remove \"bili:BV...\" 误收录")
+                            .withStyle(ChatFormatting.RED));
+                    yield 0;
+                }
+                case STALE -> {
+                    source.sendFailure(Component.literal("白名单条目已发生变化，请重试。")
+                            .withStyle(ChatFormatting.YELLOW));
+                    yield 0;
+                }
             };
         } catch (IOException e) {
             LOGGER.warn("保存链接白名单失败", e);
+            source.sendFailure(Component.literal("保存白名单失败：" + e.getMessage()).withStyle(ChatFormatting.RED));
+            return 0;
+        }
+    }
+
+    private static int commentWhitelist(CommandSourceStack source, String raw, String text) {
+        try {
+            BiliWhitelistManager.CommentResult result = BiliWhitelistManager.addComment(source.getServer(), raw,
+                    source.getPlayer(), text);
+            return switch (result.status()) {
+                case ADDED -> {
+                    source.sendSuccess(() -> Component.literal("已追加白名单审核评论：" + result.requestedId())
+                            .withStyle(ChatFormatting.GREEN), true);
+                    yield 1;
+                }
+                case MISSING -> {
+                    source.sendFailure(Component.literal("白名单中没有：" + result.requestedId())
+                            .withStyle(ChatFormatting.YELLOW));
+                    yield 0;
+                }
+                case INVALID -> {
+                    source.sendFailure(Component.literal("请输入有效的 BV号、av号或白名单链接。")
+                            .withStyle(ChatFormatting.RED));
+                    yield 0;
+                }
+                case COMMENT_REQUIRED -> {
+                    source.sendFailure(Component.literal("审核评论不能为空。")
+                            .withStyle(ChatFormatting.RED));
+                    yield 0;
+                }
+                case STALE -> {
+                    source.sendFailure(Component.literal("白名单条目已发生变化，请重试。")
+                            .withStyle(ChatFormatting.YELLOW));
+                    yield 0;
+                }
+            };
+        } catch (IOException e) {
+            LOGGER.warn("保存链接白名单评论失败", e);
             source.sendFailure(Component.literal("保存白名单失败：" + e.getMessage()).withStyle(ChatFormatting.RED));
             return 0;
         }
@@ -214,11 +270,17 @@ public final class NetMusicBiliServerCommands {
                     .withStyle(ChatFormatting.RED));
             return 0;
         }
-        String csv = BiliWhitelistManager.exportCsv(source.getServer());
-        PacketDistributor.sendToPlayer(player, WhitelistCsvExportPacket.create(csv));
-        source.sendSuccess(() -> Component.literal("已发送白名单 CSV 到你的客户端，将保存到本地游戏目录。")
-                .withStyle(ChatFormatting.GREEN), false);
-        return 1;
+        try {
+            int chunks = WhitelistCsvExportPacket.exportTo(player);
+            source.sendSuccess(() -> Component.literal(
+                    "已开始向客户端传输白名单 CSV（" + chunks + " 个分块）。")
+                    .withStyle(ChatFormatting.GREEN), false);
+            return 1;
+        } catch (IllegalArgumentException e) {
+            source.sendFailure(Component.literal("白名单 CSV 导出失败：" + e.getMessage())
+                    .withStyle(ChatFormatting.RED));
+            return 0;
+        }
     }
 
     private static int openWhitelistReview(CommandSourceStack source) {

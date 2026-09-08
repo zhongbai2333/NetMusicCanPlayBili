@@ -8,7 +8,8 @@ public final class ModernTurntableNetwork {
     }
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        PayloadRegistrar registrar = event.registrar("3");
+        // Version 6 adds immediate correlated failures for review refresh and preview navigation.
+        PayloadRegistrar registrar = event.registrar("6");
         registrar.playToServer(
                 ModernTurntableControlPacket.TYPE,
                 ModernTurntableControlPacket.STREAM_CODEC,
@@ -165,6 +166,10 @@ public final class ModernTurntableNetwork {
                 WhitelistReviewPacket.TYPE,
                 WhitelistReviewPacket.STREAM_CODEC,
                 WhitelistReviewPacket::handle);
+        registrar.playToClient(
+                WhitelistReviewMutationResultPacket.TYPE,
+                WhitelistReviewMutationResultPacket.STREAM_CODEC,
+                WhitelistReviewMutationResultPacket::handle);
         registrar.playToClient(
                 WhitelistPreviewPacket.TYPE,
                 WhitelistPreviewPacket.STREAM_CODEC,

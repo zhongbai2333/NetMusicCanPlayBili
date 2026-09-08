@@ -108,7 +108,7 @@ final class LuckPermsPermissionBridgeServerScenario implements BenchServerScenar
                     failIfTimedOut("LuckPerms revocation", 200);
                     return BenchStepResult.CONTINUE;
                 }
-                runAsPlayer(context, player, "ncpbs whitelist remove " + TARGET);
+                runAsPlayer(context, player, "ncpbs whitelist remove '" + TARGET + "' LuckPerms revoke cleanup");
                 nextPhase();
             }
             case 5 -> {

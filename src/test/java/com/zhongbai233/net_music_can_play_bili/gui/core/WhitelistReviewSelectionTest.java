@@ -23,4 +23,48 @@ class WhitelistReviewSelectionTest {
         assertTrue(WhitelistReviewSelection.matchesPreview("bili:BV1ABC", "BV1ABC"));
         assertFalse(WhitelistReviewSelection.matchesPreview("bili:BV1ABC", "BV1OTHER|p=3"));
     }
+
+    @Test
+    void selectsTheRowThatMovesIntoADeletedSelectionWithoutJumpingTheScroll() {
+        WhitelistReviewSelection.RefreshState state = WhitelistReviewSelection.resolveAfterRefresh(
+                List.of("a", "b", "c", "d", "e", "g", "h", "i"), "f", 5, 3, 4);
+
+        assertEquals(5, state.selectedIndex());
+        assertEquals(3, state.scrollOffset());
+    }
+
+    @Test
+    void deletingTheLastSelectionFallsBackToItsPredecessorAndClampsTheScroll() {
+        WhitelistReviewSelection.RefreshState state = WhitelistReviewSelection.resolveAfterRefresh(
+                List.of("a", "b", "c"), "d", 3, 2, 2);
+
+        assertEquals(2, state.selectedIndex());
+        assertEquals(1, state.scrollOffset());
+    }
+
+    @Test
+    void previewDeletionReturnsToTheNextSiblingThenFallsBackToThePreviousSibling() {
+        List<String> ids = List.of("a", "b", "c");
+
+        assertEquals("c", WhitelistReviewSelection.adjacentIdAfterRemoval(ids, "b"));
+        assertEquals("b", WhitelistReviewSelection.adjacentIdAfterRemoval(ids, "c"));
+        assertEquals("", WhitelistReviewSelection.adjacentIdAfterRemoval(List.of("a"), "a"));
+        assertEquals("", WhitelistReviewSelection.adjacentIdAfterRemoval(ids, "missing"));
+    }
+
+    @Test
+    void deletingTheOnlyRowOnTheLastPageFallsBackToThePreviousPage() {
+        assertEquals(64, WhitelistReviewSelection.clampPageOffset(64, 65, 64));
+        assertEquals(0, WhitelistReviewSelection.clampPageOffset(64, 64, 64));
+        assertEquals(64, WhitelistReviewSelection.clampPageOffset(128, 128, 64));
+        assertEquals(0, WhitelistReviewSelection.clampPageOffset(64, 0, 64));
+
+        List<String> previousPage = java.util.stream.IntStream.range(0, 64)
+                .mapToObj(index -> "entry-" + index)
+                .toList();
+        WhitelistReviewSelection.RefreshState restored = WhitelistReviewSelection.resolveAfterRefresh(
+                previousPage, "deleted-last-page-entry", previousPage.size() - 1, 0, 7);
+        assertEquals(63, restored.selectedIndex());
+        assertEquals(57, restored.scrollOffset());
+    }
 }

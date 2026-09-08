@@ -15,7 +15,7 @@
 | 索引随用随播 | `ncpb.indexed-audio-on-demand`、`ncpb.indexed-server-session-unloaded`、`ncpb.device-link-config-matrix` | 跨区块端点发现、旧预热带不启动、多个端点共享单解码器、末端离开迟滞关闭、来源区块保持卸载且循环会话继续、持久端点随真实方块重绑 |
 | 播放范围调试 | `ncpb.playback-range-debug-visualization` | 端点快照驱动的标称/解析/提示/同步范围世界线框、生命周期 HUD 与开关状态 |
 | 播放中迟到投影仪 | `ncpb.device-link-config-matrix`、`ncpb.playback-session-races` | BE 更新后的客户端消费者登记，以及同一会话重试/替换状态机 |
-| 媒体 GUI | `ncpb.gui-screen-matrix` | 15 个离线安全生产 Screen 逐一打开、真实渲染、自动化快照、关闭；包括 MP4、Pad、地图、绑定/报告和白名单审核/预览 |
+| 媒体 GUI | `ncpb.gui-screen-matrix` | 15 个离线安全生产 Screen 逐一打开、真实渲染、自动化快照、关闭；包括 MP4、Pad、地图、绑定/报告和白名单审核/预览。白名单 Screen 具备小视口自适应、键盘选择/提交/预览/seek、请求处理中禁用以及失败保留备注的生产交互 |
 | 手持 MP4/Pad | `ncpb.handheld-media-contracts`、`ncpb.playback-session-races` | 两种屏幕几何/缩放、Pad 逻辑会话身份、媒体会话竞态 |
 | Pad 地图/地形 | `ncpb.gui-screen-matrix`、`ncpb.terrain-lod-roundtrip` | 地图 Screen、采样/缓存使用路径、LOD/PIP/GPU/透明层与资源收敛 |
 | Bilibili 直播 | `ncpb.live-stream-contracts`、`ncpb.real-live-device-topology` | 房间号/链接/占位 URL、元数据 owner、健康重连与指数退避；真实 8178490 直播流的直播机、投影仪、中控台屏幕/音频元素和实体音响联合加载 |
@@ -26,7 +26,7 @@
 | 多客户端 | 三个 `ncpb.multi-client-*` | 独立消费者 lease、断开、重连、真实媒体 survivor |
 | 跨维度 | `ncpb.cross-dimension-media-cleanup` | respawn 包、加载 UI、跨维度媒体精确清理 |
 | 中控台 | `ncpb.console-consumer-lifecycle`、`ncpb.device-link-config-matrix`、`ncpb.real-live-device-topology` | 消费者 attach/detach、source binding、客户端消费者登记、GUI/lease，以及真实直播的屏幕+音频元素 |
-| 白名单与权限 | `ncpb.whitelist-management-lifecycle`、`ncpb.luckperms-permission-bridge`、`ncpb.gui-screen-matrix` | 真实服务端增加/删除、直播机启动拦截、审核列表非空快照、预览 Screen、CSV 服务端生成与客户端落盘；paired Bench 加载 LuckPerms NeoForge，并验证 LP 授权/撤销经 NeoForge PermissionAPI 控制真实白名单命令；场景结束恢复配置并清理临时条目 |
+| 白名单与权限 | `ncpb.whitelist-management-lifecycle`、`ncpb.luckperms-permission-bridge`、`ncpb.gui-screen-matrix` | 真实服务端增加/删除（删除备注必填）、追加审核评论、活动/历史审核快照、移除记录保留、分页边界、预览 Screen、CSV 分块生成与客户端落盘；审核/预览实现删除后保持分页和滚动邻域、S2C 操作回执、处理中锁定、失败/超时保留备注及键盘操作。paired Bench 加载 LuckPerms NeoForge，并验证 LP 授权/撤销经 NeoForge PermissionAPI 控制带备注的白名单命令；场景结束恢复配置并清理临时条目 |
 
 ## 当前不能完全自动化的边界
 
@@ -36,6 +36,7 @@
 - Minecart Revolution、Iris shaderpack、第三方资源包以及六平台硬解属于外部环境矩阵；缺少对应模组、
   shaderpack、资源包或机器时不能由默认客户端虚构通过。`ncpb.terrain-lod-roundtrip` 的 compat 模式和
   真实 AV1 场景用于具备环境时执行。
+- `ncpb.gui-screen-matrix` 证明生产 Screen 能打开、渲染并关闭，但不会伪造真实网络延迟或逐键注入操作；白名单审核的“处理中”、失败保稿、删除后保持视口和完整键盘流程仍应在发布前做一次人工客户端验收。
 - “覆盖”表示每个生产功能域至少存在一个带断言的场景，并不等同于每个平台、每个 CDN、每个 GPU 驱动组合均已实机验证。
 
 ## 快速执行
