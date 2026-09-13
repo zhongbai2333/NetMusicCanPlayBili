@@ -158,16 +158,18 @@ final class BiliSubtitleApi {
     }
 
     private static JsonObject getJson(String url) throws Exception {
-        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(15)).GET();
-        BiliRequestHeaders.applyWebApiHeaders(builder);
+        URI target = URI.create(url);
+        HttpRequest.Builder builder = HttpRequest.newBuilder(target).timeout(Duration.ofSeconds(15)).GET();
+        BiliRequestHeaders.applyWebApiHeaders(builder, target);
         HttpResponse<String> response = BiliApiClient.sendApi(BiliWbiSigner.HTTP, builder.build(),
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), "bili-api-json");
         return JsonParser.parseString(response.body()).getAsJsonObject();
     }
 
     private static String getText(String url) throws Exception {
-        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(15)).GET();
-        BiliRequestHeaders.applyWebApiHeaders(builder);
+        URI target = URI.create(url);
+        HttpRequest.Builder builder = HttpRequest.newBuilder(target).timeout(Duration.ofSeconds(15)).GET();
+        BiliRequestHeaders.applyWebApiHeaders(builder, target);
         return BiliApiClient.sendApi(BiliWbiSigner.HTTP, builder.build(),
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), "bili-api-text").body();
     }

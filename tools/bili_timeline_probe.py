@@ -12,6 +12,9 @@ Examples:
   python tools/bili_timeline_probe.py BV17q9EBEE9w --page 2
   python tools/bili_timeline_probe.py BV17q9EBEE9w --page 2 --quality 80 --sample-start 5317 --sample-duration 20
   python tools/bili_timeline_probe.py BV17q9EBEE9w --page 2 --frames --max-frames 900
+
+Authentication is opt-in: pass --sessdata or set BILI_SESSDATA. This diagnostic
+tool never reads Minecraft configuration or the machine-bound credential vault.
 """
 
 from __future__ import annotations
@@ -202,22 +205,9 @@ def parse_video_id(raw: str) -> VideoId:
     raise ValueError(f"无法解析 BV/AV: {raw}")
 
 
-def auto_sessdata() -> str:
-    explicit = os.environ.get("BILI_SESSDATA", "").strip()
-    if explicit:
-        return explicit
-    roots = [Path.cwd(), Path(__file__).resolve().parents[1]]
-    for root in roots:
-        config = root / "run" / "config" / "net_music_can_play_bili.json"
-        if config.exists():
-            try:
-                value = json.loads(config.read_text(encoding="utf-8")).get("sessdata", "").strip()
-                if value:
-                    print(f"[auth] using SESSDATA from {config}")
-                    return value
-            except Exception:
-                pass
-    return ""
+def resolve_sessdata(explicit: str = "") -> str:
+    """Resolve credentials only from an explicit argument or BILI_SESSDATA."""
+    return explicit.strip() or os.environ.get("BILI_SESSDATA", "").strip()
 
 
 def request_headers(sessdata: str = "") -> dict[str, str]:
@@ -1040,7 +1030,11 @@ def main() -> int:
     parser.add_argument("--page", "-p", type=int, default=2, help="page number, default P2 for the current test video")
     parser.add_argument("--quality", "-q", type=int, default=80, help="preferred video quality ceiling, Java startup default is 80")
     parser.add_argument("--codec-id", type=int, default=7, help="preferred codec id, 7=H.264 like Java default")
-    parser.add_argument("--sessdata", default="", help="SESSDATA; default auto reads env/config")
+    parser.add_argument(
+        "--sessdata",
+        default="",
+        help="SESSDATA; defaults to BILI_SESSDATA only and never reads game files",
+    )
     parser.add_argument("--ffprobe", default="", help="path to ffprobe; default PATH")
     parser.add_argument("--frames", action="store_true", help="sample video frame PTS with ffprobe")
     parser.add_argument("--sample-start", type=float, default=None, help="ffprobe read interval start seconds")
@@ -1090,7 +1084,7 @@ def main() -> int:
         ))
         return 0
 
-    sessdata = args.sessdata.strip() or auto_sessdata()
+    sessdata = resolve_sessdata(args.sessdata)
     video_id = parse_video_id(args.video)
     view = get_view(video_id, args.page)
     print("[view]")

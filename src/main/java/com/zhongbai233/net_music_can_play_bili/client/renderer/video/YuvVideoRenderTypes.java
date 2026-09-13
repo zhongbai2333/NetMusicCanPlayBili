@@ -31,10 +31,10 @@ public final class YuvVideoRenderTypes {
             "pipeline/nv12_entity");
     private static final Identifier RGBA_FLAT_SOLID_PIPELINE_ID = Identifier.fromNamespaceAndPath(
             NetMusicCanPlayBili.MODID, "pipeline/video_rgba_flat_solid");
+    private static final Identifier RGBA_FLAT_CUTOUT_PIPELINE_ID = Identifier.fromNamespaceAndPath(
+            NetMusicCanPlayBili.MODID, "pipeline/video_rgba_flat_cutout");
     private static final Identifier RGBA_FLAT_TRANSLUCENT_PIPELINE_ID = Identifier.fromNamespaceAndPath(
             NetMusicCanPlayBili.MODID, "pipeline/video_rgba_flat_translucent");
-    private static final Identifier RGBA_FLAT_OVERLAY_PIPELINE_ID = Identifier.fromNamespaceAndPath(
-            NetMusicCanPlayBili.MODID, "pipeline/video_rgba_flat_overlay");
     private static final Identifier FRAGMENT_SHADER = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
             "core/yuv420p_entity");
     private static final Identifier NV12_FRAGMENT_SHADER = Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
@@ -47,11 +47,11 @@ public final class YuvVideoRenderTypes {
     static final RenderPipeline YUV420P_ENTITY = buildYuv420pEntityPipeline();
     static final RenderPipeline NV12_ENTITY = buildYuvEntityPipeline(NV12_PIPELINE_ID, NV12_FRAGMENT_SHADER);
     static final RenderPipeline RGBA_FLAT_SOLID = buildFlatRgbaPipeline(
-            RGBA_FLAT_SOLID_PIPELINE_ID, false, false);
+            RGBA_FLAT_SOLID_PIPELINE_ID, VideoRgbaRenderPass.SOLID);
+    static final RenderPipeline RGBA_FLAT_CUTOUT = buildFlatRgbaPipeline(
+            RGBA_FLAT_CUTOUT_PIPELINE_ID, VideoRgbaRenderPass.CUTOUT);
     static final RenderPipeline RGBA_FLAT_TRANSLUCENT = buildFlatRgbaPipeline(
-            RGBA_FLAT_TRANSLUCENT_PIPELINE_ID, true, false);
-    static final RenderPipeline RGBA_FLAT_OVERLAY = buildFlatRgbaPipeline(
-            RGBA_FLAT_OVERLAY_PIPELINE_ID, true, true);
+            RGBA_FLAT_TRANSLUCENT_PIPELINE_ID, VideoRgbaRenderPass.TRANSLUCENT);
 
     static final RenderPipeline YUV420P_TEXTURED_PROBE_ENTITY = RenderPipeline.builder(
             RenderPipelines.ENTITY_EMISSIVE_SNIPPET)
@@ -63,8 +63,8 @@ public final class YuvVideoRenderTypes {
 
         private static final int MAX_RGBA_ENTITY_CACHE_ENTRIES = 64;
         private static final Map<Identifier, RenderType> RGBA_ENTITY_CACHE = newRgbaRenderTypeCache();
+        private static final Map<Identifier, RenderType> RGBA_CUTOUT_ENTITY_CACHE = newRgbaRenderTypeCache();
         private static final Map<Identifier, RenderType> RGBA_TRANSLUCENT_ENTITY_CACHE = newRgbaRenderTypeCache();
-        private static final Map<Identifier, RenderType> RGBA_EMISSIVE_ENTITY_CACHE = newRgbaRenderTypeCache();
 
         private static Map<Identifier, RenderType> newRgbaRenderTypeCache() {
                 return Collections.synchronizedMap(
@@ -81,8 +81,8 @@ public final class YuvVideoRenderTypes {
 
     public static void registerPipelines(RegisterRenderPipelinesEvent event) {
         event.registerPipeline(RGBA_FLAT_SOLID);
+        event.registerPipeline(RGBA_FLAT_CUTOUT);
         event.registerPipeline(RGBA_FLAT_TRANSLUCENT);
-        event.registerPipeline(RGBA_FLAT_OVERLAY);
         if (!YUV_SHADER_DEBUG.isBlank()) {
             LOGGER.warn("YUV shader 可视化诊断已启用: mode={}。若画面不变，说明当前后端没有执行本模组 YUV fragment shader。",
                     YUV_SHADER_DEBUG);
@@ -104,19 +104,23 @@ public final class YuvVideoRenderTypes {
         return buildYuvEntityPipeline(PIPELINE_ID, FRAGMENT_SHADER);
     }
 
-    private static RenderPipeline buildFlatRgbaPipeline(Identifier pipelineId, boolean translucent,
-            boolean disableDepthWrite) {
+    private static RenderPipeline buildFlatRgbaPipeline(Identifier pipelineId, VideoRgbaRenderPass renderPass) {
+        if (renderPass == VideoRgbaRenderPass.SKIP) {
+            throw new IllegalArgumentException("SKIP does not have a render pipeline");
+        }
         RenderPipeline.Builder builder = RenderPipeline.builder(RenderPipelines.ENTITY_SNIPPET)
                 .withLocation(pipelineId)
                 .withShaderDefine("NO_OVERLAY")
                 .withShaderDefine("NO_CARDINAL_LIGHTING")
+                .withDepthStencilState(new DepthStencilState(CompareOp.LESS_THAN_OR_EQUAL,
+                        renderPass.depthWrite()))
                 .withSampler("Sampler1");
-        if (translucent) {
+        if (renderPass.alphaCutout() > 0.0F) {
+            builder.withShaderDefine("ALPHA_CUTOUT", renderPass.alphaCutout());
+        }
+        if (renderPass.blending()) {
             builder.withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
                     .withCull(false);
-        }
-        if (disableDepthWrite) {
-            builder.withDepthStencilState(new DepthStencilState(CompareOp.LESS_THAN_OR_EQUAL, false));
         }
         return builder.build();
     }
@@ -220,6 +224,24 @@ public final class YuvVideoRenderTypes {
                 }
     }
 
+        /** Opaque/depth-writing RGBA surface with binary-alpha cutout. */
+        public static RenderType videoRgbaCutoutEntity(Identifier texture) {
+                synchronized (RGBA_CUTOUT_ENTITY_CACHE) {
+                        return RGBA_CUTOUT_ENTITY_CACHE.computeIfAbsent(texture,
+                                        key -> videoRgbaEntity("bili_video_rgba_cutout_entity",
+                                                        RGBA_FLAT_CUTOUT, key));
+                }
+        }
+
+        static RenderType videoRgbaEntity(Identifier texture, VideoRgbaRenderPass renderPass) {
+                return switch (renderPass) {
+                        case SOLID -> videoRgbaEntity(texture);
+                        case CUTOUT -> videoRgbaCutoutEntity(texture);
+                        case TRANSLUCENT -> videoRgbaTranslucentEntity(texture);
+                        case SKIP -> throw new IllegalArgumentException("SKIP does not have a RenderType");
+                };
+        }
+
         /**
          * Shaderpack-safe translucent RGBA surface.  Iris may replace the vanilla entity
          * program with one that validates all three conventional sampler slots, so the
@@ -230,15 +252,6 @@ public final class YuvVideoRenderTypes {
                         return RGBA_TRANSLUCENT_ENTITY_CACHE.computeIfAbsent(texture,
                                         key -> videoRgbaEntity("bili_video_rgba_translucent_entity",
                                                         RGBA_FLAT_TRANSLUCENT, key));
-                }
-        }
-
-        /** Flat-lit translucent variant used by loading, idle and privacy overlays. */
-        public static RenderType videoRgbaEmissiveEntity(Identifier texture) {
-                synchronized (RGBA_EMISSIVE_ENTITY_CACHE) {
-                        return RGBA_EMISSIVE_ENTITY_CACHE.computeIfAbsent(texture,
-                                        key -> videoRgbaEntity("bili_video_rgba_emissive_entity",
-                                                        RGBA_FLAT_OVERLAY, key));
                 }
         }
 

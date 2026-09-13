@@ -140,7 +140,7 @@ final class VideoPlaybackPresentation {
         if (HolographicGlassesClient.shouldHideProjectorVideos()) {
             VideoBillboardPreview.submitProjectorPrivacyOverlay(event, minecraft, camera, projector);
         } else if (owner.networkFailure && VideoPlaceholderFrames.NETWORK_ERROR_ENABLED) {
-            VideoBillboardPreview.submitProjectorEmissiveGeometry(event, minecraft, camera, projector,
+            VideoBillboardPreview.submitProjectorPlaceholderGeometry(event, minecraft, camera, projector,
                     placeholderTexture(VideoPlaceholderFrames.Kind.NETWORK_ERROR), VideoPlaceholderFrames.WIDTH,
                     VideoPlaceholderFrames.HEIGHT);
         } else if (owner.hasFrame && owner.textures.hasRgbaTexture()) {
@@ -165,7 +165,7 @@ final class VideoPlaybackPresentation {
                     placeholderTexture(kind), VideoPlaceholderFrames.WIDTH, VideoPlaceholderFrames.HEIGHT,
                     VideoPlaceholderFrames.IRIS_VIEW_DEPTH_OFFSET);
         } else {
-            VideoBillboardPreview.submitProjectorEmissiveGeometry(event, minecraft, camera, projector,
+            VideoBillboardPreview.submitProjectorPlaceholderGeometry(event, minecraft, camera, projector,
                     placeholderTexture(kind), VideoPlaceholderFrames.WIDTH, VideoPlaceholderFrames.HEIGHT);
         }
     }

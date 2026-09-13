@@ -223,7 +223,10 @@ def build_document() -> Document:
     add_bullet(document, "NetMusic 为必装前置；Curios 为可选兼容，不安装也可使用穿戴设备。")
     add_bullet(document, "模组已打包常见平台所需的原生解码库，普通玩家通常无须另行安装系统 FFmpeg。")
     add_bullet(document, "高画质能否取得取决于视频源、Bilibili 登录状态、账号权限和网络环境。画面卡顿时建议优先降低到 720P 或更低画质。")
-    add_bullet(document, "Bilibili 登录信息保存在本地配置中，请勿公开上传或转发含 Cookie 的配置文件。")
+    add_bullet(
+        document,
+        "Bilibili 登录凭据保存在游戏目录的机器绑定加密凭据库中，不再写入 config；即使复制到其他机器不能直接使用，也不应公开上传或转发。",
+    )
 
     add_note(
         document,

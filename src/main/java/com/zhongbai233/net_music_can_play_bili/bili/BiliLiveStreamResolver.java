@@ -357,10 +357,11 @@ public final class BiliLiveStreamResolver {
     }
 
     private static JsonObject getJson(String url) throws IOException {
-        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
+        URI target = URI.create(url);
+        HttpRequest.Builder builder = HttpRequest.newBuilder(target)
                 .timeout(API_TIMEOUT)
                 .GET();
-        BiliRequestHeaders.applyLiveHeaders(builder, null);
+        BiliRequestHeaders.applyLiveHeaders(builder, target);
         try {
             HttpResponse<String> response = CancellableHttpRequestScope.sendOneBlocking(BiliWbiSigner.HTTP,
                     builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8),

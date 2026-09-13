@@ -79,11 +79,14 @@ public final class BiliApiClient {
 
     public static VideoId extractVideoIdLenientWithShortLink(String raw) {
         VideoId direct = extractVideoIdLenient(raw);
-        if (direct != null || raw == null || raw.isBlank()
-                || !BiliVideoReferenceParser.looksLikeShortLink(raw)) {
+        if (direct != null || raw == null || raw.isBlank()) {
             return direct;
         }
-        String expanded = expandBiliShortLink(raw.trim());
+        URI shortLink = BiliVideoReferenceParser.parseShortLinkUri(raw);
+        if (shortLink == null) {
+            return null;
+        }
+        String expanded = expandBiliShortLink(shortLink);
         return expanded == null ? null : extractVideoIdLenient(expanded);
     }
 
@@ -93,28 +96,45 @@ public final class BiliApiClient {
 
     public static VideoSelection extractVideoSelectionLenientWithShortLink(String raw) {
         VideoSelection direct = extractVideoSelectionLenient(raw);
-        if (direct != null || raw == null || raw.isBlank()
-                || !BiliVideoReferenceParser.looksLikeShortLink(raw)) {
+        if (direct != null || raw == null || raw.isBlank()) {
             return direct;
         }
-        String expanded = expandBiliShortLink(raw.trim());
+        URI shortLink = BiliVideoReferenceParser.parseShortLinkUri(raw);
+        if (shortLink == null) {
+            return null;
+        }
+        String expanded = expandBiliShortLink(shortLink);
         return expanded == null ? null : extractVideoSelectionLenient(expanded);
     }
 
-    private static String expandBiliShortLink(String raw) {
+    private static String expandBiliShortLink(URI shortLink) {
         try {
-            URI uri = URI.create(raw.startsWith("http://") || raw.startsWith("https://") ? raw : "https://" + raw);
-            HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
+            HttpRequest.Builder builder = HttpRequest.newBuilder(shortLink)
                     .timeout(SHORT_LINK_TIMEOUT)
                     .GET();
-            BiliRequestHeaders.applyWebApiHeaders(builder);
+            BiliRequestHeaders.applyPublicWebHeaders(builder);
             HttpRequest req = builder.build();
-            return sendApi(SHORT_LINK_HTTP, req, HttpResponse.BodyHandlers.discarding(),
-                    "bili-api-short-link").uri().toString();
+            URI expanded = sendApi(SHORT_LINK_HTTP, req, HttpResponse.BodyHandlers.discarding(),
+                    "bili-api-short-link").uri();
+            if (!isTrustedExpandedShortLink(expanded)) {
+                logger().warn("拒绝 B站短链的非可信重定向目标: host={}", safeHost(expanded));
+                return null;
+            }
+            return expanded.toString();
         } catch (Exception e) {
-            logger().debug("B站短链展开失败: {}", raw, e);
+            logger().debug("B站短链展开失败: host={}", safeHost(shortLink), e);
             return null;
         }
+    }
+
+    static boolean isTrustedExpandedShortLink(URI expanded) {
+        return expanded != null
+                && "https".equalsIgnoreCase(expanded.getScheme())
+                && BiliRequestHeaders.isBiliHost(expanded);
+    }
+
+    private static String safeHost(URI uri) {
+        return uri == null || uri.getHost() == null || uri.getHost().isBlank() ? "unknown" : uri.getHost();
     }
 
     public static boolean isStoredVideoSelection(String raw) {
@@ -349,11 +369,12 @@ public final class BiliApiClient {
         String url = "https://api.bilibili.com/x/web-interface/view?"
                 + BiliWbiSigner.buildQuery(signed);
 
+        URI target = URI.create(url);
         HttpRequest.Builder builder = HttpRequest.newBuilder()
-                .uri(URI.create(url))
+                .uri(target)
                 .timeout(Duration.ofSeconds(15))
                 .GET();
-        BiliRequestHeaders.applyWebApiHeaders(builder);
+        BiliRequestHeaders.applyWebApiHeaders(builder, target);
         HttpRequest req = builder.build();
 
         HttpResponse<String> resp = sendApi(BiliWbiSigner.HTTP, req,
@@ -433,10 +454,11 @@ public final class BiliApiClient {
         String url = "https://api.bilibili.com/x/player/wbi/playurl?"
                 + BiliWbiSigner.buildQuery(signed);
 
+        URI target = URI.create(url);
         HttpRequest.Builder builder = HttpRequest.newBuilder()
-                .uri(URI.create(url))
+                .uri(target)
                 .timeout(Duration.ofSeconds(15));
-        BiliRequestHeaders.applyWebApiHeaders(builder);
+        BiliRequestHeaders.applyWebApiHeaders(builder, target);
         HttpRequest req = builder.GET().build();
 
         HttpResponse<String> resp = sendApi(BiliWbiSigner.HTTP, req,
@@ -651,10 +673,11 @@ public final class BiliApiClient {
         String url = "https://api.bilibili.com/x/player/wbi/playurl?"
                 + BiliWbiSigner.buildQuery(signed);
 
+        URI target = URI.create(url);
         HttpRequest.Builder builder = HttpRequest.newBuilder()
-                .uri(URI.create(url))
+                .uri(target)
                 .timeout(Duration.ofSeconds(15));
-        BiliRequestHeaders.applyWebApiHeaders(builder);
+        BiliRequestHeaders.applyWebApiHeaders(builder, target);
         HttpRequest req = builder.GET().build();
 
         HttpResponse<String> resp = sendApi(BiliWbiSigner.HTTP, req,

@@ -3,12 +3,16 @@ package com.zhongbai233.net_music_can_play_bili.bili;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.security.SecureRandom;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -21,6 +25,9 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BiliLoginManagerCancellationTest {
+    @TempDir
+    Path temporaryDirectory;
+
     @Test
     void closeCancelsGenerateBeforeHeadersAndRejectsLateWork() throws Exception {
         CountDownLatch entered = new CountDownLatch(1);
@@ -89,10 +96,11 @@ class BiliLoginManagerCancellationTest {
         }
     }
 
-    private static BiliLoginManager manager(HttpServer server) {
+    private BiliLoginManager manager(HttpServer server) {
         String base = "http://127.0.0.1:" + server.getAddress().getPort();
         return new BiliLoginManager(HttpClient.newHttpClient(), URI.create(base + "/generate"),
-                base + "/poll", base + "/qr");
+                base + "/poll", base + "/qr", new BiliCredentialStore(
+                        temporaryDirectory.resolve("unused-credentials.enc"), Optional::empty, new SecureRandom()));
     }
 
     private static HttpServer server(ExecutorService executor, com.sun.net.httpserver.HttpHandler handler)

@@ -12,6 +12,9 @@ public final class MP4BiliLoginOverlay {
     private static volatile BufferedImage qrImage;
     private static volatile String statusText = "";
     private static volatile boolean visible;
+    /**
+     * 异步回调的发布屏障：状态文本和 closeTick 必须先写入，最后再把 done 设为 true。
+     */
     private static volatile boolean done;
     private static int pollTick;
     private static int closeTick = -1;
@@ -119,8 +122,13 @@ public final class MP4BiliLoginOverlay {
                     case SCANNED -> statusText = "已扫描，请在手机上确认登录";
                     case SUCCESS -> {
                         statusText = "登录成功！";
-                        done = true;
                         closeTick = 40;
+                        done = true;
+                    }
+                    case SUCCESS_SESSION_ONLY -> {
+                        statusText = "登录成功（仅本次有效，重启需重扫）";
+                        closeTick = 160;
+                        done = true;
                     }
                     case EXPIRED -> {
                         statusText = "二维码已过期，点 B站 重试";

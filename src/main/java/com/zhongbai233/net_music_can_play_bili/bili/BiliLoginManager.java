@@ -24,6 +24,8 @@ import java.util.concurrent.CancellationException;
  * B站二维码登录状态机
  */
 public final class BiliLoginManager implements AutoCloseable {
+    private static final java.util.logging.Logger PERSISTENCE_LOGGER = java.util.logging.Logger
+            .getLogger(BiliLoginManager.class.getName() + ".persistence");
     private static final URI DEFAULT_GENERATE_URI = URI.create(
             "https://passport.bilibili.com/x/passport-login/web/qrcode/generate");
     private static final String DEFAULT_POLL_ENDPOINT =
@@ -37,26 +39,30 @@ public final class BiliLoginManager implements AutoCloseable {
     private final String pollEndpoint;
     private final String qrImageEndpoint;
     private final boolean applyProductionHeaders;
+    private final BiliCredentialStore credentialStore;
     private volatile String qrcodeKey;
     private volatile String qrUrl;
     private CompletableFuture<State> generateFuture;
     private CompletableFuture<State> pollFuture;
 
     public BiliLoginManager() {
-        this(BiliWbiSigner.HTTP, DEFAULT_GENERATE_URI, DEFAULT_POLL_ENDPOINT, DEFAULT_QR_IMAGE_ENDPOINT, true);
+        this(BiliWbiSigner.HTTP, DEFAULT_GENERATE_URI, DEFAULT_POLL_ENDPOINT, DEFAULT_QR_IMAGE_ENDPOINT, true,
+                BiliCredentialStore.defaults());
     }
 
-    BiliLoginManager(HttpClient httpClient, URI generateUri, String pollEndpoint, String qrImageEndpoint) {
-        this(httpClient, generateUri, pollEndpoint, qrImageEndpoint, false);
+    BiliLoginManager(HttpClient httpClient, URI generateUri, String pollEndpoint, String qrImageEndpoint,
+            BiliCredentialStore credentialStore) {
+        this(httpClient, generateUri, pollEndpoint, qrImageEndpoint, false, credentialStore);
     }
 
     private BiliLoginManager(HttpClient httpClient, URI generateUri, String pollEndpoint, String qrImageEndpoint,
-            boolean applyProductionHeaders) {
+            boolean applyProductionHeaders, BiliCredentialStore credentialStore) {
         this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
         this.generateUri = Objects.requireNonNull(generateUri, "generateUri");
         this.pollEndpoint = requireEndpoint(pollEndpoint, "pollEndpoint");
         this.qrImageEndpoint = requireEndpoint(qrImageEndpoint, "qrImageEndpoint");
         this.applyProductionHeaders = applyProductionHeaders;
+        this.credentialStore = Objects.requireNonNull(credentialStore, "credentialStore");
     }
 
     public String getQrUrl() {
@@ -71,6 +77,7 @@ public final class BiliLoginManager implements AutoCloseable {
         PENDING,
         SCANNED,
         SUCCESS,
+        SUCCESS_SESSION_ONLY,
         EXPIRED,
         FAILED,
     }
@@ -86,7 +93,7 @@ public final class BiliLoginManager implements AutoCloseable {
                 HttpRequest.Builder builder = HttpRequest.newBuilder(generateUri)
                         .timeout(Duration.ofSeconds(10))
                         .GET();
-                applyHeaders(builder);
+                applyHeaders(builder, generateUri);
                 HttpRequest req = builder.build();
                 generateFuture = requests.sendAsync(httpClient, req,
                         HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), "bili-login-generate")
@@ -132,10 +139,11 @@ public final class BiliLoginManager implements AutoCloseable {
         try {
                 String url = appendQuery(pollEndpoint, "qrcode_key="
                         + URLEncoder.encode(qrcodeKey, StandardCharsets.UTF_8));
-                HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
+                URI target = URI.create(url);
+                HttpRequest.Builder builder = HttpRequest.newBuilder(target)
                         .timeout(Duration.ofSeconds(10))
                         .GET();
-                applyHeaders(builder);
+                applyHeaders(builder, target);
                 HttpRequest req = builder.build();
                 pollFuture = requests.sendAsync(httpClient, req,
                         HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), "bili-login-poll")
@@ -184,9 +192,16 @@ public final class BiliLoginManager implements AutoCloseable {
                         if (!sessdata.isBlank()) {
                             BiliApiClient.sessdata = sessdata;
                             BiliApiClient.webCookie = buildCookieHeader(cookiePairs);
-                            BiliConfig.save();
-                            logger().info("B站登录成功, 已保存 Web Cookie 字段数={}", cookiePairs.size());
-                            return State.SUCCESS;
+                            BiliCredentialStore.SaveResult saveResult = BiliConfig.saveCredentials(credentialStore,
+                                    new BiliCredentialStore.Credentials(sessdata, BiliApiClient.webCookie));
+                            if (saveResult.saved()) {
+                                PERSISTENCE_LOGGER.info("B站登录成功，登录凭据已按本机加密保存，Cookie 字段数="
+                                        + cookiePairs.size());
+                                return State.SUCCESS;
+                            }
+                            PERSISTENCE_LOGGER.warning("B站登录成功，但加密凭据保存失败（" + saveResult.status()
+                                    + "）；登录仅在本次游戏中有效");
+                            return State.SUCCESS_SESSION_ONLY;
                         }
                         logger().warn("登录成功但未找到 SESSDATA cookie, Set-Cookie 字段数={}", cookiePairs.size());
                         return State.FAILED;
@@ -256,9 +271,9 @@ public final class BiliLoginManager implements AutoCloseable {
         return endpoint + (endpoint.contains("?") ? "&" : "?") + query;
     }
 
-    private void applyHeaders(HttpRequest.Builder builder) {
+    private void applyHeaders(HttpRequest.Builder builder, URI target) {
         if (applyProductionHeaders) {
-            BiliRequestHeaders.applyWebApiHeaders(builder);
+            BiliRequestHeaders.applyWebApiHeaders(builder, target);
         }
     }
 

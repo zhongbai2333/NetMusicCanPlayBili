@@ -26,8 +26,13 @@ public class BiliQrLoginScreen extends Screen {
     private DynamicTexture qrTexture;
     private Identifier qrTextureId;
     private volatile String statusText = "正在生成二维码...";
+    private volatile String statusDetail = "";
+    private volatile boolean persistenceWarning;
     private int pollTick;
     private int closeTick = -1;
+    /**
+     * 异步回调的发布屏障：提示状态和 closeTick 必须先写入，最后再把 done 设为 true。
+     */
     private volatile boolean done;
     private volatile int loadGeneration;
     private boolean removed;
@@ -40,6 +45,12 @@ public class BiliQrLoginScreen extends Screen {
     @Override
     protected void init() {
         removed = false;
+        statusText = "正在生成二维码...";
+        statusDetail = "";
+        persistenceWarning = false;
+        done = false;
+        pollTick = 0;
+        closeTick = -1;
         int generation = ++loadGeneration;
         loginManager.generate().thenAccept(state -> {
             if (!isCurrent(generation)) {
@@ -125,19 +136,35 @@ public class BiliQrLoginScreen extends Screen {
                     return;
                 }
                 switch (state) {
-                    case PENDING -> statusText = "请用 B站APP 扫描二维码";
-                    case SCANNED -> statusText = "已扫描，请在手机上确认登录";
+                    case PENDING -> {
+                        statusText = "请用 B站APP 扫描二维码";
+                        statusDetail = "";
+                    }
+                    case SCANNED -> {
+                        statusText = "已扫描，请在手机上确认登录";
+                        statusDetail = "";
+                    }
                     case SUCCESS -> {
                         statusText = "登录成功！";
-                        done = true;
+                        statusDetail = "凭据已绑定本机并安全保存";
                         closeTick = 40;
+                        done = true;
+                    }
+                    case SUCCESS_SESSION_ONLY -> {
+                        statusText = "登录成功，但未能安全保存";
+                        statusDetail = "本次游戏有效；重启后需重新扫码";
+                        persistenceWarning = true;
+                        closeTick = 160;
+                        done = true;
                     }
                     case EXPIRED -> {
                         statusText = "二维码已过期，请关闭重试";
+                        statusDetail = "";
                         done = true;
                     }
                     case FAILED -> {
                         statusText = "登录失败，请重试";
+                        statusDetail = "";
                         done = true;
                     }
                 }
@@ -170,8 +197,13 @@ public class BiliQrLoginScreen extends Screen {
             graphics.fillGradient(qrX, qrY, qrX + QR_SIZE, qrY + QR_SIZE, 0xFF444444, 0xFF444444);
         }
 
-        int statusColor = done ? 0xFF55FF55 : 0xFFAAAAAA;
-        graphics.centeredText(this.font, statusText, boxX + BOX_WIDTH / 2, boxY + BOX_HEIGHT - 16, statusColor);
+        int statusColor = persistenceWarning ? 0xFFFFC857 : done ? 0xFF55FF55 : 0xFFAAAAAA;
+        int statusY = statusDetail.isBlank() ? boxY + BOX_HEIGHT - 16 : boxY + BOX_HEIGHT - 29;
+        graphics.centeredText(this.font, statusText, boxX + BOX_WIDTH / 2, statusY, statusColor);
+        if (!statusDetail.isBlank()) {
+            graphics.centeredText(this.font, statusDetail, boxX + BOX_WIDTH / 2,
+                    boxY + BOX_HEIGHT - 15, persistenceWarning ? 0xFFFFD98A : 0xFFAAAAAA);
+        }
     }
 
     @Override

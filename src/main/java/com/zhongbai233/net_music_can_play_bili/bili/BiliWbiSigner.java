@@ -56,11 +56,12 @@ public final class BiliWbiSigner {
                 return cachedKey;
             }
 
+            URI target = URI.create("https://api.bilibili.com/x/web-interface/nav");
             HttpRequest.Builder builder = HttpRequest.newBuilder()
-                    .uri(URI.create("https://api.bilibili.com/x/web-interface/nav"))
+                    .uri(target)
                     .timeout(Duration.ofSeconds(10))
                     .GET();
-            BiliRequestHeaders.applyWebApiHeaders(builder);
+            BiliRequestHeaders.applyWebApiHeaders(builder, target);
             HttpRequest request = builder.build();
 
             HttpResponse<String> resp = CancellableHttpRequestScope.sendOneBlocking(HTTP, request,

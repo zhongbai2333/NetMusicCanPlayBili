@@ -17,6 +17,9 @@ the Java mod's renderer queue:
 Audio playback is optional and uses ffplay when available. The GUI still tracks the
 audio expected/current timeline even when audio output is disabled, so it is useful
 for sync diagnosis on machines without Python audio libraries.
+
+Authentication is opt-in through --sessdata or BILI_SESSDATA. The GUI never reads
+Minecraft configuration or the machine-bound credential vault.
 """
 
 from __future__ import annotations
@@ -288,7 +291,7 @@ class TimelineGui(tk.Tk):
 
     def _resolve_worker(self) -> None:
         try:
-            sessdata = self.args.sessdata.strip() or probe.auto_sessdata()
+            sessdata = probe.resolve_sessdata(self.args.sessdata)
             video_id = probe.parse_video_id(self.video_var.get())
             view = probe.get_view(video_id, int(self.page_var.get()))
             playurl = probe.get_playurl(video_id, int(view["cid"]), sessdata, int(self.quality_var.get()))
@@ -584,7 +587,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--quality", "-q", type=int, default=116)
     parser.add_argument("--codec-id", type=int, default=7)
     parser.add_argument("--start", type=float, default=5317.2, help="start media time in seconds")
-    parser.add_argument("--sessdata", default="")
+    parser.add_argument(
+        "--sessdata",
+        default="",
+        help="SESSDATA; defaults to BILI_SESSDATA only and never reads game files",
+    )
     parser.add_argument("--ffmpeg", default="")
     parser.add_argument("--ffplay", default="")
     parser.add_argument("--no-audio", action="store_true")

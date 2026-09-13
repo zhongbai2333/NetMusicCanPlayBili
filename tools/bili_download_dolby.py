@@ -8,9 +8,9 @@ B站 Dolby Atmos (E-AC-3) 音频下载工具
     python bili_download_dolby.py BV1dakuYcENi --page 1
     python bili_download_dolby.py BV1dakuYcENi --output test.ec3
 
-SESSDATA 自动检测:
-  优先从游戏 run/config/net_music_can_play_bili.json 读取已登录的 SESSDATA
-  也支持通过 --sessdata 或环境变量 BILI_SESSDATA 手动指定
+SESSDATA 输入:
+  优先使用 --sessdata，其次使用环境变量 BILI_SESSDATA
+  本工具不会读取 Minecraft 配置或机器绑定凭据库
 """
 
 import argparse
@@ -285,39 +285,9 @@ def verify_ec3(filepath: str) -> bool:
         return False
 
 
-def auto_detect_sessdata() -> str:
-    """
-    自动从游戏 run 目录或当前项目目录查找 NetMusicCanPlayBili 配置文件，
-    提取已登录的 SESSDATA。
-    """
-    config_filename = "net_music_can_play_bili.json"
-    search_dirs = [
-        Path.cwd() / "run" / "config",        # dev run/config/
-        Path.cwd(),                           # 当前目录
-        Path(__file__).resolve().parent / "run" / "config",  # 脚本所在项目 run/config/
-    ]
-    # 也尝试往上找 run/config（从当前目录向上遍历）
-    p = Path.cwd()
-    for _ in range(5):
-        candidate = p / "run" / "config"
-        if candidate.is_dir() and candidate not in search_dirs:
-            search_dirs.append(candidate)
-        if p.parent == p:
-            break
-        p = p.parent
-
-    for d in search_dirs:
-        config_path = d / config_filename
-        if config_path.exists():
-            try:
-                data = json.loads(config_path.read_text(encoding="utf-8"))
-                sessdata = data.get("sessdata", "").strip()
-                if sessdata:
-                    print(f"🔑 从游戏配置自动读取 SESSDATA: {config_path}")
-                    return sessdata
-            except Exception:
-                pass
-    return ""
+def resolve_sessdata(explicit="") -> str:
+    """只接受显式命令行值或 BILI_SESSDATA，不扫描游戏文件。"""
+    return (explicit or "").strip() or os.environ.get("BILI_SESSDATA", "").strip()
 
 
 def parse_bool_env(name: str, default: bool = False) -> bool:
@@ -350,21 +320,23 @@ SESSDATA 获取方法:
     parser.add_argument("video", help="B站视频 BV 号或 AV 号 (如 BV1dakuYcENi)")
     parser.add_argument("--page", "-p", type=int, default=1, help="分P编号 (默认: 1)")
     parser.add_argument("--output", "-o", default=None, help="输出文件路径 (默认: 视频标题.ec3)")
-    parser.add_argument("--sessdata", "-s", default=None, help="B站 SESSDATA Cookie (也可通过环境变量 BILI_SESSDATA 设置)")
+    parser.add_argument(
+        "--sessdata",
+        "-s",
+        default="",
+        help="B站 SESSDATA Cookie；未提供时仅检查 BILI_SESSDATA，不读取游戏文件",
+    )
     parser.add_argument("--no-verify", action="store_true", help="跳过 EC-3 格式验证")
     args = parser.parse_args()
 
-    # SESSDATA: 命令行 > 环境变量 > 游戏配置自动检测
-    sessdata = args.sessdata or os.environ.get("BILI_SESSDATA", "")
-    if not sessdata:
-        sessdata = auto_detect_sessdata()
+    # SESSDATA: 显式命令行 > 环境变量；绝不扫描游戏配置或凭据库。
+    sessdata = resolve_sessdata(args.sessdata)
     if not sessdata:
         print("⚠ 未找到 SESSDATA。将尝试获取普通音质（可能无法获取 Dolby Atmos）。")
         print("  SESSDATA 来源优先级:")
         print("  1. --sessdata 命令行参数")
         print("  2. BILI_SESSDATA 环境变量")
-        print("  3. run/config/net_music_can_play_bili.json (游戏内已登录)")
-        print("  4. 浏览器 F12 → Application → Cookies → bilibili.com → SESSDATA\n")
+        print("  获取后请通过上述任一显式入口传入；工具不会读取游戏配置或凭据库。\n")
 
     try:
         # 1. 解析视频 ID

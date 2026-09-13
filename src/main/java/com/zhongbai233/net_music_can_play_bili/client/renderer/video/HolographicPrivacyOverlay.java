@@ -29,7 +29,8 @@ public final class HolographicPrivacyOverlay {
             float p3x, float p3y, float p3z) {
         collector.submitCustomGeometry(
                 poseStack,
-                YuvVideoRenderTypes.videoRgbaEmissiveEntity(textureId()),
+                YuvVideoRenderTypes.videoRgbaEntity(textureId(), VideoRgbaRenderPass.choose(
+                        VideoRgbaRenderPass.TextureAlpha.TRANSLUCENT, 1.0F)),
                 (pose, buffer) -> {
                     emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z,
                             false);

@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.bili;
 
+import java.net.URI;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -98,8 +99,45 @@ final class BiliVideoReferenceParser {
     }
 
     static boolean looksLikeShortLink(String input) {
-        String lower = input.toLowerCase(Locale.ROOT);
-        return lower.contains("b23.tv/") || lower.contains("bili2233.cn/");
+        return parseShortLinkUri(input) != null;
+    }
+
+    static URI parseShortLinkUri(String input) {
+        if (input == null || input.isBlank()) {
+            return null;
+        }
+        try {
+            String candidate = input.trim();
+            if (startsWithOfficialShortLinkHost(candidate, "b23.tv/")
+                    || startsWithOfficialShortLinkHost(candidate, "bili2233.cn/")) {
+                candidate = "https://" + candidate;
+            }
+            URI uri = URI.create(candidate);
+            if (uri.isOpaque() || !"https".equalsIgnoreCase(uri.getScheme()) || uri.getRawUserInfo() != null) {
+                return null;
+            }
+            int port = uri.getPort();
+            if (port != -1 && port != 443) {
+                return null;
+            }
+            String host = uri.getHost();
+            if (host == null) {
+                return null;
+            }
+            String lowerHost = host.toLowerCase(Locale.ROOT);
+            if (!"b23.tv".equals(lowerHost) && !"bili2233.cn".equals(lowerHost)) {
+                return null;
+            }
+            String path = uri.getRawPath();
+            return path != null && path.length() > 1 ? uri : null;
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    private static boolean startsWithOfficialShortLinkHost(String value, String hostAndSlash) {
+        return value.length() > hostAndSlash.length()
+                && value.regionMatches(true, 0, hostAndSlash, 0, hostAndSlash.length());
     }
 
     private static int extractPage(String input, int fallback) {

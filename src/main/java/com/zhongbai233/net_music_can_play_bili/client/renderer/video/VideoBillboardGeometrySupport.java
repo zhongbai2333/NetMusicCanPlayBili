@@ -53,10 +53,11 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
                 0.0D, YuvVideoRenderTypes.videoRgbaEntity(renderTextureId), "projector-rgba");
     }
 
-    static void submitProjectorEmissiveGeometry(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera,
+    static void submitProjectorPlaceholderGeometry(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera,
             VideoProjectorBlockEntity projector, Identifier renderTextureId, int textureWidth, int textureHeight) {
         submitProjectorGeometry(event, minecraft, camera, projector, renderTextureId, textureWidth, textureHeight,
-                0.0D, shaderpackSafeEmissiveRgba(renderTextureId), "projector-rgba-placeholder");
+                0.0D, rgbaRenderType(renderTextureId, VideoRgbaRenderPass.TextureAlpha.OPAQUE, 1.0F),
+                "projector-rgba-placeholder");
     }
 
     static void submitProjectorPrivacyOverlay(SubmitCustomGeometryEvent event, Minecraft minecraft, Camera camera,
@@ -81,7 +82,8 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
         if (quad == null) {
             return false;
         }
-        RenderType renderType = YuvVideoRenderTypes.videoRgbaEntity(HolographicPrivacyOverlay.textureId());
+        RenderType renderType = rgbaRenderType(HolographicPrivacyOverlay.textureId(),
+                VideoRgbaRenderPass.TextureAlpha.TRANSLUCENT, 1.0F);
         BufferBuilder builder = Tesselator.getInstance().begin(renderType.mode(), renderType.format());
         PoseStack poseStack = "identity".equals(YUV_IMMEDIATE_POSE) ? new PoseStack() : event.getPoseStack();
         PoseStack.Pose pose = poseStack.last();
@@ -227,9 +229,7 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
             return false;
         }
         submitLocalTexturedQuad(collector, poseStack,
-                frame.emissiveRgba()
-                        ? shaderpackSafeEmissiveRgba(frame.rgbaTexture())
-                        : YuvVideoRenderTypes.videoRgbaEntity(frame.rgbaTexture()),
+                rgbaRenderType(frame.rgbaTexture(), VideoRgbaRenderPass.TextureAlpha.OPAQUE, 1.0F),
                 -halfWidth, halfHeight, halfWidth, -halfHeight, rgbaDepthOffset, 1.0F);
         if (frame.loadingProgressOverlay()) {
             submitLoadingProgressOnPose(collector, poseStack, halfWidth, halfHeight);
@@ -280,13 +280,7 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
             return false;
         }
         submitLocalTexturedQuad(collector, poseStack,
-                frame.emissiveRgba()
-                ? (opacityRoute == VideoOpacityRoute.TRANSLUCENT
-                    ? shaderpackSafeTranslucentRgba(frame.rgbaTexture())
-                    : shaderpackSafeEmissiveRgba(frame.rgbaTexture()))
-                : (opacityRoute == VideoOpacityRoute.TRANSLUCENT
-                    ? shaderpackSafeTranslucentRgba(frame.rgbaTexture())
-                    : YuvVideoRenderTypes.videoRgbaEntity(frame.rgbaTexture())),
+                rgbaRenderType(frame.rgbaTexture(), VideoRgbaRenderPass.TextureAlpha.OPAQUE, normalizedOpacity),
                 -halfWidth, halfHeight, halfWidth, -halfHeight, rgbaDepthOffset, normalizedOpacity, brightness);
         if (frame.loadingProgressOverlay()) {
             submitLoadingProgressOnPose(collector, poseStack, halfWidth, halfHeight, normalizedOpacity, brightness);
@@ -326,12 +320,10 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
             return false;
         }
         float normalizedOpacity = VideoOpacityRoute.normalize(opacity);
-        RenderType frameRenderType = route == VideoOpacityRoute.TRANSLUCENT
-                ? shaderpackSafeTranslucentRgba(LOADING_PROGRESS_FRAME_TEXTURE)
-                : shaderpackSafeEmissiveRgba(LOADING_PROGRESS_FRAME_TEXTURE);
-        RenderType segmentRenderType = route == VideoOpacityRoute.TRANSLUCENT
-                ? shaderpackSafeTranslucentRgba(LOADING_PROGRESS_SEGMENT_TEXTURE)
-                : shaderpackSafeEmissiveRgba(LOADING_PROGRESS_SEGMENT_TEXTURE);
+        RenderType frameRenderType = rgbaRenderType(LOADING_PROGRESS_FRAME_TEXTURE,
+                VideoRgbaRenderPass.TextureAlpha.BINARY_CUTOUT, normalizedOpacity);
+        RenderType segmentRenderType = rgbaRenderType(LOADING_PROGRESS_SEGMENT_TEXTURE,
+                VideoRgbaRenderPass.TextureAlpha.OPAQUE, normalizedOpacity);
         submitLocalTexturedQuad(collector, poseStack, frameRenderType,
                 pixelLeft(LOADING_PROGRESS_X, halfWidth),
                 pixelTop(LOADING_PROGRESS_Y, halfHeight),
@@ -361,12 +353,9 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
         return true;
     }
 
-    protected static RenderType shaderpackSafeEmissiveRgba(Identifier texture) {
-        return YuvVideoRenderTypes.videoRgbaEmissiveEntity(texture);
-    }
-
-    protected static RenderType shaderpackSafeTranslucentRgba(Identifier texture) {
-        return YuvVideoRenderTypes.videoRgbaTranslucentEntity(texture);
+    protected static RenderType rgbaRenderType(Identifier texture, VideoRgbaRenderPass.TextureAlpha textureAlpha,
+            float opacity) {
+        return YuvVideoRenderTypes.videoRgbaEntity(texture, VideoRgbaRenderPass.choose(textureAlpha, opacity));
     }
 
     public static boolean submitProjectorPrivacyOverlayOnPose(

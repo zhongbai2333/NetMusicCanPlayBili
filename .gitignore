@@ -40,3 +40,7 @@ logs/
 
 # Iris/Sodium-only reproduction sandbox
 iris-only-dev/
+
+# Machine-bound Bilibili credentials when a custom game directory points at the checkout root
+# (the normal development game directory is already covered by run/ above).
+/net_music_can_play_bili-private/
