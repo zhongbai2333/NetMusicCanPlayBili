@@ -105,8 +105,8 @@ final class DeterministicVideoUploadScenario implements BenchClientScenario {
         if (peakStagingDelta <= 0L) {
             throw new AssertionError("YUV upload did not allocate tracked texture staging memory");
         }
-        if (peakPboDelta <= 0L) {
-            throw new AssertionError("NV12 upload did not allocate tracked PBO memory");
+        if (peakPboDelta != 0L) {
+            throw new AssertionError("Portable Renderpearl upload unexpectedly allocated raw OpenGL PBO memory");
         }
         var resources = VideoBillboardPreview.benchUploadResources();
         if (resources.rgbaTexture() || resources.yuvTextures()

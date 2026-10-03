@@ -1,6 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
-import com.mojang.blaze3d.pipeline.RenderPipeline;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import net.minecraft.resources.Identifier;

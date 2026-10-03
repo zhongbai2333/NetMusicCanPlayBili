@@ -1,6 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
-import com.mojang.blaze3d.pipeline.RenderPipeline;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import net.irisshaders.iris.api.v0.IrisApi;
 import net.irisshaders.iris.api.v0.IrisProgram;
 import net.irisshaders.iris.pipeline.IrisPipelines;

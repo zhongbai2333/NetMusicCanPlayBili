@@ -84,7 +84,7 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
         }
         RenderType renderType = rgbaRenderType(HolographicPrivacyOverlay.textureId(),
                 VideoRgbaRenderPass.TextureAlpha.TRANSLUCENT, 1.0F);
-        BufferBuilder builder = Tesselator.getInstance().begin(renderType.mode(), renderType.format());
+        BufferBuilder builder = Tesselator.getInstance().begin(renderType.primitiveTopology(), renderType.format());
         PoseStack poseStack = "identity".equals(YUV_IMMEDIATE_POSE) ? new PoseStack() : event.getPoseStack();
         PoseStack.Pose pose = poseStack.last();
         emitQuad(builder, pose, quad.p0x(), quad.p0y(), quad.p0z() + 0.003F,

@@ -1,13 +1,15 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
-import com.mojang.blaze3d.pipeline.ColorTargetState;
-import com.mojang.blaze3d.pipeline.BlendFunction;
-import com.mojang.blaze3d.pipeline.DepthStencilState;
-import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.platform.CompareOp;
+import com.mojang.renderpearl.api.pipeline.ColorTargetState;
+import com.mojang.renderpearl.api.pipeline.BlendFunction;
+import com.mojang.renderpearl.api.pipeline.DepthStencilState;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import com.mojang.renderpearl.api.pipeline.CompareOp;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.BindGroupLayouts;
+import net.minecraft.client.renderer.oit.OitPipelineSet;
 import net.minecraft.client.renderer.rendertype.RenderSetup;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.resources.Identifier;
@@ -93,11 +95,33 @@ public final class YuvVideoRenderTypes {
             event.registerPipeline(YUV420P_ENTITY);
             IrisShaderpackCompat.assignYuvPipelineIfRequested(NV12_ENTITY);
             event.registerPipeline(NV12_ENTITY);
+            registerOit(event, YUV420P_OIT);
+            registerOit(event, NV12_OIT);
         }
         // 单采样降级路径：只在禁用三平面 Iris YUV 时注册。
         if (IrisShaderpackCompat.shouldRegisterTexturedProbePipeline()) {
             event.registerPipeline(YUV420P_TEXTURED_PROBE_ENTITY);
         }
+    }
+
+    private static final OitPipelineSet YUV420P_OIT = buildYuvOit("yuv420p_entity", FRAGMENT_SHADER);
+    private static final OitPipelineSet NV12_OIT = buildYuvOit("nv12_entity", NV12_FRAGMENT_SHADER);
+
+    private static OitPipelineSet buildYuvOit(String name, Identifier fragmentShader) {
+        return OitPipelineSet.builder("ncpb_" + name, yuvBuilder(fragmentShader))
+                .withDepthBoundsModifier(builder -> builder.withLocation(
+                        Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID, "pipeline/oit_depth_bounds_" + name)))
+                .withTransmittanceModifier(builder -> builder.withLocation(
+                        Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID, "pipeline/oit_transmittance_" + name)))
+                .withAccumulateModifier(builder -> builder.withLocation(
+                        Identifier.fromNamespaceAndPath(NetMusicCanPlayBili.MODID, "pipeline/oit_accumulate_" + name)))
+                .build();
+    }
+
+    private static void registerOit(RegisterRenderPipelinesEvent event, OitPipelineSet pipelines) {
+        event.registerPipeline(pipelines.depthBoundsPipeline());
+        event.registerPipeline(pipelines.transmittancePipeline());
+        event.registerPipeline(pipelines.accumulatePipeline());
     }
 
     private static RenderPipeline buildYuv420pEntityPipeline() {
@@ -114,7 +138,7 @@ public final class YuvVideoRenderTypes {
                 .withShaderDefine("NO_CARDINAL_LIGHTING")
                 .withDepthStencilState(new DepthStencilState(CompareOp.LESS_THAN_OR_EQUAL,
                         renderPass.depthWrite()))
-                .withSampler("Sampler1");
+                .withBindGroupLayout(BindGroupLayouts.SAMPLER1);
         if (renderPass.alphaCutout() > 0.0F) {
             builder.withShaderDefine("ALPHA_CUTOUT", renderPass.alphaCutout());
         }
@@ -125,22 +149,22 @@ public final class YuvVideoRenderTypes {
         return builder.build();
     }
 
-        private static RenderPipeline buildYuvEntityPipeline(Identifier pipelineId, Identifier fragmentShader) {
-                RenderPipeline.Builder builder = RenderPipeline.builder(RenderPipelines.ENTITY_EMISSIVE_SNIPPET)
-                .withLocation(pipelineId)
-                .withFragmentShader(fragmentShader)
-                .withShaderDefine("NO_OVERLAY")
-                .withShaderDefine("NO_CARDINAL_LIGHTING")
-                                // 视频面片按全亮表面处理，不声明 lightmap，减少光影/后处理 pass 误读遗留 lightmap。
-                                // 中控台淡化通过 vertexColor alpha 传递，必须启用 framebuffer 混合。
+    private static RenderPipeline buildYuvEntityPipeline(Identifier pipelineId, Identifier fragmentShader) {
+        return yuvBuilder(fragmentShader).withLocation(pipelineId)
                 .withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
                 .withDepthStencilState(YUV_NO_DEPTH_WRITE
                         ? new DepthStencilState(CompareOp.LESS_THAN_OR_EQUAL, false)
-                        : DepthStencilState.DEFAULT)
+                        : DepthStencilState.DEFAULT).build();
+    }
+
+    private static RenderPipeline.Builder yuvBuilder(Identifier fragmentShader) {
+        RenderPipeline.Builder builder = RenderPipeline.builder(RenderPipelines.ENTITY_EMISSIVE_SNIPPET)
+                .withFragmentShader(fragmentShader)
+                .withShaderDefine("NO_OVERLAY")
+                .withShaderDefine("NO_CARDINAL_LIGHTING")
                 .withCull(false)
-                .withSampler("Sampler0")
-                .withSampler("Sampler1")
-                .withSampler("Sampler2");
+                .withBindGroupLayout(BindGroupLayouts.SAMPLER1)
+                .withBindGroupLayout(BindGroupLayouts.SAMPLER2);
         switch (YUV_SHADER_DEBUG) {
             case "CONSTANT", "MAGENTA", "CYAN" -> builder.withShaderDefine("BILI_YUV_DEBUG_CONSTANT");
             case "PLANES", "YUV" -> builder.withShaderDefine("BILI_YUV_DEBUG_PLANES");
@@ -151,7 +175,7 @@ public final class YuvVideoRenderTypes {
             }
             default -> LOGGER.warn("未知 ncpb.video.yuv.shader_debug='{}'，将按正常 YUV→RGB shader 编译", YUV_SHADER_DEBUG);
         }
-        return builder.build();
+        return builder;
     }
 
     public static RenderType yuv420pEntity(Identifier yTexture, Identifier uTexture, Identifier vTexture) {
@@ -161,7 +185,7 @@ public final class YuvVideoRenderTypes {
         // 采样器沿用 Sampler0/1/2，兼容 Iris 对原版 sampler 名的校验。
         return createYuvRenderType(
                 "bili_yuv420p_entity",
-                RenderSetup.builder(YUV420P_ENTITY)
+                videoSetup(YUV420P_ENTITY, YUV420P_OIT)
                         .withTexture("Sampler0", yTexture)
                         .withTexture("Sampler1", uTexture)
                         .withTexture("Sampler2", vTexture)
@@ -182,21 +206,22 @@ public final class YuvVideoRenderTypes {
                 YUV420P_TEXTURED_PROBE_ENTITY);
         return createYuvRenderType(
                 name,
-                RenderSetup.builder(NV12_ENTITY)
+                videoSetup(NV12_ENTITY, NV12_OIT)
                         .withTexture("Sampler0", yTexture)
                         .withTexture("Sampler1", uvTexture)
                         .withTexture("Sampler2", placeholderTexture)
                         .createRenderSetup());
     }
 
+    private static RenderSetup.RenderSetupBuilder videoSetup(RenderPipeline pipeline, OitPipelineSet oit) {
+        var builder = RenderSetup.builder(pipeline).setOitPipelines(oit);
+        if (VideoYuvRenderPolicy.useSolidFeatureStage()) builder.withForcedSolidModelPhase();
+        return builder;
+    }
+
     private static RenderType createYuvRenderType(String name, RenderSetup setup) {
-        // 26.1 的 CustomFeatureRenderer 仅通过 hasBlending() 分桶。视频需要在实体阶段
-        // 写入深度以正确遮挡后绘制的云和粒子，但实际 pipeline 仍保留 TRANSLUCENT
-        // blend，故 opacity 顶点 alpha 仍能实现平滑淡入淡出。
-        return VideoYuvRenderPolicy.useSolidFeatureStage()
-                ? new SolidClassifiedVideoRenderType(name, setup)
-                : RenderType.create(name, setup);
-        }
+        return RenderType.create(name, setup);
+    }
 
     static RenderType yOnlyTexturedProbeEntity(Identifier yTexture) {
         IrisShaderpackCompat.prepareYuvPipelineForCurrentShaderpackState(YUV420P_ENTITY,
