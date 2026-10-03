@@ -1,10 +1,9 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
-import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.GpuTexture;
-import com.mojang.blaze3d.textures.TextureFormat;
+import com.mojang.blaze3d.GpuFormat;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.renderer.texture.AbstractTexture;
 import org.lwjgl.system.MemoryUtil;
@@ -18,8 +17,8 @@ import java.nio.ByteBuffer;
  * NV12 UV 平面纹理。
  *
  * <p>
- * Minecraft 26.1 的 {@link TextureFormat} 尚无 RG8，因此这里优先用裸 GL_RG8 包装为 GlTexture；
- * 若创建失败，再回退 RGBA8 临时承载 interleaved UV：R=U, G=V, B=0, A=255。
+ * Minecraft 26.2 使用后端无关的 {@link GpuFormat#RG8_UNORM}；
+ * 若创建失败，再回退 RGBA8 承载 interleaved UV：R=U, G=V, B=0, A=255。
  * </p>
  */
 final class Nv12UvTexture extends AbstractTexture {
@@ -50,15 +49,16 @@ final class Nv12UvTexture extends AbstractTexture {
         this.rg8Texture = false;
         if (RG8_ENABLED) {
             try {
-                this.texture = RawRg8GlTexture.create(label, usage, this.width, this.height);
+                this.texture = RenderSystem.getDevice().createTexture(label, usage, GpuFormat.RG8_UNORM,
+                        this.width, this.height, 1, 1);
                 this.rg8Texture = true;
             } catch (RuntimeException | LinkageError e) {
-                LOGGER.warn("NV12: 创建 GL_RG8 UV 纹理失败，回退 RGBA8: {}", e.toString());
+                LOGGER.warn("NV12: 创建 RG8 UV 纹理失败，回退 RGBA8: {}", e.toString());
             }
         }
         if (this.texture == null) {
             this.texture = RenderSystem.getDevice().createTexture(label,
-                    usage, TextureFormat.RGBA8, this.width, this.height, 1, 1);
+                    usage, GpuFormat.RGBA8_UNORM, this.width, this.height, 1, 1);
         }
         try {
             this.sampler = RenderSystem.getSamplerCache().getRepeat(FilterMode.LINEAR);
@@ -98,18 +98,34 @@ final class Nv12UvTexture extends AbstractTexture {
             }
         }
         uploadBuffer.flip();
-        if (rg8Texture && pboUploader != null
-                && pboUploader.uploadNv12UvAsRg8(texture, nv12, offset, width, height)) {
-            return;
-        }
         RenderSystem.getDevice().createCommandEncoder().writeToTexture(texture,
-                uploadBuffer, rg8Texture ? NativeImage.Format.LUMINANCE_ALPHA : NativeImage.Format.RGBA,
+                uploadBuffer,
                 0, 0, 0, 0, width, height);
+    }
+
+    /** Copies into owned staging memory before the decoder may recycle its direct frame. */
+    void upload(ByteBuffer nv12, int offset) {
+        if (texture == null || texture.isClosed()) {
+            recreate(width, height);
+        }
+        int pixelCount = Math.multiplyExact(width, height);
+        uploadBuffer.clear();
+        if (rg8Texture) {
+            uploadBuffer.put(nv12.slice(offset, Math.multiplyExact(pixelCount, 2)));
+        } else {
+            Nv12UploadBuffers.expandUv(nv12, offset, pixelCount, uploadBuffer);
+        }
+        uploadBuffer.flip();
+        RenderSystem.getDevice().createCommandEncoder().writeToTexture(texture,
+                uploadBuffer, 0, 0, 0, 0, width, height);
     }
 
     boolean uploadPbo(byte[] nv12, int offset) {
         if (texture == null || texture.isClosed()) {
             recreate(width, height);
+        }
+        if (!VideoUploadBackend.current().supportsPbo()) {
+            return false;
         }
         if (pboUploader == null) {
             pboUploader = new Nv12PboUploader(label + "_pbo");
@@ -124,6 +140,9 @@ final class Nv12UvTexture extends AbstractTexture {
             recreate(width, height);
         }
         if (!rg8Texture) {
+            return false;
+        }
+        if (!VideoUploadBackend.current().supportsPbo()) {
             return false;
         }
         if (pboUploader == null) {

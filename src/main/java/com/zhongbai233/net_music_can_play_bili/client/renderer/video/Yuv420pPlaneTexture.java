@@ -1,10 +1,9 @@
 package com.zhongbai233.net_music_can_play_bili.client.renderer.video;
 
-import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.GpuTexture;
-import com.mojang.blaze3d.textures.TextureFormat;
+import com.mojang.blaze3d.GpuFormat;
 import net.minecraft.client.renderer.texture.AbstractTexture;
 import org.lwjgl.system.MemoryUtil;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
@@ -37,7 +36,7 @@ final class Yuv420pPlaneTexture extends AbstractTexture {
         this.height = Math.max(1, height);
         this.texture = RenderSystem.getDevice().createTexture(label,
                 GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_TEXTURE_BINDING,
-                TextureFormat.RED8, this.width, this.height, 1, 1);
+                GpuFormat.R8_UNORM, this.width, this.height, 1, 1);
         try {
             this.sampler = RenderSystem.getSamplerCache().getRepeat(FilterMode.LINEAR);
             this.textureView = RenderSystem.getDevice().createTextureView(this.texture);
@@ -66,13 +65,28 @@ final class Yuv420pPlaneTexture extends AbstractTexture {
         uploadBuffer.put(yuv420p, offset, byteCount);
         uploadBuffer.flip();
         RenderSystem.getDevice().createCommandEncoder().writeToTexture(texture,
-                uploadBuffer, NativeImage.Format.LUMINANCE,
+                uploadBuffer,
                 0, 0, 0, 0, width, height);
+    }
+
+    /** The staging buffer remains owned by this texture, not by the decoder. */
+    void upload(ByteBuffer data, int offset) {
+        if (texture == null || texture.isClosed()) {
+            recreate(width, height);
+        }
+        uploadBuffer.clear();
+        uploadBuffer.put(data.slice(offset, Math.multiplyExact(width, height)));
+        uploadBuffer.flip();
+        RenderSystem.getDevice().createCommandEncoder().writeToTexture(texture,
+                uploadBuffer, 0, 0, 0, 0, width, height);
     }
 
     boolean uploadPbo(byte[] data, int offset) {
         if (texture == null || texture.isClosed()) {
             recreate(width, height);
+        }
+        if (!VideoUploadBackend.current().supportsPbo()) {
+            return false;
         }
         if (pboUploader == null) {
             pboUploader = new Nv12PboUploader(label + "_pbo");
@@ -83,6 +97,9 @@ final class Yuv420pPlaneTexture extends AbstractTexture {
     boolean uploadPbo(ByteBuffer data, int offset) {
         if (texture == null || texture.isClosed()) {
             recreate(width, height);
+        }
+        if (!VideoUploadBackend.current().supportsPbo()) {
+            return false;
         }
         if (pboUploader == null) {
             pboUploader = new Nv12PboUploader(label + "_pbo");

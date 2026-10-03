@@ -35,5 +35,6 @@
   },
   "overwrites": {
     "requireAnnotations": true
-  }
+  },
+  "plugin": "com.zhongbai233.net_music_can_play_bili.mixin.VideoMixinPlugin"
 }
