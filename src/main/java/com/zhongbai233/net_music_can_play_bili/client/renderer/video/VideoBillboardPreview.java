@@ -793,7 +793,7 @@ public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
         }
 
         RenderType renderType = yuvRenderTypeForCurrentIrisProgram(yuvTextures);
-        BufferBuilder builder = Tesselator.getInstance().begin(renderType.mode(), renderType.format());
+        BufferBuilder builder = Tesselator.getInstance().begin(renderType.primitiveTopology(), renderType.format());
         PoseStack poseStack = "identity".equals(YUV_IMMEDIATE_POSE) ? new PoseStack() : event.getPoseStack();
         PoseStack.Pose pose = poseStack.last();
         emitQuad(builder, pose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),
@@ -917,7 +917,7 @@ public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
         float halfWidth = captured.halfHeight() * textures.width() / (float) textures.height();
         PreviewQuad quad = transformedLocalQuad(captured.pose(), halfWidth, captured.halfHeight());
         RenderType renderType = yuvRenderTypeForCurrentIrisProgram(textures);
-        BufferBuilder builder = Tesselator.getInstance().begin(renderType.mode(), renderType.format());
+        BufferBuilder builder = Tesselator.getInstance().begin(renderType.primitiveTopology(), renderType.format());
         PoseStack.Pose identityPose = new PoseStack().last();
         emitQuad(builder, identityPose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),
                 quad.p2x(), quad.p2y(), quad.p2z(), quad.p3x(), quad.p3y(), quad.p3z(), false, captured.opacity(),
@@ -948,7 +948,7 @@ public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
             return false;
         }
         RenderType renderType = yuvRenderTypeForCurrentIrisProgram(textures);
-        BufferBuilder builder = Tesselator.getInstance().begin(renderType.mode(), renderType.format());
+        BufferBuilder builder = Tesselator.getInstance().begin(renderType.primitiveTopology(), renderType.format());
         PoseStack poseStack = "identity".equals(YUV_IMMEDIATE_POSE) ? new PoseStack() : event.getPoseStack();
         PoseStack.Pose pose = poseStack.last();
         emitQuad(builder, pose, quad.p0x(), quad.p0y(), quad.p0z(), quad.p1x(), quad.p1y(), quad.p1z(),

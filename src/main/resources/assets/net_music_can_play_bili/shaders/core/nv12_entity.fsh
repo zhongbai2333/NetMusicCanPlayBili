@@ -1,28 +1,32 @@
 #version 330
+#extension GL_ARB_separate_shader_objects : require
 
-#moj_import <minecraft:dynamictransforms.glsl>
+#include <minecraft:dynamictransforms.glsl>
+#include <minecraft:oit.glsl>
 
 // NV12：Sampler0=Y 平面，Sampler1=UV 平面（临时 RGBA8 承载，读取 .rg），Sampler2=占位。
 uniform sampler2D Sampler0;
 uniform sampler2D Sampler1;
 uniform sampler2D Sampler2;
 
-in float sphericalVertexDistance;
-in float cylindricalVertexDistance;
+layout(location = 0) in float sphericalVertexDistance;
+layout(location = 1) in float cylindricalVertexDistance;
 #ifdef PER_FACE_LIGHTING
-in vec4 vertexPerFaceColorBack;
-in vec4 vertexPerFaceColorFront;
+layout(location = 2) in vec4 vertexPerFaceColorBack;
+layout(location = 3) in vec4 vertexPerFaceColorFront;
 #else
-in vec4 vertexColor;
+layout(location = 2) in vec4 vertexColor;
 #endif
 
 #ifndef EMISSIVE
-in vec4 lightMapColor;
+layout(location = 4) in vec4 lightMapColor;
 #endif
 
-in vec2 texCoord0;
+layout(location = 6) in vec2 texCoord0;
 
-out vec4 fragColor;
+#ifndef OIT_ALPHA_ONLY
+layout(location = 0) out vec4 fragColor;
+#endif
 
 void main() {
     float y = texture(Sampler0, texCoord0).r;
@@ -62,5 +66,12 @@ void main() {
 #else
     color *= vertexColor * ColorModulator;
 #endif
+#ifdef OIT_ALPHA_ONLY
+    executeAlphaOnlyPhase(gl_FragCoord.z, color.a);
+#else
+#ifdef OIT_ACCUMULATE
+    color = sampleColorForAccumulation(color);
+#endif
     fragColor = color;
+#endif
 }

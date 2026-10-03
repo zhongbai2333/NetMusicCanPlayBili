@@ -10,7 +10,6 @@ import java.nio.ByteBuffer;
  * NV12 双平面纹理集：Y=RED8，UV=RG8（旧 GPU/驱动不可用时由 {@link Nv12UvTexture} 回退）。
  */
 public final class Nv12TextureSet implements VideoYuvTextureSet {
-    private static final boolean PBO_UPLOAD = VideoPipelineProperties.upload().nv12PboEnabled();
     private final Identifier yId;
     private final Identifier uvId;
     private final Identifier placeholderId;
@@ -52,6 +51,9 @@ public final class Nv12TextureSet implements VideoYuvTextureSet {
     }
 
     public boolean upload(byte[] nv12, int width, int height) {
+        if (width <= 0 || height <= 0 || (long) width * height > Integer.MAX_VALUE / 2) {
+            return false;
+        }
         int ySize = width * height;
         int uvWidth = Math.max(1, width / 2);
         int uvHeight = Math.max(1, height / 2);
@@ -60,19 +62,15 @@ public final class Nv12TextureSet implements VideoYuvTextureSet {
             return false;
         }
         ensureTextures(width, height, uvWidth, uvHeight);
-        if (PBO_UPLOAD) {
-            boolean yOk = yTexture.uploadPbo(nv12, 0);
-            boolean uvOk = uvTexture.uploadPbo(nv12, ySize);
-            if (yOk && uvOk) {
-                return true;
-            }
-        }
         yTexture.upload(nv12, 0);
         uvTexture.upload(nv12, ySize);
         return true;
     }
 
     public boolean upload(ByteBuffer nv12, int byteLength, int width, int height) {
+        if (width <= 0 || height <= 0 || (long) width * height > Integer.MAX_VALUE / 2) {
+            return false;
+        }
         int ySize = width * height;
         int uvWidth = Math.max(1, width / 2);
         int uvHeight = Math.max(1, height / 2);
@@ -81,23 +79,9 @@ public final class Nv12TextureSet implements VideoYuvTextureSet {
             return false;
         }
         ensureTextures(width, height, uvWidth, uvHeight);
-        if (PBO_UPLOAD) {
-            boolean yOk = yTexture.uploadPbo(nv12, 0);
-            boolean uvOk = uvTexture.uploadPbo(nv12, ySize);
-            if (yOk && uvOk) {
-                return true;
-            }
-        }
-        return upload(frameBytes(nv12, ySize + uvSize), width, height);
-    }
-
-    private static byte[] frameBytes(ByteBuffer buffer, int byteCount) {
-        ByteBuffer src = buffer.duplicate();
-        src.position(0);
-        src.limit(Math.min(src.limit(), byteCount));
-        byte[] out = new byte[src.remaining()];
-        src.get(out);
-        return out;
+        yTexture.upload(nv12, 0);
+        uvTexture.upload(nv12, ySize);
+        return true;
     }
 
     private void ensureTextures(int width, int height, int uvWidth, int uvHeight) {
