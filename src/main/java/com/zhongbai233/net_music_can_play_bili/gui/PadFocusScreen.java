@@ -97,9 +97,9 @@ public class PadFocusScreen extends Screen {
         if (cancelled) {
             return false;
         }
-        updateHover((int) event.x(), (int) event.y());
+        updateHover(event.x(), event.y());
         if (event.button() == 1) {
-            TexturePoint point = toTexturePoint((int) event.x(), (int) event.y());
+            TexturePoint point = toTexturePoint(event.x(), event.y());
             if (point != null && insideMap(point, PadClient.cachedDocumentFor(heldPadStack()))) {
                 PadTriggerPoint hitPoint = pointAt(point);
                 PadDocument document = PadClient.cachedDocumentFor(heldPadStack());
@@ -112,7 +112,7 @@ public class PadFocusScreen extends Screen {
             return true;
         }
         if (event.button() == 0) {
-            handleLeftClick((int) event.x(), (int) event.y());
+            handleLeftClick(event.x(), event.y());
             return true;
         }
         return false;
@@ -120,9 +120,9 @@ public class PadFocusScreen extends Screen {
 
     @Override
     public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
-        updateHover((int) event.x(), (int) event.y());
+        updateHover(event.x(), event.y());
         if (event.button() == 0 && draggingProgress) {
-            TexturePoint point = toTexturePoint((int) event.x(), (int) event.y());
+            TexturePoint point = toTexturePoint(event.x(), event.y());
             if (point != null) {
                 UUID deviceId = PadItem.readDeviceId(heldPadStack());
                 boolean video = PadFocusState.pausedVideo()
@@ -132,9 +132,9 @@ public class PadFocusScreen extends Screen {
             return true;
         }
         if (event.button() == 0 && PadFocusState.draggingPoint()) {
-            TexturePoint point = toTexturePoint((int) event.x(), (int) event.y());
+            TexturePoint point = toTexturePoint(event.x(), event.y());
             if (point != null && insideMap(point, PadClient.cachedDocumentFor(heldPadStack()))) {
-                PadFocusState.updatePointDragPreview(point.x(), point.y());
+                PadFocusState.updatePointDragPreview(Math.round(point.x()), Math.round(point.y()));
             }
             return true;
         }
@@ -143,9 +143,9 @@ public class PadFocusScreen extends Screen {
 
     @Override
     public boolean mouseReleased(MouseButtonEvent event) {
-        updateHover((int) event.x(), (int) event.y());
+        updateHover(event.x(), event.y());
         if (event.button() == 0 && PadFocusState.draggingMedia()) {
-            TexturePoint point = toTexturePoint((int) event.x(), (int) event.y());
+            TexturePoint point = toTexturePoint(event.x(), event.y());
             if (point != null && insideMap(point, PadClient.cachedDocumentFor(heldPadStack()))) {
                 createPointFromDrag(point, PadFocusState.draggingMediaId(), PadFocusState.draggingMediaName());
             }
@@ -159,7 +159,7 @@ public class PadFocusScreen extends Screen {
             return true;
         }
         if (event.button() == 0 && PadFocusState.draggingPoint()) {
-            TexturePoint point = toTexturePoint((int) event.x(), (int) event.y());
+            TexturePoint point = toTexturePoint(event.x(), event.y());
             if (point != null && inside(point, MAP_X, MAP_Y, MAP_W, MAP_H)) {
                 moveSelectedPoint(point);
             }
@@ -171,29 +171,29 @@ public class PadFocusScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        updateHover((int) mouseX, (int) mouseY);
+        updateHover(mouseX, mouseY);
         return true;
     }
 
-    private void updateHover(int mouseX, int mouseY) {
+    private void updateHover(double mouseX, double mouseY) {
         TexturePoint point = toTexturePoint(mouseX, mouseY);
         if (point == null) {
             PadFocusState.clearHoverTarget();
             return;
         }
-        float localX = point.x() / (TEXTURE_W - 1.0F) * 2.0F - 1.0F;
-        float localY = point.y() / (TEXTURE_H - 1.0F) * 2.0F - 1.0F;
+        float localX = point.x() / (float) TEXTURE_W * 2.0F - 1.0F;
+        float localY = point.y() / (float) TEXTURE_H * 2.0F - 1.0F;
         PadFocusState.updateHover(localX, localY);
-        PadFocusState.updateHoverTarget(point.x(), point.y(), hit(point));
+        PadFocusState.updateHoverTarget(Math.round(point.x()), Math.round(point.y()), hit(point));
     }
 
-    private void handleLeftClick(int mouseX, int mouseY) {
+    private void handleLeftClick(double mouseX, double mouseY) {
         TexturePoint point = toTexturePoint(mouseX, mouseY);
         if (point == null) {
             return;
         }
         String control = hit(point);
-        PadFocusState.pressFeedback(point.x(), point.y(), control);
+        PadFocusState.pressFeedback(Math.round(point.x()), Math.round(point.y()), control);
         if (handleLockedVideoControl(point, control)) {
             return;
         }
@@ -362,8 +362,8 @@ public class PadFocusScreen extends Screen {
         if (selected == null) {
             return;
         }
-        int localX = point.x() - EDITOR_X;
-        int localY = point.y() - EDITOR_Y;
+        int localX = (int) Math.floor(point.x() - EDITOR_X);
+        int localY = (int) Math.floor(point.y() - EDITOR_Y);
         if (localY >= 28 && localY < 43 && localX >= 8 && localX < 60) {
             updatePoint(rebuildPoint(selected, selected.radiusBlocks(), !selected.visible(), selected.volumePerMille(),
                     selected.loop()));
@@ -430,7 +430,7 @@ public class PadFocusScreen extends Screen {
                 mediaId);
         writeDocument(stack, document.withTrigger(created));
         PadFocusState.selectPoint(created.pointId());
-        PadFocusState.pressFeedback(point.x(), point.y(), "MAP");
+        PadFocusState.pressFeedback(Math.round(point.x()), Math.round(point.y()), "MAP");
     }
 
     private void moveSelectedPoint(TexturePoint point) {
@@ -636,7 +636,7 @@ public class PadFocusScreen extends Screen {
     }
 
     private PadMediaEntry mediaEntryAt(TexturePoint point) {
-        int localY = point.y() - MEDIA_Y;
+        int localY = (int) Math.floor(point.y() - MEDIA_Y);
         if (localY < 30) {
             return null;
         }
@@ -797,7 +797,7 @@ public class PadFocusScreen extends Screen {
         return point.x() >= x && point.y() >= y && point.x() < x + w && point.y() < y + h;
     }
 
-    private TexturePoint toTexturePoint(int mouseX, int mouseY) {
+    private TexturePoint toTexturePoint(double mouseX, double mouseY) {
         Quad quad = projectedInputQuadOrNull();
         return quad != null ? quad.toTexturePoint(mouseX, mouseY) : null;
     }
@@ -813,94 +813,18 @@ public class PadFocusScreen extends Screen {
                 new ScreenPoint(PadFocusState.projectedQuadX(3), PadFocusState.projectedQuadY(3)));
     }
 
-    private record TexturePoint(int x, int y) {
+    private record TexturePoint(float x, float y) {
     }
 
     private record ScreenPoint(float x, float y) {
     }
 
-    private record ProjectedSurface(int left, int top, int width, int height) {
-        ProjectedSurface inflate(int amount) {
-            return new ProjectedSurface(left - amount, top - amount, width + amount * 2, height + amount * 2);
-        }
-
-        boolean contains(int x, int y) {
-            return x >= left && y >= top && x < left + width && y < top + height;
-        }
-    }
-
     private record Quad(ScreenPoint topLeft, ScreenPoint topRight, ScreenPoint bottomRight, ScreenPoint bottomLeft) {
-        TexturePoint toTexturePoint(float screenX, float screenY) {
-            if (!bounds().inflate(4).contains(Math.round(screenX), Math.round(screenY))) {
-                return null;
-            }
-            float u = 0.5F;
-            float v = 0.5F;
-            for (int i = 0; i < 8; i++) {
-                ScreenPoint p = sample(u, v);
-                float dx = p.x() - screenX;
-                float dy = p.y() - screenY;
-                if (Math.abs(dx) + Math.abs(dy) < 0.01F) {
-                    break;
-                }
-                ScreenPoint du = derivativeU(v);
-                ScreenPoint dv = derivativeV(u);
-                float det = du.x() * dv.y() - du.y() * dv.x();
-                if (Math.abs(det) < 1.0E-4F) {
-                    break;
-                }
-                float deltaU = (dx * dv.y() - dy * dv.x()) / det;
-                float deltaV = (du.x() * dy - du.y() * dx) / det;
-                u = clamp(u - deltaU);
-                v = clamp(v - deltaV);
-            }
-            ScreenPoint resolved = sample(u, v);
-            float error = Math.abs(resolved.x() - screenX) + Math.abs(resolved.y() - screenY);
-            if (error > 18.0F) {
-                return null;
-            }
-            return new TexturePoint(Math.round(u * (TEXTURE_W - 1)), Math.round(v * (TEXTURE_H - 1)));
-        }
-
-        ProjectedSurface bounds() {
-            float minX = Math.min(Math.min(topLeft.x(), topRight.x()), Math.min(bottomRight.x(), bottomLeft.x()));
-            float minY = Math.min(Math.min(topLeft.y(), topRight.y()), Math.min(bottomRight.y(), bottomLeft.y()));
-            float maxX = Math.max(Math.max(topLeft.x(), topRight.x()), Math.max(bottomRight.x(), bottomLeft.x()));
-            float maxY = Math.max(Math.max(topLeft.y(), topRight.y()), Math.max(bottomRight.y(), bottomLeft.y()));
-            return new ProjectedSurface(Math.round(minX), Math.round(minY), Math.round(maxX - minX),
-                    Math.round(maxY - minY));
-        }
-
-        private ScreenPoint sample(float u, float v) {
-            float topX = lerp(topLeft.x(), topRight.x(), u);
-            float topY = lerp(topLeft.y(), topRight.y(), u);
-            float bottomX = lerp(bottomLeft.x(), bottomRight.x(), u);
-            float bottomY = lerp(bottomLeft.y(), bottomRight.y(), u);
-            return new ScreenPoint(lerp(topX, bottomX, v), lerp(topY, bottomY, v));
-        }
-
-        private ScreenPoint derivativeU(float v) {
-            float topX = topRight.x() - topLeft.x();
-            float topY = topRight.y() - topLeft.y();
-            float bottomX = bottomRight.x() - bottomLeft.x();
-            float bottomY = bottomRight.y() - bottomLeft.y();
-            return new ScreenPoint(lerp(topX, bottomX, v), lerp(topY, bottomY, v));
-        }
-
-        private ScreenPoint derivativeV(float u) {
-            float leftX = bottomLeft.x() - topLeft.x();
-            float leftY = bottomLeft.y() - topLeft.y();
-            float rightX = bottomRight.x() - topRight.x();
-            float rightY = bottomRight.y() - topRight.y();
-            return new ScreenPoint(lerp(leftX, rightX, u), lerp(leftY, rightY, u));
-        }
-
-        private static float lerp(float a, float b, float t) {
-            return a + (b - a) * t;
-        }
-
-        private static float clamp(float value) {
-            return Math.max(0.0F, Math.min(1.0F, value));
+        TexturePoint toTexturePoint(double x, double y) {
+            var plane = new ProjectedInputPlane(topLeft.x(), topLeft.y(), topRight.x(), topRight.y(),
+                    bottomRight.x(), bottomRight.y(), bottomLeft.x(), bottomLeft.y());
+            var point = plane.toTexturePoint(x, y, TEXTURE_W, TEXTURE_H);
+            return point != null ? new TexturePoint((float) point.x(), (float) point.y()) : null;
         }
     }
 }

@@ -14,6 +14,10 @@ public final class ClientMediaSyncHandler {
     }
 
     public static void handleSync(ClientMediaSyncPayload payload, ClientMediaSyncPolicy policy) {
+        handleSync(payload, policy, 0L);
+    }
+
+    public static void handleSync(ClientMediaSyncPayload payload, ClientMediaSyncPolicy policy, long receivedNanos) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.player == null || minecraft.level == null || payload == null || policy == null) {
             return;
@@ -40,6 +44,9 @@ public final class ClientMediaSyncHandler {
         ClientMediaPlaybackRegistry.SourceLocation sourceLocation = ClientMediaPlaybackRegistry.SourceLocation
                 .from(payload);
         ActivePlayback previous = ClientMediaPlaybackRegistry.get(sourceId);
+        String physicalToken = com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync.parseTerminalToken(payload.playUrl());
+        boolean refreshedTransport = !physicalToken.isEmpty() && !ClientMediaTerminalRegistry.current(
+                sourceId, payload.sessionId(), physicalToken);
         policy.beforeRegisterPlayback(payload, sourceId);
         if (previous != null && playbackSessionId.equals(previous.playbackSessionId())) {
             PlaybackSessionId retainedSessionId = playbackSessionId.orElseThrow();
@@ -48,9 +55,11 @@ public final class ClientMediaSyncHandler {
                     .withSourceLocation(sourceLocation)
                     .withHeadphoneRouted(payload.headphoneRouted());
             ClientMediaPlaybackRegistry.put(sourceId, updated);
+            ClientMediaPlaybackRegistry.captureStartupPacing(sourceId, payload, receivedNanos);
             policy.updateVolume(sourceId, payload.volumePerMille() / 1000.0F);
-            ClientMediaRetryHandler.onSessionRefreshed(sourceId, retainedSessionId);
-            if (policy.shouldRebuildSound(sourceId, payload)) {
+            if (refreshedTransport) ClientMediaRetryHandler.onSessionRefreshed(sourceId, retainedSessionId);
+            boolean rebuildSound = policy.shouldRebuildSound(sourceId, payload);
+            if (refreshedTransport || rebuildSound) {
                 policy.onRebuildSound(payload, sourceId);
                 schedulePlayback(payload, sourceId, policy);
             }
@@ -59,6 +68,7 @@ public final class ClientMediaSyncHandler {
 
         PlaybackSessionId acceptedSessionId = playbackSessionId.orElseThrow();
         ClientMediaPlaybackRegistry.put(sourceId, ClientMediaPlaybackRegistry.createFromSync(payload));
+        ClientMediaPlaybackRegistry.captureStartupPacing(sourceId, payload, receivedNanos);
         ClientMediaRetryHandler.onSessionAccepted(sourceId, acceptedSessionId);
         ClientMediaPrepareLauncher.onSessionAccepted(sourceId, acceptedSessionId);
         ClientMediaSoundRegistry.onSessionAccepted(sourceId, acceptedSessionId);

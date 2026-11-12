@@ -12,7 +12,9 @@ import net.minecraft.world.level.Level;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Objects;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -50,6 +52,11 @@ public final class PadMapClientCache {
     private static final ExecutorService DISK_FLUSH_EXECUTOR = Executors.newSingleThreadExecutor(
             NetMusicThreadFactory.daemon("pad-map-disk-flush"));
     private static final AtomicBoolean DISK_FLUSH_IN_PROGRESS = new AtomicBoolean(false);
+    private static final Object DISK_FLUSH_LOCK = new Object();
+    // One writer plus at most two queued immutable captures; a full queue retains the live dirty owner.
+    private static final int MAX_PENDING_DISK_FLUSHES = 2;
+    private static final ArrayDeque<DiskFlushBatch> PENDING_DISK_FLUSHES = new ArrayDeque<>();
+    private static DiskFlushBatch writingDiskFlush;
     private static final PadMapCellMemoryCache CELL_CACHE = new PadMapCellMemoryCache(CELL_CACHE_LIMIT);
     private static final PadMapDirtyChunkTracker DIRTY_CHUNKS = new PadMapDirtyChunkTracker(DIRTY_CHUNK_LIMIT);
     private static final PadMapViewSnapshotCache VIEW_SNAPSHOTS = new PadMapViewSnapshotCache();
@@ -63,6 +70,15 @@ public final class PadMapClientCache {
     private static float manualZoom = OUTDOOR_ZOOM;
     private static String activeDiskScope;
     private static String syncedWorldScopeId;
+    // Bind destinations before sampling: Minecraft.level may already be the next dimension at flush time.
+    private static Path activeDiskWorldRoot;
+    private static Path activeCellDiskPath;
+    private static Path activeSnapshotDiskPath;
+    private static Level snapshotLoadedLevel;
+    private static Path snapshotLoadedPath;
+    private static boolean contextTransitionBlocked;
+    private static boolean worldScopeChangePending;
+    private static String pendingWorldScopeId;
     private static boolean diskCacheLoaded;
     private static boolean diskCacheDirty;
     private static boolean snapshotCacheDirty;
@@ -84,7 +100,7 @@ public final class PadMapClientCache {
     }
 
     public static PadMapSnapshot snapshot(int playerX, int playerZ) {
-        if (completed == null) {
+        if (contextTransitionBlocked || completed == null) {
             return placeholder(playerX, playerZ);
         }
         return completed;
@@ -103,19 +119,25 @@ public final class PadMapClientCache {
 
     public static void tick() {
         Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.player == null || minecraft.level == null) {
-            if (activeLevel != null) {
-                flushDiskCache();
-                clearLevelRuntimeState();
-                activeLevel = null;
-            }
+        if (worldScopeChangePending && !applyPendingWorldScope()) {
             return;
         }
-        if (activeLevel != minecraft.level) {
-            clearLevelRuntimeState();
-            activeLevel = minecraft.level;
+        if (minecraft.player == null || minecraft.level == null) {
+            if (activeLevel != null) {
+                if (!flushBeforeContextChange()) {
+                    blockContextTransition();
+                    return;
+                }
+                clearLevelRuntimeState();
+                invalidateSnapshotLoad();
+                activeLevel = null;
+            }
+            contextTransitionBlocked = false;
+            return;
         }
-        updateDiskScope(minecraft);
+        if (!updateDiskScope(minecraft)) {
+            return;
+        }
         loadDiskCacheIfNeeded();
         if (!isPadRelevant(minecraft)) {
             activeJob = null;
@@ -381,14 +403,34 @@ public final class PadMapClientCache {
 
     public static void setServerWorldScope(String worldScopeId, String worldName) {
         String normalizedScopeId = isBlank(worldScopeId) ? null : worldScopeId.trim();
-        if (java.util.Objects.equals(syncedWorldScopeId, normalizedScopeId)) {
+        if (Objects.equals(syncedWorldScopeId, normalizedScopeId)) {
+            worldScopeChangePending = false;
+            pendingWorldScopeId = null;
             return;
         }
-        flushDiskCache();
-        syncedWorldScopeId = normalizedScopeId;
+        pendingWorldScopeId = normalizedScopeId;
+        worldScopeChangePending = true;
+        applyPendingWorldScope();
+    }
+
+    private static boolean applyPendingWorldScope() {
+        // Do not publish null/the next ID until the old bound dirty payload has been admitted.
+        if (!flushBeforeContextChange()) {
+            blockContextTransition();
+            return false;
+        }
+        syncedWorldScopeId = pendingWorldScopeId;
+        worldScopeChangePending = false;
+        pendingWorldScopeId = null;
         clearAllCaches(false);
         activeDiskScope = null;
+        activeDiskWorldRoot = null;
+        activeCellDiskPath = null;
+        activeSnapshotDiskPath = null;
+        invalidateSnapshotLoad();
         diskCacheLoaded = false;
+        contextTransitionBlocked = false;
+        return true;
     }
 
     public static Path diskCachePath() {
@@ -400,32 +442,144 @@ public final class PadMapClientCache {
     }
 
     public static void flushDiskCache() {
-        if (!DISK_CACHE_ENABLED || !diskCacheLoaded || !hasSyncedDiskScope()) {
-            return;
+        enqueueDiskFlush(false);
+    }
+
+    private static boolean flushBeforeContextChange() {
+        return enqueueDiskFlush(true);
+    }
+
+    private static boolean enqueueDiskFlush(boolean allowBusy) {
+        // Eligibility belongs to the previous bound owner, never to a newly null/different Minecraft.level.
+        if (!DISK_CACHE_ENABLED || !diskCacheLoaded || activeCellDiskPath == null
+                || activeSnapshotDiskPath == null || isBlank(syncedWorldScopeId)) {
+            return true;
         }
-        if (!DISK_FLUSH_IN_PROGRESS.compareAndSet(false, true)) {
-            return;
-        }
-        PadMapCellDiskCodec.Snapshot cells = captureCellDiskSnapshot();
-        PadMapSnapshotDiskCodec.Snapshot snapshot = captureSnapshotDiskSnapshot();
-        if (cells == null && snapshot == null) {
-            DISK_FLUSH_IN_PROGRESS.set(false);
-            return;
-        }
-        try {
-            DISK_FLUSH_EXECUTOR.execute(() -> {
+        synchronized (DISK_FLUSH_LOCK) {
+            if (!diskCacheDirty && (!snapshotCacheDirty || completed == null || completed.hasUnknownTiles())) {
+                return true;
+            }
+            if (DISK_FLUSH_IN_PROGRESS.get() && !allowBusy) {
+                return false;
+            }
+            DiskFlushBatch previousTail = PENDING_DISK_FLUSHES.peekLast();
+            boolean coalesce = previousTail != null && previousTail.matches(activeCellDiskPath,
+                    activeSnapshotDiskPath);
+            if (!coalesce && PENDING_DISK_FLUSHES.size() >= MAX_PENDING_DISK_FLUSHES) {
+                return false;
+            }
+            PadMapCellDiskCodec.Snapshot cells = captureCellDiskSnapshot();
+            PadMapSnapshotDiskCodec.Snapshot snapshot = captureSnapshotDiskSnapshot();
+            if (cells == null && snapshot == null) {
+                return true;
+            }
+            DiskFlushBatch batch = new DiskFlushBatch(activeCellDiskPath, activeSnapshotDiskPath, cells, snapshot);
+            if (coalesce) {
+                PENDING_DISK_FLUSHES.removeLast();
+                batch = previousTail.merge(batch);
+            }
+            PENDING_DISK_FLUSHES.addLast(batch);
+            if (!DISK_FLUSH_IN_PROGRESS.get()) {
+                DISK_FLUSH_IN_PROGRESS.set(true);
                 try {
-                    PadMapCellDiskCodec.write(cells);
-                    PadMapSnapshotDiskCodec.write(snapshot);
-                } finally {
+                    DISK_FLUSH_EXECUTOR.execute(PadMapClientCache::drainDiskFlushes);
+                } catch (RuntimeException error) {
+                    PENDING_DISK_FLUSHES.removeLast();
+                    if (coalesce) {
+                        PENDING_DISK_FLUSHES.addLast(previousTail);
+                    }
                     DISK_FLUSH_IN_PROGRESS.set(false);
+                    diskCacheDirty |= cells != null;
+                    snapshotCacheDirty |= snapshot != null;
+                    throw error;
                 }
-            });
-        } catch (RuntimeException error) {
-            DISK_FLUSH_IN_PROGRESS.set(false);
-            diskCacheDirty |= cells != null;
-            snapshotCacheDirty |= snapshot != null;
+            }
+            return true;
+        }
+    }
+
+    private static void drainDiskFlushes() {
+        Throwable failure = null;
+        for (;;) {
+            DiskFlushBatch batch;
+            synchronized (DISK_FLUSH_LOCK) {
+                batch = PENDING_DISK_FLUSHES.pollFirst();
+                if (batch == null) {
+                    DISK_FLUSH_IN_PROGRESS.set(false);
+                    break;
+                }
+                writingDiskFlush = batch;
+            }
+            // A failed worker must still retire its queued owners. Codec IOException handling is unchanged.
+            try {
+                PadMapCellDiskCodec.write(batch.cells);
+            } catch (RuntimeException | Error error) {
+                failure = collectFlushFailure(failure, error);
+            }
+            try {
+                PadMapSnapshotDiskCodec.write(batch.snapshot);
+            } catch (RuntimeException | Error error) {
+                failure = collectFlushFailure(failure, error);
+            } finally {
+                synchronized (DISK_FLUSH_LOCK) {
+                    // Explicit refresh may race an already running write; delete that old result before newer work.
+                    try {
+                        if (batch.discardCells) {
+                            deleteDiskFile(batch.cellPath);
+                        }
+                        if (batch.discardSnapshot) {
+                            deleteDiskFile(batch.snapshotPath);
+                        }
+                    } catch (RuntimeException | Error error) {
+                        failure = collectFlushFailure(failure, error);
+                    } finally {
+                        writingDiskFlush = null;
+                    }
+                }
+            }
+        }
+        if (failure instanceof RuntimeException error) {
             throw error;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+    }
+
+    private static Throwable collectFlushFailure(Throwable first, Throwable next) {
+        if (first == null) {
+            return next;
+        }
+        if (first != next) {
+            first.addSuppressed(next);
+        }
+        return first;
+    }
+
+    private static final class DiskFlushBatch {
+        private final Path cellPath;
+        private final Path snapshotPath;
+        private final PadMapCellDiskCodec.Snapshot cells;
+        private final PadMapSnapshotDiskCodec.Snapshot snapshot;
+        // Only refresh cancellation mutates these flags; captured destinations and payloads never change.
+        private boolean discardCells;
+        private boolean discardSnapshot;
+
+        private DiskFlushBatch(Path cellPath, Path snapshotPath, PadMapCellDiskCodec.Snapshot cells,
+                PadMapSnapshotDiskCodec.Snapshot snapshot) {
+            this.cellPath = cellPath;
+            this.snapshotPath = snapshotPath;
+            this.cells = cells;
+            this.snapshot = snapshot;
+        }
+
+        private boolean matches(Path cells, Path snapshot) {
+            return cellPath.equals(cells) && snapshotPath.equals(snapshot);
+        }
+
+        private DiskFlushBatch merge(DiskFlushBatch newer) {
+            return new DiskFlushBatch(cellPath, snapshotPath, newer.cells == null ? cells : newer.cells,
+                    newer.snapshot == null ? snapshot : newer.snapshot);
         }
     }
 
@@ -433,7 +587,7 @@ public final class PadMapClientCache {
         if (!diskCacheDirty) {
             return null;
         }
-        Path path = diskCachePath();
+        Path path = activeCellDiskPath;
         List<PadMapCellDiskCodec.Entry> entries = new ArrayList<>();
         for (PadMapCellMemoryCache.Entry entry : CELL_CACHE.entries()) {
             if (entry.kind() != PadMapTileKind.UNKNOWN) {
@@ -443,14 +597,14 @@ public final class PadMapClientCache {
             }
         }
         diskCacheDirty = false;
-        return new PadMapCellDiskCodec.Snapshot(path, entries);
+        return new PadMapCellDiskCodec.Snapshot(path, List.copyOf(entries));
     }
 
     private static PadMapSnapshotDiskCodec.Snapshot captureSnapshotDiskSnapshot() {
         if (!snapshotCacheDirty || completed == null || completed.tiles() == null || completed.hasUnknownTiles()) {
             return null;
         }
-        Path path = snapshotCachePath();
+        Path path = activeSnapshotDiskPath;
         PadMapSnapshot snapshot = completed;
         PadMapTileKind[] tiles = java.util.Arrays.copyOf(snapshot.tiles(), snapshot.tiles().length);
         snapshotCacheDirty = false;
@@ -472,10 +626,15 @@ public final class PadMapClientCache {
         diskCacheLoaded = true;
         diskCacheDirty = false;
         snapshotCacheDirty = false;
+        snapshotLoadedLevel = activeLevel;
+        snapshotLoadedPath = activeSnapshotDiskPath;
         if (deleteDisk) {
+            Path cells = diskCachePath().toAbsolutePath().normalize();
+            Path snapshot = snapshotCachePath().toAbsolutePath().normalize();
+            discardQueuedDiskWrites(cells, snapshot);
             try {
-                Files.deleteIfExists(diskCachePath());
-                Files.deleteIfExists(snapshotCachePath());
+                Files.deleteIfExists(cells);
+                Files.deleteIfExists(snapshot);
             } catch (IOException ignored) {
             }
         }
@@ -483,6 +642,8 @@ public final class PadMapClientCache {
     }
 
     static void clearMemorySnapshots() {
+        snapshotLoadedLevel = activeLevel;
+        snapshotLoadedPath = activeSnapshotDiskPath;
         activeJob = null;
         completed = null;
         placeholder = null;
@@ -500,27 +661,55 @@ public final class PadMapClientCache {
     }
 
     private static void loadDiskCacheIfNeeded() {
-        if (!DISK_CACHE_ENABLED || diskCacheLoaded || !hasSyncedDiskScope()) {
+        if (!DISK_CACHE_ENABLED || !hasSyncedDiskScope() || contextTransitionBlocked) {
             return;
         }
-        diskCacheLoaded = true;
-        loadSnapshotDiskCache();
-        Path path = diskCachePath();
-        List<PadMapCellDiskCodec.Entry> entries = PadMapCellDiskCodec.read(path, CELL_CACHE_LIMIT);
-        if (entries == null) {
-            return;
+        if (!diskCacheLoaded) {
+            diskCacheLoaded = true;
+            // Cell population is world-owned, and dimension-keyed entries survive a level replacement.
+            List<PadMapCellDiskCodec.Entry> entries = pendingCellEntries(activeCellDiskPath);
+            if (entries == null && !discardedWriteInProgress(activeCellDiskPath)) {
+                entries = PadMapCellDiskCodec.read(activeCellDiskPath, CELL_CACHE_LIMIT);
+            }
+            if (entries != null) {
+                CELL_CACHE.clear();
+                for (PadMapCellDiskCodec.Entry entry : entries) {
+                    CELL_CACHE.put(new PadMapCellMemoryCache.Key(entry.dimension(), entry.cellSize(), entry.cellX(),
+                            entry.cellZ()), entry.kind());
+                }
+            }
         }
-        CELL_CACHE.clear();
-        for (PadMapCellDiskCodec.Entry entry : entries) {
-            CELL_CACHE.put(new PadMapCellMemoryCache.Key(entry.dimension(), entry.cellSize(), entry.cellX(),
-                    entry.cellZ()), entry.kind());
+        // Snapshot IO has a separate one-attempt stamp; it must not be gated by the world cell flag.
+        if (snapshotLoadedLevel != activeLevel || !Objects.equals(snapshotLoadedPath, activeSnapshotDiskPath)) {
+            snapshotLoadedLevel = activeLevel;
+            snapshotLoadedPath = activeSnapshotDiskPath;
+            loadSnapshotDiskCache();
+        }
+    }
+
+    private static List<PadMapCellDiskCodec.Entry> pendingCellEntries(Path path) {
+        synchronized (DISK_FLUSH_LOCK) {
+            var newestFirst = PENDING_DISK_FLUSHES.descendingIterator();
+            while (newestFirst.hasNext()) {
+                DiskFlushBatch batch = newestFirst.next();
+                if (batch.cells != null && batch.cellPath.equals(path)) {
+                    return batch.cells.entries();
+                }
+            }
+            if (writingDiskFlush != null && !writingDiskFlush.discardCells && writingDiskFlush.cells != null
+                    && writingDiskFlush.cellPath.equals(path)) {
+                return writingDiskFlush.cells.entries();
+            }
+            return null;
         }
     }
 
     private static void loadSnapshotDiskCache() {
-        Path path = snapshotCachePath();
-        PadMapSnapshot snapshot = PadMapSnapshotDiskCodec.read(path, PadMapSampler.DEFAULT_WIDTH,
-                PadMapSampler.DEFAULT_HEIGHT, PadMapSamplingPolicy.cellSizeForZoom(OUTDOOR_ZOOM));
+        PadMapSnapshot snapshot = pendingMapSnapshot(activeSnapshotDiskPath);
+        if (snapshot == null && !discardedWriteInProgress(activeSnapshotDiskPath)) {
+            snapshot = PadMapSnapshotDiskCodec.read(activeSnapshotDiskPath, PadMapSampler.DEFAULT_WIDTH,
+                    PadMapSampler.DEFAULT_HEIGHT, PadMapSamplingPolicy.cellSizeForZoom(OUTDOOR_ZOOM));
+        }
         if (snapshot != null) {
             completed = snapshot;
             completedProfile = PadMapViewProfile.OUTDOOR;
@@ -528,24 +717,102 @@ public final class PadMapClientCache {
         }
     }
 
-    private static void updateDiskScope(Minecraft minecraft) {
-        String scope = currentDiskScope(minecraft);
-        if (scope.equals(activeDiskScope)) {
-            return;
+    private static PadMapSnapshot pendingMapSnapshot(Path path) {
+        synchronized (DISK_FLUSH_LOCK) {
+            var newestFirst = PENDING_DISK_FLUSHES.descendingIterator();
+            while (newestFirst.hasNext()) {
+                DiskFlushBatch batch = newestFirst.next();
+                if (batch.snapshot != null && batch.snapshotPath.equals(path)) {
+                    return copyCapturedSnapshot(batch.snapshot);
+                }
+            }
+            if (writingDiskFlush != null && !writingDiskFlush.discardSnapshot && writingDiskFlush.snapshot != null
+                    && writingDiskFlush.snapshotPath.equals(path)) {
+                return copyCapturedSnapshot(writingDiskFlush.snapshot);
+            }
+            return null;
         }
-        flushDiskCache();
+    }
+
+    private static PadMapSnapshot copyCapturedSnapshot(PadMapSnapshotDiskCodec.Snapshot snapshot) {
+        return new PadMapSnapshot(snapshot.centerX(), snapshot.centerY(), snapshot.centerZ(),
+                snapshot.cellSizeBlocks(), snapshot.width(), snapshot.height(),
+                java.util.Arrays.copyOf(snapshot.tiles(), snapshot.tiles().length));
+    }
+
+    private static boolean updateDiskScope(Minecraft minecraft) {
+        String scope = currentDiskScope(minecraft);
+        Path cells = diskCachePath().toAbsolutePath().normalize();
+        Path snapshot = snapshotCachePath().toAbsolutePath().normalize();
+        Path worldRoot = cells.getParent().getParent();
+        boolean worldChanged = !scope.equals(activeDiskScope) || !worldRoot.equals(activeDiskWorldRoot);
+        if (!worldChanged && activeLevel == minecraft.level && snapshot.equals(activeSnapshotDiskPath)) {
+            contextTransitionBlocked = false;
+            return true;
+        }
+        // All captures below still use old bound paths, even though Minecraft.level is already the new object.
+        if (!flushBeforeContextChange()) {
+            blockContextTransition();
+            return false;
+        }
+        clearLevelRuntimeState();
+        invalidateSnapshotLoad();
+        activeLevel = minecraft.level;
         activeDiskScope = scope;
-        activeJob = null;
-        completed = null;
-        placeholder = null;
-        VIEW_SNAPSHOTS.clear();
-        DIRTY_CHUNKS.clear();
-        resetProfileStability();
-        nextUnknownRetryTick = 0L;
-        CELL_CACHE.clear();
-        diskCacheLoaded = false;
-        diskCacheDirty = false;
+        activeDiskWorldRoot = worldRoot;
+        activeCellDiskPath = cells;
+        activeSnapshotDiskPath = snapshot;
         snapshotCacheDirty = false;
+        if (worldChanged) {
+            CELL_CACHE.clear();
+            diskCacheLoaded = false;
+            diskCacheDirty = false;
+        }
+        contextTransitionBlocked = false;
+        return true;
+    }
+
+    private static void blockContextTransition() {
+        contextTransitionBlocked = true;
+        activeJob = null;
+        placeholder = null;
+    }
+
+    private static void invalidateSnapshotLoad() {
+        snapshotLoadedLevel = null;
+        snapshotLoadedPath = null;
+    }
+
+    private static void discardQueuedDiskWrites(Path cells, Path snapshot) {
+        synchronized (DISK_FLUSH_LOCK) {
+            var batches = PENDING_DISK_FLUSHES.iterator();
+            while (batches.hasNext()) {
+                DiskFlushBatch batch = batches.next();
+                // The two paths always identify the same dimension's refresh target.
+                if (batch.matches(cells, snapshot)) {
+                    batches.remove();
+                }
+            }
+            if (writingDiskFlush != null && writingDiskFlush.matches(cells, snapshot)) {
+                writingDiskFlush.discardCells = true;
+                writingDiskFlush.discardSnapshot = true;
+            }
+        }
+    }
+
+    private static boolean discardedWriteInProgress(Path path) {
+        synchronized (DISK_FLUSH_LOCK) {
+            return writingDiskFlush != null
+                    && ((writingDiskFlush.discardCells && writingDiskFlush.cellPath.equals(path))
+                            || (writingDiskFlush.discardSnapshot && writingDiskFlush.snapshotPath.equals(path)));
+        }
+    }
+
+    private static void deleteDiskFile(Path path) {
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException ignored) {
+        }
     }
 
     private static boolean hasSyncedDiskScope() {

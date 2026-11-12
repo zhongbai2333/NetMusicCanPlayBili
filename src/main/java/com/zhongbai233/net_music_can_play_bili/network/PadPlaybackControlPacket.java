@@ -5,7 +5,6 @@ import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.PadDiagnosticsProperties;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
-import com.zhongbai233.net_music_can_play_bili.bili.BiliSongInfoSanitizer;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.item.PadItem;
 import com.zhongbai233.net_music_can_play_bili.item.pad.PadDocument;
@@ -85,6 +84,8 @@ public record PadPlaybackControlPacket(Action action, UUID deviceId, UUID pointI
         }
     }
 
+    static boolean hasPending(UUID deviceId) { return RESOLVE_INTENTS.hasPending(deviceId); }
+
     static void startFromServer(ServerPlayer player, ItemStack stack, UUID deviceId, UUID pointId, long targetMillis) {
         start(player, stack, deviceId, pointId, targetMillis);
     }
@@ -113,7 +114,7 @@ public record PadPlaybackControlPacket(Action action, UUID deviceId, UUID pointI
         ItemMusicCD.SongInfo songInfo = ItemMusicCD.getSongInfo(media.disc());
         if (songInfo == null
                 || songInfo.vip && !MusicPlayResolverManager.canResolve(songInfo)
-                || !isPlaybackAllowed(player, songInfo.songUrl)) {
+                || (!BiliWhitelistManager.isShortLink(songInfo.songUrl) && !isPlaybackAllowed(player, songInfo.songUrl))) {
             return false;
         }
         PadResolveIntentRegistry.Intent intent = RESOLVE_INTENTS.beginRetryIfIdle(player.getUUID(), deviceId, pointId,
@@ -164,7 +165,7 @@ public record PadPlaybackControlPacket(Action action, UUID deviceId, UUID pointI
             stop(player, deviceId);
             return;
         }
-        if (!isPlaybackAllowed(player, songInfo.songUrl)) {
+        if ((!BiliWhitelistManager.isShortLink(songInfo.songUrl) && !isPlaybackAllowed(player, songInfo.songUrl))) {
             stop(player, deviceId);
             return;
         }
@@ -176,7 +177,12 @@ public record PadPlaybackControlPacket(Action action, UUID deviceId, UUID pointI
 
     private static void resolve(ServerPlayer player, UUID deviceId, PadTriggerPoint point,
             ItemMusicCD.SongInfo original, long targetMillis, PadResolveIntentRegistry.Intent intent) {
-        MusicPlayResolverManager.resolve(original.clone()).whenCompleteAsync((resolved, error) -> {
+        BiliWhitelistManager.resolveSong(original).whenCompleteAsync((resolved, error) -> {
+            if (!BiliWhitelistManager.acceptsServer(player.level().getServer())
+                    || player.level().getServer().getPlayerList().getPlayer(player.getUUID()) != player) {
+                RESOLVE_INTENTS.complete(deviceId, intent);
+                return;
+            }
             if (!RESOLVE_INTENTS.isCurrent(deviceId, intent)) {
                 return;
             }
@@ -187,6 +193,8 @@ public record PadPlaybackControlPacket(Action action, UUID deviceId, UUID pointI
                 } else {
                     LOGGER.warn("Pad 解析播放返回空结果: point={} song={}", point.pointId(), original.songName);
                 }
+                stop(player, deviceId);
+                player.sendSystemMessage(net.minecraft.network.chat.Component.literal("Pad 音源解析失败，已停止；请重试。"));
                 return;
             }
             applyResolvedPlayback(player, deviceId, original, resolved, targetMillis, intent);
@@ -224,16 +232,14 @@ public record PadPlaybackControlPacket(Action action, UUID deviceId, UUID pointI
             RESOLVE_INTENTS.complete(deviceId, intent);
             return;
         }
-        if (!isPlaybackAllowed(player, original.songUrl)) {
+        if (!isPlaybackAllowed(player, BiliWhitelistManager.playbackIdentity(original.songUrl, resolved.songUrl))) {
             RESOLVE_INTENTS.complete(deviceId, intent);
             stop(player, deviceId);
             return;
         }
-        String rawUrl = original.songUrl != null ? original.songUrl : "";
-        String playUrl = resolved.songUrl != null && !resolved.songUrl.isBlank() ? resolved.songUrl : rawUrl;
-        if (BiliApiClient.isStoredVideoSelection(rawUrl)) {
-            playUrl = rawUrl;
-        }
+        ServerMediaPlayback.ResolvedTrack track = ServerMediaPlayback.resolvedTrack(original, resolved);
+        String rawUrl = track.rawUrl();
+        String playUrl = track.playUrl();
         if (playUrl.isBlank()) {
             RESOLVE_INTENTS.complete(deviceId, intent);
             if (!intent.retry()) {
@@ -241,13 +247,12 @@ public record PadPlaybackControlPacket(Action action, UUID deviceId, UUID pointI
             }
             return;
         }
-        String songName = resolved.songName != null && !resolved.songName.isBlank() ? resolved.songName
-                : original.songName;
-        if (songName == null || songName.isBlank()) {
+        String songName = track.songName();
+        if (songName.isBlank()) {
             songName = point.name().isBlank() ? "Pad 点位 #" + point.mediaId() : point.name();
         }
-        int durationSeconds = Math.max(1, resolved.songTime > 0 ? resolved.songTime : original.songTime);
-        long elapsedMillis = Math.min(Math.max(0L, targetMillis), Math.max(0L, durationSeconds * 1000L - 50L));
+        int durationSeconds = track.durationSeconds();
+        long elapsedMillis = MP4PlaybackProgressPolicy.clampTarget(durationSeconds, targetMillis);
         PlaybackSessionId sessionId = intent.retry()
                 ? intent.expectedSessionId()
                 : PadPlaybackSessionIds.create(deviceId, point.pointId(), intent.generation().value());
@@ -319,21 +324,7 @@ public record PadPlaybackControlPacket(Action action, UUID deviceId, UUID pointI
     }
 
     private static boolean isPlaybackAllowed(ServerPlayer player, String sourceUrl) {
-        if (BiliSongInfoSanitizer.isForbiddenBiliDirectUrl(sourceUrl)) {
-            if (player != null) {
-                player.sendSystemMessage(BiliWhitelistManager.denialMessage(player, sourceUrl, "Pad播放"));
-            }
-            return false;
-        }
-        if (player == null || !BiliWhitelistManager.enabled()
-                || BiliWhitelistManager.canonicalResource(sourceUrl).isEmpty()) {
-            return true;
-        }
-        if (BiliWhitelistManager.isAllowed(player.level().getServer(), sourceUrl)) {
-            return true;
-        }
-        player.sendSystemMessage(BiliWhitelistManager.denialMessage(player, sourceUrl, "Pad播放"));
-        return false;
+        return BiliWhitelistManager.isPlaybackAllowed(player, sourceUrl, "Pad播放");
     }
 
     public enum Action {

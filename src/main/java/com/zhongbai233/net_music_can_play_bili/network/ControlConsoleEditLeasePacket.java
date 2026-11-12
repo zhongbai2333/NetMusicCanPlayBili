@@ -2,6 +2,8 @@ package com.zhongbai233.net_music_can_play_bili.network;
 
 import com.zhongbai233.net_music_can_play_bili.blockentity.ControlConsoleBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.server.ControlConsoleEditLeaseRegistry;
+import com.zhongbai233.net_music_can_play_bili.server.ControlConsolePermissionPolicy;
+import com.zhongbai233.net_music_can_play_bili.server.NetMusicPermissions;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -64,6 +66,8 @@ public record ControlConsoleEditLeasePacket(BlockPos pos, Action action, UUID le
             return;
         }
         if (!NetworkRateLimiter.allow(player.getUUID(), "control_console_edit_lease", 4)
+                || !ControlConsolePermissionPolicy.passesBuildGate(player.mayBuild(),
+                    NetMusicPermissions.canAdministerControlConsole(player.createCommandSourceStack()))
                 || player.position().distanceToSqr(Vec3.atCenterOf(payload.pos())) > 64.0D
                 || !level.hasChunk(Math.floorDiv(payload.pos().getX(), 16),
                     Math.floorDiv(payload.pos().getZ(), 16))

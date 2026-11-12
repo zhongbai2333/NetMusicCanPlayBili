@@ -36,6 +36,10 @@ final class MP4GuiTexture implements AutoCloseable {
         offscreenRenderer.renderFrameStart(deviceId);
     }
 
+    boolean renderedLandscape() {
+        return offscreenRenderer.renderedLandscape();
+    }
+
     Identifier whiteTextureId() {
         ensureWhiteTexture();
         return WHITE_TEXTURE_ID;

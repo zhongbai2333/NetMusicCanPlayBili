@@ -208,7 +208,6 @@ public class MP4Item extends Item {
         if (action == ClickAction.SECONDARY && !slot.hasItem()) {
             ItemStack removed = removeSelectedOrLastDisc(mp4Stack, player);
             if (!removed.isEmpty()) {
-                syncQueueCopy(player, mp4Stack);
                 slot.set(removed);
                 slot.setChanged();
                 return true;
@@ -228,7 +227,6 @@ public class MP4Item extends Item {
         if (action == ClickAction.SECONDARY && carriedStack.isEmpty()) {
             ItemStack removed = removeSelectedOrLastDisc(mp4Stack, player);
             if (!removed.isEmpty()) {
-                syncQueueCopy(player, mp4Stack);
                 carriedAccess.set(removed);
                 return true;
             }
@@ -279,8 +277,14 @@ public class MP4Item extends Item {
     }
 
     private static ItemStack removeSelectedOrLastDisc(ItemStack mp4Stack, Player player) {
+        int size = queueSize(mp4Stack);
         int selectedIndex = selectedQueueIndexFor(player, mp4Stack);
-        return removeQueueDisc(mp4Stack, selectedIndex);
+        int removedIndex = selectedIndex >= 0 && selectedIndex < size ? selectedIndex : size - 1;
+        ItemStack removed = removeQueueDisc(mp4Stack, selectedIndex);
+        if (!removed.isEmpty()) {
+            syncQueueCopy(player, mp4Stack, removedIndex);
+        }
+        return removed;
     }
 
     private static ItemStack removeQueueDisc(ItemStack mp4Stack, int preferredIndex) {
@@ -322,6 +326,10 @@ public class MP4Item extends Item {
     }
 
     private static void syncQueueCopy(Player player, ItemStack mp4Stack) {
+        syncQueueCopy(player, mp4Stack, -1);
+    }
+
+    private static void syncQueueCopy(Player player, ItemStack mp4Stack, int removedIndex) {
         if (!(player instanceof ServerPlayer serverPlayer) || !(serverPlayer.level() instanceof ServerLevel level)
                 || !(mp4Stack.getItem() instanceof MP4Item)) {
             return;
@@ -331,7 +339,7 @@ public class MP4Item extends Item {
             return;
         }
         MP4DeviceStateStore.syncQueueCopy(level, deviceId, mp4Stack);
-        MP4PlaybackSyncManager.reconcileQueueChange(serverPlayer, deviceId, MP4Item.readQueue(mp4Stack));
+        MP4PlaybackSyncManager.reconcileQueueChange(serverPlayer, deviceId, MP4Item.readQueue(mp4Stack), removedIndex);
     }
 
     public record State(boolean playing, boolean shuffle, boolean videoEnabled, boolean landscape, int qualityIndex,

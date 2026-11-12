@@ -72,7 +72,7 @@ final class Mp4ClientMediaPreparePolicy implements ClientMediaPreparePolicy {
             long startOffsetMillis) {
         return new ClientMediaMovingSound(sourceId, url, payload.durationSeconds(), lyricRecord, payload.sessionId(),
                 startOffsetMillis, payload.volumePerMille() / 1000.0F, payload.headphoneRouted(),
-                MP4MediaSoundLifecyclePolicy.INSTANCE, "MP4");
+                MP4MediaSoundLifecyclePolicy.INSTANCE, "MP4").withTerminalFeedback(payload.playUrl());
     }
 
     @Override

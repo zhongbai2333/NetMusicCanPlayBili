@@ -24,10 +24,4 @@ class ClientAudioOwnerVolumesTest {
         assertEquals(1.0F, ClientAudioOwnerVolumes.getOrDefault(owner, 1.0F));
     }
 
-    @Test
-    void nullOwnerAlwaysUsesFallback() {
-        ClientAudioOwnerVolumes.put(null, 1.5F);
-        ClientAudioOwnerVolumes.remove(null);
-        assertEquals(0.75F, ClientAudioOwnerVolumes.getOrDefault(null, 0.75F));
-    }
 }

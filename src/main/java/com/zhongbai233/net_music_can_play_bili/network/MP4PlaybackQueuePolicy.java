@@ -10,13 +10,56 @@ final class MP4PlaybackQueuePolicy {
 
     static Reconciliation reconcile(int currentIndex, String currentSourceUrl, List<String> queueSourceUrls) {
         List<String> safeQueue = queueSourceUrls != null ? queueSourceUrls : List.of();
-        int matchedIndex = indexOfSourceUrl(safeQueue, currentSourceUrl);
+        int matchedIndex = currentIndex >= 0 && currentIndex < safeQueue.size()
+                && Objects.equals(currentSourceUrl, safeQueue.get(currentIndex))
+                        ? currentIndex : indexOfSourceUrl(safeQueue, currentSourceUrl);
         if (matchedIndex >= 0) {
             return new Reconciliation(matchedIndex == currentIndex ? ReconcileAction.KEEP : ReconcileAction.REMAP,
                     matchedIndex);
         }
         int selectedIndex = safeQueue.isEmpty() ? 0 : clamp(currentIndex, 0, safeQueue.size() - 1);
         return new Reconciliation(ReconcileAction.STOP, selectedIndex);
+    }
+
+    static Reconciliation reconcile(int currentIndex, String currentSourceUrl, List<String> queueSourceUrls,
+            int removedIndex) {
+        if (removedIndex < 0) {
+            return reconcile(currentIndex, currentSourceUrl, queueSourceUrls);
+        }
+        List<String> queue = queueSourceUrls != null ? queueSourceUrls : List.of();
+        int nextIndex = currentIndex - (removedIndex < currentIndex ? 1 : 0);
+        if (removedIndex != currentIndex && nextIndex >= 0 && nextIndex < queue.size()
+                && Objects.equals(currentSourceUrl, queue.get(nextIndex))) {
+            return new Reconciliation(nextIndex == currentIndex ? ReconcileAction.KEEP : ReconcileAction.REMAP,
+                    nextIndex);
+        }
+        return new Reconciliation(ReconcileAction.STOP,
+                queue.isEmpty() ? 0 : clamp(nextIndex, 0, queue.size() - 1));
+    }
+
+    /** Random mode draws from every other occurrence, allowing repeats across successive draws. */
+    static Completion completion(int currentIndex, int queueSize, int repeatMode, boolean shuffle, int draw) {
+        if (shuffle && repeatMode != 1 && queueSize > 0) {
+            return Completion.advance(randomOther(currentIndex, queueSize, draw));
+        }
+        return completion(currentIndex, queueSize, repeatMode);
+    }
+
+    static int manualMove(int currentIndex, int queueSize, int delta, boolean shuffle, int draw) {
+        if (queueSize <= 0) {
+            return 0;
+        }
+        return shuffle ? randomOther(currentIndex, queueSize, draw)
+                : clamp(currentIndex + delta, 0, queueSize - 1);
+    }
+
+    private static int randomOther(int currentIndex, int queueSize, int draw) {
+        if (queueSize <= 1) {
+            return 0;
+        }
+        int current = clamp(currentIndex, 0, queueSize - 1);
+        int next = Math.floorMod(draw, queueSize - 1);
+        return next >= current ? next + 1 : next;
     }
 
     static Completion completion(int currentIndex, int queueSize, int repeatMode) {

@@ -383,7 +383,12 @@ public final class PadItemScreenRenderer {
 
     private static Matrix4f firstPersonProjection(int physicalWidth, int physicalHeight) {
         float aspect = physicalWidth / (float) Math.max(1, physicalHeight);
-        return new Matrix4f().perspective((float) Math.toRadians(70.0F), aspect, 0.05F,
+        float hudFov = Minecraft.getInstance().gameRenderer.getGameRenderState()
+                .levelRenderState.cameraRenderState.hudFov;
+        if (!Float.isFinite(hudFov) || hudFov <= 0.0F) {
+            hudFov = 70.0F;
+        }
+        return new Matrix4f().perspective((float) Math.toRadians(hudFov), aspect, 0.05F,
                 net.minecraft.client.renderer.GameRenderer.PROJECTION_3D_HUD_Z_FAR);
     }
 

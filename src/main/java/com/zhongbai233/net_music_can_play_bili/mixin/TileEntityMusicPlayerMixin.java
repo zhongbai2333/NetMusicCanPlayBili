@@ -33,7 +33,8 @@ public abstract class TileEntityMusicPlayerMixin {
     private void net_music_can_play_bili$guardOriginalMusicPlayer(ItemMusicCD.SongInfo song, CallbackInfo ci) {
         String songUrl = song == null ? null : song.songUrl;
         if (!BiliSongInfoSanitizer.isForbiddenBiliDirectUrl(songUrl) && (!BiliWhitelistManager.enabled()
-            || BiliWhitelistManager.canonicalResource(songUrl).isEmpty())) {
+            || (BiliWhitelistManager.canonicalResource(songUrl).isEmpty()
+                && !BiliWhitelistManager.isShortLink(songUrl)))) {
             return;
         }
 

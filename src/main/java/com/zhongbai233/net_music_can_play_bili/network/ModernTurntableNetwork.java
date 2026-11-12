@@ -8,8 +8,10 @@ public final class ModernTurntableNetwork {
     }
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        // Version 6 adds immediate correlated failures for review refresh and preview navigation.
-        PayloadRegistrar registrar = event.registrar("6");
+        // Version 7 separates MP4 selection commands from presentation snapshots.
+        PayloadRegistrar registrar = event.registrar("7");
+        registrar.playToServer(MP4PlaybackEndPacket.TYPE, MP4PlaybackEndPacket.STREAM_CODEC,
+                MP4PlaybackEndPacket::handle);
         registrar.playToServer(
                 ModernTurntableControlPacket.TYPE,
                 ModernTurntableControlPacket.STREAM_CODEC,
@@ -146,7 +148,7 @@ public final class ModernTurntableNetwork {
                 MP4DeviceStateMirrorPacket.TYPE,
                 MP4DeviceStateMirrorPacket.STREAM_CODEC,
                 MP4DeviceStateMirrorPacket::handle);
-        registrar.playToClient(
+        registrar.executesOn(net.neoforged.neoforge.network.registration.HandlerThread.NETWORK).playToClient(
                 MP4PlaybackSyncPacket.TYPE,
                 MP4PlaybackSyncPacket.STREAM_CODEC,
                 MP4PlaybackSyncPacket::handle);

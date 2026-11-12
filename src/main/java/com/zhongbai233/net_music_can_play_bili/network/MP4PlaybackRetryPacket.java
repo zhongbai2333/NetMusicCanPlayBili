@@ -66,7 +66,7 @@ public record MP4PlaybackRetryPacket(UUID deviceId, String expectedSessionId, lo
         if (!payload.deviceId().equals(authoritativeDeviceId)) {
             return;
         }
-        MP4PlaybackControlPacket.retryPlayback(player, stack, payload.deviceId(), expectedSessionId,
+        MP4PlaybackCommands.retryPlayback(player, stack, payload.deviceId(), expectedSessionId,
                 Math.max(0L, payload.targetMillis()));
     }
 }

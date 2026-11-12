@@ -72,6 +72,8 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             .build();
     private static final OneShotRequestRegistry<PlaybackRequest> REQUESTS = new OneShotRequestRegistry<>();
     private static final Set<ActiveStreamControl> ACTIVE_MODERN_STREAMS = ConcurrentHashMap.newKeySet();
+    private static final Set<RequestControl> ACTIVE_REQUEST_CONTROLS = ConcurrentHashMap.newKeySet();
+    private static final Object REQUEST_LIFECYCLE_LOCK = new Object();
 
     public static void registerSegmentBase(String audioUrl, long initStart, long initEnd, long indexStart,
             long indexEnd) {
@@ -94,20 +96,34 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     }
 
     public static void cancelRequest(MediaRequestToken requestToken) {
-        REQUESTS.cancelToken(requestToken);
+        java.util.List<RequestControl> matching;
+        synchronized(REQUEST_LIFECYCLE_LOCK) {
+            REQUESTS.cancelToken(requestToken);
+            BiliPlaybackDiagnostics.cancelRequest(requestToken);
+            matching=ACTIVE_REQUEST_CONTROLS.stream().filter(c->requestToken!=null&&requestToken.equals(c.token)).toList();
+        }
+        for(RequestControl control:matching) control.cancel();
     }
 
     /** 供其他 handler（如直播）消费自己 URL 上携带的一次性播放请求。 */
     public static PlaybackRequest consumeRegisteredRequest(String url) {
-        return PlaybackSync.parseMediaRequestToken(url).map(REQUESTS::consumeToken).orElse(null);
+        synchronized (REQUEST_LIFECYCLE_LOCK) {
+            return PlaybackSync.parseMediaRequestToken(url).map(REQUESTS::consumeToken).orElse(null);
+        }
     }
 
     public static void closeModernStreams() {
+        java.util.List<RequestControl> requests;
+        synchronized(REQUEST_LIFECYCLE_LOCK) {
+            BiliPlaybackDiagnostics.closePendingRequest(REQUESTS::containsToken);
+            requests=java.util.List.copyOf(ACTIVE_REQUEST_CONTROLS);
+            REQUESTS.clear();
+        }
+        for(RequestControl control:requests) control.cancel();
         for (ActiveStreamControl control : ACTIVE_MODERN_STREAMS) {
             control.close();
         }
         ACTIVE_MODERN_STREAMS.clear();
-        REQUESTS.clear();
         Fmp4AudioStreamSeeker.clearSegmentBases();
     }
 
@@ -140,24 +156,43 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
 
     @Override
     public AudioInputStream handle(URL url) throws UnsupportedAudioFileException, IOException {
-        PlaybackRequest request = consumeRequest(url);
-        URL requestUrl = request != null ? URI.create(request.mediaUrl()).toURL() : PlaybackSync.strip(url);
-
-        if (request != null && isNativeNetMusicHost(requestUrl)) {
-            return fallbackHttpStream(requestUrl, request, null);
-        }
-
-        try {
-            return handleWithPipeline(requestUrl, request);
-        } catch (UnsupportedAudioFileException e) {
-            // 非 fMP4/raw EC-3 内容应回到 NetMusic 的普通 HTTP 路径处理。
-            if (e instanceof NonPipelineAudioException) {
-                return fallbackHttpStream(requestUrl, request, e);
+        Optional<MediaRequestToken> token = PlaybackSync.parseMediaRequestToken(url.toString());
+        PlaybackRequest request;
+        RequestControl control;
+        synchronized(REQUEST_LIFECYCLE_LOCK) {
+            request=consumeRequest(url);
+            if(token.isPresent() && request==null) {
+                IOException failure=new IOException("playback request expired, cancelled, or already consumed");
+                throw failure;
             }
-            BiliPlaybackDiagnostics.markFailed(requestUrl, e);
+            var diagnosis=BiliPlaybackDiagnostics.beginHttpWorker(url,
+                    request!=null?request.sessionId():"",
+                    request!=null&&request.pos()!=null?request.pos().toShortString():"",
+                    request!=null&&request.ownerId()!=null?request.ownerId().toString():"",
+                    request!=null&&request.minecartUuid()!=null?request.minecartUuid().toString():"");
+            control=new RequestControl(token.orElse(null),diagnosis);
+            if(token.isPresent()) ACTIVE_REQUEST_CONTROLS.add(control);
+        }
+        try {
+            control.checkOpen();
+            URL requestUrl=request!=null?URI.create(request.mediaUrl()).toURL():PlaybackSync.strip(url);
+            if (request != null && isNativeNetMusicHost(requestUrl)) {
+                control.beginFallback();
+                return control.attach(fallbackHttpStream(requestUrl,request,null,control),requestUrl,true);
+            }
+            try {
+                return control.attach(handleWithPipeline(requestUrl,request,control),requestUrl,false);
+            } catch (NonPipelineAudioException probe) {
+                control.beginFallback();
+                return control.attach(fallbackHttpStream(requestUrl,request,probe,control),requestUrl,true);
+            }
+        } catch (UnsupportedAudioFileException e) {
+            BiliPlaybackDiagnostics.markFailed(control.diagnosis,e);
+            control.cancel();
             throw e;
-        } catch (IOException e) {
-            BiliPlaybackDiagnostics.markFailed(requestUrl, e);
+        } catch (IOException | RuntimeException e) {
+            BiliPlaybackDiagnostics.markFailed(control.diagnosis,e);
+            control.cancel();
             throw e;
         }
     }
@@ -166,8 +201,9 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
      * 用 fMP4/EC-3 管线处理音频
      * 现代化唱片机 → OpenAL；普通唱片机 → PcmPipeline
      */
-    private AudioInputStream handleWithPipeline(URL url, PlaybackRequest request)
+    private AudioInputStream handleWithPipeline(URL url, PlaybackRequest request, RequestControl control)
             throws UnsupportedAudioFileException, IOException {
+        final var diagnosis = control.diagnosis;
         long started = System.currentTimeMillis();
         boolean modernTurntable = request != null;
         final float startOffsetSeconds = startOffsetSeconds(request);
@@ -177,42 +213,52 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         AtomicReference<Exception> errorRef = new AtomicReference<>();
         AtomicReference<InputStream> bodyRef = new AtomicReference<>();
         AtomicBoolean closed = new AtomicBoolean(false);
+        AtomicBoolean naturalInputEnd = new AtomicBoolean(false);
         CountDownLatch formatReady = new CountDownLatch(1);
 
         Thread worker = NetMusicThreadFactory.daemonThread(
                 modernTurntable ? "AudioStreamWorker" : "BiliCompatAudioStreamWorker",
                 () -> streamDecode(url, fallbackPipe, pipelineRef, errorRef, bodyRef, closed, formatReady,
-                        request, startOffsetSeconds));
-        worker.start();
+                        request, startOffsetSeconds, naturalInputEnd,diagnosis));
         ActiveStreamControl streamControl = null;
         if (modernTurntable && request != null) {
             streamControl = new ActiveStreamControl(url, request.pos(), request.playbackSessionId(),
                     request.minecartUuid(), closed,
-                    bodyRef, worker, fallbackPipe, pipelineRef, formatReady);
+                    bodyRef, worker, fallbackPipe, pipelineRef, formatReady,diagnosis);
         }
         if (streamControl != null) {
             ACTIVE_MODERN_STREAMS.add(streamControl);
         }
+        final ActiveStreamControl ownedStreamControl = streamControl;
+        control.startPreparation(() -> {
+            formatReady.countDown();
+            closeWorker(url,closed,bodyRef,worker,fallbackPipe,pipelineRef.get(),ownedStreamControl,diagnosis,true);
+        },worker);
 
         try {
-            awaitFormat(url, closed, bodyRef, worker, formatReady, errorRef);
+            awaitFormat(url, closed, bodyRef, worker, formatReady, errorRef,diagnosis);
             LOGGER.debug("HTTP 音频格式就绪: cost={}ms session={} offset={}s host={}",
                     System.currentTimeMillis() - started,
                     request != null ? request.sessionId() : "", startOffsetSeconds, url.getHost());
         } catch (IOException | UnsupportedAudioFileException e) {
-            closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipelineRef.get(), streamControl);
+            boolean terminal = !(e instanceof NonPipelineAudioException);
+            if (terminal) BiliPlaybackDiagnostics.markFailed(diagnosis,e);
+            closeWorker(url,closed,bodyRef,worker,fallbackPipe,pipelineRef.get(),streamControl,diagnosis,terminal);
             throw e;
         }
         try {
             throwIfFailed(errorRef);
         } catch (IOException | UnsupportedAudioFileException e) {
-            closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipelineRef.get(), streamControl);
+            boolean terminal = !(e instanceof NonPipelineAudioException);
+            if (terminal) BiliPlaybackDiagnostics.markFailed(diagnosis,e);
+            closeWorker(url,closed,bodyRef,worker,fallbackPipe,pipelineRef.get(),streamControl,diagnosis,terminal);
             throw e;
         }
 
         AudioDecodePipeline pipeline = pipelineRef.get();
         if (pipeline == null) {
-            closeWorker(url, closed, bodyRef, worker, fallbackPipe, null, streamControl);
+            BiliPlaybackDiagnostics.markFailed(diagnosis,new IOException("unable to detect audio format"));
+            closeWorker(url,closed,bodyRef,worker,fallbackPipe,null,streamControl,diagnosis,true);
             throw new IOException("unable to detect audio format");
         }
 
@@ -240,18 +286,19 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                         new PcmDitheringStream(decoded, decodedFormat, fmt16),
                         fmt16, AudioSystem.NOT_SPECIFIED);
             }
-            return managedStream(decoded, closed, worker, url, bodyRef, fallbackPipe, pipeline, streamControl);
+            return managedStream(decoded,closed,worker,url,bodyRef,fallbackPipe,pipeline,streamControl,errorRef,diagnosis,control);
         }
         if (pipeline instanceof FlacOpenALPipeline flacPipeline) {
             AudioInputStream tapped = flacPipeline.openTappedStream();
-            return managedStream(tapped, closed, worker, url, bodyRef, fallbackPipe, pipeline, streamControl);
+            return managedStream(tapped,closed,worker,url,bodyRef,fallbackPipe,pipeline,streamControl,errorRef,diagnosis,control);
         }
         if (pipeline.usesOpenAlOutput()) {
-            return silentStream(format, closed, worker, url, bodyRef, fallbackPipe, pipeline, streamControl);
+            return silentStream(format, closed, worker, url, bodyRef, fallbackPipe, pipeline, streamControl,
+                    errorRef,naturalInputEnd,diagnosis,control);
         }
         return managedStream(
                 new AudioInputStream(fallbackPipe, format, AudioSystem.NOT_SPECIFIED),
-                closed, worker, url, bodyRef, fallbackPipe, pipeline, streamControl);
+                closed,worker,url,bodyRef,fallbackPipe,pipeline,streamControl,errorRef,diagnosis,control);
     }
 
     private static PlaybackRequest consumeRequest(URL url) {
@@ -263,9 +310,10 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     }
 
     private static AudioInputStream fallbackHttpStream(URL url, PlaybackRequest request,
-            UnsupportedAudioFileException probeError)
+            UnsupportedAudioFileException probeError,RequestControl control)
             throws UnsupportedAudioFileException, IOException {
         try {
+            control.checkOpen();
             LOGGER.debug("Falling back to NetMusic direct HTTP handler for non-fMP4 URL: {}", url);
             float startOffsetSeconds = request != null ? request.startOffsetSeconds() : 0f;
             // MP3 Layer III 帧可能依赖之前的 bit reservoir。即使 HTTP Range 的起点
@@ -273,38 +321,44 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             // 自定义 MP3 显式从文件头建解码状态；网易源则在下方通过专用 handler
             // 从头打开，再统一丢弃已播放的 PCM，保留其鉴权和请求头行为。
             if (request != null && startOffsetSeconds > 1.0f && !isNativeNetMusicHost(url)) {
-                AudioInputStream strict = tryOpenSafeCustomMp3Stream(url, request, startOffsetSeconds);
+                AudioInputStream strict = tryOpenSafeCustomMp3Stream(url,request,startOffsetSeconds,control);
                 if (strict != null) {
                     return strict;
                 }
             }
 
             NetEaseHttpHandler netEase = new NetEaseHttpHandler();
+            control.checkOpen();
             AudioInputStream stream;
             if (netEase.canHandle(url)) {
                 stream = netEase.handle(url);
             } else {
                 stream = new DirectHttpHandler().handle(url);
             }
+            stream=diagnosticStream(stream,control,true);
+            final AudioInputStream preparing=stream;
+            control.prepareResource(preparing::close);
             return request != null
-                    ? openModernFallbackStream(stream, request, startOffsetSeconds)
-                    : applyStartOffset(stream, startOffsetSeconds);
+                    ? openModernFallbackStream(stream,request,startOffsetSeconds,control)
+                    : diagnosticStream(applyStartOffset(stream,startOffsetSeconds),control,false);
         } catch (UnsupportedAudioFileException | IOException fallbackError) {
             if (probeError != null) {
                 fallbackError.addSuppressed(probeError);
             }
-            BiliPlaybackDiagnostics.markFailed(url, fallbackError);
+            BiliPlaybackDiagnostics.markFailed(control.diagnosis,fallbackError);
             throw fallbackError;
         }
     }
 
     private static AudioInputStream tryOpenSafeCustomMp3Stream(URL url, PlaybackRequest request,
-            float startOffsetSeconds) throws IOException, UnsupportedAudioFileException {
+            float startOffsetSeconds,RequestControl control) throws IOException, UnsupportedAudioFileException {
         InputStream body = null;
         InputStream aligned = null;
         AudioInputStream encoded = null;
         try {
             body = openHttpRangeStream(url, 0L);
+            final InputStream preparing=body;
+            control.prepareResource(preparing::close);
             byte[] probe = body.readNBytes(MP3_SYNC_SCAN_BYTES);
             int sync = Mp3FrameSync.findFrameSync(probe, probe.length);
             if (sync < 0) {
@@ -324,7 +378,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             aligned = null;
             LOGGER.debug("Custom MP3 safe seek: decodeFromHead=true target={}s frameOffset={} host={}",
                     startOffsetSeconds, sync, url.getHost());
-            AudioInputStream result = openModernFallbackStream(encoded, request, startOffsetSeconds);
+            AudioInputStream result = openModernFallbackStream(encoded,request,startOffsetSeconds,control);
             encoded = null;
             return result;
         } catch (UnsupportedAudioFileException | IOException e) {
@@ -417,28 +471,62 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
     }
 
     private static AudioInputStream openModernFallbackStream(AudioInputStream stream, PlaybackRequest request,
-            float startOffsetSeconds)
+            float startOffsetSeconds,RequestControl control)
             throws UnsupportedAudioFileException, IOException {
-        AudioInputStream pcm = toPcmStream(stream);
-        PcmStartupSeekPolicy.Result seek = PcmStartupSeekPolicy.seekToCurrentPlayback(pcm, pcm.getFormat(), request,
-                startOffsetSeconds);
-        pcm = requireReadablePcm(pcm, "no decoded PCM after HTTP seek");
-        if (startOffsetSeconds > 0f) {
-            pcm = PcmFadeInAudioInputStream.wrap(pcm, MP3_SEEK_FADE_MILLIS);
+        final var diagnosis=control.diagnosis;
+        AudioInputStream pcm = stream;
+        StereoOpenALHandler allocatedOutput = null;
+        try {
+            control.checkOpen();
+            pcm = toPcmStream(pcm);
+            PcmStartupSeekPolicy.Result seek = PcmStartupSeekPolicy.seekToCurrentPlayback(pcm, pcm.getFormat(), request,
+                    startOffsetSeconds);
+            pcm = requireReadablePcm(pcm, "no decoded PCM after HTTP seek");
+            if (startOffsetSeconds > 0f) {
+                pcm = PcmFadeInAudioInputStream.wrap(pcm, MP3_SEEK_FADE_MILLIS);
+            }
+            control.checkOpen();
+            pcm = diagnosticStream(pcm,control,true);
+            StereoOpenALHandler stereo = new StereoOpenALHandler();
+            allocatedOutput = stereo;
+            stereo.setSampleRate((int) pcm.getFormat().getSampleRate());
+            if (request.ownerId() != null && request.pos() == null && request.minecartUuid() == null
+                    && request.totalMillis() > 0L) {
+                stereo.configureStartupPacing(request.elapsedMillis(), request.totalMillis(), request.capturedNanos(),
+                        seek.skippedBytes() / Math.max(1, seek.frameSize()));
+            }
+            ClientAudioOutputRegistry.registerStereo(stereo, request.pos(), seek.timelineOffsetSeconds(),
+                    request.sessionId(), request.ownerId());
+            LOGGER.debug(
+                    "HTTP 音频起播追赶完成: session={} captured={}ms effective={}ms setup={}ms passes={} offset={}s skippedBytes={} frameSize={} aligned={}",
+                    request.sessionId(), request.elapsedMillis(), seek.timelineOffsetMillis(),
+                    AudioStartupSync.elapsedSinceCaptureMillis(request.capturedNanos(), System.nanoTime()),
+                    seek.passes(), startOffsetSeconds, seek.skippedBytes(), seek.frameSize(), seek.isFrameAligned());
+            return new OpenALTappedAudioInputStream(pcm, stereo, () -> {
+                try {
+                    ClientAudioOutputRegistry.unregisterStereo(stereo);
+                    stereo.cleanup();
+                } catch(RuntimeException failure) {
+                    BiliPlaybackDiagnostics.markFailed(diagnosis,failure);throw failure;
+                } finally { control.finished(diagnosis); }
+            });
+        } catch (IOException | UnsupportedAudioFileException | RuntimeException failure) {
+            BiliPlaybackDiagnostics.markFailed(diagnosis, failure);
+            if (allocatedOutput != null) {
+                try {
+                    ClientAudioOutputRegistry.unregisterStereo(allocatedOutput);
+                    allocatedOutput.cleanup();
+                } catch (RuntimeException cleanupFailure) {
+                    failure.addSuppressed(cleanupFailure);
+                }
+            }
+            try {
+                pcm.close();
+            } catch (IOException | RuntimeException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
         }
-        StereoOpenALHandler stereo = new StereoOpenALHandler();
-        stereo.setSampleRate((int) pcm.getFormat().getSampleRate());
-        ClientAudioOutputRegistry.registerStereo(stereo, request.pos(), seek.timelineOffsetSeconds(),
-                request.sessionId(), request.ownerId());
-        LOGGER.debug(
-                "HTTP 音频起播追赶完成: session={} captured={}ms effective={}ms setup={}ms passes={} offset={}s skippedBytes={} frameSize={} aligned={}",
-                request.sessionId(), request.elapsedMillis(), seek.timelineOffsetMillis(),
-                AudioStartupSync.elapsedSinceCaptureMillis(request.capturedNanos(), System.nanoTime()),
-                seek.passes(), startOffsetSeconds, seek.skippedBytes(), seek.frameSize(), seek.isFrameAligned());
-        return new OpenALTappedAudioInputStream(pcm, stereo, () -> {
-            ClientAudioOutputRegistry.unregisterStereo(stereo);
-            stereo.cleanup();
-        });
     }
 
     private static AudioInputStream applyStartOffset(AudioInputStream stream, float startOffsetSeconds)
@@ -460,10 +548,50 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         if (read < 0) {
             throw new EOFException(message);
         }
-        return new AudioInputStream(
-                new SequenceInputStream(new ByteArrayInputStream(first, 0, read), stream),
-                stream.getFormat(),
-                AudioSystem.NOT_SPECIFIED);
+        ByteArrayInputStream prefix = new ByteArrayInputStream(first, 0, read);
+        InputStream prefixed = new InputStream() {
+            private final AtomicBoolean closed = new AtomicBoolean();
+
+            private void requireOpen() throws IOException {
+                if (closed.get()) {
+                    throw new IOException("PCM stream closed");
+                }
+            }
+
+            @Override
+            public int read() throws IOException {
+                requireOpen();
+                int value = prefix.read();
+                return value < 0 ? stream.read() : value;
+            }
+
+            @Override
+            public int read(byte[] buffer, int offset, int length) throws IOException {
+                requireOpen();
+                java.util.Objects.checkFromIndexSize(offset, length, buffer.length);
+                if (length == 0) {
+                    return 0;
+                }
+                int count = prefix.read(buffer, offset, length);
+                // AudioInputStream can return zero while assembling a complete PCM frame.
+                // Keep that retryable result instead of letting SequenceInputStream close the tail.
+                return count < 0 ? stream.read(buffer, offset, length) : count;
+            }
+
+            @Override
+            public int available() throws IOException {
+                requireOpen();
+                return (int) Math.min(Integer.MAX_VALUE, (long) prefix.available() + stream.available());
+            }
+
+            @Override
+            public void close() throws IOException {
+                if (closed.compareAndSet(false, true)) {
+                    stream.close();
+                }
+            }
+        };
+        return new AudioInputStream(prefixed, stream.getFormat(), AudioSystem.NOT_SPECIFIED);
     }
 
     private static AudioInputStream toPcmStream(AudioInputStream stream)
@@ -502,7 +630,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             AtomicBoolean closed,
             CountDownLatch formatReady,
             PlaybackRequest request,
-            float startOffsetSeconds) {
+            float startOffsetSeconds,AtomicBoolean naturalInputEnd,BiliPlaybackDiagnostics.Worker diagnosis) {
         long[] decoded = { 0L };
         long[] mdatBytes = { 0L };
 
@@ -527,7 +655,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                                         Fmp4ToMp4Converter.listAudioCodecs(moovData), fallbackPipe, closed, request,
                                         effectiveStartOffsetSeconds);
                                 if (selection instanceof AudioPipelineFactory.Supported supported) {
-                                    activatePipeline(url, pipelineRef, supported.pipeline(), formatReady);
+                                    activatePipeline(url,pipelineRef,supported.pipeline(),formatReady,diagnosis,closed);
                                 } else if (selection instanceof AudioPipelineFactory.Unsupported unsupported) {
                                     throw new UnsupportedAudioFileException(unsupported.reason());
                                 }
@@ -557,7 +685,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                                     throws IOException, UnsupportedAudioFileException {
                                 DolbyEc3Pipeline pipeline = createRawDolbyPipeline(closed, request,
                                         effectiveStartOffsetSeconds);
-                                activatePipeline(url, pipelineRef, pipeline, formatReady);
+                                activatePipeline(url,pipelineRef,pipeline,formatReady,diagnosis,closed);
                                 decoded[0] += pipeline.onRawStream(payload);
                             }
                         });
@@ -569,15 +697,21 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 LOGGER.debug("Audio stream finished: decoded={} mdatBytes={} {}",
                         decoded[0], mdatBytes[0], pipeline != null ? pipeline.statsSummary() : "");
             }
+            if (!closed.get()) {
+                if (decoded[0] > 0L) naturalInputEnd.set(true);
+                else errorRef.compareAndSet(null, new IOException("audio ended without decoded media"));
+            }
         } catch (EOFException e) {
             LOGGER.debug("Audio stream EOF: decoded={} mdatBytes={}", decoded[0], mdatBytes[0]);
+            if (!closed.get()) errorRef.compareAndSet(null, new IOException("truncated audio stream", e));
             if (!closed.get() && decoded[0] == 0L && mdatBytes[0] == 0L) {
-                BiliPlaybackDiagnostics.markFailed(url, e);
+                BiliPlaybackDiagnostics.markFailed(diagnosis,e);
                 errorRef.set(new IOException("audio stream ended before any media bytes", e));
             } else if (!closed.get()) {
                 reportRecoverableStreamFailure(url, request, e, decoded[0], mdatBytes[0]);
             }
         } catch (IOException e) {
+            if (!closed.get()) errorRef.compareAndSet(null, e);
             if (closed.get() || isStreamEndException(e)) {
                 LOGGER.debug("Audio stream stopped: closed={} msg={} decoded={} mdatBytes={}",
                         closed.get(), e.getMessage(), decoded[0], mdatBytes[0]);
@@ -587,7 +721,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 }
             } else {
                 LOGGER.error("Audio stream IO failed", e);
-                BiliPlaybackDiagnostics.markFailed(url, e);
+                BiliPlaybackDiagnostics.markFailed(diagnosis,e);
                 if (decoded[0] > 0L || mdatBytes[0] > 0L) {
                     reportRecoverableStreamFailure(url, request, e, decoded[0], mdatBytes[0]);
                 }
@@ -597,14 +731,14 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             if (!closed.get()) {
                 if (!(e instanceof NonPipelineAudioException)) {
                     LOGGER.warn("Audio stream unsupported: {}", e.getMessage());
-                    BiliPlaybackDiagnostics.markFailed(url, e);
+                    BiliPlaybackDiagnostics.markFailed(diagnosis,e);
                 }
                 errorRef.set(e);
             }
         } catch (Exception e) {
             if (!closed.get()) {
                 LOGGER.error("Audio stream decode failed", e);
-                BiliPlaybackDiagnostics.markFailed(url, e);
+                BiliPlaybackDiagnostics.markFailed(diagnosis,e);
                 errorRef.set(e);
             }
         } finally {
@@ -616,6 +750,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 } catch (IOException e) {
                     if (!closed.get()) {
                         LOGGER.debug("Audio pipeline finish failed: {}", e.getMessage());
+                        errorRef.compareAndSet(null, e);
                     }
                 }
             }
@@ -654,12 +789,16 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             URL url,
             AtomicReference<AudioDecodePipeline> pipelineRef,
             AudioDecodePipeline pipeline,
-            CountDownLatch formatReady) {
-        if (!pipelineRef.compareAndSet(null, pipeline)) {
+            CountDownLatch formatReady,BiliPlaybackDiagnostics.Worker diagnosis,AtomicBoolean closed) {
+        if (closed.get() || BiliPlaybackDiagnostics.terminalOrRetired(diagnosis) || !pipelineRef.compareAndSet(null,pipeline)) {
             pipeline.close();
             return;
         }
-        BiliPlaybackDiagnostics.updateFormat(url, pipeline.container(), pipeline.codec(),
+        if(closed.get() || BiliPlaybackDiagnostics.terminalOrRetired(diagnosis)) {
+            if(pipelineRef.compareAndSet(pipeline,null)) pipeline.close();
+            return;
+        }
+        BiliPlaybackDiagnostics.updateFormat(diagnosis,url,pipeline.container(),pipeline.codec(),
                 pipeline.format(), pipeline.detail());
         formatReady.countDown();
     }
@@ -672,30 +811,33 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             AtomicReference<InputStream> bodyRef,
             BlockingAudioPipe fallbackPipe,
             AudioDecodePipeline pipeline,
-            ActiveStreamControl streamControl) {
+            ActiveStreamControl streamControl, AtomicReference<Exception> errorRef,
+            AtomicBoolean naturalInputEnd,BiliPlaybackDiagnostics.Worker diagnosis,RequestControl control) {
         return new AudioInputStream(fallbackPipe, format, AudioSystem.NOT_SPECIFIED) {
             @Override
-            public int read() {
-                return closed.get() ? -1 : 0;
+            public int read() throws IOException {
+                byte[] single = new byte[1];
+                return read(single, 0, 1) < 0 ? -1 : 0;
             }
 
             @Override
-            public int read(byte[] b, int off, int len) {
-                if (closed.get()) {
-                    return -1;
+            public int read(byte[] b, int off, int len) throws IOException {
+                try {
+                    int n=com.zhongbai233.net_music_can_play_bili.media.stream.TerminalSilence.read(b,off,len,
+                            closed.get(),errorRef.get(),naturalInputEnd.get(),pipeline.drainStatus());
+                    if(n<0) BiliPlaybackDiagnostics.markClosed(diagnosis);
+                    return n;
+                } catch(IOException | RuntimeException e) {
+                    BiliPlaybackDiagnostics.markFailed(diagnosis,e);throw e;
                 }
-                if (len <= 0) {
-                    return 0;
-                }
-                int fill = Math.min(len, b.length - off);
-                Arrays.fill(b, off, off + fill, (byte) 0);
-                return fill;
             }
 
             @Override
             public void close() throws IOException {
-                closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipeline, streamControl);
-                super.close();
+                try {
+                    closeWorker(url,closed,bodyRef,worker,fallbackPipe,pipeline,streamControl,diagnosis,true);
+                    super.close();
+                } finally { control.finished(diagnosis); }
             }
         };
     }
@@ -708,13 +850,28 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             AtomicReference<InputStream> bodyRef,
             BlockingAudioPipe fallbackPipe,
             AudioDecodePipeline pipeline,
-            ActiveStreamControl streamControl) {
+            ActiveStreamControl streamControl,AtomicReference<Exception> errorRef,
+            BiliPlaybackDiagnostics.Worker diagnosis,RequestControl control) {
         return new AudioInputStream(delegate, delegate.getFormat(), AudioSystem.NOT_SPECIFIED) {
+            @Override
+            public int read(byte[] b, int off, int len) throws IOException {
+                try {
+                    if(closed.get()) throw new com.zhongbai233.net_music_can_play_bili.media.stream.PlaybackStreamCancelledException();
+                    if(errorRef.get()!=null) throw new IOException("media producer failed",errorRef.get());
+                    int read=delegate.read(b,off,len);
+                    if(errorRef.get()!=null) throw new IOException("media producer failed",errorRef.get());
+                    if(read<0) BiliPlaybackDiagnostics.markClosed(diagnosis);
+                    return read;
+                } catch(IOException | RuntimeException e) {
+                    BiliPlaybackDiagnostics.markFailed(diagnosis,e);throw e;
+                }
+            }
+
             @Override
             public void close() throws IOException {
                 IOException error = null;
                 try {
-                    closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipeline, streamControl);
+                    closeWorker(url,closed,bodyRef,worker,fallbackPipe,pipeline,streamControl,diagnosis,true);
                 } catch (IOException e) {
                     error = e;
                 }
@@ -727,6 +884,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                         error = e;
                     }
                 }
+                control.finished(diagnosis);
                 if (error != null) {
                     throw error;
                 }
@@ -740,7 +898,7 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             AtomicReference<InputStream> bodyRef,
             Thread worker,
             CountDownLatch formatReady,
-            AtomicReference<Exception> errorRef) throws IOException, UnsupportedAudioFileException {
+            AtomicReference<Exception> errorRef,BiliPlaybackDiagnostics.Worker diagnosis) throws IOException, UnsupportedAudioFileException {
         long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(FORMAT_WAIT_SECONDS);
         try {
             while (!formatReady.await(100L, TimeUnit.MILLISECONDS)) {
@@ -758,8 +916,9 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                     closed.set(true);
                     closeBody(bodyRef);
                     worker.interrupt();
-                    BiliPlaybackDiagnostics.markClosed(url);
-                    throw new IOException("timed out waiting for audio format");
+                    IOException timeout=new IOException("timed out waiting for audio format");
+                    BiliPlaybackDiagnostics.markFailed(diagnosis,timeout);
+                    throw timeout;
                 }
             }
             throwIfFailed(errorRef);
@@ -768,8 +927,9 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             closeBody(bodyRef);
             worker.interrupt();
             Thread.currentThread().interrupt();
-            BiliPlaybackDiagnostics.markClosed(url);
-            throw new IOException("interrupted while loading audio stream", e);
+            IOException failure=new IOException("interrupted while loading audio stream",e);
+            BiliPlaybackDiagnostics.markFailed(diagnosis,failure);
+            throw failure;
         }
     }
 
@@ -802,9 +962,9 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             Thread worker,
             BlockingAudioPipe fallbackPipe,
             AudioDecodePipeline pipeline,
-            ActiveStreamControl streamControl) throws IOException {
-        if (closed.compareAndSet(false, true)) {
-            BiliPlaybackDiagnostics.markClosed(url);
+            ActiveStreamControl streamControl,BiliPlaybackDiagnostics.Worker diagnosis,boolean terminal) throws IOException {
+        if (closed.compareAndSet(false,true) && terminal) {
+            BiliPlaybackDiagnostics.markClosed(diagnosis);
         }
         closeBody(bodyRef);
         fallbackPipe.closeWriter();
@@ -853,6 +1013,108 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
                 || lower.contains("hdslb") || lower.contains("mcdn");
     }
 
+    /** Keep the tap outermost: source EOF is not output EOF while OpenAL still has queued PCM. */
+    private static AudioInputStream diagnosticStream(AudioInputStream delegate,RequestControl control,boolean belowTap) {
+        final var diagnosis=control.diagnosis;
+        return new AudioInputStream(delegate,delegate.getFormat(),delegate.getFrameLength()) {
+            private final AtomicBoolean closed=new AtomicBoolean();
+            @Override public int read() throws IOException {
+                try {
+                    if(control.isCancelled()) throw new com.zhongbai233.net_music_can_play_bili.media.stream.PlaybackStreamCancelledException();
+                    int n=delegate.read();
+                    if(n<0 && !belowTap) BiliPlaybackDiagnostics.markClosed(diagnosis);
+                    return n;
+                } catch(IOException | RuntimeException e) {BiliPlaybackDiagnostics.markFailed(diagnosis,e);throw e;}
+            }
+            @Override public int read(byte[] bytes,int offset,int length) throws IOException {
+                try {
+                    if(control.isCancelled()) throw new com.zhongbai233.net_music_can_play_bili.media.stream.PlaybackStreamCancelledException();
+                    int n=delegate.read(bytes,offset,length);
+                    if(n<0 && !belowTap) BiliPlaybackDiagnostics.markClosed(diagnosis);
+                    return n;
+                } catch(IOException | RuntimeException e) {BiliPlaybackDiagnostics.markFailed(diagnosis,e);throw e;}
+            }
+            @Override public long skip(long amount) throws IOException {return delegate.skip(amount);}
+            @Override public int available() throws IOException {return delegate.available();}
+            @Override public boolean markSupported() {return delegate.markSupported();}
+            @Override public void mark(int limit) {delegate.mark(limit);}
+            @Override public void reset() throws IOException {delegate.reset();}
+            @Override public void close() throws IOException {
+                if(!closed.compareAndSet(false,true)) return;
+                try {delegate.close();}
+                catch(IOException | RuntimeException e) {BiliPlaybackDiagnostics.markFailed(diagnosis,e);throw e;}
+                finally {if(!belowTap) control.finished(diagnosis);}
+            }
+        };
+    }
+
+    @FunctionalInterface private interface CloseAction {void close() throws IOException;}
+
+    /** One physical request owns preparation and its final stream, independently of the latest displayed song. */
+    private static final class RequestControl {
+        private final MediaRequestToken token;
+        private volatile BiliPlaybackDiagnostics.Worker diagnosis;
+        private boolean cancelled,finished;
+        private CloseAction preparation;
+        private AudioInputStream attached;
+        RequestControl(MediaRequestToken token,BiliPlaybackDiagnostics.Worker diagnosis) {
+            this.token=token;this.diagnosis=diagnosis;
+        }
+        synchronized void checkOpen() throws IOException {
+            Throwable failure=BiliPlaybackDiagnostics.failure(diagnosis);
+            if(failure instanceof IOException io) throw io;
+            if(failure!=null) throw new IOException("playback request failed",failure);
+            if(cancelled || finished || BiliPlaybackDiagnostics.terminalOrRetired(diagnosis)) {
+                throw new com.zhongbai233.net_music_can_play_bili.media.stream.PlaybackStreamCancelledException();
+            }
+        }
+        synchronized boolean isCancelled() {return cancelled;}
+        synchronized void startPreparation(CloseAction close,Thread worker) throws IOException {
+            checkOpen();preparation=close;worker.start();
+        }
+        synchronized void prepareResource(CloseAction close) throws IOException {
+            try {checkOpen();}
+            catch(IOException stopped) {
+                try {close.close();}catch(IOException | RuntimeException cleanup) {stopped.addSuppressed(cleanup);}
+                throw stopped;
+            }
+            preparation=close;
+        }
+        synchronized void beginFallback() throws IOException {
+            checkOpen();preparation=null;diagnosis=BiliPlaybackDiagnostics.beginFallback(diagnosis);checkOpen();
+        }
+        synchronized AudioInputStream attach(AudioInputStream stream,URL url,boolean fallback) throws IOException {
+            try {checkOpen();}
+            catch(IOException stopped) {
+                try {stream.close();}catch(IOException | RuntimeException cleanup) {stopped.addSuppressed(cleanup);}
+                throw stopped;
+            }
+            attached=stream;preparation=null;
+            if(fallback) {
+                BiliPlaybackDiagnostics.updateFormat(diagnosis,url,"unknown",stream.getFormat().getEncoding().toString(),
+                        stream.getFormat(),"NetMusic HTTP fallback; output audio format");
+            }
+            return stream;
+        }
+        synchronized void finished(BiliPlaybackDiagnostics.Worker owner) {
+            if(owner!=diagnosis) return;
+            finished=true;attached=null;preparation=null;
+            BiliPlaybackDiagnostics.markClosed(owner);ACTIVE_REQUEST_CONTROLS.remove(this);
+        }
+        void cancel() {
+            AudioInputStream stream;CloseAction preparing;
+            synchronized(this) {
+                if(cancelled || finished) return;
+                cancelled=true;stream=attached;attached=null;preparing=preparation;preparation=null;
+                BiliPlaybackDiagnostics.markClosed(diagnosis);ACTIVE_REQUEST_CONTROLS.remove(this);
+            }
+            try {
+                if(stream!=null) stream.close();
+                else if(preparing!=null) preparing.close();
+            } catch(IOException | RuntimeException e) {LOGGER.debug("Failed to close owned HTTP playback request",e);}
+        }
+    }
+
     private static final class ActiveStreamControl {
         private final URL url;
         private final BlockPos pos;
@@ -864,11 +1126,12 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
         private final BlockingAudioPipe fallbackPipe;
         private final AtomicReference<AudioDecodePipeline> pipelineRef;
         private final CountDownLatch formatReady;
+        private final BiliPlaybackDiagnostics.Worker diagnosis;
 
         private ActiveStreamControl(URL url, BlockPos pos, Optional<PlaybackSessionId> playbackSessionId,
                 UUID minecartUuid, AtomicBoolean closed,
                 AtomicReference<InputStream> bodyRef, Thread worker, BlockingAudioPipe fallbackPipe,
-                AtomicReference<AudioDecodePipeline> pipelineRef, CountDownLatch formatReady) {
+                AtomicReference<AudioDecodePipeline> pipelineRef,CountDownLatch formatReady,BiliPlaybackDiagnostics.Worker diagnosis) {
             this.url = url;
             this.pos = AudioUtils.copyPos(pos);
             this.playbackSessionId = playbackSessionId != null ? playbackSessionId : Optional.empty();
@@ -879,12 +1142,13 @@ public class HttpAudioStreamHandler implements IAudioStreamHandler {
             this.fallbackPipe = fallbackPipe;
             this.pipelineRef = pipelineRef;
             this.formatReady = formatReady;
+            this.diagnosis=diagnosis;
         }
 
         private void close() {
             try {
                 formatReady.countDown();
-                closeWorker(url, closed, bodyRef, worker, fallbackPipe, pipelineRef.get(), this);
+                closeWorker(url,closed,bodyRef,worker,fallbackPipe,pipelineRef.get(),this,diagnosis,true);
             } catch (IOException e) {
                 LOGGER.debug("Failed to close modern audio stream during client cleanup: {}", e.getMessage());
             }

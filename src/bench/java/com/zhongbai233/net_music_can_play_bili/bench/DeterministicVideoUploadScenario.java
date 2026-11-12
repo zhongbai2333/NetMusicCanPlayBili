@@ -42,7 +42,7 @@ final class DeterministicVideoUploadScenario implements BenchClientScenario {
     @Override
     public void setup(BenchClientContext context) {
         ModernTurntableVideoClient.clear();
-        ConsoleConsumerLifecycleScenario.requireClean("deterministic upload setup");
+        requireClean("deterministic upload setup");
         VideoBillboardPreview.releaseBenchUploadResources();
         var resources = VideoBillboardPreview.benchUploadResources();
         baselineStaging = resources.textureStagingBytes();
@@ -131,6 +131,16 @@ final class DeterministicVideoUploadScenario implements BenchClientScenario {
         Arrays.sort(sorted);
         context.metrics().record(UPLOAD_P95, percentile(sorted, 0.95D) / 1_000_000.0D);
         context.metrics().record(UPLOAD_P99, percentile(sorted, 0.99D) / 1_000_000.0D);
+    }
+
+    private static void requireClean(String phase) {
+        ModernTurntableVideoClient.VideoLifecycleDiagnostics lifecycle =
+                ModernTurntableVideoClient.videoLifecycleDiagnostics();
+        if (lifecycle.controlConsoleConsumers() != 0 || lifecycle.activeRequests() != 0
+                || lifecycle.pendingRequests() != 0 || lifecycle.resources().instances() != 0
+                || lifecycle.resources().pendingLoading() != 0 || lifecycle.resources().pendingFailure() != 0) {
+            throw new AssertionError("Video lifecycle not clean during " + phase + ": " + lifecycle);
+        }
     }
 
     private static long percentile(long[] sorted, double quantile) {

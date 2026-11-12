@@ -202,6 +202,8 @@ public class WhitelistReviewScreen extends Screen {
     }
 
     private void rebuildButtons() {
+        ensureSelectedVisible();
+        clampScrollOffset();
         if (promptField != null) {
             promptDraft = promptField.getValue();
         }

@@ -20,6 +20,20 @@ public final class ControlConsoleExitFade {
         return (float) (1.0D - smooth);
     }
 
+    /** Retire on the last update that can fit the observed callback cadence in the total budget. */
+    public static float gainWithinUpdateBudget(long startedNanos, long nowNanos, long updateIntervalNanos) {
+        if (nowNanos < startedNanos) {
+            return 1.0F;
+        }
+        long elapsed = nowNanos - startedNanos;
+        long reserve = Math.clamp(updateIntervalNanos, 0L, DURATION_NANOS);
+        if (elapsed < 0L || elapsed >= DURATION_NANOS
+                || DURATION_NANOS - elapsed <= reserve) {
+            return 0.0F;
+        }
+        return gain(startedNanos, nowNanos);
+    }
+
     public static boolean finished(long startedNanos, long nowNanos) {
         return gain(startedNanos, nowNanos) <= 0.0F;
     }

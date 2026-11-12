@@ -15,21 +15,6 @@ final class MP4ResolveIntentRegistry {
     private final AtomicReference<ResolveGeneration> generations =
             new AtomicReference<>(ResolveGeneration.initial());
 
-    Intent begin(UUID deviceId, int queueIndex, String sourceUrl) {
-        PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
-        String normalizedSource = sourceUrl != null ? sourceUrl : "";
-        Intent[] started = new Intent[1];
-        active.compute(sourceId, (ignored, current) -> {
-            if (current != null && current.matches(queueIndex, normalizedSource)) {
-                return current;
-            }
-            Intent replacement = new Intent(nextGeneration(), queueIndex, normalizedSource);
-            started[0] = replacement;
-            return replacement;
-        });
-        return started[0];
-    }
-
     Intent replace(UUID deviceId, int queueIndex, String sourceUrl) {
         PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
         Intent replacement = new Intent(nextGeneration(), queueIndex,
@@ -52,6 +37,21 @@ final class MP4ResolveIntentRegistry {
             return intent;
         });
         return started[0];
+    }
+
+    boolean hasPending(UUID deviceId) {
+        return deviceId != null && active.containsKey(PlaybackSourceId.of(deviceId));
+    }
+
+    int pendingQueueIndex(UUID deviceId, int fallback) {
+        Intent intent = deviceId != null ? active.get(PlaybackSourceId.of(deviceId)) : null;
+        return intent != null ? intent.queueIndex() : fallback;
+    }
+
+    void onQueueRemoval(UUID deviceId, int removedIndex) {
+        if (removedIndex >= 0 && pendingQueueIndex(deviceId, -1) >= removedIndex) {
+            invalidate(deviceId);
+        }
     }
 
     boolean isCurrent(UUID deviceId, Intent intent) {
@@ -84,8 +84,5 @@ final class MP4ResolveIntentRegistry {
             Objects.requireNonNull(generation, "generation");
         }
 
-        private boolean matches(int candidateQueueIndex, String candidateSourceUrl) {
-            return queueIndex == candidateQueueIndex && sourceUrl.equals(candidateSourceUrl);
-        }
     }
 }

@@ -8,6 +8,8 @@ import com.zhongbai233.net_music_can_play_bili.util.concurrent.LifecycleClose;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackPresentationEnvelope;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioDrainPolicy;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioDrainStatus;
 import org.slf4j.Logger;
 
 import java.util.List;
@@ -44,10 +46,21 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     private final Thread worker;
     private final PlaybackPresentationEnvelope presentationEnvelope = new PlaybackPresentationEnvelope();
     private volatile boolean closed;
+    private volatile boolean inputEnded;
+    private volatile boolean outputCancelled;
+    private volatile AudioDrainStatus cachedDrainStatus = AudioDrainStatus.RUNNING;
     private final AtomicBoolean cleanupStarted = new AtomicBoolean();
     private volatile boolean started;
     private volatile boolean paused;
     private long totalSamplesFed;
+    private volatile boolean requestPacingConfigured;
+    private long requestElapsedMillis;
+    private long requestDurationMillis;
+    private long requestCapturedNanos;
+    private long decodedInputOriginSamples;
+    private boolean startupPhaseAligned;
+    private long requestPauseStartedNanos;
+    private long requestPausedNanos;
     private volatile long totalInputSamples;
     private volatile long discardInputUntilSample;
     private volatile boolean resetPendingInput;
@@ -60,7 +73,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     private volatile int pcmQueueHighWater;
     private int sampleRate = 48000;
     private float[][] pendingBlock = new float[2][SAMPLES_PER_BLOCK];
-    private int pendingSamples;
+    private volatile int pendingSamples;
     private volatile float lastDistance = Float.NaN;
     private volatile float lastGain = 1.0f;
     private volatile float userVolume = 1.0f;
@@ -92,7 +105,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
 
     /** 将解码后的立体声 float32 PCM 拆成固定 256-sample block 入队，避免 FLAC 可变块长影响播放速度 */
     public boolean enqueuePcm(float[][] stereoBlock) {
-        if (stereoBlock == null || closed)
+        if (stereoBlock == null || closed || outputCancelled)
             return false;
         int samples = sampleCount(stereoBlock);
         if (samples <= 0)
@@ -139,18 +152,32 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     }
 
     public boolean finishInput() {
-        if (closed || pendingSamples <= 0) {
-            return false;
+        boolean queued = false;
+        if (!closed && pendingSamples > 0) {
+            float[][] block = pendingBlock;
+            pendingBlock = new float[2][SAMPLES_PER_BLOCK];
+            pendingSamples = 0;
+            queued = enqueueBlock(block);
         }
-        float[][] block = pendingBlock;
-        pendingBlock = new float[2][SAMPLES_PER_BLOCK];
-        pendingSamples = 0;
-        return enqueueBlock(block);
+        inputEnded = true;
+        return queued;
+    }
+
+    @Override
+    public AudioDrainStatus drainStatus() {
+        return closed || outputCancelled ? AudioDrainStatus.CANCELLED : cachedDrainStatus;
+    }
+
+    private void updateDrainStatus() {
+        OpenALSpatialAudio output = spatialAudio;
+        cachedDrainStatus = AudioDrainPolicy.status(closed || outputCancelled, output != null && output.isDeviceLost(), inputEnded, paused,
+                initialized && output != null && !output.isDeviceLost(), 0L, pendingSamples,
+                pcmQueue.size(), output != null && output.isMediaDrained());
     }
 
     private boolean enqueueBlock(float[][] block) {
         try {
-            while (!closed) {
+            while (!closed && !outputCancelled) {
                 if (pcmQueue.offer(block, 250, TimeUnit.MILLISECONDS)) {
                     frameCount++;
                     pcmQueueHighWater = Math.max(pcmQueueHighWater, pcmQueue.size());
@@ -210,16 +237,35 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
         @Override
         public void tick(float[] machinePos, float[] listenerPos, long targetRelativeTicks,
             boolean followLocalPlayerFront, boolean muteWorldRelays) {
-        if (closed || !initialized)
+        if (closed || outputCancelled || !initialized)
             return;
         if (paused)
             return;
+        long preciseTargetSamples = requestPacingConfigured ? requestPacingSamples(System.nanoTime()) : -1L;
+        if (preciseTargetSamples >= 0L) {
+            targetRelativeTicks = preciseTargetSamples / samplesPerTick();
+        }
+        if (started && requestPacingConfigured && !startupPhaseAligned && spatialAudio != null) {
+            startupPhaseAligned = spatialAudio.catchUpStartedMedia(preciseTargetSamples);
+            if (startupPhaseAligned) {
+                for (SpeakerAudioRelay relay : relays) relay.catchUpStartedMedia(preciseTargetSamples);
+            }
+        }
         if (!started) {
-            if (pcmQueue.size() < PREBUFFER_BLOCKS)
+            if (!AudioDrainPolicy.mayStart(pcmQueue.size(), PREBUFFER_BLOCKS, inputEnded)) {
+                updateDrainStatus();
                 return;
+            }
+            alignFirstFeed(targetRelativeTicks, preciseTargetSamples);
+            if (pcmQueue.isEmpty()) {
+                updateDrainStatus();
+                return;
+            }
             started = true;
+            startupPhaseAligned = false;
             lastFrameFeedNanos = System.nanoTime();
-            frameBudget = Math.min(MAX_BLOCKS_PER_TICK, sampleRate / 20.0 / SAMPLES_PER_BLOCK);
+            frameBudget = Math.min(MAX_BLOCKS_PER_TICK,
+                    (requestPacingConfigured ? 2.0D : 1.0D) * sampleRate / 20.0D / SAMPLES_PER_BLOCK);
             // 统一通知所有 relay 可以开始播放（替代各自独立的 280ms 计时器）
             for (SpeakerAudioRelay relay : relays) {
                 relay.setHandlerStarted(true);
@@ -266,6 +312,7 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
                 return;
             }
             spatialAudio.pumpQueuedAudio();
+            updateDrainStatus();
             if (listenerPos != null && machinePos != null) {
                 forwardToMachine[0] = machinePos[0] - listenerPos[0];
                 forwardToMachine[1] = 0f;
@@ -290,11 +337,35 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
         }
     }
 
+    /** Drop actual decoded blocks made stale by setup before the first native media feed. */
+    private void alignFirstFeed(long targetRelativeTicks, long preciseTargetSamples) {
+        if (spatialAudio == null || preciseTargetSamples < 0L
+                && (targetRelativeTicks == Long.MAX_VALUE || targetRelativeTicks <= 0L)) {
+            return;
+        }
+        long perTick = samplesPerTick();
+        long targetSamples = preciseTargetSamples >= 0L ? preciseTargetSamples
+                : targetRelativeTicks > Long.MAX_VALUE / perTick ? Long.MAX_VALUE : targetRelativeTicks * perTick;
+        long before = totalSamplesFed;
+        // The first admitted complete block must contain no samples older than the target.
+        while (totalSamplesFed < targetSamples && pcmQueue.poll() != null) {
+            totalSamplesFed += SAMPLES_PER_BLOCK;
+        }
+        if (totalSamplesFed != before) {
+            spatialAudio.flushQueuedAudio(totalSamplesFed);
+            for (SpeakerAudioRelay relay : relays) {
+                relay.flushQueuedAudio(totalSamplesFed);
+            }
+        }
+    }
+
     private boolean isAheadOfTarget(long targetRelativeTicks) {
         if (!started) {
             return false;
         }
-        return SYNC_POLICY.isAhead(getFedPositionTicks(), getPositionTicks(), targetRelativeTicks);
+        // A small real-media queue is a playback safety buffer, not an advanced audible clock.
+        return requestPacingConfigured ? getPositionTicks() > targetRelativeTicks
+                : SYNC_POLICY.isAhead(getFedPositionTicks(), getPositionTicks(), targetRelativeTicks);
     }
 
     private boolean hardFlushIfAhead(long targetRelativeTicks) {
@@ -486,6 +557,28 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
         return Math.max(1, sampleRate) / 20L;
     }
 
+    /** Keep PCM supply tied to the captured request, independently of sound/lyric clock reanchoring. */
+    public void configureStartupPacing(long elapsedMillis, long durationMillis, long capturedNanos,
+            long inputOriginSamples) {
+        requestElapsedMillis = Math.max(0L, elapsedMillis);
+        requestDurationMillis = Math.max(0L, durationMillis);
+        requestCapturedNanos = capturedNanos > 0L ? capturedNanos : System.nanoTime();
+        decodedInputOriginSamples = Math.max(0L, inputOriginSamples);
+        requestPausedNanos = 0L;
+        requestPauseStartedNanos = paused ? System.nanoTime() : 0L;
+        requestPacingConfigured = durationMillis > 0L;
+    }
+
+    private long requestPacingSamples(long nowNanos) {
+        long now = requestPauseStartedNanos != 0L ? requestPauseStartedNanos : nowNanos;
+        long elapsedNanos = Math.max(0L, now - requestCapturedNanos - requestPausedNanos);
+        double elapsedMillis = Math.min(requestDurationMillis,
+                requestElapsedMillis + elapsedNanos / 1_000_000.0D);
+        long sourceSamples = (long) Math.min(Long.MAX_VALUE,
+                Math.max(0.0D, elapsedMillis) * Math.max(1, sampleRate) / 1000.0D);
+        return Math.max(0L, sourceSamples - decodedInputOriginSamples);
+    }
+
     /** 设置实际音频采样率（如 96000 for Hi-Res FLAC），必须在初始化前调用 */
     public void setSampleRate(int sr) {
         this.sampleRate = sr > 0 ? sr : 48000;
@@ -493,6 +586,15 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
 
     @Override
     public void setPaused(boolean paused) {
+        if (requestPacingConfigured && paused != this.paused) {
+            long now = System.nanoTime();
+            if (paused) {
+                requestPauseStartedNanos = now;
+            } else if (requestPauseStartedNanos != 0L) {
+                requestPausedNanos += Math.max(0L, now - requestPauseStartedNanos);
+                requestPauseStartedNanos = 0L;
+            }
+        }
         this.paused = paused;
         OpenALSpatialAudio sa = spatialAudio;
         if (sa != null) {
@@ -528,6 +630,11 @@ public class StereoOpenALHandler implements com.zhongbai233.net_music_can_play_b
     }
 
     public void hardStopOutput() {
+        outputCancelled = true;
+        requestPacingConfigured = false;
+        requestPauseStartedNanos = 0L;
+        requestPausedNanos = 0L;
+        cachedDrainStatus = AudioDrainStatus.CANCELLED;
         started = false;
         frameBudget = 0.0D;
         presentationEnvelope.reset();

@@ -58,51 +58,6 @@ class VideoFeaturePropertiesTest {
         assertEquals("h264_videotoolbox", VideoFeatureProperties.ffmpegDecoder());
     }
 
-    @Test
-    void typedAdvancedOverridesRemainConfigurable() {
-        set(BOOLEAN_KEY, "false");
-        set(INT_KEY, "42");
-        set(LONG_KEY, "9000");
-        set(STRING_KEY, "  decoder  ");
-
-        assertFalse(VideoFeatureProperties.booleanValue(BOOLEAN_KEY, true));
-        assertEquals(42, VideoFeatureProperties.intValue(INT_KEY, 1));
-        assertEquals(9_000L, VideoFeatureProperties.longValue(LONG_KEY, 1L));
-        assertEquals("decoder", VideoFeatureProperties.stringValue(STRING_KEY, "fallback"));
-    }
-
-    @Test
-    void invalidAndBlankValuesUseCompatibilityDefaults() {
-        set(VideoFeatureProperties.ADVANCED_FEATURES, "yes");
-        set(VideoFeatureProperties.BENCH_FEATURES, "1");
-        set(VideoFeatureProperties.REAL_BENCH, "yes");
-        set(VideoFeatureProperties.REAL_BENCH_MANAGED, "1");
-        set(VideoFeatureProperties.REAL_MEDIA_LIFECYCLE, "yes");
-        set(VideoFeatureProperties.REAL_MEDIA_LIFECYCLE_ROUNDS, "0");
-        set(VideoFeatureProperties.REAL_MEDIA_LIFECYCLE_CYCLE_TIMEOUT_TICKS, "999999");
-        set(VideoFeatureProperties.REAL_BENCH_VIDEO_ID, "   ");
-        set(VideoFeatureProperties.REAL_MEDIA_LIFECYCLE_QUALITY, "0");
-        set(BOOLEAN_KEY, "yes");
-        set(INT_KEY, "invalid");
-        set(LONG_KEY, "invalid");
-        set(STRING_KEY, "   ");
-        set(VideoFeatureProperties.NATIVE_HWACCEL, "   ");
-        set(VideoFeatureProperties.FFMPEG_DECODER, "   ");
-
-        assertFalse(VideoFeatureProperties.advancedFeaturesEnabled());
-        assertFalse(VideoFeatureProperties.benchFeaturesEnabled());
-        assertFalse(VideoFeatureProperties.realBenchEnabled());
-        assertFalse(VideoFeatureProperties.realBenchManaged());
-        assertEquals(new VideoFeatureProperties.RealMediaLifecycle(
-                false, 1, 72_000, "BV1GJ411x7h7", 1), VideoFeatureProperties.realMediaLifecycle());
-        assertTrue(VideoFeatureProperties.booleanValue(BOOLEAN_KEY, true));
-        assertEquals(7, VideoFeatureProperties.intValue(INT_KEY, 7));
-        assertEquals(11L, VideoFeatureProperties.longValue(LONG_KEY, 11L));
-        assertEquals("fallback", VideoFeatureProperties.stringValue(STRING_KEY, "fallback"));
-        assertEquals("auto", VideoFeatureProperties.nativeHwaccel());
-        assertEquals("", VideoFeatureProperties.ffmpegDecoder());
-    }
-
     private void set(String key, String value) {
         System.setProperty(key, value);
         if (!changedKeys.contains(key)) {

@@ -10,7 +10,6 @@ import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.client.VideoFeatureProperties;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoCloseDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
-import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
 import com.zhongbai233.net_music_can_play_bili.media.codec.VideoNativeDecoder;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRequestCloseDiagnostics;
 import net.minecraft.core.BlockPos;
@@ -27,7 +26,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class RealAv1HardwareSeekScenario implements BenchClientScenario {
     private static final long LIVE_START_OFFSET_MILLIS = 5_000L;
-    private static final long FIXTURE_SEEK_OFFSET_MILLIS = 35_000L;
     private static final long MIN_SEGMENT_ADVANCE_MILLIS = 2_000L;
     private static final int MIN_DISTINCT_PTS_SAMPLES = 12;
     private static final BenchMetricDescriptor MEDIA_MILLIS = new BenchMetricDescriptor(
@@ -37,7 +35,6 @@ final class RealAv1HardwareSeekScenario implements BenchClientScenario {
     private static final BenchMetricDescriptor NATIVE_BYTES = new BenchMetricDescriptor(
             "ncpb.real_av1_hardware_seek.native_bytes", "bytes", MetricDirection.LOWER_IS_BETTER);
 
-    private final boolean frozenFixture;
     private final VideoFeatureProperties.RealMediaLifecycle properties =
             VideoFeatureProperties.realMediaLifecycle();
     private final AtomicReference<Throwable> resolutionFailure = new AtomicReference<>();
@@ -65,23 +62,16 @@ final class RealAv1HardwareSeekScenario implements BenchClientScenario {
     private int preSeekPtsSamples;
     private int postSeekPtsSamples;
     private String observedBackend = "unknown";
-    private FrozenRealAv1RangeServer fixtureServer;
-
-    RealAv1HardwareSeekScenario(boolean frozenFixture) {
-        this.frozenFixture = frozenFixture;
-    }
 
     @Override
     public void setup(BenchClientContext context) {
         cleanup();
         projectorPos = context.player().blockPosition().relative(Direction.NORTH, 3).immutable();
-        resolution = (frozenFixture
-                ? CompletableFuture.supplyAsync(this::resolveFrozenMedia)
-                : CompletableFuture.supplyAsync(this::resolveMedia))
+        resolution = CompletableFuture.supplyAsync(this::resolveMedia)
                 .whenComplete((ignored, error) -> {
                     if (error != null) {
                         resolutionFailure.compareAndSet(null,
-                                RealMediaLifecycleScenario.unwrapCompletion(error));
+                                RealMediaStages.unwrapCompletion(error));
                     }
                 });
     }
@@ -100,7 +90,7 @@ final class RealAv1HardwareSeekScenario implements BenchClientScenario {
         if (!idleForBaseline()) {
             return BenchClientStepResult.CONTINUE;
         }
-        memoryBaseline = RealMediaLifecycleScenario.currentOwnedBytesByCategory();
+        memoryBaseline = RealMediaStages.currentOwnedBytesByCategory();
         uploadBaseline = VideoBillboardPreview.benchUploadResources();
         nativeBaseline = VideoNativeDecoder.nativeMemoryStats();
         closeBaseline = VideoCloseDiagnostics.global().snapshot(System.nanoTime()).activeOperations();
@@ -122,7 +112,7 @@ final class RealAv1HardwareSeekScenario implements BenchClientScenario {
         record(context);
         if (!started) {
             started = true;
-            startAt(frozenFixture ? 0L : LIVE_START_OFFSET_MILLIS);
+            startAt(LIVE_START_OFFSET_MILLIS);
             return BenchClientStepResult.CONTINUE;
         }
         VideoBillboardPreview.pumpPreviewFrame(media.sessionId());
@@ -137,8 +127,8 @@ final class RealAv1HardwareSeekScenario implements BenchClientScenario {
             validateAv1Hardware(status);
             observePts(sync.mediaMillis());
         }
-        long startOffsetMillis = frozenFixture ? 0L : LIVE_START_OFFSET_MILLIS;
-        if (!initialPlaybackObserved && status.hasFrame() && sync.mediaMillis() >= startOffsetMillis - 500L) {
+        if (!initialPlaybackObserved && status.hasFrame()
+                && sync.mediaMillis() >= LIVE_START_OFFSET_MILLIS - 500L) {
             initialPlaybackObserved = true;
             initialMediaMillis = sync.mediaMillis();
             lastMediaMillis = initialMediaMillis;
@@ -146,9 +136,7 @@ final class RealAv1HardwareSeekScenario implements BenchClientScenario {
         } else if (initialPlaybackObserved && !seekIssued
                 && sync.mediaMillis() - initialMediaMillis >= MIN_SEGMENT_ADVANCE_MILLIS
                 && preSeekPtsSamples >= MIN_DISTINCT_PTS_SAMPLES) {
-            seekTargetMillis = frozenFixture
-                    ? FIXTURE_SEEK_OFFSET_MILLIS
-                    : Math.min(media.durationMillis() - 5_000L, sync.mediaMillis() + 20_000L);
+            seekTargetMillis = Math.min(media.durationMillis() - 5_000L, sync.mediaMillis() + 20_000L);
             if (seekTargetMillis <= sync.mediaMillis() + 10_000L) {
                 throw new AssertionError("Resolved media is too short for a forward range seek: " + describe());
             }
@@ -197,12 +185,6 @@ final class RealAv1HardwareSeekScenario implements BenchClientScenario {
                 || postSeekPtsSamples < MIN_DISTINCT_PTS_SAMPLES) {
             throw new AssertionError("AV1 hardware/PTS evidence is incomplete: " + describe());
         }
-        if (frozenFixture && (fixtureServer == null || fixtureServer.fullRequests() < 1
-                || fixtureServer.rangeRequests() < 3
-                || !fixtureServer.servedRangeStartingAt(FrozenRealAv1RangeServer.SEEK_FRAGMENT_START))) {
-            throw new AssertionError("Frozen AV1 fixture did not exercise the exact 35s byte range: "
-                    + describe());
-        }
     }
 
     @Override
@@ -240,21 +222,6 @@ final class RealAv1HardwareSeekScenario implements BenchClientScenario {
             return new Av1Media("bench-real-av1-hardware-seek", Math.max(1L, info.duration() * 1_000L),
                     candidate.sourceWidth(), candidate.sourceHeight(), candidate.fps(), List.of(candidate));
         } catch (Exception error) {
-            throw new CompletionException(error);
-        }
-    }
-
-    private Av1Media resolveFrozenMedia() {
-        try {
-            fixtureServer = FrozenRealAv1RangeServer.start();
-            String videoUrl = fixtureServer.videoUrl().toString();
-            Fmp4NativeVideoDecoder.registerSegmentBase(videoUrl, 0L, 939L, 992L, 1_491L);
-            BiliVideoStreamResolver.VideoCandidate candidate = new BiliVideoStreamResolver.VideoCandidate(
-                    videoUrl, BiliApiClient.CODEC_AV1, 682, 360, 25, 16,
-                    BiliVideoStreamResolver.DecodeMode.HARDWARE_REQUIRED);
-            return new Av1Media("bench-frozen-real-av1-hardware-seek", 40_000L,
-                    682, 360, 25, List.of(candidate));
-        } catch (IOException error) {
             throw new CompletionException(error);
         }
     }
@@ -319,7 +286,7 @@ final class RealAv1HardwareSeekScenario implements BenchClientScenario {
                 || VideoCloseDiagnostics.global().snapshot(System.nanoTime()).failedConvergences()
                         != failedCloseBaseline
                 || HttpRequestCloseDiagnostics.global().snapshot(System.nanoTime()).activeRequests() != httpBaseline
-                || !Arrays.equals(memoryBaseline, RealMediaLifecycleScenario.currentOwnedBytesByCategory())) {
+                || !Arrays.equals(memoryBaseline, RealMediaStages.currentOwnedBytesByCategory())) {
             return false;
         }
         VideoBillboardPreview.BenchUploadResources upload = VideoBillboardPreview.benchUploadResources();
@@ -354,10 +321,6 @@ final class RealAv1HardwareSeekScenario implements BenchClientScenario {
         }
         VideoBillboardPreview.stop();
         VideoBillboardPreview.releaseBenchUploadResources();
-        if (fixtureServer != null) {
-            fixtureServer.close();
-            fixtureServer = null;
-        }
     }
 
     private String describe() {
@@ -375,9 +338,7 @@ final class RealAv1HardwareSeekScenario implements BenchClientScenario {
                 + VideoCloseDiagnostics.global().snapshot(System.nanoTime()) + " activeCloses="
                 + VideoCloseDiagnostics.global().activeDescriptions(System.nanoTime()) + " http="
                 + HttpRequestCloseDiagnostics.global().snapshot(System.nanoTime()) + " memory="
-                + Arrays.toString(RealMediaLifecycleScenario.currentOwnedBytesByCategory())
-                + " fixture=" + (fixtureServer == null ? "none"
-                        : fixtureServer.fullRequests() + "/" + fixtureServer.rangeRequests());
+                + Arrays.toString(RealMediaStages.currentOwnedBytesByCategory());
     }
 
     private record Av1Media(String sessionId, long durationMillis, int width, int height, int fps,

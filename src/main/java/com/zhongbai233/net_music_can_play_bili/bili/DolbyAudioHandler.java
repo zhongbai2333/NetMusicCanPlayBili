@@ -12,6 +12,8 @@ import com.zhongbai233.net_music_can_play_bili.util.concurrent.LifecycleClose;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 
 import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioDrainPolicy;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioDrainStatus;
 import org.slf4j.Logger;
 
 import java.util.ArrayList;
@@ -47,7 +49,13 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
     private final Thread worker;
     private final PlaybackPresentationEnvelope presentationEnvelope = new PlaybackPresentationEnvelope();
     private volatile boolean closed;
+    private volatile boolean inputEnded;
+    private volatile boolean outputCancelled;
+    private volatile AudioDrainStatus cachedDrainStatus = AudioDrainStatus.RUNNING;
     private final AtomicBoolean cleanupStarted = new AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicLong acceptedFrames = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong completedFrames = new java.util.concurrent.atomic.AtomicLong();
+    private volatile boolean decodeFailed;
     private boolean playbackStarted;
     private volatile boolean paused;
     private long lastFrameFeedNanos;
@@ -99,6 +107,7 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
         try {
             while (!closed) {
                 if (rawQueue.offer(ec3Frame, 250, TimeUnit.MILLISECONDS)) {
+                    acceptedFrames.incrementAndGet();
                     rawQueueHighWater = Math.max(rawQueueHighWater, rawQueue.size());
                     PlaybackLatencyBench.markAudioQueued(this, "dolby", rawQueue.size(),
                             totalFramesFedToOpenAL * 1536L, 48000);
@@ -136,8 +145,10 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
             return;
         }
         if (!playbackStarted) {
-            if (processedQueue.size() < PREBUFFER_FRAMES)
+            if (!AudioDrainPolicy.mayStart(processedQueue.size(), PREBUFFER_FRAMES, inputEnded)) {
+                updateDrainStatus();
                 return;
+            }
             playbackStarted = true;
             lastFrameFeedNanos = System.nanoTime();
             frameBudget = MAX_FRAMES_PER_TICK;
@@ -182,12 +193,31 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
                 return;
             }
             spatialAudio.pumpQueuedAudio();
+            updateDrainStatus();
             updateSpatialState(machinePos, listenerPos, followLocalPlayerFront);
         }
         // 驱动所有音响 relay（relay 使用自身存储的音响位置，不传 machinePos）
         for (SpeakerAudioRelay relay : relays) {
             relay.tick(listenerPos, muteWorldRelays);
         }
+    }
+
+    public void finishInput() { inputEnded = true; }
+
+    @Override
+    public AudioDrainStatus drainStatus() {
+        return closed || outputCancelled ? AudioDrainStatus.CANCELLED : cachedDrainStatus;
+    }
+
+    private void updateDrainStatus() {
+        OpenALSpatialAudio output = spatialAudio;
+        long outstanding = Math.max(0L, acceptedFrames.get() - completedFrames.get());
+        boolean emptyDecode = inputEnded && outstanding == 0L && processedQueue.isEmpty()
+                && totalFramesFedToOpenAL == 0L && acceptedFrames.get() > 0L;
+        cachedDrainStatus = AudioDrainPolicy.status(closed || outputCancelled, decodeFailed || emptyDecode
+                || spatialAudio != null && spatialAudio.isDeviceLost(),
+                inputEnded, paused, initialized && output != null && !output.isDeviceLost(), outstanding,
+                0, rawQueue.size() + processedQueue.size(), output != null && output.isMediaDrained());
     }
 
     public int queuedFrames() {
@@ -425,6 +455,8 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
     }
 
     public void hardStopOutput() {
+        outputCancelled = true;
+        cachedDrainStatus = AudioDrainStatus.CANCELLED;
         playbackStarted = false;
         presentationEnvelope.reset();
         lastFrameFeedNanos = 0L;
@@ -450,17 +482,21 @@ public class DolbyAudioHandler implements com.zhongbai233.net_music_can_play_bil
                 if (raw == null)
                     continue;
 
-                ProcessedFrame pf;
                 try {
-                    pf = decodeOneFrame(decoder, raw);
+                    ProcessedFrame pf = decodeOneFrame(decoder, raw);
+                    if (pf != null) {
+                        processedQueue.put(pf);
+                        processedQueueHighWater = Math.max(processedQueueHighWater, processedQueue.size());
+                    }
                 } catch (Exception e) {
+                    decodeFailed = true;
+                    if (e instanceof InterruptedException) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
                     LOGGER.warn("DolbyDecodeWorker 解码异常", e);
-                    continue;
-                }
-
-                if (pf != null) {
-                    processedQueue.put(pf);
-                    processedQueueHighWater = Math.max(processedQueueHighWater, processedQueue.size());
+                } finally {
+                    completedFrames.incrementAndGet();
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

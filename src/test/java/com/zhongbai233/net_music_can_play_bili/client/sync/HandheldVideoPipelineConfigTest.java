@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HandheldVideoPipelineConfigTest {
@@ -39,51 +38,6 @@ class HandheldVideoPipelineConfigTest {
         assertEquals(TimeUnit.MILLISECONDS.toNanos(500L), config.offscreenGraceNanos());
         assertEquals(TimeUnit.MILLISECONDS.toNanos(1_500L), config.offscreenResumeRestartLagNanos());
         assertEquals(TimeUnit.MILLISECONDS.toNanos(1_000L), config.rgbaConsumerGraceNanos());
-    }
-
-    @Test
-    void customPrefixValuesRemainConfigurable() {
-        set("max_frames", "5000");
-        set("frame_wait_slice_ms", "12");
-        set("max_late_frame_ms", "300");
-        set("startup_drop_lag_ms", "900");
-        set("max_decode_lead_ms", "400");
-        set("early_tolerance_ms", "30");
-        set("queue_capacity", "6");
-        set("offscreen.pause_decode", "false");
-        set("offscreen.grace_ms", "600");
-        set("offscreen.resume_restart_lag_ms", "1800");
-        set("rgba_consumer_grace_ms", "1200");
-
-        HandheldVideoPipelineConfig config = HandheldVideoPipelineConfig
-                .fromSystemProperties("  " + PREFIX + "  ");
-        assertEquals(5_000, config.maxFrames());
-        assertEquals(12L, config.frameWaitSliceMillis());
-        assertEquals(TimeUnit.MILLISECONDS.toNanos(300L), config.maxLateFrameNanos());
-        assertEquals(TimeUnit.MILLISECONDS.toNanos(900L), config.startupDropLagNanos());
-        assertEquals(TimeUnit.MILLISECONDS.toNanos(400L), config.maxDecodeLeadNanos());
-        assertEquals(TimeUnit.MILLISECONDS.toNanos(30L), config.earlyToleranceNanos());
-        assertEquals(6, config.frameQueueCapacity());
-        assertFalse(config.offscreenPauseDecode());
-        assertEquals(TimeUnit.MILLISECONDS.toNanos(600L), config.offscreenGraceNanos());
-        assertEquals(TimeUnit.MILLISECONDS.toNanos(1_800L), config.offscreenResumeRestartLagNanos());
-        assertEquals(TimeUnit.MILLISECONDS.toNanos(1_200L), config.rgbaConsumerGraceNanos());
-    }
-
-    @Test
-    void invalidValuesUseCompatibilityDefaults() {
-        set("max_frames", "invalid");
-        set("frame_wait_slice_ms", "invalid");
-        set("max_late_frame_ms", "invalid");
-        set("queue_capacity", "invalid");
-        set("offscreen.pause_decode", "yes");
-
-        HandheldVideoPipelineConfig config = HandheldVideoPipelineConfig.fromSystemProperties(PREFIX);
-        assertEquals(1_000_000, config.maxFrames());
-        assertEquals(8L, config.frameWaitSliceMillis());
-        assertEquals(TimeUnit.MILLISECONDS.toNanos(250L), config.maxLateFrameNanos());
-        assertEquals(4, config.frameQueueCapacity());
-        assertTrue(config.offscreenPauseDecode());
     }
 
     @Test

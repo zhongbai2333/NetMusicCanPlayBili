@@ -95,6 +95,27 @@ public final class PlaybackSync {
         return value + separator + MINECART_ENTITY_KEY + entityId + "&" + MINECART_UUID_KEY + entityUuid;
     }
 
+    /** Physical server attempt identity uses a fragment, so signed HTTP request targets remain unchanged. */
+    public static String withTerminalToken(String value, MediaRequestToken token) {
+        if (value == null || token == null) return value;
+        int hash = value.indexOf('#');
+        String base = hash < 0 ? value : value.substring(0, hash);
+        String fragments = hash < 0 ? "" : java.util.Arrays.stream(value.substring(hash + 1).split("&"))
+                .filter(part -> !part.startsWith("nmb_terminal=")).collect(java.util.stream.Collectors.joining("&"));
+        return base + "#" + (fragments.isEmpty() ? "" : fragments + "&") + "nmb_terminal=" + token.value();
+    }
+
+    public static String parseTerminalToken(String value) {
+        if (value == null || value.indexOf('#') < 0) return "";
+        for (String part : value.substring(value.indexOf('#') + 1).split("&")) {
+            if (part.startsWith("nmb_terminal=")) {
+                return MediaRequestToken.parse(part.substring("nmb_terminal=".length()))
+                        .map(MediaRequestToken::value).orElse("");
+            }
+        }
+        return "";
+    }
+
     public static String withRequestToken(String value, String requestToken) {
         return MediaRequestToken.parse(requestToken)
                 .map(token -> withRequestToken(value, token))
@@ -216,7 +237,7 @@ public final class PlaybackSync {
         return fragment.contains(SESSION_KEY) || fragment.contains(SOURCE_KEY)
                 || fragment.contains(ELAPSED_MS_KEY) || fragment.contains(TOTAL_MS_KEY)
                 || fragment.contains(MINECART_ENTITY_KEY) || fragment.contains(MINECART_UUID_KEY)
-                || fragment.contains(REQUEST_KEY)
+                || fragment.contains(REQUEST_KEY) || fragment.contains("nmb_terminal=")
                         ? value.substring(0, hash)
                         : value;
     }

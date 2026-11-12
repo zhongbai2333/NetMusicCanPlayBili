@@ -89,6 +89,7 @@ public final class ClientMediaLifecycleHandler {
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
         long lifecycleNow = System.nanoTime();
+        com.zhongbai233.net_music_can_play_bili.client.ControlConsoleClient.tickClosingSave(lifecycleNow);
         for (String warning : com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoCloseDiagnostics
                 .tickGlobal()) {
             LOGGER.warn(warning);
@@ -107,6 +108,7 @@ public final class ClientMediaLifecycleHandler {
         com.zhongbai233.net_music_can_play_bili.client.audio.SyncedMediaSound.tickPendingDecodeAdmissions();
         com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackCoordinator
                 .tickIndexedPlaybackDemand();
+        com.zhongbai233.net_music_can_play_bili.client.ClientMediaMovingSound.tickNaturalEnds();
         com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaDemandScheduler.tick();
         // 切世界/单人存档重进时清掉旧 tracker 记录
         if (mc.level != lastTrackedLevel) {

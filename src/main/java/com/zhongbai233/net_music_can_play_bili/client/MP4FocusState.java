@@ -123,6 +123,19 @@ public final class MP4FocusState {
         rotationAnimating = false;
     }
 
+    /** Update accepted transport fields without resetting menus, pose, drag or an active scrub. */
+    public static void applyAuthoritativePlayback(MP4Item.State state) {
+        if (!active || state == null) {
+            return;
+        }
+        playing = state.playing();
+        selectedQueueIndex = Math.max(0, Math.min(QUEUE_SIZE - 1, state.selectedQueueIndex()));
+        if (!scrubbingProgress) {
+            mediaProgress = Math.max(0.0F, Math.min(1.0F, state.progressPerMille() / 1000.0F));
+        }
+        ensureSelectedQueueVisible(landscape ? LANDSCAPE_QUEUE_VISIBLE_ROWS : PORTRAIT_QUEUE_VISIBLE_ROWS);
+    }
+
     public static void loadForHeldRender(MP4Item.State state) {
         if (active) {
             return;
@@ -543,8 +556,11 @@ public final class MP4FocusState {
         return projectedQuadValid
                 && projectedQuadGuiWidth == guiWidth
                 && projectedQuadGuiHeight == guiHeight
-                && projectedQuadLandscape == landscape
                 && System.nanoTime() - projectedQuadNanos < 250_000_000L;
+    }
+
+    public static boolean projectedQuadLandscape() {
+        return projectedQuadLandscape;
     }
 
     public static float projectedQuadX(int index) {
@@ -842,7 +858,11 @@ public final class MP4FocusState {
     }
 
     public static void selectVisibleQueueRow(int row) {
-        int visibleRows = landscape ? LANDSCAPE_QUEUE_VISIBLE_ROWS : PORTRAIT_QUEUE_VISIBLE_ROWS;
+        selectVisibleQueueRow(row, landscape);
+    }
+
+    public static void selectVisibleQueueRow(int row, boolean renderedLandscape) {
+        int visibleRows = renderedLandscape ? LANDSCAPE_QUEUE_VISIBLE_ROWS : PORTRAIT_QUEUE_VISIBLE_ROWS;
         if (row < 0 || row >= visibleRows) {
             return;
         }

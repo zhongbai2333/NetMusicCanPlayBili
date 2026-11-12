@@ -5,6 +5,7 @@ import com.zhongbai233.net_music_can_play_bili.media.audio.AudioPlaybackRange;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackApproachPredictor;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import net.minecraft.client.Minecraft;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.phys.Vec3;
@@ -27,6 +28,24 @@ public final class ClientMediaDemandScheduler {
             return;
         }
         PlaybackSourceId source = PlaybackSourceId.of(sourceId);
+        String transportToken = PlaybackSync.parseTerminalToken(payload.playUrl());
+        var previous = DEMAND.snapshot(source).filter(snapshot -> snapshot.sessionId().equals(sessionId))
+                .orElse(null);
+        if (previous != null) {
+            String previousToken = PlaybackSync.parseTerminalToken(previous.payload().payload().playUrl());
+            if (transportToken.isEmpty() && !previousToken.isEmpty()) {
+                // A token-less duplicate cannot replace an already accepted physical request.
+                // Current position/volume still come from the active logical playback below.
+                tick();
+                return;
+            }
+            if (!transportToken.isEmpty() && !transportToken.equals(previousToken)) {
+                // A retained logical session can own a new physical request after retry.
+                // Cancel the old prepare owner before granting normal demand a fresh start.
+                ClientMediaPrepareLauncher.removeScheduledForDevice(sourceId);
+                DEMAND.remove(source, sessionId);
+            }
+        }
         DEMAND.announce(source, sessionId, new Pending(payload, sourceId, policy));
         tick();
     }

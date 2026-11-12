@@ -23,3 +23,12 @@ Patent License 1.0 is reproduced at
 The patent license contains reciprocity and defensive-termination conditions.
 Its inclusion is not a representation that AV1 is free from every third-party
 patent claim in every jurisdiction.
+
+## ZXing QR encoder subset
+
+This product includes a QR-encoding-only subset of ZXing Core 3.5.4, Copyright ZXing authors,
+under the Apache License 2.0. Original source headers are retained. The only source change
+is relocation from com.google.zxing to the private NCPB internal.qr.zxing namespace.
+The complete upstream license/third-party notices are in META-INF/licenses/ZXing-3.5.4-LICENSE.txt.
+Pinned provenance, the exact source selection and reproduction instructions are under
+third_party/zxing-qr-only in the source distribution. The full ZXing core/decoder is test-only.

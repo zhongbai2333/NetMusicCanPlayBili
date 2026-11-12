@@ -91,12 +91,13 @@ public final class MP4HandheldVideoClient {
             stop(deviceId, "等待播放同步");
             return false;
         }
-        if (!VideoNativeDecoder.isNativeAvailable()) {
-            stopForNativeUnavailable(state, playback);
-            return false;
-        }
+        // Admission confirms sound startup or ABSENT before a video-only failure may be reported.
         if (!activeProfile.canStartVideoDecode(deviceId, playback)) {
             waitForAudioStart(state);
+            return false;
+        }
+        if (!VideoNativeDecoder.isNativeAvailable()) {
+            stopForNativeUnavailable(deviceId, state, playback);
             return false;
         }
         HandheldPlaybackKey key = new HandheldPlaybackKey(playback.playbackSessionId(), playback.rawUrl(),
@@ -106,7 +107,10 @@ public final class MP4HandheldVideoClient {
         synchronized (state.lifecycleLock) {
             HandheldVideoSession session = state.activeSession;
             if (key.equals(state.activeKey) && session != null && !session.closed.get()) {
-                return HandheldVideoFrameTimeline.pumpFrameForTimeline(state, session, HandheldVideoFrameTimeline.anchoredVisualMillis(deviceId, activeProfile, playback));
+                long visualMillis = HandheldVideoFrameTimeline.anchoredVisualMillis(deviceId, activeProfile, playback);
+                boolean frame = HandheldVideoFrameTimeline.pumpFrameForTimeline(state, session, visualMillis);
+                reportVideoOnlyEnd(deviceId, state, session, visualMillis);
+                return frame;
             }
             if (key.equals(state.resolvingKey)) {
                 return false;
@@ -300,7 +304,7 @@ public final class MP4HandheldVideoClient {
         }
     }
 
-    private static void stopForNativeUnavailable(HandheldDeviceVideoState state, HandheldMediaPlayback playback) {
+    private static void stopForNativeUnavailable(UUID deviceId, HandheldDeviceVideoState state, HandheldMediaPlayback playback) {
         synchronized (state.lifecycleLock) {
             if ("原生视频不可用".equals(state.statusText)) {
                 return;
@@ -308,6 +312,9 @@ public final class MP4HandheldVideoClient {
             stopLocked(state, "原生视频不可用");
             state.audioOnly = true;
             state.statusText = "原生视频不可用";
+            reportVideoOnlyFailure(deviceId, playback.sessionId(),
+                    com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalRegistry.token(deviceId, playback.sessionId()),
+                    new IOException("原生视频不可用"));
             LOGGER.warn("手持视频解码跳过：FFmpeg native 未加载，session={} raw='{}'",
                     playback != null ? playback.sessionId() : "unknown",
                     playback != null ? playback.rawUrl() : "unknown");
@@ -412,6 +419,8 @@ public final class MP4HandheldVideoClient {
     private static void resolveAndStart(UUID deviceId, HandheldDeviceVideoState state,
             HandheldMediaPlayback playback,
             HandheldPlaybackKey key, long intentGeneration) {
+        String transportToken = com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalRegistry.token(
+                deviceId, key.sessionId());
         CancellableTaskFuture<ResolvedVideoStream> resolveTask = CancellableTaskFuture.submit(EXECUTOR,
                 () -> resolveStream(playback, key.quality()));
         synchronized (state.lifecycleLock) {
@@ -425,7 +434,7 @@ public final class MP4HandheldVideoClient {
                 previous.cancel(true);
             }
         }
-        resolveTask.whenComplete((stream, error) -> {
+        resolveTask.whenComplete((stream, error) -> Minecraft.getInstance().execute(() -> {
                     synchronized (state.lifecycleLock) {
                         if (state.resolveTask == resolveTask) {
                             state.resolveTask = null;
@@ -438,6 +447,7 @@ public final class MP4HandheldVideoClient {
                             state.failedKey = key;
                             state.audioOnly = !BiliVideoStreamResolver.isStoredVideoSelection(playback.rawUrl());
                             state.statusText = state.audioOnly ? "纯音乐" : "视频解析失败";
+                            reportVideoOnlyFailure(deviceId, key.sessionId(), transportToken, error);
                             LOGGER.warn("MP4 横屏视频流解析失败: session={} raw='{}' reason={}", playback.sessionId(),
                                     playback.rawUrl(), error.toString());
                             return;
@@ -459,7 +469,7 @@ public final class MP4HandheldVideoClient {
                         return;
                     }
                     startDecoder(deviceId, state, currentPlayback, key, stream, intentGeneration);
-                });
+                }));
     }
 
     private static boolean isCurrentIntent(UUID deviceId, HandheldDeviceVideoState state,
@@ -535,6 +545,9 @@ public final class MP4HandheldVideoClient {
                     state.resolvingKey = HandheldPlaybackKey.EMPTY;
                     state.failedKey = key;
                     state.statusText = "旧视频解码器关闭失败";
+                    reportVideoOnlyFailure(deviceId, key.sessionId(),
+                            com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalRegistry.token(deviceId, key.sessionId()),
+                            new IOException("旧视频解码器关闭失败"));
                     LOGGER.error("手持视频旧 decoder 退出信号异常，拒绝打开新会话: session={}", key.sessionId());
                     return;
                 }
@@ -546,6 +559,9 @@ public final class MP4HandheldVideoClient {
                 }
 
                 session = new HandheldVideoSession(state, key, elapsedMillis, stream.candidates());
+                session.transportToken = com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalRegistry.token(
+                        deviceId, key.sessionId());
+                session.frameDurationMillis = Math.max(1L, 1000L / Math.max(1, stream.fps()));
                 state.activeSession = session;
                 state.replacementGate.install(key.sessionId(), session.decodeExit, session.physicalTermination);
                 state.resolvingKey = HandheldPlaybackKey.EMPTY;
@@ -562,10 +578,10 @@ public final class MP4HandheldVideoClient {
                     session.completeDecodeTaskExit();
                 }
             }, EXECUTOR)
-                    .whenComplete((ignored, error) -> completeDecoderTask(state, session, key, stream, error));
+                    .whenComplete((ignored, error) -> completeDecoderTask(deviceId, state, session, key, stream, error));
         } catch (RuntimeException schedulingFailure) {
             session.completeDecodeTaskExit();
-            completeDecoderTask(state, session, key, stream, schedulingFailure);
+            completeDecoderTask(deviceId, state, session, key, stream, schedulingFailure);
         }
     }
 
@@ -592,9 +608,9 @@ public final class MP4HandheldVideoClient {
                 previousSignals.decodeExit(), previousSignals.nativeTermination());
         HandheldReplacementWait waitDecision = new HandheldReplacementWait();
         convergence.orTimeout(CANDIDATE_CLOSE_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
-                .whenComplete((ignored, error) -> resumeDecoderAfterPreviousExit(
+                .whenComplete((ignored, error) -> Minecraft.getInstance().execute(() -> resumeDecoderAfterPreviousExit(
                         deviceId, state, key, stream, intentGeneration,
-                        previousSignals, closeOperation, waitDecision, error));
+                        previousSignals, closeOperation, waitDecision, error)));
     }
 
     private static void resumeDecoderAfterPreviousExit(UUID deviceId, HandheldDeviceVideoState state,
@@ -613,6 +629,9 @@ public final class MP4HandheldVideoClient {
                     state.resolvingKey = HandheldPlaybackKey.EMPTY;
                     state.failedKey = key;
                     state.statusText = "旧视频解码器关闭失败";
+                    reportVideoOnlyFailure(deviceId, key.sessionId(),
+                            com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalRegistry.token(deviceId, key.sessionId()),
+                            new IOException("旧视频解码器未正常收敛"));
                 }
             }
             VideoZombieCloseSupervisor.global().track(previousSignals.sessionId(),
@@ -634,14 +653,15 @@ public final class MP4HandheldVideoClient {
         startDecoder(deviceId, state, currentPlayback, key, stream, intentGeneration);
     }
 
-    private static void completeDecoderTask(HandheldDeviceVideoState state, HandheldVideoSession session,
+    private static void completeDecoderTask(UUID deviceId, HandheldDeviceVideoState state, HandheldVideoSession session,
             HandheldPlaybackKey key, ResolvedVideoStream stream, Throwable error) {
         if (containsOutOfMemory(error)) {
             com.zhongbai233.net_music_can_play_bili.client.ClientMediaLifecycleHandler
                     .tripMemoryProtection("handheld video decoder allocation failed");
         }
         synchronized (state.lifecycleLock) {
-            if (state.activeSession == session) {
+            if (error != null) session.naturalEnd = false;
+            if (state.activeSession == session && !session.naturalEnd) {
                 state.activeSession = null;
             }
             if (error != null && !session.closed.get()) {
@@ -652,6 +672,39 @@ public final class MP4HandheldVideoClient {
                         stream.url(), stream.quality(), error.toString());
             }
         }
+        if (error != null && !session.closed.get()) Minecraft.getInstance().execute(() -> {
+            if (com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalRegistry.videoOnly(
+                    deviceId, session.key.sessionId())) {
+                com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalReporter.failure(
+                        deviceId, session.key.sessionId(), session.transportToken);
+            }
+        });
+    }
+
+    private static void reportVideoOnlyEnd(UUID deviceId, HandheldDeviceVideoState state,
+            HandheldVideoSession session, long visualMillis) {
+        long presentedMillis = session.tailPresentation.observe(state.frameSequence.get(), System.nanoTime(),
+                Minecraft.getInstance().isPaused());
+        if (session.endReported || !com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalRegistry.videoOnly(
+                deviceId, session.key.sessionId())) return;
+        long lastFrame = HandheldVideoFrameTimeline.latestFrameMillis(state, session);
+        if (com.zhongbai233.net_music_can_play_bili.client.sync.VideoOnlyEndPolicy.ready(session.naturalEnd,
+                session.closed.get(), Minecraft.getInstance().isPaused(),
+                com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalRegistry.current(
+                        deviceId, session.key.sessionId(), session.transportToken), lastFrame >= 0L,
+                HandheldVideoFrameTimeline.frameQueueEmpty(state), visualMillis,
+                Math.max(0L, lastFrame), session.frameDurationMillis, presentedMillis)) {
+            session.endReported = true;
+            com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalReporter.videoEnd(
+                    deviceId, session.key.sessionId(), session.transportToken);
+        }
+    }
+
+    private static void reportVideoOnlyFailure(UUID deviceId, String session, String token, Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause())
+            if (cause instanceof java.util.concurrent.CancellationException) return;
+        if (com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalRegistry.videoOnly(deviceId, session))
+            com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalReporter.failure(deviceId, session, token);
     }
 
     private static boolean containsOutOfMemory(Throwable error) {
@@ -744,6 +797,7 @@ public final class MP4HandheldVideoClient {
                     }
                     synchronized (state.lifecycleLock) {
                         if (state.activeSession == session && session.key.equals(state.activeKey)) {
+                            session.naturalEnd = true;
                             state.endedKey = session.key;
                             state.statusText = "视频播放结束";
                         }

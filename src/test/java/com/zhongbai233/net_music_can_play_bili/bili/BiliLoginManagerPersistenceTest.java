@@ -86,7 +86,7 @@ class BiliLoginManagerPersistenceTest {
 
     private static BiliLoginManager manager(LoginServer server, BiliCredentialStore store) {
         return new BiliLoginManager(HttpClient.newHttpClient(), URI.create(server.baseUrl() + "/generate"),
-                server.baseUrl() + "/poll", server.baseUrl() + "/qr", store);
+                server.baseUrl() + "/poll", store);
     }
 
     private static final class LoginServer implements AutoCloseable {

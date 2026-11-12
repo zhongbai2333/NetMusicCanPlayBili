@@ -87,6 +87,14 @@ public final class DolbyEc3Pipeline extends AbstractAudioPipeline {
     }
 
     @Override
+    public com.zhongbai233.net_music_can_play_bili.media.audio.AudioDrainStatus drainStatus() {
+        return dolby.drainStatus();
+    }
+
+    @Override
+    public void finish() { dolby.finishInput(); }
+
+    @Override
     public void close() {
         if (cleaned.compareAndSet(false, true)) {
             ClientAudioOutputRegistry.unregister(dolby);

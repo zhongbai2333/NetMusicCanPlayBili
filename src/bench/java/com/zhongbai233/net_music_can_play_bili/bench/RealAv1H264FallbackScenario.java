@@ -63,7 +63,7 @@ final class RealAv1H264FallbackScenario implements BenchClientScenario {
                 .whenComplete((ignored, error) -> {
                     if (error != null) {
                         resolutionFailure.compareAndSet(null,
-                                RealMediaLifecycleScenario.unwrapCompletion(error));
+                                RealMediaStages.unwrapCompletion(error));
                     }
                 });
     }
@@ -82,7 +82,7 @@ final class RealAv1H264FallbackScenario implements BenchClientScenario {
         if (!idleForBaseline()) {
             return BenchClientStepResult.CONTINUE;
         }
-        memoryBaseline = RealMediaLifecycleScenario.currentOwnedBytesByCategory();
+        memoryBaseline = RealMediaStages.currentOwnedBytesByCategory();
         uploadBaseline = VideoBillboardPreview.benchUploadResources();
         nativeBaseline = VideoNativeDecoder.nativeMemoryStats();
         closeBaseline = VideoCloseDiagnostics.global().snapshot(System.nanoTime()).activeOperations();
@@ -216,7 +216,7 @@ final class RealAv1H264FallbackScenario implements BenchClientScenario {
                 media != null ? media.sessionId() : "").mediaMillis();
         context.metrics().record(MEDIA_MILLIS,
                 Math.max(0L, Math.max(observedMediaMillis, currentMediaMillis)));
-        context.metrics().record(OWNED_BYTES, RealMediaLifecycleScenario.currentOwnedBytes());
+        context.metrics().record(OWNED_BYTES, RealMediaStages.currentOwnedBytes());
         context.metrics().record(NATIVE_BYTES, stats.available() ? stats.ffmpegCurrentBytes() : 0L);
     }
 
@@ -231,7 +231,7 @@ final class RealAv1H264FallbackScenario implements BenchClientScenario {
         if (VideoBillboardPreview.getSyncStatus(media.sessionId()).running()
                 || VideoCloseDiagnostics.global().snapshot(System.nanoTime()).activeOperations() != closeBaseline
                 || HttpRequestCloseDiagnostics.global().snapshot(System.nanoTime()).activeRequests() != httpBaseline
-                || !Arrays.equals(memoryBaseline, RealMediaLifecycleScenario.currentOwnedBytesByCategory())) {
+                || !Arrays.equals(memoryBaseline, RealMediaStages.currentOwnedBytesByCategory())) {
             return false;
         }
         VideoBillboardPreview.BenchUploadResources upload = VideoBillboardPreview.benchUploadResources();
@@ -277,7 +277,7 @@ final class RealAv1H264FallbackScenario implements BenchClientScenario {
                 + VideoBillboardPreview.benchUploadResources() + " native=" + nativeStats
                 + " closes=" + VideoCloseDiagnostics.global().snapshot(System.nanoTime())
                 + " http=" + HttpRequestCloseDiagnostics.global().snapshot(System.nanoTime())
-                + " memory=" + Arrays.toString(RealMediaLifecycleScenario.currentOwnedBytesByCategory());
+                + " memory=" + Arrays.toString(RealMediaStages.currentOwnedBytesByCategory());
     }
 
 private record FallbackMedia(String sessionId, long durationMillis, int width, int height, int fps,

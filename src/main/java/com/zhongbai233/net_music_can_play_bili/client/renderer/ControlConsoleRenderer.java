@@ -65,6 +65,10 @@ public final class ControlConsoleRenderer
     private static final Map<BlockPos, Set<BlockPos>> CONSOLE_AUDIO_KEYS = new ConcurrentHashMap<>();
     private static final Map<BlockPos, BlockPos> CONSOLE_AUDIO_SOURCES = new ConcurrentHashMap<>();
     private static final Map<BlockPos, ConsumerState> CONSUMERS = new ConcurrentHashMap<>();
+    private static final long[] EXIT_FRAME_INTERVALS = new long[8];
+    private static int exitFrameIntervalIndex;
+    private static long lastExitFrameNanos;
+    private static long exitUpdateReserveNanos;
     private static final long CONSUMER_LEASE_MILLIS = 3_000L;
     private static final long CONSUMER_RENEW_MILLIS = 1_000L;
     private static final long VIDEO_HEALTH_CHECK_MILLIS =
@@ -518,16 +522,80 @@ public final class ControlConsoleRenderer
     }
 
     public static void updateConsumerFades() {
-        for (Map.Entry<BlockPos, ConsumerState> entry : List.copyOf(CONSUMERS.entrySet())) {
-            if (entry.getValue().fadingOut) {
-                tickBurstExit(entry.getKey(), entry.getValue());
+        long now = System.nanoTime();
+        if (lastExitFrameNanos != 0L && now > lastExitFrameNanos) {
+            EXIT_FRAME_INTERVALS[exitFrameIntervalIndex] =
+                    Math.min(ControlConsoleExitFade.DURATION_NANOS, now - lastExitFrameNanos);
+            exitFrameIntervalIndex = (exitFrameIntervalIndex + 1) % EXIT_FRAME_INTERVALS.length;
+            exitUpdateReserveNanos = 0L;
+            for (long interval : EXIT_FRAME_INTERVALS) {
+                exitUpdateReserveNanos = Math.max(exitUpdateReserveNanos, interval);
             }
+        }
+        lastExitFrameNanos = now;
+        for (Map.Entry<BlockPos, ConsumerState> entry : List.copyOf(CONSUMERS.entrySet())) {
+            ConsumerState runtime = entry.getValue();
+            if (runtime.active) {
+                checkConsumerExit(entry.getKey(), runtime, now);
+            }
+            if (runtime.fadingOut) {
+                tickBurstExit(entry.getKey(), runtime);
+            }
+        }
+    }
+
+    /** Frame-time exit detection only: no registration, prewarm or lease renewal work. */
+    private static void checkConsumerExit(BlockPos consolePos, ConsumerState runtime, long now) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null || minecraft.player == null || runtime.level != minecraft.level) {
+            reconcileConsumer(consolePos);
+            return;
+        }
+        if (!minecraft.level.hasChunk(Math.floorDiv(consolePos.getX(), 16),
+                Math.floorDiv(consolePos.getZ(), 16))) {
+            beginBurstExit(consolePos, runtime);
+            return;
+        }
+        if (!(minecraft.level.getBlockEntity(consolePos) instanceof ControlConsoleBlockEntity console)) {
+            reconcileConsumer(consolePos);
+            return;
+        }
+        ControlConsoleDocument document = console.document();
+        BlockPos source = sourcePos(document, minecraft.level);
+        var range = ControlConsoleRangeGate.evaluate(true,
+                minecraft.player.getX() - consolePos.getX() - 0.5D,
+                minecraft.player.getY() - consolePos.getY() - 0.5D,
+                minecraft.player.getZ() - consolePos.getZ() - 0.5D,
+                document.hardRangeX(), document.hardRangeY(), document.hardRangeZ());
+        boolean sourceChanged = !java.util.Objects.equals(runtime.sourcePos, source)
+                || runtime.sourceKind != document.sourceKind();
+        if (sourceChanged) {
+            beginBurstExit(consolePos, runtime);
+        } else if (!range.active()) {
+            boolean rangeChanged = runtime.halfX != document.hardRangeX()
+                    || runtime.halfY != document.hardRangeY() || runtime.halfZ != document.hardRangeZ();
+            boolean discontinuous = ControlConsoleExitPolicy.positionDiscontinuous(runtime.playerX,
+                    runtime.playerY, runtime.playerZ, minecraft.player.getX(), minecraft.player.getY(),
+                    minecraft.player.getZ());
+            if (ControlConsoleExitPolicy.shouldFade(true, source != null, rangeChanged,
+                    discontinuous, runtime.lastRangeGain)) {
+                beginBurstExit(consolePos, runtime);
+            } else {
+                releaseConsumerLease(consolePos, runtime);
+                deactivateConsumer(consolePos);
+            }
+        } else {
+            runtime.lastInsideNanos = now;
         }
     }
 
     public static void clearConsumers() {
         List.copyOf(CONSUMERS.keySet()).forEach(ControlConsoleRenderer::deactivateConsumer);
         CONSUMERS.clear();
+        java.util.Arrays.fill(EXIT_FRAME_INTERVALS, 0L);
+        exitFrameIntervalIndex = 0;
+        lastExitFrameNanos = 0L;
+        exitUpdateReserveNanos = 0L;
     }
 
     public static void acceptConsumerLeaseResult(
@@ -625,7 +693,7 @@ public final class ControlConsoleRenderer
         }
         long now = System.nanoTime();
         if (state.fadingOut) {
-            return state.fadeBaseGain * ControlConsoleExitFade.gain(state.fadeStartedNanos, now);
+            return state.lastExitGain;
         }
         float envelope = state.entering
                 ? com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleEntryFade.gain(
@@ -713,13 +781,13 @@ public final class ControlConsoleRenderer
             logRangeTransition(consolePos, runtime, !result.active() ? "OUTSIDE" : "NO_SOURCE",
                     playerX - centerX, playerY - centerY, playerZ - centerZ,
                     document, result.gain());
-            releaseConsumerLease(consolePos, runtime);
             boolean abrupt = ControlConsoleExitPolicy.shouldFade(runtime.active, source != null, rangeChanged,
                     positionDiscontinuous, runtime.lastRangeGain);
             if (abrupt) {
                 beginBurstExit(consolePos, runtime);
                 tickBurstExit(consolePos, runtime);
             } else {
+                releaseConsumerLease(consolePos, runtime);
                 deactivateConsumer(consolePos);
             }
             runtime.sourcePos = source;
@@ -761,6 +829,9 @@ public final class ControlConsoleRenderer
             runtime.entryStartedNanos = System.nanoTime();
         }
         runtime.active = true;
+        if (runtime.lastInsideNanos == 0L) {
+            runtime.lastInsideNanos = System.nanoTime();
+        }
         runtime.prewarming = false;
         logRangeTransition(consolePos, runtime, "ACTIVE",
             playerX - centerX, playerY - centerY, playerZ - centerZ,
@@ -910,11 +981,12 @@ public final class ControlConsoleRenderer
     }
 
     private static void deactivateConsumer(BlockPos consolePos) {
+        // Retire the logical audio route before potentially slower video/subtitle cleanup.
+        unregisterAudioForConsole(consolePos);
         ClientAiSubtitleRegistry.release(consolePos);
         ModernTurntableVideoClient.unregisterControlConsoleConsumer(consolePos);
         LiveStreamerVideoClient.unregisterControlConsoleConsumer(consolePos);
         VideoBillboardPreview.detachControlConsoleConsumer(consolePos);
-        unregisterAudioForConsole(consolePos);
         ConsumerState state = CONSUMERS.get(consolePos);
         if (state != null) {
             state.active = false;
@@ -925,6 +997,9 @@ public final class ControlConsoleRenderer
             state.sourcePos = null;
             state.sourceKind = null;
             state.fadeStartedNanos = 0L;
+            state.exitBudgetAnchorNanos = 0L;
+            state.lastInsideNanos = 0L;
+            state.lastExitGain = 0.0F;
             state.nextVideoHealthCheckMillis = 0L;
             state.videoEnvelope.reset();
         }
@@ -934,22 +1009,30 @@ public final class ControlConsoleRenderer
         if (runtime.fadingOut) {
             return;
         }
-        releaseConsumerLease(consolePos, runtime);
-        // Fade may consume only already-owned short text state; it must not keep an AI HTTP request alive.
-        ClientAiSubtitleRegistry.release(consolePos);
+        // Include detection and cleanup in the total budget; repeated observations cannot restart it.
+        long now = System.nanoTime();
+        runtime.fadeStartedNanos = now;
+        runtime.exitBudgetAnchorNanos = runtime.lastInsideNanos > 0L
+                ? Math.min(now, runtime.lastInsideNanos) : now;
+        runtime.fadeBaseGain = Math.clamp(runtime.lastRangeGain, 0.0F, 1.0F);
+        runtime.lastExitGain = runtime.fadeBaseGain;
         runtime.active = false;
         runtime.prewarming = false;
         runtime.entering = false;
         runtime.entryStartedNanos = 0L;
         runtime.fadingOut = true;
-        runtime.fadeStartedNanos = System.nanoTime();
-        runtime.fadeBaseGain = Math.clamp(runtime.lastRangeGain, 0.0F, 1.0F);
+        releaseConsumerLease(consolePos, runtime);
+        ClientAiSubtitleRegistry.release(consolePos);
     }
 
     private static void tickBurstExit(BlockPos consolePos, ConsumerState runtime) {
-        float gain = runtime.fadeBaseGain * ControlConsoleExitFade.gain(runtime.fadeStartedNanos, System.nanoTime());
-        updateAudioRangeGain(consolePos, gain);
-        if (gain <= 0.0F) {
+        float gain = runtime.fadeBaseGain * ControlConsoleExitFade.gainWithinUpdateBudget(
+                runtime.exitBudgetAnchorNanos, System.nanoTime(),
+                // Allow one observed interval to reach the next update and one to retire its route.
+                Math.min(ControlConsoleExitFade.DURATION_NANOS, 2L * exitUpdateReserveNanos));
+        runtime.lastExitGain = Math.min(runtime.lastExitGain, gain);
+        updateAudioRangeGain(consolePos, runtime.lastExitGain);
+        if (runtime.lastExitGain <= 0.0F) {
             deactivateConsumer(consolePos);
         }
     }
@@ -1053,6 +1136,9 @@ public final class ControlConsoleRenderer
         private boolean entering;
         private long entryStartedNanos;
         private long fadeStartedNanos;
+        private long exitBudgetAnchorNanos;
+        private long lastInsideNanos;
+        private float lastExitGain = 1.0F;
         private float fadeBaseGain = 1.0F;
         private float lastRangeGain = 1.0F;
         private double halfX;

@@ -50,8 +50,8 @@ final class MultiClientRealMediaScenario implements BenchClientScenario {
     private PairedResolvedMedia media;
     private UUID audioOwner;
     private PlaybackSessionId mediaSession;
-    private RealMediaLifecycleScenario.RealVideoStage video;
-    private RealMediaLifecycleScenario.RealAudioStage audio;
+    private RealMediaStages.RealVideoStage video;
+    private RealMediaStages.RealAudioStage audio;
     private long[] memoryBaseline;
     private VideoBillboardPreview.BenchUploadResources uploadBaseline;
     private StereoOpenALHandler.LifecycleSnapshot stereoBaseline;
@@ -84,7 +84,7 @@ final class MultiClientRealMediaScenario implements BenchClientScenario {
                 .whenComplete((ignored, error) -> {
                     if (error != null) {
                         resolutionFailure.compareAndSet(null,
-                                RealMediaLifecycleScenario.unwrapCompletion(error));
+                                RealMediaStages.unwrapCompletion(error));
                     }
                 });
     }
@@ -219,7 +219,7 @@ final class MultiClientRealMediaScenario implements BenchClientScenario {
     }
 
     private void captureBaseline() {
-        memoryBaseline = RealMediaLifecycleScenario.currentOwnedBytesByCategory();
+        memoryBaseline = RealMediaStages.currentOwnedBytesByCategory();
         uploadBaseline = VideoBillboardPreview.benchUploadResources();
         stereoBaseline = StereoOpenALHandler.lifecycleSnapshot();
         tapBaseline = OpenALTappedAudioInputStream.lifecycleSnapshot();
@@ -235,9 +235,9 @@ final class MultiClientRealMediaScenario implements BenchClientScenario {
     }
 
     private void startMedia() {
-        video = RealMediaLifecycleScenario.RealVideoStage.start(
+        video = RealMediaStages.RealVideoStage.start(
                 media.videoStream(), memoryBaseline, uploadBaseline.gpuPboBytes());
-        audio = RealMediaLifecycleScenario.RealAudioStage.start(
+        audio = RealMediaStages.RealAudioStage.start(
                 media.audioUrl(), audioOwner, mediaSession, media.durationMillis());
         mediaStarted = true;
     }
@@ -301,7 +301,7 @@ final class MultiClientRealMediaScenario implements BenchClientScenario {
         context.metrics().record(MULTI_CLIENT_REAL_MEDIA_LOADED, mediaLoaded ? 1L : 0L);
         context.metrics().record(MULTI_CLIENT_REAL_MEDIA_CONVERGED, converged ? 1L : 0L);
         context.metrics().record(MULTI_CLIENT_REAL_MEDIA_OWNED_BYTES,
-                RealMediaLifecycleScenario.currentOwnedBytes());
+                RealMediaStages.currentOwnedBytes());
         context.metrics().record(MULTI_CLIENT_REAL_MEDIA_IRIS, irisObserved ? 1L : 0L);
     }
 
@@ -335,7 +335,7 @@ final class MultiClientRealMediaScenario implements BenchClientScenario {
                 && upload.textureStagingBytes() == uploadBaseline.textureStagingBytes()
                 && upload.gpuPboBytes() == uploadBaseline.gpuPboBytes()
                 && Arrays.equals(memoryBaseline,
-                        RealMediaLifecycleScenario.currentOwnedBytesByCategory());
+                        RealMediaStages.currentOwnedBytesByCategory());
     }
 
     private void cleanupGlobalResources() {
@@ -381,7 +381,7 @@ final class MultiClientRealMediaScenario implements BenchClientScenario {
                 + " stereo=" + StereoOpenALHandler.lifecycleSnapshot()
                 + " tap=" + OpenALTappedAudioInputStream.lifecycleSnapshot()
                 + " pendingNative=" + OpenALSpatialAudio.pendingNativeDeleteBatches()
-                + " memory=" + Arrays.toString(RealMediaLifecycleScenario.currentOwnedBytesByCategory());
+                + " memory=" + Arrays.toString(RealMediaStages.currentOwnedBytesByCategory());
     }
 
     private record PairedResolvedMedia(long durationMillis,

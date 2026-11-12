@@ -22,6 +22,10 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class MP4DeviceStateStore {
     private static final Map<PlaybackSourceId, DeviceEntry> RUNTIME = new ConcurrentHashMap<>();
 
+    public static void clearRuntime() {
+        RUNTIME.clear();
+    }
+
     private MP4DeviceStateStore() {
     }
 
@@ -122,10 +126,8 @@ public final class MP4DeviceStateStore {
         DeviceEntry current = getOrCreate(level, deviceId, ItemStack.EMPTY);
         MP4Item.State old = current.state();
         int progress = progressPerMille(elapsedMillis, durationSeconds, old.progressPerMille());
-        MP4Item.State state = new MP4Item.State(playing, old.shuffle(), old.videoEnabled(), old.landscape(),
-                old.qualityIndex(), queueIndex, old.queueScrollOffset(), clamp(volumePerMille, 0, 1000),
-                old.repeatMode(), old.playlistOpen(), old.lyricsEnabled(), old.subtitleMode(),
-                old.subtitleAiEnabled(), progress, old.rotationHintShown());
+        MP4Item.State state = MP4StateUpdatePolicy.withPlayback(old, playing, queueIndex,
+                clamp(volumePerMille, 0, 1000), progress);
         update(level, deviceId, new DeviceEntry(state, current.queue(), Math.max(0L, elapsedMillis),
                 Math.max(0, durationSeconds), playbackSessionId));
     }

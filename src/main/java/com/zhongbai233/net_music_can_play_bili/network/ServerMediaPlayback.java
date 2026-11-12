@@ -2,6 +2,8 @@ package com.zhongbai233.net_music_can_play_bili.network;
 
 import java.util.UUID;
 
+import com.github.tartaricacid.netmusic.item.ItemMusicCD;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSyncPayload;
 import net.minecraft.server.level.ServerPlayer;
 
@@ -46,6 +48,20 @@ public final class ServerMediaPlayback {
     public static void stopExternalPlaybackForLinkedHeadphones(ServerPlayer actor, UUID deviceId) {
         MP4PlaybackSyncManager.stopExternalPlaybackForLinkedHeadphones(actor, deviceId);
     }
+
+    static ResolvedTrack resolvedTrack(ItemMusicCD.SongInfo original, ItemMusicCD.SongInfo resolved) {
+        String rawUrl = original.songUrl != null ? original.songUrl : "";
+        String playUrl = resolved.songUrl != null && !resolved.songUrl.isBlank() ? resolved.songUrl : rawUrl;
+        if (BiliApiClient.isStoredVideoSelection(rawUrl)) {
+            playUrl = rawUrl;
+        }
+        String songName = resolved.songName != null && !resolved.songName.isBlank()
+                ? resolved.songName : original.songName;
+        int durationSeconds = Math.max(0, resolved.songTime > 0 ? resolved.songTime : original.songTime);
+        return new ResolvedTrack(rawUrl, playUrl, songName != null ? songName : "", durationSeconds);
+    }
+
+    record ResolvedTrack(String rawUrl, String playUrl, String songName, int durationSeconds) { }
 
     public record StartRequest(UUID ownerId, UUID sourceId, int sourceType, int sourceEntityId, double sourceX,
             double sourceY, double sourceZ, int queueIndex, String playUrl, String rawUrl, String songName,

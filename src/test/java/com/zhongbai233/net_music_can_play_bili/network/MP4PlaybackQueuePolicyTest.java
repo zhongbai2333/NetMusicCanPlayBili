@@ -1,31 +1,15 @@
 package com.zhongbai233.net_music_can_play_bili.network;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
-
+import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/** Queue progression, duplicate occurrence identity and shuffle selection. */
 class MP4PlaybackQueuePolicyTest {
-    @Test
-    void reconciliationKeepsTheCurrentTrackAtTheSameIndex() {
-        MP4PlaybackQueuePolicy.Reconciliation result = MP4PlaybackQueuePolicy.reconcile(
-                1, "second", List.of("first", "second", "third"));
-
-        assertEquals(MP4PlaybackQueuePolicy.ReconcileAction.KEEP, result.action());
-        assertEquals(1, result.selectedIndex());
-    }
-
-    @Test
-    void reconciliationRemapsTheCurrentTrackToItsFirstNewIndex() {
-        MP4PlaybackQueuePolicy.Reconciliation result = MP4PlaybackQueuePolicy.reconcile(
-                2, "current", List.of("current", "other", "current"));
-
-        assertEquals(MP4PlaybackQueuePolicy.ReconcileAction.REMAP, result.action());
-        assertEquals(0, result.selectedIndex());
-    }
 
     @Test
     void reconciliationStopsAndClampsSelectionWhenTheTrackWasRemoved() {
@@ -41,22 +25,6 @@ class MP4PlaybackQueuePolicyTest {
     }
 
     @Test
-    void singleTrackRepeatReplaysTheClampedCurrentIndex() {
-        MP4PlaybackQueuePolicy.Completion completion = MP4PlaybackQueuePolicy.completion(8, 3, 1);
-
-        assertTrue(completion.shouldAdvance());
-        assertEquals(2, completion.nextIndex());
-    }
-
-    @Test
-    void normalCompletionAdvancesToTheNextTrack() {
-        MP4PlaybackQueuePolicy.Completion completion = MP4PlaybackQueuePolicy.completion(1, 3, 0);
-
-        assertTrue(completion.shouldAdvance());
-        assertEquals(2, completion.nextIndex());
-    }
-
-    @Test
     void listRepeatWrapsButNormalAndEmptyQueuesStop() {
         MP4PlaybackQueuePolicy.Completion wrapped = MP4PlaybackQueuePolicy.completion(2, 3, 2);
         MP4PlaybackQueuePolicy.Completion stopped = MP4PlaybackQueuePolicy.completion(2, 3, 0);
@@ -67,5 +35,33 @@ class MP4PlaybackQueuePolicyTest {
         assertFalse(stopped.shouldAdvance());
         assertEquals(-1, stopped.nextIndex());
         assertFalse(empty.shouldAdvance());
+    }
+
+    @Test void appendPreservesSecondOccurrenceAndCompletionGoesToAppendedTrack() {
+        var result = MP4PlaybackQueuePolicy.reconcile(2, "A", List.of("A", "B", "A", "C"), -1);
+        assertEquals(MP4PlaybackQueuePolicy.ReconcileAction.KEEP, result.action());
+        assertEquals(2, result.selectedIndex());
+        assertEquals(3, MP4PlaybackQueuePolicy.completion(result.selectedIndex(), 4, 0).nextIndex());
+    }
+
+    @Test void shuffleUsesEveryOtherOccurrenceAndContinuesAtTheEnd() {
+        for (int current = 0; current < 4; current++) {
+            var selected = new java.util.HashSet<Integer>();
+            for (int draw = 0; draw < 3; draw++) {
+                var completion = MP4PlaybackQueuePolicy.completion(current, 4, 0, true, draw);
+                assertTrue(completion.shouldAdvance());
+                assertNotEquals(current, completion.nextIndex());
+                selected.add(completion.nextIndex());
+                assertEquals(completion.nextIndex(), MP4PlaybackQueuePolicy.manualMove(current, 4, 1, true, draw));
+            }
+            assertEquals(3, selected.size());
+        }
+    }
+    @Test void oneTrackShuffleLoopsAndEmptyShuffleStops() {
+        assertEquals(0, MP4PlaybackQueuePolicy.completion(0, 1, 0, true, -1).nextIndex());
+        assertFalse(MP4PlaybackQueuePolicy.completion(0, 0, 0, true, 1).shouldAdvance());
+    }
+    @Test void singleRepeatWinsOverPreviouslyEnabledShuffle() {
+        assertEquals(2, MP4PlaybackQueuePolicy.completion(2,4,1,true,0).nextIndex());
     }
 }

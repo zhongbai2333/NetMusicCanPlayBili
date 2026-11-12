@@ -102,6 +102,14 @@ public record MP4StatePacket(boolean playing, boolean shuffle, boolean videoEnab
                 subtitleAiEnabled, progressPerMille, rotationHintShown);
     }
 
+    static void clearClientSyncs() {
+        LAST_CLIENT_SYNCS.clear();
+    }
+
+    static void removeClientSyncs(UUID playerId) {
+        LAST_CLIENT_SYNCS.keySet().removeIf(key -> key.playerId().equals(playerId));
+    }
+
     public static void handle(MP4StatePacket payload, IPayloadContext context) {
         if (!(context.player() instanceof ServerPlayer player)) {
             return;
@@ -125,27 +133,9 @@ public record MP4StatePacket(boolean playing, boolean shuffle, boolean videoEnab
         LAST_CLIENT_SYNCS.put(syncKey, incoming);
         MP4DeviceStateStore.syncQueueCopy(level, deviceId, stack);
         MP4DeviceStateStore.DeviceEntry current = MP4DeviceStateStore.getOrCreate(level, deviceId, stack);
-        MP4Item.State state = payload.toState();
-        int queueSize = MP4Item.queueSize(stack);
-        if (queueSize <= 0) {
-            queueSize = current.queue().size();
-        }
-        int selected = queueSize <= 0 ? 0 : Math.max(0, Math.min(queueSize - 1, state.selectedQueueIndex()));
-        boolean selectedTrackChanged = selected != current.state().selectedQueueIndex();
-        int activeQueueIndex = MP4PlaybackSyncManager.activeQueueIndex(deviceId);
-        boolean activeTrackChanged = activeQueueIndex >= 0 && activeQueueIndex != selected;
-        if (selected != state.selectedQueueIndex()) {
-            state = new MP4Item.State(state.playing(), state.shuffle(), state.videoEnabled(), state.landscape(),
-                    state.qualityIndex(), selected, state.queueScrollOffset(), state.volumePerMille(),
-                    state.repeatMode(), state.playlistOpen(), state.lyricsEnabled(), state.subtitleMode(),
-                    state.subtitleAiEnabled(), selected == current.state().selectedQueueIndex()
-                            ? state.progressPerMille() : 0,
-                    state.rotationHintShown());
-        }
+        MP4Item.State state = MP4StateUpdatePolicy.mergeConfiguration(current.state(), payload.toState());
         MP4DeviceStateStore.update(level, deviceId, current.withState(state));
-        if (activeTrackChanged || current.state().playing() && selectedTrackChanged) {
-            MP4PlaybackControlPacket.restartSelected(player, stack, deviceId, selected, current.state().volumePerMille());
-        }
+        MP4PlaybackSyncManager.updateVolume(deviceId, state.volumePerMille());
     }
 
     private record SyncKey(UUID playerId, PlaybackSourceId sourceId) {
@@ -156,6 +146,9 @@ public record MP4StatePacket(boolean playing, boolean shuffle, boolean videoEnab
         public int compareTo(SyncVersion other) {
             if (other == null) {
                 return 1;
+            }
+            if (sequence > 0 && other.sequence() > 0) {
+                return Long.compare(sequence, other.sequence());
             }
             int timeCompare = Long.compare(updatedAtMillis, other.updatedAtMillis());
             return timeCompare != 0 ? timeCompare : Long.compare(sequence, other.sequence());

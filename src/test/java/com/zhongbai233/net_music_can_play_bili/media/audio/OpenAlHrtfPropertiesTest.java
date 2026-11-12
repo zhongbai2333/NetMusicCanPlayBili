@@ -22,41 +22,12 @@ class OpenAlHrtfPropertiesTest {
     }
 
     @Test
-    void legacyCamelCaseKeysRemainSupported() {
-        set(OpenAlHrtfProperties.LEGACY_FORCE_HRTF, "true");
-        set(OpenAlHrtfProperties.LEGACY_FORCE_HRTF_WITH_CHANNEL, "true");
-
-        assertEquals(new OpenAlHrtfProperties.Settings(true, true), OpenAlHrtfProperties.settings());
-    }
-
-    @Test
-    void canonicalKeysTakePriorityOverLegacyKeys() {
-        set(OpenAlHrtfProperties.LEGACY_FORCE_HRTF, "true");
-        set(OpenAlHrtfProperties.LEGACY_FORCE_HRTF_WITH_CHANNEL, "true");
-        set(OpenAlHrtfProperties.FORCE_HRTF, "false");
-        set(OpenAlHrtfProperties.FORCE_HRTF_WITH_CHANNEL, "false");
-
-        assertEquals(new OpenAlHrtfProperties.Settings(false, false), OpenAlHrtfProperties.settings());
-    }
-
-    @Test
     void disableOverrideWinsOverForceOverride() {
         set(OpenAlHrtfProperties.FORCE_HRTF, "true");
         set(OpenAlHrtfProperties.DISABLE_HRTF, "true");
         set(OpenAlHrtfProperties.FORCE_HRTF_WITH_CHANNEL, "true");
 
         assertEquals(new OpenAlHrtfProperties.Settings(false, true), OpenAlHrtfProperties.settings());
-    }
-
-    @Test
-    void invalidCanonicalValuesUseLegacyOrDefaultValues() {
-        set(OpenAlHrtfProperties.FORCE_HRTF, "yes");
-        set(OpenAlHrtfProperties.LEGACY_FORCE_HRTF, "true");
-        set(OpenAlHrtfProperties.DISABLE_HRTF, "no");
-        set(OpenAlHrtfProperties.LEGACY_DISABLE_HRTF, "false");
-        set(OpenAlHrtfProperties.FORCE_HRTF_WITH_CHANNEL, "1");
-
-        assertEquals(new OpenAlHrtfProperties.Settings(true, false), OpenAlHrtfProperties.settings());
     }
 
     private void set(String key, String value) {

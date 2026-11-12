@@ -1,77 +1,90 @@
-# Bench 功能覆盖矩阵
+# Bench 场景与运行方式
 
-本表描述 `src/bench` 中可执行场景对用户功能域的覆盖。默认场景必须离线、确定性、无需人工输入；
-真实 Bilibili、真实 MP3、双客户端和外部模组/资源包矩阵通过对应 Gradle 开关启用。
+本页列出 `NetMusicBenchProvider` 当前注册的场景和启用条件，描述场景要检查的行为，不表示本次提交已在这些环境中运行通过。日常构建默认关闭 Bench；游戏内场景需要真实客户端和对应的显卡、声卡或网络条件。
 
-| 功能域 | 主要场景 | 覆盖内容 |
+`platformTest` 保护存档、协议、权限、凭据及核心播放回归；`test` 覆盖纯 Java 单元行为；界面和玩法仍需[发布前人工检查](testing/manual-release-checklist.md)。本表不承诺每个生产功能都有自动化场景。
+
+## 保留的场景
+
+| 场景 | 启用条件 | 检查的行为 |
 | --- | --- | --- |
-| Scene Editor JiJ | `ncpb.scene-editor-library-smoke`、`ncpb.editor-gui-lifecycle` | core/Minecraft adapter 加载、编辑会话、真实 Screen 生命周期 |
-| 唱片机方块 | `ncpb.turntable-block-interactions` | 插入、右键弹出、播放状态、自动化事务提取 |
-| 唱片机真实音频 | `ncpb.real-turntable-mp3-end-to-end`、`ncpb.real-mp3-range-reentry`、`ncpb.real-turntable-volume-range-reentry`、`ncpb.real-media-channel-recovery`、其它 `real-mp3-*` | 服务端解析、同步包、MP3 解码、OpenAL、seek/retry/静音/范围停止；连续 12 次“流式声道已分配、解码未开始”取消后，第 13 次仍须产生真实声道、PCM 和视频帧；音量场景通过真实唱片机 GUI 拖动音量滑块，再用 BenchMod 玩家位姿控制离开/返回，并要求服务端也观测到移动及两次真实非静音 PCM |
-| 固定媒体设备 | `ncpb.device-link-config-matrix` | 唱片机、视频投影仪、歌词投影仪、音响、直播机、中控台的真实 BE 创建与同步 |
-| 设备链接与配置 | `ncpb.device-link-config-matrix` | 视频质量/投影参数、歌词模式/AI、7.1.4 声道/JOC/音量、中控源绑定；运行期从唱片机 A 重绑到 B，并核对客户端链接和服务端反向索引迁移 |
-| 耳机/全息眼镜 | `ncpb.wearable-binding-topology` | 正式绑定服务、唱片机/MP4/Pad/投影仪拓扑、客户端耳机路由、全息屏幕绑定、四槽上限、按目标解绑和反向索引清理 |
-| 音响 relay | `ncpb.device-link-config-matrix` | 音响到唱片机的服务端反向索引、客户端音频 relay 注册以及 7.1.4/JOC/音量同步 |
-| 索引随用随播 | `ncpb.indexed-audio-on-demand`、`ncpb.indexed-server-session-unloaded`、`ncpb.device-link-config-matrix` | 跨区块端点发现、旧预热带不启动、多个端点共享单解码器、末端离开迟滞关闭、来源区块保持卸载且循环会话继续、持久端点随真实方块重绑 |
-| 播放范围调试 | `ncpb.playback-range-debug-visualization` | 端点快照驱动的标称/解析/提示/同步范围世界线框、生命周期 HUD 与开关状态 |
-| 播放中迟到投影仪 | `ncpb.device-link-config-matrix`、`ncpb.playback-session-races` | BE 更新后的客户端消费者登记，以及同一会话重试/替换状态机 |
-| 媒体 GUI | `ncpb.gui-screen-matrix` | 15 个离线安全生产 Screen 逐一打开、真实渲染、自动化快照、关闭；包括 MP4、Pad、地图、绑定/报告和白名单审核/预览。白名单 Screen 具备小视口自适应、键盘选择/提交/预览/seek、请求处理中禁用以及失败保留备注的生产交互 |
-| 手持 MP4/Pad | `ncpb.handheld-media-contracts`、`ncpb.playback-session-races` | 两种屏幕几何/缩放、Pad 逻辑会话身份、媒体会话竞态 |
-| Pad 地图/地形 | `ncpb.gui-screen-matrix`、`ncpb.terrain-lod-roundtrip` | 地图 Screen、采样/缓存使用路径、LOD/PIP/GPU/透明层与资源收敛 |
-| Bilibili 直播 | `ncpb.live-stream-contracts`、`ncpb.real-live-device-topology` | 房间号/链接/占位 URL、元数据 owner、健康重连与指数退避；真实 8178490 直播流的直播机、投影仪、中控台屏幕/音频元素和实体音响联合加载 |
-| 真实 Bilibili 点播 | `ncpb.real-bv-playback`、`ncpb.real-video-range-reentry` | 真实 BV 分 P、DASH 音视频、AV1/H.264 候选、native decode、OpenAL、GPU 上传与清理；真实唱片机、物理投影仪和屏幕-only 中控台在 128 格离开后保持休眠会话；监听者坐标不依赖活跃输出，返回后视频时间继续推进且 MP3 再次输出真实 PCM |
-| AV1 回退/硬解 seek | `ncpb.real-av1-h264-fallback`、`ncpb.real-av1-hardware-seek`、`ncpb.frozen-real-av1-hardware-seek` | AV1 首帧失败转 H.264、同会话 continuity、Range seek、PTS、固定样本 |
-| GPU 视频上传 | `ncpb.deterministic-video-upload` | RGBA、YUV420P、NV12/PBO 上传与纹理释放 |
-| 资源生命周期 | `ncpb.media-resource-convergence`、`ncpb.real-media-lifecycle-100` | HTTP、native、GPU/PBO、OpenAL、owned memory 的静止基线 |
-| 多客户端 | 三个 `ncpb.multi-client-*` | 独立消费者 lease、断开、重连、真实媒体 survivor |
-| 跨维度 | `ncpb.cross-dimension-media-cleanup` | respawn 包、加载 UI、跨维度媒体精确清理 |
-| 中控台 | `ncpb.console-consumer-lifecycle`、`ncpb.device-link-config-matrix`、`ncpb.real-live-device-topology` | 消费者 attach/detach、source binding、客户端消费者登记、GUI/lease，以及真实直播的屏幕+音频元素 |
-| 白名单与权限 | `ncpb.whitelist-management-lifecycle`、`ncpb.luckperms-permission-bridge`、`ncpb.gui-screen-matrix` | 真实服务端增加/删除（删除备注必填）、追加审核评论、活动/历史审核快照、移除记录保留、分页边界、预览 Screen、CSV 分块生成与客户端落盘；审核/预览实现删除后保持分页和滚动邻域、S2C 操作回执、处理中锁定、失败/超时保留备注及键盘操作。paired Bench 加载 LuckPerms NeoForge，并验证 LP 授权/撤销经 NeoForge PermissionAPI 控制带备注的白名单命令；场景结束恢复配置并清理临时条目 |
+| `ncpb.platform-mixin-audit` | 默认 | 真实 FML 变换目标与声音桥接注入 |
+| `ncpb.deterministic-video-upload` | 默认 | RGBA、YUV420P、NV12/PBO 上传、纹理释放和资源基线 |
+| `ncpb.cross-dimension-media-cleanup` | 默认 | respawn 包、加载界面和跨维度媒体清理 |
+| `ncpb.real-mp3-sound-engine` | `-PncpbRealMp3Bench=true` | Minecraft streaming channel、5s/12s 两代 seek 的时间窗口、暂停/恢复、静音与范围停止 |
+| `ncpb.real-turntable-volume-range-reentry` | 同上 | 唱片机 GUI 音量、服务端解析与同步会话、真实移动离开/返回范围、非静音 PCM 和弹出后的资源收敛 |
+| `ncpb.real-bv-playback` | `-PncpbRealBench=true` | BV DASH 音视频、native decode、OpenAL 和资源清理；默认还检查唱片机、投影仪、中控台屏幕离开/返回范围后的休眠与恢复 |
+| `ncpb.real-av1-h264-fallback` | 同上 | 注入 AV1 首帧失败后转 H.264，同一逻辑会话和时间线继续 |
+| `ncpb.real-av1-hardware-seek` | 同上 | 实际 AV1 硬解、Range seek、PTS 和物理资源收敛 |
+| `ncpb.real-live-device-topology` | `-PncpbRealLiveBench=true` | 真实直播流在直播机、投影仪、中控台屏幕/音源和实体音响中的联合加载 |
+| `ncpb.multi-client-consumer-lifecycle` | 双客户端 | 独立 lease、同 UUID 断线重连、幸存者不受影响，再错峰退出；服务端观察 2→1→2→1→0 |
+| `ncpb.multi-client-real-media-lifecycle` | 双客户端及 `-PncpbRealMediaLifecycle=true` | 两端真实视频/音频、首端退出后另一端继续持有媒体与 lease，再分别回到资源基线；服务端观察 2→1→0 |
 
-## 当前不能完全自动化的边界
+## 执行前提
 
-- B站二维码登录成功需要真人扫码，Bench 不能伪造成功态；这是唯一不进入离线 GUI 矩阵的生产 Screen，
-  默认矩阵不发起登录网络请求。登录后的 Cookie/API
-  使用由真实 Bilibili 场景覆盖，二维码生成与扫码仍保留为发布前人工检查。
-- Minecart Revolution、Iris shaderpack、第三方资源包以及六平台硬解属于外部环境矩阵；缺少对应模组、
-  shaderpack、资源包或机器时不能由默认客户端虚构通过。`ncpb.terrain-lod-roundtrip` 的 compat 模式和
-  真实 AV1 场景用于具备环境时执行。
-- `ncpb.gui-screen-matrix` 证明生产 Screen 能打开、渲染并关闭，但不会伪造真实网络延迟或逐键注入操作；白名单审核的“处理中”、失败保稿、删除后保持视口和完整键盘流程仍应在发布前做一次人工客户端验收。
-- “覆盖”表示每个生产功能域至少存在一个带断言的场景，并不等同于每个平台、每个 CDN、每个 GPU 驱动组合均已实机验证。
+从仓库根目录执行，使用项目要求的 JDK 25。只检查 Bench 编译可运行：
 
-## 快速执行
+```sh
+bash gradlew compileBenchJava -PenableModBench=true
+```
 
-```bash
-bash gradlew runBenchClient \
-  -PenableModBench=true \
-  -PmodBench.scenarios=ncpb.device-link-config-matrix,ncpb.wearable-binding-topology,ncpb.gui-screen-matrix,ncpb.handheld-media-contracts,ncpb.live-stream-contracts,ncpb.whitelist-management-lifecycle \
+编译不证明游戏内播放、GPU/声卡或双客户端行为已经通过。下列命令会启动游戏进程。
+
+真实点播默认 BV 为 `BV1GJ411x7h7`，可用 `-PncpbBenchVideo=<BV号>` 替换。真实 MP3 使用 `-PncpbRealMp3BenchUrl=<地址>`，未指定时使用构建脚本的默认样本地址；BV 场景的范围阶段也需要该 MP3 地址。真实直播默认房间 `8178490`，可用 `-PncpbLiveBenchRoom=<房间号>` 替换。房间未开播、地址失效、登录权限不足或设备不支持相应硬解时，场景可能失败，报告应保留实际原因。
+
+## 单客户端
+
+默认离线场景：
+
+```sh
+bash gradlew runBenchClient -PenableModBench=true \
+  -PmodBench.scenarios=ncpb.platform-mixin-audit,ncpb.deterministic-video-upload,ncpb.cross-dimension-media-cleanup \
   --no-daemon
 ```
 
-真实 Bilibili 直播四设备拓扑默认使用房间 `8178490`，只在显式开启时注册：
+真实 MP3：
 
-```bash
-bash gradlew runBenchClient \
-  -PenableModBench=true \
-  -PncpbRealLiveBench=true \
-  -PncpbLiveBenchRoom=8178490 \
-  -PmodBench.scenarios=ncpb.real-live-device-topology \
+```sh
+bash gradlew runBenchClient -PenableModBench=true -PncpbRealMp3Bench=true \
+  -PmodBench.scenarios=ncpb.real-mp3-sound-engine,ncpb.real-turntable-volume-range-reentry \
   --no-daemon
 ```
 
-房间当时未开播或 B站未返回可播地址时，该真实网络场景会明确失败，不会用假帧代替。真实点播使用
-`ncpb.real-bv-playback`；离开/返回范围回归使用 `ncpb.real-video-range-reentry`，默认 BV 均为
-`BV1GJ411x7h7`。
+真实点播与 AV1：
 
-流式声道耗尽回归需要同时打开真实 MP3 与真实 Bilibili 开关。它连续取消 12 条尚未创建解码器的
-Minecraft streaming channel，再要求第 13 条真实 MP3、OpenAL PCM 与 H.264 native 视频帧成功启动，
-并等待声音、HTTP、GPU/owned memory 与 native 视频关闭操作全部回到基线：
-
-```bash
-bash gradlew runBenchClient \
-  -PenableModBench=true \
-  -PncpbRealMp3Bench=true \
-  -PncpbRealBench=true \
-  -PmodBench.scenarios=ncpb.real-media-channel-recovery \
+```sh
+bash gradlew runBenchClient -PenableModBench=true -PncpbRealBench=true \
+  -PmodBench.scenarios=ncpb.real-bv-playback,ncpb.real-av1-h264-fallback,ncpb.real-av1-hardware-seek \
   --no-daemon
 ```
+
+真实直播：
+
+```sh
+bash gradlew runBenchClient -PenableModBench=true -PncpbRealLiveBench=true \
+  -PncpbLiveBenchRoom=8178490 -PmodBench.scenarios=ncpb.real-live-device-topology \
+  --no-daemon
+```
+
+## 双客户端
+
+`runBenchPaired` 启动独立 dedicated server 和两个客户端 JVM。消费者场景需要 BenchMod runner 支持配对客户端在场景内断线后自动重连；该能力由 runner 处理，不需要另传 `expectReconnect` 开关。更换 BenchMod 版本时须确认仍具备这一能力。
+
+```sh
+bash gradlew runBenchPaired -PenableModBench=true -PncpbPairedClientCount=2 \
+  -PmodBench.scenarios=ncpb.multi-client-consumer-lifecycle --no-daemon
+```
+
+真实媒体幸存者场景单独运行：
+
+```sh
+bash gradlew runBenchPaired -PenableModBench=true -PncpbPairedClientCount=2 \
+  -PncpbRealMediaLifecycle=true \
+  -PmodBench.scenarios=ncpb.multi-client-real-media-lifecycle --no-daemon
+```
+
+## 仍需人工或设备验收的边界
+
+- B站二维码登录成功需要真人扫码。真实 Bilibili 场景只验证当次可取得的媒体和播放路径，不代替账号登录、凭据持久化或各种权限状态的验收。
+- Iris shaderpack、第三方资源包及六平台硬解需要对应环境。单一机器的通过记录不能代表其他 GPU、驱动、操作系统或资产组合。
+- 已移除的历史场景不再是当前运行入口。旧测试数、机器环境和测量值见文档归档，不作为当前版本的自动验收结果。

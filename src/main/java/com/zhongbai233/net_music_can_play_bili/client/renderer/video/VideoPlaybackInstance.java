@@ -60,6 +60,7 @@ final class VideoPlaybackInstance {
     final VideoPlaybackAnchor anchor;
     final VideoPlaybackFrameQueue frameQueue = new VideoPlaybackFrameQueue(PRESENTATION.queueCapacity());
     final AtomicLong generation = new AtomicLong();
+    final GenerationVisualTiming visualTiming = new GenerationVisualTiming();
     final VideoConsumerRegistry<BlockPos> consumers = new VideoConsumerRegistry<>();
     final VideoPhysicalCloseHandoff physicalCloseHandoff = new VideoPhysicalCloseHandoff();
     final VideoPerformanceMonitor performanceMonitor = new VideoPerformanceMonitor();
@@ -189,7 +190,8 @@ final class VideoPlaybackInstance {
         frameQueue.clear();
         startNanoTime = immediatelyVisible ? System.nanoTime() : 0L;
         decoderGenerationStartedNanoTime = startNanoTime;
-        generation.incrementAndGet();
+        long gen = generation.incrementAndGet();
+        visualTiming.begin(gen, immediatelyVisible, System.nanoTime());
         if (immediatelyVisible) {
             grantDecodeAdmission();
         }
@@ -224,8 +226,7 @@ final class VideoPlaybackInstance {
         if (synced >= 0L) {
             return synced;
         }
-        long startNs = startNanoTime;
-        return startNs > 0L ? Math.max(0L, System.nanoTime() - startNs) : 0L;
+        return visualTiming.sample(generation.get(), System.nanoTime());
     }
 
     private long syncedPlaybackNanos() {
@@ -235,6 +236,22 @@ final class VideoPlaybackInstance {
         long synced = anchor.timeline().relativeNanos(
                 baseOffsetMillis + AUDIO_OUTPUT_LATENCY_COMPENSATION_MILLIS);
         return synced;
+    }
+
+    /** Candidate admission, not close-barrier release, starts a pending local visual epoch. */
+    synchronized long prepareCandidateTiming(long gen) {
+        if (!running || stopRequested || terminalFailure || gen != generation.get()
+                || restartState != VideoDecoderRestartState.ACTIVE) {
+            return -1L;
+        }
+        long offset = effectiveDecoderStartOffsetMillis();
+        decoderStartOffsetMillis = offset;
+        adaptiveRestartOffsetMillis = -1L;
+        long now = System.nanoTime();
+        visualTiming.begin(gen, prewarmVisible, now);
+        startNanoTime = now;
+        decoderGenerationStartedNanoTime = now;
+        return offset;
     }
 
     long effectiveDecoderStartOffsetMillis() {
@@ -452,7 +469,7 @@ final class VideoPlaybackInstance {
         restartDecoder(nextWidth, nextHeight, restartOffsetMillis, false);
     }
 
-    void restartDecoder(int nextWidth, int nextHeight, long restartOffsetMillis, boolean keepVisibleFrame) {
+    synchronized void restartDecoder(int nextWidth, int nextHeight, long restartOffsetMillis, boolean keepVisibleFrame) {
         if (restartInProgress) {
             LOGGER.debug("视频解码器重启正在等待旧 worker 退出，忽略重复请求: session={}", sessionId());
             return;
@@ -460,6 +477,7 @@ final class VideoPlaybackInstance {
         restartInProgress = true;
         restartState = VideoDecoderRestartState.CLOSING;
         long gen = generation.incrementAndGet();
+        visualTiming.begin(gen, prewarmVisible, System.nanoTime());
         boolean preserveVisibleFrame = keepVisibleFrame
                 && nextWidth == targetWidth
                 && nextHeight == targetHeight
@@ -768,6 +786,7 @@ final class VideoPlaybackInstance {
         consumers.setGuiConsumer(value);
         if (value) {
             prewarmVisible = true;
+            visualTiming.setDemand(generation.get(), true, System.nanoTime());
             offscreenSinceNanoTime = 0L;
             lastVisibleNanoTime = System.nanoTime();
             grantDecodeAdmission();
@@ -975,6 +994,54 @@ final class VideoPlaybackInstance {
 
     synchronized void abandonBeforeStart() {
         closer.abandonBeforeStart();
+    }
+
+
+    /** Only EMPTY-clock presentation uses this epoch; an authoritative timeline always wins. */
+    static final class GenerationVisualTiming {
+        private long generation = -1L;
+        private long elapsedNanos;
+        private long sampledAt;
+        private boolean committed;
+        private boolean demanded;
+        private boolean paused;
+
+        synchronized void begin(long gen, boolean demand, long now) {
+            generation = gen;
+            elapsedNanos = 0L;
+            sampledAt = now;
+            committed = false;
+            demanded = demand;
+            paused = false;
+        }
+
+        synchronized void commit(long gen, long firstPtsNanos, long now) {
+            if (gen != generation || committed) return;
+            elapsedNanos = Math.max(0L, firstPtsNanos);
+            sampledAt = now;
+            committed = true;
+        }
+
+        synchronized long sample(long gen, long now) {
+            if (gen != generation) return 0L;
+            if (committed && demanded && !paused) {
+                elapsedNanos += Math.max(0L, now - sampledAt);
+            }
+            sampledAt = now;
+            return committed ? elapsedNanos : 0L;
+        }
+
+        synchronized void setDemand(long gen, boolean demand, long now) {
+            if (gen != generation) return;
+            sample(gen, now);
+            demanded = demand;
+        }
+
+        synchronized void setPaused(long gen, boolean pause, long now) {
+            if (gen != generation) return;
+            sample(gen, now);
+            paused = pause;
+        }
     }
 
 }

@@ -16,7 +16,7 @@ class ClientMediaRetryDispatchTest {
         TestRetryPolicy policy = new TestRetryPolicy(true, false);
         AtomicInteger rejections = new AtomicInteger();
 
-        assertTrue(ClientMediaRetryDispatch.dispatch(policy, UUID.randomUUID(),
+        assertTrue(ClientMediaRetryHandler.dispatchRetry(policy, UUID.randomUUID(),
                 PlaybackSessionId.of("accepted-retry"), active("accepted-retry"), null,
                 rejections::incrementAndGet));
         assertEquals(1, policy.dispatches());
@@ -28,7 +28,7 @@ class ClientMediaRetryDispatchTest {
         TestRetryPolicy policy = new TestRetryPolicy(false, false);
         AtomicInteger rejections = new AtomicInteger();
 
-        assertFalse(ClientMediaRetryDispatch.dispatch(policy, UUID.randomUUID(),
+        assertFalse(ClientMediaRetryHandler.dispatchRetry(policy, UUID.randomUUID(),
                 PlaybackSessionId.of("rejected-retry"), active("rejected-retry"), null,
                 rejections::incrementAndGet));
         assertEquals(1, policy.dispatches());
@@ -40,7 +40,7 @@ class ClientMediaRetryDispatchTest {
         TestRetryPolicy policy = new TestRetryPolicy(false, true);
         AtomicInteger rejections = new AtomicInteger();
 
-        assertFalse(ClientMediaRetryDispatch.dispatch(policy, UUID.randomUUID(),
+        assertFalse(ClientMediaRetryHandler.dispatchRetry(policy, UUID.randomUUID(),
                 PlaybackSessionId.of("failed-retry"), active("failed-retry"), new IllegalStateException("stream"),
                 rejections::incrementAndGet));
         assertEquals(1, policy.dispatches());

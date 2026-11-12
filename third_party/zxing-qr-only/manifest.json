@@ -1,0 +1,230 @@
+{
+  "binary_artifact_sha256": "71de5d89341b5fcf5dd89da7f44e84d825d0e084cdf3ec77c9abe26b0f0ceb13",
+  "namespace": "com.zhongbai233.net_music_can_play_bili.internal.qr.zxing",
+  "seed": "com/google/zxing/qrcode/QRCodeWriter.class",
+  "selected_binary_classes": [
+    "com/google/zxing/BarcodeFormat.class",
+    "com/google/zxing/DecodeHintType.class",
+    "com/google/zxing/EncodeHintType.class",
+    "com/google/zxing/FormatException.class",
+    "com/google/zxing/ReaderException.class",
+    "com/google/zxing/ResultPoint.class",
+    "com/google/zxing/ResultPointCallback.class",
+    "com/google/zxing/Writer.class",
+    "com/google/zxing/WriterException.class",
+    "com/google/zxing/common/BitArray.class",
+    "com/google/zxing/common/BitMatrix.class",
+    "com/google/zxing/common/CharacterSetECI.class",
+    "com/google/zxing/common/ECIEncoderSet.class",
+    "com/google/zxing/common/StringUtils.class",
+    "com/google/zxing/common/detector/MathUtils.class",
+    "com/google/zxing/common/reedsolomon/GenericGF.class",
+    "com/google/zxing/common/reedsolomon/GenericGFPoly.class",
+    "com/google/zxing/common/reedsolomon/ReedSolomonEncoder.class",
+    "com/google/zxing/qrcode/QRCodeWriter.class",
+    "com/google/zxing/qrcode/decoder/ErrorCorrectionLevel.class",
+    "com/google/zxing/qrcode/decoder/FormatInformation.class",
+    "com/google/zxing/qrcode/decoder/Mode.class",
+    "com/google/zxing/qrcode/decoder/Version$ECB.class",
+    "com/google/zxing/qrcode/decoder/Version$ECBlocks.class",
+    "com/google/zxing/qrcode/decoder/Version.class",
+    "com/google/zxing/qrcode/encoder/BlockPair.class",
+    "com/google/zxing/qrcode/encoder/ByteMatrix.class",
+    "com/google/zxing/qrcode/encoder/Encoder$1.class",
+    "com/google/zxing/qrcode/encoder/Encoder.class",
+    "com/google/zxing/qrcode/encoder/MaskUtil.class",
+    "com/google/zxing/qrcode/encoder/MatrixUtil.class",
+    "com/google/zxing/qrcode/encoder/MinimalEncoder$1.class",
+    "com/google/zxing/qrcode/encoder/MinimalEncoder$Edge.class",
+    "com/google/zxing/qrcode/encoder/MinimalEncoder$ResultList$ResultNode.class",
+    "com/google/zxing/qrcode/encoder/MinimalEncoder$ResultList.class",
+    "com/google/zxing/qrcode/encoder/MinimalEncoder$VersionSize.class",
+    "com/google/zxing/qrcode/encoder/MinimalEncoder.class",
+    "com/google/zxing/qrcode/encoder/QRCode.class"
+  ],
+  "selection": "Transitive referenced ZXing class names in pinned classfiles, mapped to complete outer Java source files; namespace relocation only",
+  "source_artifact_sha256": "a611e3b63b661aeb2a81b8b4f4bde2daace1e2976adbb37917a674a0019c8fac",
+  "sources": [
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/BarcodeFormat.java",
+      "sha256": "54304f7c461ddb8d2531d8843384e9398a2ff410eeb987ee6384025d814a000c",
+      "upstream": "com/google/zxing/BarcodeFormat.java",
+      "upstream_sha256": "60ce1aeaa312e4a796fb9a099218999f0ddd0f0e39a188fced3af8650db71f41"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/DecodeHintType.java",
+      "sha256": "46da843cf6c204c8660cc673bef32dff5ccd3402a18ab4c9a8ae394b3bb84887",
+      "upstream": "com/google/zxing/DecodeHintType.java",
+      "upstream_sha256": "4a1fed0a4c135d6ead73dbc949c372b56556344ae9f2431c50ee1719f7e25543"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/EncodeHintType.java",
+      "sha256": "e1664f98cf4f257196d200816a10a25ffab44216e70869c2268ad2d11166c7a8",
+      "upstream": "com/google/zxing/EncodeHintType.java",
+      "upstream_sha256": "d342c763ac39ec1517d487065c04500d2fab95c7c6ef5a62fd993638266e9e0b"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/FormatException.java",
+      "sha256": "09b219e1c555d5b973e836b7000c5dd07a736f20dca4ba3e8bf82ab23f79038b",
+      "upstream": "com/google/zxing/FormatException.java",
+      "upstream_sha256": "3c0549800bbc60b08c5a685c5df80958031f53e0d4f6cf666f3ce065165f5d0d"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/ReaderException.java",
+      "sha256": "25723d54ffa59172a2ab08af076392c276125fd9f854b5b168a007b091ba85ba",
+      "upstream": "com/google/zxing/ReaderException.java",
+      "upstream_sha256": "6b29ac6470dcc95babd7387634519cf755da215d751ebb38ce98f39341763028"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/ResultPoint.java",
+      "sha256": "1d7c4491d15a0c957abbfcae9251677dcc7a5402acd635e4a67dc2c10c4732a3",
+      "upstream": "com/google/zxing/ResultPoint.java",
+      "upstream_sha256": "39e9de763392fec845de7b09a789c9b901e9a94cfa71a0a3c60a160eb68e4526"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/ResultPointCallback.java",
+      "sha256": "5f2336d56dc88e748a8a86832c8d43ddc77094dd0f5a907a874d67e4623a587a",
+      "upstream": "com/google/zxing/ResultPointCallback.java",
+      "upstream_sha256": "9b30d8aa9554e820629826055ce7f4d9ccbd7b766c22c87e97403685bb44a198"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/Writer.java",
+      "sha256": "fd98dc79b2da4cd13ac5b7d016b659af4060ea70e6cb800f0df8726c75e3260d",
+      "upstream": "com/google/zxing/Writer.java",
+      "upstream_sha256": "254c7eb0bc4727f2110cce67d19ea6c3de99d7e65fa2d9b63e55191a71e15049"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/WriterException.java",
+      "sha256": "446df6d895814eaace06d0adb94e086dfffc8e47bb283547ac0559be7483baa5",
+      "upstream": "com/google/zxing/WriterException.java",
+      "upstream_sha256": "d1ad616c3cdaab3ec232c8126f9cede8cb2f0af5b7bb2a4f3b7f9e9de9e46d23"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/common/BitArray.java",
+      "sha256": "20f70758fc7f7ddc58da0e72f9b218bdaff773cf2baaf4e51cec661a27ca7bf1",
+      "upstream": "com/google/zxing/common/BitArray.java",
+      "upstream_sha256": "e7ea53b00f8af0a1b0a3a59bc0b7b5a8fe2bd1c05cd9fc52243df5b807cc1251"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/common/BitMatrix.java",
+      "sha256": "28f5f641c7b6f289d8e807ea491eea2d0daf3dae761641dad61ce5ab89d7be7a",
+      "upstream": "com/google/zxing/common/BitMatrix.java",
+      "upstream_sha256": "244bd15e350b4f0e4ac96a3768fb019ed1b9904807c8565b98d1282ad47106c4"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/common/CharacterSetECI.java",
+      "sha256": "849dc5a93511989cab58ce0ab6db15f125db508a69aa955af989763689d2ab86",
+      "upstream": "com/google/zxing/common/CharacterSetECI.java",
+      "upstream_sha256": "57d777fd577920055c558d77851a1ea228f5d75416936797087e4faa17c5673d"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/common/ECIEncoderSet.java",
+      "sha256": "fe3cce395eb5df1ad82611ffebca734e9966f628c45e076719578f58839b780a",
+      "upstream": "com/google/zxing/common/ECIEncoderSet.java",
+      "upstream_sha256": "36cdd6f5b6ac872bc04b8d45d3ceacb8361a01b689f8d75b76e15b45263c6bb9"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/common/StringUtils.java",
+      "sha256": "296e0496ce7d2954a695aafb9bbda74ff3949de4a8c04b224ceb29a442f3b9dd",
+      "upstream": "com/google/zxing/common/StringUtils.java",
+      "upstream_sha256": "e1f57d30980e5df4b74ab70e95bfa6fbc7cc726e48043cca684b2d1fda6c3098"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/common/detector/MathUtils.java",
+      "sha256": "869ba4ab1b5e28f2d3157bc0de995b5bf42cbd8d76551b39367cd6f04cffe64c",
+      "upstream": "com/google/zxing/common/detector/MathUtils.java",
+      "upstream_sha256": "66ca67b7e8bad43298053712233cf1a76d7a34fbb50d86d0808bfbf394a2cb28"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/common/reedsolomon/GenericGF.java",
+      "sha256": "7e09a780feb35bf2d27517c3956f0c5ce2045c6675df1e360f8bd6845a1a9542",
+      "upstream": "com/google/zxing/common/reedsolomon/GenericGF.java",
+      "upstream_sha256": "512a921b17327a5f4228a203e8dc73cb8c9dff9d6f9a8a9094afd5654aa4a982"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/common/reedsolomon/GenericGFPoly.java",
+      "sha256": "fd441af34360004193411254844f92a8ab85d782fa9d4af611455802f6c550e8",
+      "upstream": "com/google/zxing/common/reedsolomon/GenericGFPoly.java",
+      "upstream_sha256": "1bc19810c16dd63c2aed81c5829431cc08e9c07adfc3723bbdc94f1b8924ad89"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/common/reedsolomon/ReedSolomonEncoder.java",
+      "sha256": "ecfd49c6be6aff29b6d943fc67c3bad2f242e34f21f02909ee874ed4b557ad62",
+      "upstream": "com/google/zxing/common/reedsolomon/ReedSolomonEncoder.java",
+      "upstream_sha256": "a28b5b5572b6f1f37836f45f40fdb71ed83cf84c8f7586c435c97a4bf02cf23c"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/qrcode/QRCodeWriter.java",
+      "sha256": "25169883e158fa38c19aa656196b2a6469e3ba01062314bc530cd28e8fc60874",
+      "upstream": "com/google/zxing/qrcode/QRCodeWriter.java",
+      "upstream_sha256": "39b56858de5e86c5c3375ff45b322683eb5a57c942dcdf2d5a23fb625adedbaf"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/qrcode/decoder/ErrorCorrectionLevel.java",
+      "sha256": "8ba793ccfb5fa83f4ac379501dfd00ead490e20defdfa8907d93749e825c26c7",
+      "upstream": "com/google/zxing/qrcode/decoder/ErrorCorrectionLevel.java",
+      "upstream_sha256": "eaaf4b86041a77c53c3d9a2b3c8e70e33cb98e529fff44a5fe6257e7c27912ae"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/qrcode/decoder/FormatInformation.java",
+      "sha256": "4fd52326bbd2d30186a9d3ac7de1e8e880f109ef5233ba939296ede1448ab575",
+      "upstream": "com/google/zxing/qrcode/decoder/FormatInformation.java",
+      "upstream_sha256": "f3f0ccf03250b41787a6cceaabe0121c47175b60e52bbbc6502ea5f20db72dda"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/qrcode/decoder/Mode.java",
+      "sha256": "2745fd1eba5df40c4714c35e87de20aec89335f13b4efa388de0c551a5347048",
+      "upstream": "com/google/zxing/qrcode/decoder/Mode.java",
+      "upstream_sha256": "05ccf6ef212a5ebab33131cf8ab6eca853e34298eca48820bb11459ae6ffae3c"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/qrcode/decoder/Version.java",
+      "sha256": "6100193eb22f87b53435f12d04fc18cf0b53228de002ea23b599165e1eafd08f",
+      "upstream": "com/google/zxing/qrcode/decoder/Version.java",
+      "upstream_sha256": "99e9583f160fd7bac81e8695eb3a4e45b891a9a52824d71ce263c27d9ad5c6f2"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/qrcode/encoder/BlockPair.java",
+      "sha256": "9a261cee0584a8c7d56a4784c2fd1ac7491bc74857153c376f86c4a0af59f7f5",
+      "upstream": "com/google/zxing/qrcode/encoder/BlockPair.java",
+      "upstream_sha256": "192a4e358f83a049874ae8e46f04f28a4843885c23f8a2829f3dffdb98cd1045"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/qrcode/encoder/ByteMatrix.java",
+      "sha256": "6a5236e8beef0ceb2c430ab1e0891b9740426336e89fa80f8351ccc21ffb6f21",
+      "upstream": "com/google/zxing/qrcode/encoder/ByteMatrix.java",
+      "upstream_sha256": "6a7e2c2be08fc2855f458fc069274db6f5c0aa1be4edd31f357a164ec388940a"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/qrcode/encoder/Encoder.java",
+      "sha256": "a961be29550e0cedf5fd5474524f5680aa40e5f04f92fe9d4014b589df4df755",
+      "upstream": "com/google/zxing/qrcode/encoder/Encoder.java",
+      "upstream_sha256": "b25b23227954112335d7c645f591edfe0811964034fb4abed627c9a9378f60bd"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/qrcode/encoder/MaskUtil.java",
+      "sha256": "decaa6f1300cc8c27815e6ebb04a776e9ceed47fac988620cfa26a12c09b270c",
+      "upstream": "com/google/zxing/qrcode/encoder/MaskUtil.java",
+      "upstream_sha256": "103db6e72d9978eb356f4945900a6cb0332a7330943653d02e8b28e100ef25ce"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/qrcode/encoder/MatrixUtil.java",
+      "sha256": "47cb0ced34003e3eeceb84634708e3505bdab887438bb73ef201fe916c9fb1ab",
+      "upstream": "com/google/zxing/qrcode/encoder/MatrixUtil.java",
+      "upstream_sha256": "d4b9cd44395b63d5d1a938788a532b51659e9192cfc8663deb3f1890cb5966fc"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/qrcode/encoder/MinimalEncoder.java",
+      "sha256": "269b557c0fe7e04306fcf65ad984314440dc6226f0d3f2cd0ad5cd10afe6ce69",
+      "upstream": "com/google/zxing/qrcode/encoder/MinimalEncoder.java",
+      "upstream_sha256": "bd7a9cef06de2f2e3367782ed341e3fb5c169f085b98985813e084faf9bf4824"
+    },
+    {
+      "relocated": "src/main/java/com/zhongbai233/net_music_can_play_bili/internal/qr/zxing/qrcode/encoder/QRCode.java",
+      "sha256": "41f746502795f1dead8c79a5dd46e5746cd75513b02372f4af169891acef55fc",
+      "upstream": "com/google/zxing/qrcode/encoder/QRCode.java",
+      "upstream_sha256": "0203518f0d82a792d473419560b919f2210c9a437dd10dca9526d18e4f003d07"
+    }
+  ],
+  "upstream": "com.google.zxing:core:3.5.4"
+}

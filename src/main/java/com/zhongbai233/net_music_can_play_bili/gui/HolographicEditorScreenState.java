@@ -29,6 +29,7 @@ import com.zhongbai233.net_music_can_play_bili.link.HolographicScreenSettings;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -329,6 +330,55 @@ abstract class HolographicEditorScreenState extends Screen {
             this.locked = locked;
             this.brightness = brightness;
         }
+
+        @Override
+        public boolean equals(Object object) {
+            if (this == object) return true;
+            if (!(object instanceof ScreenSnapshot other)) return false;
+            return Objects.equals(elementId, other.elementId)
+                    && Objects.equals(type, other.type)
+                    && Objects.equals(name, other.name)
+                    && Objects.equals(contentMode, other.contentMode)
+                    && Objects.equals(text, other.text)
+                    && Objects.equals(alignment, other.alignment)
+                    && Float.compare(distance, other.distance) == 0
+                    && Float.compare(offsetX, other.offsetX) == 0
+                    && Float.compare(offsetY, other.offsetY) == 0
+                    && Float.compare(height, other.height) == 0
+                    && Float.compare(aspect, other.aspect) == 0
+                    && Float.compare(yaw, other.yaw) == 0
+                    && Float.compare(pitch, other.pitch) == 0
+                    && Float.compare(roll, other.roll) == 0
+                    && Float.compare(scaleX, other.scaleX) == 0
+                    && Float.compare(scaleY, other.scaleY) == 0
+                    && Float.compare(scaleZ, other.scaleZ) == 0
+                    && Float.compare(pivotX, other.pivotX) == 0
+                    && Float.compare(pivotY, other.pivotY) == 0
+                    && Float.compare(pivotZ, other.pivotZ) == 0
+                    && Float.compare(skewXByY, other.skewXByY) == 0
+                    && Float.compare(skewYByX, other.skewYByX) == 0
+                    && Float.compare(textScale, other.textScale) == 0
+                    && Float.compare(volume, other.volume) == 0
+                    && Float.compare(maxDistance, other.maxDistance) == 0
+                    && Float.compare(maxWidth, other.maxWidth) == 0
+                    && Float.compare(brightness, other.brightness) == 0
+                    && followLyrics == other.followLyrics
+                    && showTranslation == other.showTranslation
+                    && color == other.color
+                    && channelIndex == other.channelIndex
+                    && autoMixJoc == other.autoMixJoc
+                    && translationColor == other.translationColor
+                    && backgroundColor == other.backgroundColor
+                    && wrap == other.wrap
+                    && enabled == other.enabled
+                    && locked == other.locked;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(elementId, type, name, contentMode, text, alignment, distance, offsetX, offsetY, height, aspect, yaw, pitch, roll, scaleX, scaleY, scaleZ, pivotX, pivotY, pivotZ, skewXByY, skewYByX, textScale, volume, maxDistance, maxWidth, brightness, followLyrics, showTranslation, color, channelIndex, autoMixJoc, translationColor, backgroundColor, wrap, enabled, locked);
+        }
+
     }
 
     protected static final class ConsoleProperties {
@@ -341,6 +391,22 @@ abstract class HolographicEditorScreenState extends Screen {
             this.hardRangeY = hardRangeY;
             this.hardRangeZ = hardRangeZ;
         }
+
+        @Override
+        public boolean equals(Object object) {
+            if (this == object) return true;
+            if (!(object instanceof ConsoleProperties other)) return false;
+            return Objects.equals(displayName, other.displayName)
+                    && Double.compare(hardRangeX, other.hardRangeX) == 0
+                    && Double.compare(hardRangeY, other.hardRangeY) == 0
+                    && Double.compare(hardRangeZ, other.hardRangeZ) == 0;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(displayName, hardRangeX, hardRangeY, hardRangeZ);
+        }
+
     }
 
     protected static final class EditorSceneState {
@@ -353,6 +419,21 @@ abstract class HolographicEditorScreenState extends Screen {
             this.selectedScreen = selectedScreen;
             this.consoleProperties = consoleProperties;
         }
+
+        @Override
+        public boolean equals(Object object) {
+            if (this == object) return true;
+            if (!(object instanceof EditorSceneState other)) return false;
+            return Objects.equals(screens, other.screens)
+                    && Objects.equals(consoleProperties, other.consoleProperties)
+                    && selectedScreen == other.selectedScreen;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(screens, consoleProperties, selectedScreen);
+        }
+
     }
 
     protected static final class OrientationAxis {

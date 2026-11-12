@@ -61,26 +61,7 @@ public class ClientAudioOutputRegistry {
 
     public static void register(DolbyAudioHandler handler, BlockPos pos, float startOffsetSeconds, String sessionId,
             UUID ownerId) {
-        if (handler == null) {
-            return;
-        }
-        Optional<PlaybackSessionId> playbackSessionId = PlaybackSessionId.parse(sessionId);
-        BlockPos key = keyFor(pos, ownerId, playbackSessionId);
-        String normalizedSessionId = playbackSessionId.map(session -> session.value()).orElse("");
-        if (!ClientAudioOutputPolicy.isCurrentSession(pos, normalizedSessionId)) {
-            handler.hardStopOutput();
-            handler.cleanup();
-            return;
-        }
-        AudioEntry entry = new AudioEntry(key, centerFor(pos), handler, OutputKind.DOLBY, System.currentTimeMillis(),
-                startOffsetTicks(startOffsetSeconds), playbackSessionId, ownerId);
-        handler.setConsoleRouteSuppressed(isMainRouteSuppressed(pos));
-        handler.setPaused(paused);
-        handler.setUserVolume(ownerId != null ? ClientAudioOwnerVolumes.getOrDefault(ownerId, 1.0F)
-                : ClientAudioOutputPolicy.volume(pos));
-        cleanupAfterPut(OUTPUTS.put(key, entry, entry.createdAtMillis()));
-        // 自动连接已注册的音响 relay
-        connectPendingRelays(key, handler);
+        registerOutput(handler, OutputKind.DOLBY, pos, startOffsetSeconds, sessionId, ownerId);
     }
 
     public static void unregister(DolbyAudioHandler handler) {
@@ -109,6 +90,11 @@ public class ClientAudioOutputRegistry {
 
     public static void registerStereo(StereoOpenALHandler handler, BlockPos pos, float startOffsetSeconds,
             String sessionId, UUID ownerId) {
+        registerOutput(handler, OutputKind.STEREO, pos, startOffsetSeconds, sessionId, ownerId);
+    }
+
+    private static void registerOutput(AudioOutputHandle handler, OutputKind kind, BlockPos pos,
+            float startOffsetSeconds, String sessionId, UUID ownerId) {
         if (handler == null) {
             return;
         }
@@ -120,7 +106,7 @@ public class ClientAudioOutputRegistry {
             handler.cleanup();
             return;
         }
-        AudioEntry entry = new AudioEntry(key, centerFor(pos), handler, OutputKind.STEREO, System.currentTimeMillis(),
+        AudioEntry entry = new AudioEntry(key, centerFor(pos), handler, kind, System.currentTimeMillis(),
                 startOffsetTicks(startOffsetSeconds), playbackSessionId, ownerId);
         handler.setConsoleRouteSuppressed(isMainRouteSuppressed(pos));
         handler.setPaused(paused);

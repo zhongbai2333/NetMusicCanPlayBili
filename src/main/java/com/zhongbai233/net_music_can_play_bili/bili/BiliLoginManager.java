@@ -5,6 +5,8 @@ import com.google.gson.JsonParser;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.media.stream.CancellableHttpRequestScope;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRequestCloseDiagnostics;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.CancellableTaskFuture;
+import java.util.concurrent.ExecutorService;
 import org.slf4j.Logger;
 
 import java.net.URI;
@@ -30,14 +32,17 @@ public final class BiliLoginManager implements AutoCloseable {
             "https://passport.bilibili.com/x/passport-login/web/qrcode/generate");
     private static final String DEFAULT_POLL_ENDPOINT =
             "https://passport.bilibili.com/x/passport-login/web/qrcode/poll";
-    private static final String DEFAULT_QR_IMAGE_ENDPOINT = "https://api.qrserver.com/v1/create-qr-code/";
 
     private final CancellableHttpRequestScope requests = new CancellableHttpRequestScope(
             HttpRequestCloseDiagnostics.global());
     private final HttpClient httpClient;
     private final URI generateUri;
     private final String pollEndpoint;
-    private final String qrImageEndpoint;
+    private final ExecutorService qrExecutor;
+    private CancellableTaskFuture<byte[]> qrTask;
+    private CompletableFuture<byte[]> qrImageFuture;
+    private String qrImageInput;
+    private long qrImageGeneration;
     private final boolean applyProductionHeaders;
     private final BiliCredentialStore credentialStore;
     private volatile String qrcodeKey;
@@ -46,23 +51,28 @@ public final class BiliLoginManager implements AutoCloseable {
     private CompletableFuture<State> pollFuture;
 
     public BiliLoginManager() {
-        this(BiliWbiSigner.HTTP, DEFAULT_GENERATE_URI, DEFAULT_POLL_ENDPOINT, DEFAULT_QR_IMAGE_ENDPOINT, true,
-                BiliCredentialStore.defaults());
+        this(BiliWbiSigner.HTTP, DEFAULT_GENERATE_URI, DEFAULT_POLL_ENDPOINT, true,
+                BiliCredentialStore.defaults(), LocalQrImageEncoder.executor());
     }
 
-    BiliLoginManager(HttpClient httpClient, URI generateUri, String pollEndpoint, String qrImageEndpoint,
+    BiliLoginManager(HttpClient httpClient, URI generateUri, String pollEndpoint,
             BiliCredentialStore credentialStore) {
-        this(httpClient, generateUri, pollEndpoint, qrImageEndpoint, false, credentialStore);
+        this(httpClient, generateUri, pollEndpoint, false, credentialStore, LocalQrImageEncoder.executor());
     }
 
-    private BiliLoginManager(HttpClient httpClient, URI generateUri, String pollEndpoint, String qrImageEndpoint,
-            boolean applyProductionHeaders, BiliCredentialStore credentialStore) {
+    private BiliLoginManager(HttpClient httpClient, URI generateUri, String pollEndpoint,
+            boolean applyProductionHeaders, BiliCredentialStore credentialStore, ExecutorService qrExecutor) {
         this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
         this.generateUri = Objects.requireNonNull(generateUri, "generateUri");
         this.pollEndpoint = requireEndpoint(pollEndpoint, "pollEndpoint");
-        this.qrImageEndpoint = requireEndpoint(qrImageEndpoint, "qrImageEndpoint");
+        this.qrExecutor = Objects.requireNonNull(qrExecutor, "qrExecutor");
         this.applyProductionHeaders = applyProductionHeaders;
         this.credentialStore = Objects.requireNonNull(credentialStore, "credentialStore");
+    }
+
+    BiliLoginManager(HttpClient client, URI generate, String poll, BiliCredentialStore store,
+            ExecutorService qrExecutor) {
+        this(client, generate, poll, false, store, qrExecutor);
     }
 
     public String getQrUrl() {
@@ -89,6 +99,9 @@ public final class BiliLoginManager implements AutoCloseable {
         if (generateFuture != null && !generateFuture.isDone()) {
             return generateFuture;
         }
+        cancelQrImage();
+        qrcodeKey = null;
+        qrUrl = null;
         try {
                 HttpRequest.Builder builder = HttpRequest.newBuilder(generateUri)
                         .timeout(Duration.ofSeconds(10))
@@ -112,6 +125,9 @@ public final class BiliLoginManager implements AutoCloseable {
             }
             return State.FAILED;
         }
+        if (requests.isClosed() || resp == null || resp.statusCode() < 200 || resp.statusCode() >= 300) {
+            return State.FAILED;
+        }
         try {
                 JsonObject root = JsonParser.parseString(resp.body()).getAsJsonObject();
                 int code = root.get("code").getAsInt();
@@ -120,8 +136,17 @@ public final class BiliLoginManager implements AutoCloseable {
                     return State.FAILED;
                 }
                 JsonObject data = root.getAsJsonObject("data");
-                this.qrcodeKey = data.get("qrcode_key").getAsString();
-                this.qrUrl = data.get("url").getAsString();
+                var keyValue = data.get("qrcode_key");
+                var urlValue = data.get("url");
+                if (keyValue == null || !keyValue.isJsonPrimitive() || !keyValue.getAsJsonPrimitive().isString()
+                        || urlValue == null || !urlValue.isJsonPrimitive() || !urlValue.getAsJsonPrimitive().isString()) {
+                    return State.FAILED;
+                }
+                String key = keyValue.getAsString();
+                String url = urlValue.getAsString();
+                if (key.isBlank() || url.isBlank() || requests.isClosed()) return State.FAILED;
+                this.qrcodeKey = key;
+                this.qrUrl = url;
                 return State.PENDING;
         } catch (Exception e) {
             logger().error("生成二维码响应解析异常", e);
@@ -162,9 +187,12 @@ public final class BiliLoginManager implements AutoCloseable {
             }
             return requests.isClosed() ? State.FAILED : State.PENDING;
         }
+        if (requests.isClosed()) return State.FAILED;
+        if (resp == null || resp.statusCode() < 200 || resp.statusCode() >= 300) return State.PENDING;
         try {
                 JsonObject root = JsonParser.parseString(resp.body()).getAsJsonObject();
                 int code = root.get("code").getAsInt();
+                if (code != 0) return State.PENDING;
                 int dataCode = root.has("data") && !root.get("data").isJsonNull()
                         ? root.getAsJsonObject("data").get("code").getAsInt()
                         : -1;
@@ -217,32 +245,42 @@ public final class BiliLoginManager implements AutoCloseable {
         }
     }
 
-    public CompletableFuture<byte[]> loadQrImage(String qrContentUrl) {
+    public synchronized CompletableFuture<byte[]> loadQrImage(String qrContentUrl) {
         if (requests.isClosed() || qrContentUrl == null || qrContentUrl.isBlank()) {
             return CompletableFuture.completedFuture(null);
         }
-        String encodedUrl = URLEncoder.encode(qrContentUrl, StandardCharsets.UTF_8);
-        String qrImageUrl = appendQuery(qrImageEndpoint, "size=180x180&data=" + encodedUrl);
-        HttpRequest request = HttpRequest.newBuilder(URI.create(qrImageUrl))
-                .header("User-Agent", "Mozilla/5.0")
-                .timeout(Duration.ofSeconds(10))
-                .GET()
-                .build();
-        return requests.sendAsync(httpClient, request, HttpResponse.BodyHandlers.ofByteArray(),
-                "bili-login-qr-image").handle((response, error) -> {
-                    if (error != null) {
-                        if (!isCancellation(error)) {
-                            logger().error("加载二维码图片异常", error);
-                        }
-                        return null;
-                    }
-                    return response.statusCode() >= 200 && response.statusCode() < 300 ? response.body() : null;
-                });
+        if (qrImageFuture != null && qrContentUrl.equals(qrImageInput) && !qrImageFuture.isDone()) {
+            return qrImageFuture;
+        }
+        cancelQrImage();
+        long generation = qrImageGeneration;
+        qrImageInput = qrContentUrl;
+        qrTask = LocalQrImageEncoder.encodeAsync(qrContentUrl, qrExecutor);
+        qrImageFuture = qrTask.handle((bytes, error) -> {
+            synchronized (BiliLoginManager.this) {
+                if (requests.isClosed() || generation != qrImageGeneration) return null;
+                if (error != null) {
+                    if (!isCancellation(error)) logger().warn("Local QR image unavailable");
+                    return null;
+                }
+                return bytes;
+            }
+        });
+        return qrImageFuture;
+    }
+
+    private void cancelQrImage() {
+        qrImageGeneration++;
+        if (qrTask != null) qrTask.cancel(true);
+        qrTask = null;
+        qrImageFuture = null;
+        qrImageInput = null;
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
         requests.close();
+        cancelQrImage();
     }
 
     int activeRequestCount() {

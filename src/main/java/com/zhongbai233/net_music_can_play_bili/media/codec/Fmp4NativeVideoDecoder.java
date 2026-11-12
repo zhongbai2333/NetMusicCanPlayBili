@@ -224,9 +224,9 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             started.set(true);
             Thread created = NetMusicThreadFactory.daemonThread("bili-native-video-decoder", () -> {
                 try {
-                    parseAndDecode();
-                } catch (IOException e) {
-                    failure = e;
+                    VideoWorkerTerminal.Result terminal = VideoWorkerTerminal.execute(this::parseAndDecode,
+                            closed::get, decodePump::totalFrames, maxFrames);
+                    failure = terminal.failure();
                 } finally {
                     finished.set(true);
                     closed.set(true);

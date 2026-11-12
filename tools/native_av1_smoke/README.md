@@ -10,6 +10,8 @@ fixture, a raw fMP4 fragment, or an IVF sample and verifies:
 - exact final frame count and strictly increasing presentation timestamps;
 - seek/reset flush after EOF.
 
+The commands below run from the repository root. They compile a standalone caller and then execute native decoding on the local device; they are separate from the headless Java test suites. Use a JDK with `--enable-native-access` support (the device workflows use Java 21).
+
 Compile and run it against a built native directory:
 
 ```text
@@ -23,19 +25,27 @@ java --enable-native-access=ALL-UNNAMED \
   videotoolbox
 ```
 
-## Six-platform release gate
+## Physical-device validation
 
-`tools/verify_native_av1_smoke.py` wraps the same caller for physical-device validation. The v48 bundle has no AV1
-software decoder, so the requested and actual backend must match the platform backend (`videotoolbox`, `d3d11va`,
-or `vaapi`). Hosted release runners only load the libraries and verify JNI exports because they do not guarantee AV1
-hardware. The separate self-hosted device workflows decode both frozen fragments, validate PTS and resource convergence,
-and collect GPU identity evidence.
+[`verify_native_av1_smoke.py`](../verify_native_av1_smoke.py) wraps the same caller. The embedded bundle identified by [`native/README.md`](../../src/main/resources/native/README.md) has no AV1 software decoder. Requested and actual backends must match the platform backend: `videotoolbox` on macOS, `d3d11va` on Windows, or `vaapi` on Linux. The runner must match the selected OS/architecture and provide a GPU/driver with AV1 support.
 
-## Optional FFmpeg FATE IVF inputs
+For example, on a compatible macOS ARM64 machine:
+
+```sh
+python3 tools/verify_native_runtime.py --platform macos-arm64
+python3 tools/verify_native_av1_smoke.py --platform macos-arm64 --hwaccel auto \
+  --report build/reports/native-av1-device/macos-arm64.json
+```
+
+The first command loads the native libraries, checks their runtime identity and JNI exports; it does not decode AV1. The second command decodes both frozen fragments, checks EOF drain, 35-second seek PTS and native resource return to baseline, then records GPU/driver identity and the actual backend. It requires local native execution, not just metadata or fixture inspection.
+
+The [single-device workflow](../../.github/workflows/native-av1-device-validation.yml) and [six-device workflow](../../.github/workflows/native-av1-device-matrix.yml) require dedicated self-hosted GPU runners. The latter also checks that all six platform reports are present and consistent. Hosted release checks only establish loadability/runtime identity/exports; the existence of these workflows does not mean that a current six-device hardware run has passed. See [release capabilities](../../docs/release-native-capabilities.md) for the published boundary.
+
+## Historical exploratory IVF inputs (2026-08-13)
 
 The caller also accepts IVF directly. The following public files were fetched
-from `https://fate-suite.ffmpeg.org/av1/` on 2026-08-13. They all completed
-with no loss or duplication and naturally had zero EOF-delayed frames:
+from `https://fate-suite.ffmpeg.org/av1/` on 2026-08-13. A single exploratory run at that time reported
+no loss or duplication and zero EOF-delayed frames for these files; its version, machine and backend are not recorded here. This is historical sample evidence, not a result for the current checkout or every hardware backend:
 
 | File | SHA-256 | Frames |
 | --- | --- | ---: |

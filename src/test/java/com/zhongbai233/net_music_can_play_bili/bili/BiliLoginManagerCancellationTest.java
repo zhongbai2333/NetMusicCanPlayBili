@@ -58,8 +58,8 @@ class BiliLoginManagerCancellationTest {
     }
 
     @Test
-    void closeCancelsSingleFlightPollAndQrImageTogether() throws Exception {
-        CountDownLatch blockingRequests = new CountDownLatch(2);
+    void closeCancelsSingleFlightPollWhileQrIsLocal() throws Exception {
+        CountDownLatch blockingRequests = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         ExecutorService serverExecutor = Executors.newCachedThreadPool();
         HttpServer server = server(serverExecutor, exchange -> {
@@ -81,12 +81,13 @@ class BiliLoginManagerCancellationTest {
             CompletableFuture<BiliLoginManager.State> poll = manager.poll();
             assertSame(poll, manager.poll());
             CompletableFuture<byte[]> qrImage = manager.loadQrImage("https://example.invalid/login");
+            assertTrue(qrImage.get(5, TimeUnit.SECONDS).length > 8);
             assertTrue(blockingRequests.await(2, TimeUnit.SECONDS));
 
             manager.close();
 
             assertEquals(BiliLoginManager.State.FAILED, poll.join());
-            assertNull(qrImage.join());
+            assertTrue(qrImage.join().length > 8);
             assertEquals(0, manager.activeRequestCount());
         } finally {
             release.countDown();
@@ -99,7 +100,7 @@ class BiliLoginManagerCancellationTest {
     private BiliLoginManager manager(HttpServer server) {
         String base = "http://127.0.0.1:" + server.getAddress().getPort();
         return new BiliLoginManager(HttpClient.newHttpClient(), URI.create(base + "/generate"),
-                base + "/poll", base + "/qr", new BiliCredentialStore(
+                base + "/poll", new BiliCredentialStore(
                         temporaryDirectory.resolve("unused-credentials.enc"), Optional::empty, new SecureRandom()));
     }
 

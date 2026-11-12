@@ -172,8 +172,12 @@ final class VideoPlaybackPresentation {
 
     private void markVisibility(boolean renderable, boolean prewarm) {
         long nowNs = System.nanoTime();
-        owner.prewarmVisible = prewarm;
-        if (renderable || prewarm) {
+        // A world pass has no authority to cancel a live GUI or wearable consumer.
+        boolean directVisible = owner.consumers.hasGuiConsumer() || owner.hasHolographicTurntableConsumer();
+        boolean demanded = renderable || prewarm || directVisible;
+        owner.prewarmVisible = demanded;
+        owner.visualTiming.setDemand(owner.generation.get(), demanded, nowNs);
+        if (demanded) {
             owner.grantDecodeAdmission();
             long offscreenSince = owner.offscreenSinceNanoTime;
             owner.lastVisibleNanoTime = nowNs;

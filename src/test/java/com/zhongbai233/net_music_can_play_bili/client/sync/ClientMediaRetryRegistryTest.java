@@ -126,4 +126,15 @@ class ClientMediaRetryRegistryTest {
         assertTrue(registry.dispatchIfPending(sourceId, other, () -> true));
         assertTrue(registry.contains(sourceId, other));
     }
+    @Test
+    void duplicateFailurePreservesPendingDispatchAndRetainedRefreshDoesNotRenewAttemptBudget() {
+        var registry=new ClientMediaRetryRegistry();var source=PlaybackSourceId.of(UUID.randomUUID());var session=PlaybackSessionId.of("retained");
+        assertEquals(ClientMediaRetryRegistry.Admission.SCHEDULE,registry.admitFailure(source,session));
+        assertEquals(ClientMediaRetryRegistry.Admission.ALREADY_PENDING,registry.admitFailure(source,session));
+        assertTrue(registry.dispatchIfPending(source,session,()->true));
+        registry.forget(source,session);
+        assertEquals(ClientMediaRetryRegistry.Admission.EXHAUSTED,registry.admitFailure(source,session));
+        registry.forgetSource(source);
+        assertEquals(ClientMediaRetryRegistry.Admission.SCHEDULE,registry.admitFailure(source,PlaybackSessionId.of("new")));
+    }
 }

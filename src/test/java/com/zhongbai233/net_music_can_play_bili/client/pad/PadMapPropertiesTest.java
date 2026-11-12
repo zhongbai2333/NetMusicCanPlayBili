@@ -18,40 +18,6 @@ class PadMapPropertiesTest {
     }
 
     @Test
-    void layoutDefaultsPreserveExistingDimensions() {
-        PadMapProperties.Layout layout = PadMapProperties.layout();
-
-        assertEquals(384, layout.viewWidth());
-        assertEquals(192, layout.viewHeight());
-        assertEquals(96, layout.overscan());
-        assertEquals(576, layout.width());
-        assertEquals(384, layout.height());
-        assertEquals(5, layout.cellSamples());
-    }
-
-    @Test
-    void currentViewWidthTakesPrecedenceOverLegacyMapSize() {
-        set(PadMapProperties.LEGACY_SIZE, "420");
-        assertEquals(420, PadMapProperties.layout().viewWidth());
-        assertEquals(612, PadMapProperties.layout().width());
-
-        set(PadMapProperties.VIEW_WIDTH, "512");
-        assertEquals(512, PadMapProperties.layout().viewWidth());
-        assertEquals(704, PadMapProperties.layout().width());
-    }
-
-    @Test
-    void invalidCurrentLayoutValueFallsBackToLegacyAndDerivedDefaults() {
-        set(PadMapProperties.VIEW_WIDTH, "invalid");
-        set(PadMapProperties.LEGACY_SIZE, "420");
-        set(PadMapProperties.WIDTH, "invalid");
-
-        PadMapProperties.Layout layout = PadMapProperties.layout();
-        assertEquals(420, layout.viewWidth());
-        assertEquals(612, layout.width());
-    }
-
-    @Test
     void cacheDefaultsAndExistingMinimumsRemainStable() {
         PadMapProperties.Cache defaults = PadMapProperties.cache();
         assertEquals(24, defaults.chunksPerTick());

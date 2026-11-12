@@ -26,6 +26,7 @@ public final class MP4Client {
     private static final Map<PlaybackSourceId, Boolean> DEVICE_HEADPHONE_LINKS = new ConcurrentHashMap<>();
     private static final Map<PlaybackSourceId, PendingSelection> PENDING_SELECTIONS = new ConcurrentHashMap<>();
     private static final Map<PlaybackSourceId, PendingStateSync> PENDING_STATE_SYNCS = new ConcurrentHashMap<>();
+    private static final Map<PlaybackSourceId, PendingFocusPlayback> PENDING_FOCUS_PLAYBACK = new ConcurrentHashMap<>();
     private static long localStateSequence;
     private static int ensureCooldownTicks;
     private static int fastSyncTicks;
@@ -184,12 +185,39 @@ public final class MP4Client {
         if (safeTime < currentTime) {
             return false;
         }
+        state = preservePendingFocusPlayback(sourceId, state, safeTime);
         state = preservePendingSelection(deviceId, state, queue);
         DEVICE_STATES.put(sourceId, state);
         DEVICE_STATE_TIMES.put(sourceId, safeTime);
         DEVICE_QUEUES.put(sourceId, cleanQueue(queue));
         DEVICE_HEADPHONE_LINKS.put(sourceId, headphoneLinked);
+        ItemStack focused = stackForActiveDevice();
+        if (MP4FocusState.active() && deviceId.equals(MP4Item.readDeviceId(focused))) {
+            MP4FocusState.loadQueue(DEVICE_QUEUES.get(sourceId));
+            MP4FocusState.applyAuthoritativePlayback(state);
+        }
         return true;
+    }
+
+    private static MP4Item.State preservePendingFocusPlayback(PlaybackSourceId sourceId,
+            MP4Item.State state, long serverTime) {
+        PendingFocusPlayback pending = PENDING_FOCUS_PLAYBACK.get(sourceId);
+        if (pending == null) {
+            return state;
+        }
+        boolean acknowledged = serverTime >= pending.serverTime()
+                && state.selectedQueueIndex() == pending.state().selectedQueueIndex()
+                && (!pending.playingChanged() || state.playing() == pending.state().playing());
+        if (acknowledged || System.currentTimeMillis() - pending.createdAtMillis() > PENDING_SELECTION_CONFIRM_MILLIS) {
+            PENDING_FOCUS_PLAYBACK.remove(sourceId, pending);
+            return state;
+        }
+        // A late mirror may update configuration, but cannot undo the newer local transport intent.
+        return new MP4Item.State(pending.playingChanged() ? pending.state().playing() : state.playing(),
+                state.shuffle(), state.videoEnabled(), state.landscape(), state.qualityIndex(),
+                pending.state().selectedQueueIndex(), state.queueScrollOffset(), state.volumePerMille(),
+                state.repeatMode(), state.playlistOpen(), state.lyricsEnabled(), state.subtitleMode(),
+                state.subtitleAiEnabled(), pending.state().progressPerMille(), state.rotationHintShown());
     }
 
     public static void markStackStateDirty(ItemStack stack, MP4Item.State state) {
@@ -270,6 +298,12 @@ public final class MP4Client {
                 old.repeatMode(), old.playlistOpen(), old.lyricsEnabled(), old.subtitleMode(),
                 old.subtitleAiEnabled(), progressPerMille, old.rotationHintShown());
         markStackStateDirty(stack, state);
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.getConnection() != null) {
+            minecraft.getConnection().send(new com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackControlPacket(
+                    com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackControlPacket.Action.SELECT,
+                    selected, old.volumePerMille(), 0L, deviceId));
+        }
         PENDING_SELECTIONS.put(PlaybackSourceId.of(deviceId),
                 new PendingSelection(selected, System.currentTimeMillis()));
     }
@@ -292,7 +326,15 @@ public final class MP4Client {
     public static void cacheFocusedState(UUID deviceId) {
         if (deviceId != null) {
             PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
-            DEVICE_STATES.put(sourceId, MP4FocusState.save());
+            MP4Item.State local = MP4FocusState.save();
+            MP4Item.State previous = DEVICE_STATES.get(sourceId);
+            if (previous != null && (previous.playing() != local.playing()
+                    || previous.selectedQueueIndex() != local.selectedQueueIndex())) {
+                PENDING_FOCUS_PLAYBACK.put(sourceId, new PendingFocusPlayback(local,
+                        previous.playing() != local.playing(), DEVICE_STATE_TIMES.getOrDefault(sourceId, 0L),
+                        System.currentTimeMillis()));
+            }
+            DEVICE_STATES.put(sourceId, local);
             DEVICE_STATE_TIMES.putIfAbsent(sourceId, 0L);
             DEVICE_QUEUES.putIfAbsent(sourceId, MP4Item.readQueue(stackForActiveDevice()));
         }
@@ -311,6 +353,7 @@ public final class MP4Client {
         DEVICE_QUEUES.clear();
         DEVICE_HEADPHONE_LINKS.clear();
         PENDING_SELECTIONS.clear();
+        PENDING_FOCUS_PLAYBACK.clear();
         PENDING_STATE_SYNCS.clear();
         ensureCooldownTicks = 0;
         fastSyncTicks = 0;
@@ -441,6 +484,7 @@ public final class MP4Client {
         DEVICE_QUEUES.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
         DEVICE_HEADPHONE_LINKS.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
         PENDING_SELECTIONS.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
+        PENDING_FOCUS_PLAYBACK.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
         PENDING_STATE_SYNCS.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
     }
 
@@ -456,6 +500,10 @@ public final class MP4Client {
         if (deviceId != null) {
             deviceIds.add(deviceId);
         }
+    }
+
+    private record PendingFocusPlayback(MP4Item.State state, boolean playingChanged, long serverTime,
+            long createdAtMillis) {
     }
 
     private record PendingSelection(int selectedQueueIndex, long createdAtMillis) {

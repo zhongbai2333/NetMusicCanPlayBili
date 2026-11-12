@@ -6,7 +6,10 @@ import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.item.ItemStack;
 
+import java.lang.ref.WeakReference;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 
 /** 从客户端服务端配置镜像恢复 MP4 播放，绝不从 ItemStack 运行时 NBT 恢复。 */
@@ -15,25 +18,18 @@ public final class MP4AutoResumeClient {
 
     private static UUID lastPlayerId;
     private static int ticksSincePlayerReady;
-    private static int lastResumeFingerprint;
+    private static WeakReference<Object> lastConnection = new WeakReference<>(null);
+    // A missing local decoder is not a reconnect. Each device gets one restoration
+    // attempt per connection epoch; accepted playback and terminal events consume it.
+    private static final Set<UUID> consumedDevices = new HashSet<>();
 
     private MP4AutoResumeClient() {
     }
 
     public static void tick() {
         Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.player == null || minecraft.level == null || minecraft.getConnection() == null) {
-            ticksSincePlayerReady = 0;
-            lastResumeFingerprint = 0;
-            lastPlayerId = null;
+        if (!observeConnection(minecraft)) {
             return;
-        }
-
-        UUID playerId = minecraft.player.getUUID();
-        if (!playerId.equals(lastPlayerId)) {
-            lastPlayerId = playerId;
-            ticksSincePlayerReady = 0;
-            lastResumeFingerprint = 0;
         }
         if (ticksSincePlayerReady < RESUME_DELAY_TICKS) {
             ticksSincePlayerReady++;
@@ -46,7 +42,6 @@ public final class MP4AutoResumeClient {
         }
         MP4Item.State state = MP4Client.cachedStateFor(stack);
         if (!state.playing()) {
-            lastResumeFingerprint = 0;
             return;
         }
         int queueSize = MP4Item.queueSize(stack);
@@ -59,15 +54,13 @@ public final class MP4AutoResumeClient {
         if (deviceId == null) {
             return;
         }
-        int fingerprint = resumeFingerprint(deviceId, queueIndex, state.volumePerMille(), targetMillis);
         if (ClientMediaPlayback.hasPlayback(deviceId)) {
+            consumedDevices.add(deviceId);
             return;
         }
-        if (fingerprint == lastResumeFingerprint) {
+        if (!consumedDevices.add(deviceId)) {
             return;
         }
-
-        lastResumeFingerprint = fingerprint;
         minecraft.getConnection().send(new MP4PlaybackControlPacket(
                 MP4PlaybackControlPacket.Action.START,
                 queueIndex,
@@ -78,8 +71,9 @@ public final class MP4AutoResumeClient {
 
     public static void reset() {
         ticksSincePlayerReady = 0;
-        lastResumeFingerprint = 0;
-        lastPlayerId = null;
+        // World unload and player replacement also use this cleanup hook. A
+        // temporary loss of world/player is not proof of a new connection.
+        // Keep only UUIDs and a weak listener identity until the next connection.
     }
 
     private static long targetMillis(ItemStack stack, MP4Item.State state, int queueIndex) {
@@ -99,11 +93,30 @@ public final class MP4AutoResumeClient {
                 Math.round(state.progressPerMille() / 1000.0D * durationMillis)));
     }
 
-    private static int resumeFingerprint(UUID playerId, int queueIndex, int volumePerMille, long targetMillis) {
-        int result = playerId.hashCode();
-        result = 31 * result + queueIndex;
-        result = 31 * result + volumePerMille;
-        result = 31 * result + Long.hashCode(targetMillis / 1000L);
-        return result;
+    /** Called only after a sync is accepted, or a source is stopped/completed. */
+    static void consumeRecovery(UUID deviceId) {
+        if (deviceId != null && observeConnection(Minecraft.getInstance())) {
+            consumedDevices.add(deviceId);
+        }
+    }
+
+    private static boolean observeConnection(Minecraft minecraft) {
+        if (minecraft == null || minecraft.player == null || minecraft.getConnection() == null) {
+            ticksSincePlayerReady = 0;
+            return false;
+        }
+        UUID playerId = minecraft.player.getUUID();
+        Object connection = minecraft.getConnection();
+        if (!playerId.equals(lastPlayerId) || connection != lastConnection.get()) {
+            ticksSincePlayerReady = 0;
+            consumedDevices.clear();
+            lastPlayerId = playerId;
+            lastConnection = new WeakReference<>(connection);
+        }
+        if (minecraft.level == null) {
+            ticksSincePlayerReady = 0;
+            return false;
+        }
+        return true;
     }
 }

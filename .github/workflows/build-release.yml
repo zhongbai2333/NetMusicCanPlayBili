@@ -150,6 +150,14 @@ jobs:
           set -euo pipefail
           ./gradlew build --stacktrace -Pmod_version="${{ steps.meta.outputs.mod_version }}"
 
+      - name: Verify platform contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          # platformTest is not part of `check`; releases must still exercise save formats,
+          # packet codecs, permissions and credentials against the Minecraft ABI.
+          ./gradlew platformTest --stacktrace -Pmod_version="${{ steps.meta.outputs.mod_version }}"
+
       - name: Bundle artifact
         id: bundle
         shell: bash

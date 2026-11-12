@@ -51,7 +51,7 @@ jarJar(implementation("com.github.zhongbai2333.SceneEditor:scene-editor-minecraf
 ```
 
 最低版本设为 `1.0.1-beta.2`，使 NCPB 与其他 Scene Editor 宿主统一使用包含相机极点钳制、事务修复及共享交互策略的
-同一兼容基线。`1.0.0-beta.1` 的运行时 group 常量仍是迁移前值，继续不得参与多宿主版本协商。
+同一兼容基线。`1.0.0-beta.1` 的运行时 group 常量仍是迁移前值，仍不得参与多宿主版本协商。
 
 `verifySceneEditorJiJ` 检查：
 
@@ -71,20 +71,24 @@ Scene Editor 采用独立语义版本。主模组版本、世界数据与物品�
 - 全息眼镜当前为 `HolographicGlassesItem.PERSISTENCE_SCHEMA_VERSION = 1`；
 - core 的 `SceneDocument` 不包含主模组持久化 schema。
 
-本次迁移仅把库的构建与发布边界移出主仓库，不提升 NetMusicCanPlayBili 的 Mod 版本。
+库的构建与发布由独立 SceneEditor 仓库维护；NetMusicCanPlayBili 的版本号仍由主项目管理。
 
 ## 可重复验证
 
-```bash
-# SceneEditor 独立项目：构建、测试并发布到本地 Maven
+在 SceneEditor 仓库根目录构建、测试并发布到本地 Maven：
+
+```sh
 ./gradlew build \
   :scene-editor-core:publishToMavenLocal \
   :scene-editor-minecraft:publishToMavenLocal --no-daemon
-
-# 主项目：解析 JitPack release 并验证 production JiJ
-bash gradlew clean build verifySceneEditorJiJ --refresh-dependencies --no-daemon
-
-# 主项目 integrated-client adapter 实际调用
-bash gradlew runBenchClient -PenableModBench=true \
-  -PmodBench.scenarios=ncpb.scene-editor-library-smoke --no-daemon
 ```
+
+在 NCPB 仓库根目录验证主项目和 production JiJ：
+
+```sh
+bash gradlew build platformTest verifySceneEditorJiJ --no-daemon
+```
+
+`verifySceneEditorJiJ` 验证主项目的打包结构和版本元数据，不能证明游戏运行时的库加载或 adapter 调用成功。
+库自身行为由独立 SceneEditor 仓库的测试维护；NCPB 保留真实宿主适配的回归测试。
+集成客户端的 GUI 生命周期按[发布前人工检查单](testing/manual-release-checklist.md)验收，不能以结构检查或单元测试代替。

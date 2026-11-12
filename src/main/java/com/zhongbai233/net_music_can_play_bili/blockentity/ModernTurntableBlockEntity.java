@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.blockentity;
 
+import com.zhongbai233.net_music_can_play_bili.server.BiliWhitelistManager;
+
 import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.github.tartaricacid.netmusic.api.resolver.MusicPlayResolverManager;
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
@@ -417,20 +419,21 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
             }
             return;
         }
-        if (!isPlaybackAllowed(serverLevel, songInfo.songUrl, triggerPlayer)) {
+        if (!BiliWhitelistManager.isShortLink(songInfo.songUrl)
+                && !isPlaybackAllowed(serverLevel, songInfo.songUrl, triggerPlayer)) {
             return;
         }
 
         ItemMusicCD.SongInfo original = songInfo.clone();
         playbackOwnerId = triggerPlayer != null ? triggerPlayer.getUUID() : null;
         ResolveGeneration capturedGeneration = beginPlaybackIntent();
-        MusicPlayResolverManager.resolve(original.clone())
+        BiliWhitelistManager.resolveSong(original)
                 .whenCompleteAsync((resolved, error) -> {
                     if (!acceptsPlaybackResult(serverLevel, capturedGeneration, currentDiscUrl(), original.songUrl)) {
                         return;
                     }
                     resolvingPlayback = false;
-                    if (error != null) {
+                    if (error != null || resolved == null) {
                         LOGGER.error("现代化唱片机解析播放失败: {}", original.songName, error);
                         return;
                     }
@@ -445,7 +448,7 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
         if (current == null || !Objects.equals(current.songUrl, original.songUrl)) {
             return;
         }
-        if (!isPlaybackAllowed(serverLevel, original.songUrl, null)) {
+        if (!isPlaybackAllowed(serverLevel, BiliWhitelistManager.playbackIdentity(original.songUrl, resolved.songUrl), null)) {
             stopPlayback();
             return;
         }
@@ -453,7 +456,8 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
             return;
         }
 
-        rawUrl = original.songUrl != null ? original.songUrl : "";
+        rawUrl = BiliWhitelistManager.playbackIdentity(original.songUrl, resolved.songUrl);
+        if (rawUrl == null) rawUrl = "";
         playUrl = playbackUrlForStorage(rawUrl, resolved.songUrl != null ? resolved.songUrl : rawUrl);
         songName = resolved.songName != null && !resolved.songName.isBlank()
                 ? resolved.songName
@@ -693,7 +697,8 @@ public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackA
 
     private boolean acceptsPlaybackResult(ServerLevel requestedLevel, ResolveGeneration capturedGeneration,
             String currentSource, String requestedSource) {
-        return TurntableResolveAdmissionPolicy.decide(isRemoved(), level == requestedLevel,
+        return BiliWhitelistManager.acceptsServer(requestedLevel.getServer())
+                && TurntableResolveAdmissionPolicy.decide(isRemoved(), level == requestedLevel,
                 playbackIntentGeneration, capturedGeneration, currentSource, requestedSource)
                 == TurntableResolveAdmissionPolicy.Decision.APPLY;
     }

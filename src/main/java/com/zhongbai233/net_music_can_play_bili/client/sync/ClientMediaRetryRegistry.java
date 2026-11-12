@@ -10,6 +10,17 @@ import java.util.function.BooleanSupplier;
 
 /** Owns one-shot client stream retry admission by exact source/session identity. */
 final class ClientMediaRetryRegistry {
+    private final java.util.Map<Key, Integer> attempts = new java.util.HashMap<>();
+    enum Admission { SCHEDULE, ALREADY_PENDING, EXHAUSTED }
+    synchronized Admission admitFailure(PlaybackSourceId sourceId, PlaybackSessionId sessionId) {
+        Key key = new Key(sourceId, sessionId);
+        if (pending.contains(key)) return Admission.ALREADY_PENDING;
+        if (attempts.getOrDefault(key, 0) >= 1) return Admission.EXHAUSTED;
+        attempts.put(key, 1);
+        pending.add(key);
+        return Admission.SCHEDULE;
+    }
+
     private final Set<Key> pending = ConcurrentHashMap.newKeySet();
 
     synchronized boolean tryMark(PlaybackSourceId sourceId, PlaybackSessionId sessionId) {
@@ -29,6 +40,7 @@ final class ClientMediaRetryRegistry {
             return;
         }
         pending.removeIf(key -> key.sourceId().equals(sourceId));
+        attempts.keySet().removeIf(key -> key.sourceId().equals(sourceId));
     }
 
     synchronized boolean dispatchIfPending(PlaybackSourceId sourceId, PlaybackSessionId sessionId,
@@ -46,6 +58,7 @@ final class ClientMediaRetryRegistry {
 
     synchronized void clear() {
         pending.clear();
+        attempts.clear();
     }
 
     private record Key(PlaybackSourceId sourceId, PlaybackSessionId sessionId) {

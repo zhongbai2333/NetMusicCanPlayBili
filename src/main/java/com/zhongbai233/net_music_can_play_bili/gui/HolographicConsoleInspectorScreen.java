@@ -327,7 +327,7 @@ abstract class HolographicConsoleInspectorScreen extends HolographicEditorLifecy
         consoleTrustedPlayersBox = addConsoleTextBox(rangeX, 216, 202,
                 document.trustedPlayerIds().stream().map(id -> id.toString()).sorted()
                         .collect(java.util.stream.Collectors.joining(",")), ignored -> {
-                });
+                }, (ControlConsoleDocument.MAX_TRUSTED_PLAYERS + 1) * 37);
         addRenderableWidget(new BlackGoldButton(rangeX + 102, 152, 100, 20,
                 Component.literal("应用权限"), button -> sendConsoleAccessUpdate(), GOLD));
         if (consoleSaveConflict) {
@@ -373,7 +373,11 @@ abstract class HolographicConsoleInspectorScreen extends HolographicEditorLifecy
         LinkedHashSet<UUID> result = new LinkedHashSet<>();
         for (String value : text.trim().split("[,;\\s]+")) {
             if (!value.isBlank()) {
-                result.add(UUID.fromString(value));
+                UUID parsed = UUID.fromString(value);
+                if (!parsed.toString().equalsIgnoreCase(value)) {
+                    throw new IllegalArgumentException("trusted player ID must be a complete canonical UUID");
+                }
+                result.add(parsed);
             }
         }
         if (result.size() > ControlConsoleDocument.MAX_TRUSTED_PLAYERS) {
@@ -400,7 +404,13 @@ abstract class HolographicConsoleInspectorScreen extends HolographicEditorLifecy
 
     protected EditBox addConsoleTextBox(int x, int y, int boxWidth, String value,
             java.util.function.Consumer<String> responder) {
+        return addConsoleTextBox(x, y, boxWidth, value, responder, 32);
+    }
+
+    protected EditBox addConsoleTextBox(int x, int y, int boxWidth, String value,
+            java.util.function.Consumer<String> responder, int maximumLength) {
         EditBox box = new EditBox(font, x, y, boxWidth, 18, Component.literal("中控台名称"));
+        box.setMaxLength(maximumLength);
         box.setValue(value);
         box.setResponder(responder);
         addRenderableWidget(box);

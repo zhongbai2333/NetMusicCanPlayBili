@@ -47,6 +47,10 @@ final class PadResolveIntentRegistry {
         return deviceId != null && intent != null && active.get(PlaybackSourceId.of(deviceId)) == intent;
     }
 
+    synchronized boolean hasPending(UUID deviceId) {
+        return deviceId != null && active.containsKey(PlaybackSourceId.of(deviceId));
+    }
+
     synchronized void complete(UUID deviceId, Intent intent) {
         if (deviceId != null && intent != null) {
             active.remove(PlaybackSourceId.of(deviceId), intent);

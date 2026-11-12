@@ -16,23 +16,35 @@ public final class ControlConsoleConsumerLeaseRegistry {
     }
 
     public static synchronized UUID acquireOrRenew(Key key, long nowMillis) {
+        Lease current = LEASES.get(key);
+        return acquireOrRenew(key, nowMillis, current != null ? current.consumerGeneration() : 0L);
+    }
+
+    public static synchronized UUID acquireOrRenew(Key key, long nowMillis, long consumerGeneration) {
         Objects.requireNonNull(key, "key");
         Lease current = LEASES.get(key);
-        if (current != null && current.expiresAtMillis() > nowMillis) {
-            LEASES.put(key, new Lease(current.leaseId(), expiresAt(nowMillis)));
-            return current.leaseId();
+        if (consumerGeneration < 0L || current != null && current.expiresAtMillis() > nowMillis
+                && consumerGeneration < current.consumerGeneration()) {
+            return null;
         }
-        UUID leaseId = UUID.randomUUID();
-        LEASES.put(key, new Lease(leaseId, expiresAt(nowMillis)));
+        UUID leaseId = current != null && current.expiresAtMillis() > nowMillis
+                ? current.leaseId() : UUID.randomUUID();
+        LEASES.put(key, new Lease(leaseId, expiresAt(nowMillis), consumerGeneration));
         return leaseId;
     }
 
     public static synchronized boolean renew(Key key, UUID leaseId, long nowMillis) {
         Lease current = LEASES.get(key);
-        if (current == null || current.expiresAtMillis() <= nowMillis || !current.leaseId().equals(leaseId)) {
+        return current != null && renew(key, leaseId, nowMillis, current.consumerGeneration());
+    }
+
+    public static synchronized boolean renew(Key key, UUID leaseId, long nowMillis, long consumerGeneration) {
+        Lease current = LEASES.get(key);
+        if (current == null || current.expiresAtMillis() <= nowMillis || !current.leaseId().equals(leaseId)
+                || consumerGeneration < current.consumerGeneration()) {
             return false;
         }
-        LEASES.put(key, new Lease(current.leaseId(), expiresAt(nowMillis)));
+        LEASES.put(key, new Lease(current.leaseId(), expiresAt(nowMillis), consumerGeneration));
         return true;
     }
 
@@ -50,6 +62,13 @@ public final class ControlConsoleConsumerLeaseRegistry {
         Lease lease = LEASES.get(key);
         if (lease != null && lease.leaseId().equals(leaseId)) {
             LEASES.remove(key);
+        }
+    }
+
+    public static synchronized void release(Key key, UUID leaseId, long consumerGeneration) {
+        Lease lease = LEASES.get(key);
+        if (lease != null && consumerGeneration >= lease.consumerGeneration()) {
+            release(key, leaseId);
         }
     }
 
@@ -90,6 +109,6 @@ public final class ControlConsoleConsumerLeaseRegistry {
         }
     }
 
-    private record Lease(UUID leaseId, long expiresAtMillis) {
+    private record Lease(UUID leaseId, long expiresAtMillis, long consumerGeneration) {
     }
 }

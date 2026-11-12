@@ -36,6 +36,8 @@ final class Mp4ClientMediaSyncPolicy implements ClientMediaSyncPolicy {
 
     @Override
     public void stop(UUID sourceId) {
+        MP4AutoResumeClient.consumeRecovery(sourceId);
+        com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalRegistry.remove(sourceId);
         ClientMediaPlaybackSessions.stop(sourceId,
             deviceId -> MP4HandheldVideoClient.stop(deviceId, "播放已停止"));
     }
@@ -57,6 +59,14 @@ final class Mp4ClientMediaSyncPolicy implements ClientMediaSyncPolicy {
     @Override
     public boolean shouldRebuildSound(UUID sourceId, ClientMediaSyncPayload payload) {
         ClientMediaSoundHandle sound = ClientMediaSoundRegistry.get(sourceId);
+        String incomingToken = com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync
+                .parseTerminalToken(payload.playUrl());
+        if (sound instanceof ClientMediaMovingSound moving
+                && !incomingToken.isEmpty() && !moving.transportToken().equals(incomingToken)) {
+            sound.discardWithoutFinishing();
+            ClientMediaSoundRegistry.remove(sourceId);
+            return true;
+        }
         if (sound == null || payload.playbackSessionId().isEmpty()
                 || !payload.playbackSessionId().equals(sound.playbackSession())
                 || sound.stopped()) {
@@ -96,6 +106,21 @@ final class Mp4ClientMediaSyncPolicy implements ClientMediaSyncPolicy {
 
     @Override
     public void beforeRegisterPlayback(ClientMediaSyncPayload payload, UUID sourceId) {
+        if (!PadClientMediaSessionIds.isPadSession(payload.sessionId())) {
+            MP4AutoResumeClient.consumeRecovery(sourceId);
+        }
+        String incomingToken = com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync
+                .parseTerminalToken(payload.playUrl());
+        // A tokenless duplicate of the retained session does not replace an owned
+        // physical attempt or cancel its initial asynchronous preparation.
+        boolean tokenlessRetained = incomingToken.isEmpty()
+                && !com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalRegistry
+                        .token(sourceId, payload.sessionId()).isEmpty();
+        if (!tokenlessRetained
+                && com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalRegistry.observe(payload, sourceId)) {
+            ClientMediaPrepareLauncher.removeScheduledForDevice(sourceId);
+            MP4HandheldVideoClient.stop(sourceId, "刷新播放源");
+        }
         if (MP4HandheldVideoClient.isMp4DeviceProfile(sourceId) && !MP4HandheldVideoClient.isDeviceInHotbar(sourceId)) {
             MP4HandheldVideoClient.stop(sourceId, "等待快捷栏");
         }

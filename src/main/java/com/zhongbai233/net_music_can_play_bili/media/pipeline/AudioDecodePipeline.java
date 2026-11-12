@@ -46,6 +46,10 @@ public interface AudioDecodePipeline extends AutoCloseable {
         return "";
     }
 
+    default com.zhongbai233.net_music_can_play_bili.media.audio.AudioDrainStatus drainStatus() {
+        return com.zhongbai233.net_music_can_play_bili.media.audio.AudioDrainStatus.RUNNING;
+    }
+
     default void finish() throws IOException {
     }
 

@@ -32,13 +32,14 @@ final class MP4PlaybackProgressPolicy {
 
     static long clampTarget(int durationSeconds, long elapsedMillis) {
         if (durationSeconds <= 0) {
-            return 0L;
+            return Math.max(0L, elapsedMillis);
         }
         long max = Math.max(0L, durationSeconds * 1000L - 50L);
         return Math.max(0L, Math.min(max, elapsedMillis));
     }
 
     static int progressPerMille(long elapsedMillis, int durationSeconds) {
+        if (durationSeconds <= 0) return 0;
         long durationMillis = Math.max(1L, (long) Math.max(1, durationSeconds) * 1000L);
         long elapsed = Math.max(0L, Math.min(durationMillis, elapsedMillis));
         return Math.max(0, Math.min(1000, (int) Math.round(elapsed * 1000.0D / durationMillis)));

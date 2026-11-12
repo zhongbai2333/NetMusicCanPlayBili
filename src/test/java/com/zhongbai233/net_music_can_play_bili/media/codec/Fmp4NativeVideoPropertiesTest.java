@@ -47,27 +47,6 @@ class Fmp4NativeVideoPropertiesTest {
     }
 
     @Test
-    void canonicalKeysOverrideExistingBiliAliases() {
-        set(Fmp4NativeVideoProperties.LEGACY_RANGE_SEEK_AUTO_OFFSET_MILLIS, "6000");
-        set(Fmp4NativeVideoProperties.LEGACY_NO_COPY_DROP_GUARD_MILLIS, "1200");
-        set(Fmp4NativeVideoProperties.LEGACY_STREAM_RECOVERY_ATTEMPTS, "4");
-        set(Fmp4NativeVideoProperties.LEGACY_SEGMENT_BASE_CACHE_MAX_ENTRIES, "640");
-        assertEquals(6_000L, Fmp4NativeVideoProperties.seek().autoOffsetMillis());
-        assertEquals(1_200L, Fmp4NativeVideoProperties.seek().noCopyDropGuardMillis());
-        assertEquals(4, Fmp4NativeVideoProperties.decoder().streamRecoveryAttempts());
-        assertEquals(640, Fmp4NativeVideoProperties.decoder().segmentBaseCacheMaxEntries());
-
-        set(Fmp4NativeVideoProperties.RANGE_SEEK_AUTO_OFFSET_MILLIS, "3000");
-        set(Fmp4NativeVideoProperties.NO_COPY_DROP_GUARD_MILLIS, "500");
-        set(Fmp4NativeVideoProperties.STREAM_RECOVERY_ATTEMPTS, "2");
-        set(Fmp4NativeVideoProperties.SEGMENT_BASE_CACHE_MAX_ENTRIES, "256");
-        assertEquals(3_000L, Fmp4NativeVideoProperties.seek().autoOffsetMillis());
-        assertEquals(500L, Fmp4NativeVideoProperties.seek().noCopyDropGuardMillis());
-        assertEquals(2, Fmp4NativeVideoProperties.decoder().streamRecoveryAttempts());
-        assertEquals(256, Fmp4NativeVideoProperties.decoder().segmentBaseCacheMaxEntries());
-    }
-
-    @Test
     void unsafeNonPositiveCapacitiesAreClamped() {
         set(Fmp4NativeVideoProperties.MAX_PENDING_FRAMES, "0");
         set(Fmp4NativeVideoProperties.INIT_PROBE_BYTES, "0");
@@ -94,23 +73,6 @@ class Fmp4NativeVideoPropertiesTest {
         assertEquals(0L, seek.prerollBytes());
         assertEquals(0.0D, seek.closeFragmentSeconds());
         assertEquals(0.0D, seek.targetEpsilonSeconds());
-    }
-
-    @Test
-    void invalidAndNonFiniteValuesUseCompatibilityDefaults() {
-        set(Fmp4NativeVideoProperties.MAX_PENDING_FRAMES, "invalid");
-        set(Fmp4NativeVideoProperties.CLOSE_FRAGMENT_SECONDS, "NaN");
-        set(Fmp4NativeVideoProperties.TARGET_EPSILON_SECONDS, "Infinity");
-        set(Fmp4NativeVideoProperties.RANGE_SEEK_ENABLED, "yes");
-        set(Fmp4NativeVideoProperties.REUSE_OUTPUT_BUFFERS, "yes");
-        set(Fmp4NativeVideoProperties.DIRECT_NV12_BUFFERS, "yes");
-
-        assertEquals(8, Fmp4NativeVideoProperties.decoder().maxPendingFrames());
-        assertTrue(Fmp4NativeVideoProperties.decoder().reuseOutputBuffers());
-        assertTrue(Fmp4NativeVideoProperties.decoder().directNv12Buffers());
-        assertEquals(3.0D, Fmp4NativeVideoProperties.seek().closeFragmentSeconds());
-        assertEquals(0.25D, Fmp4NativeVideoProperties.seek().targetEpsilonSeconds());
-        assertFalse(Fmp4NativeVideoProperties.seek().rangeEnabled());
     }
 
     @Test

@@ -130,6 +130,23 @@ public final class NetMusicBiliServerCommands {
     }
 
     private static int addWhitelist(CommandSourceStack source, String raw) {
+        if (!BiliWhitelistManager.canonicalReady(raw)) {
+            var server = source.getServer();
+            var actor = source.getPlayer();
+            BiliWhitelistManager.canonicalResourceAsync(raw).whenCompleteAsync((canonical, error) -> {
+                if (!BiliWhitelistManager.acceptsServer(server)
+                        || actor != null && server.getPlayerList().getPlayer(actor.getUUID()) != actor
+                        || !canManageWhitelist(source)) return;
+                if (error != null || canonical == null || canonical.isEmpty()) {
+                    source.sendFailure(Component.literal("短链解析失败，未修改白名单，请重试。"));
+                    return;
+                }
+                addWhitelist(source, raw);
+            }, server);
+            source.sendSuccess(() -> Component.literal("正在解析短链…"), false);
+            return 1;
+        }
+
         try {
             BiliWhitelistManager.AddResult result = BiliWhitelistManager.add(source.getServer(), raw,
                     source.getPlayer());
@@ -187,6 +204,23 @@ public final class NetMusicBiliServerCommands {
     }
 
     private static int removeWhitelist(CommandSourceStack source, String raw, String note) {
+        if (!BiliWhitelistManager.canonicalReady(raw)) {
+            var server = source.getServer();
+            var actor = source.getPlayer();
+            BiliWhitelistManager.canonicalResourceAsync(raw).whenCompleteAsync((canonical, error) -> {
+                if (!BiliWhitelistManager.acceptsServer(server)
+                        || actor != null && server.getPlayerList().getPlayer(actor.getUUID()) != actor
+                        || !canManageWhitelist(source)) return;
+                if (error != null || canonical == null || canonical.isEmpty()) {
+                    source.sendFailure(Component.literal("短链解析失败，未修改白名单，请重试。"));
+                    return;
+                }
+                removeWhitelist(source, raw, note);
+            }, server);
+            source.sendSuccess(() -> Component.literal("正在解析短链…"), false);
+            return 1;
+        }
+
         try {
             BiliWhitelistManager.RemoveResult result = BiliWhitelistManager.remove(source.getServer(), raw,
                     source.getPlayer(), note);
@@ -226,6 +260,23 @@ public final class NetMusicBiliServerCommands {
     }
 
     private static int commentWhitelist(CommandSourceStack source, String raw, String text) {
+        if (!BiliWhitelistManager.canonicalReady(raw)) {
+            var server = source.getServer();
+            var actor = source.getPlayer();
+            BiliWhitelistManager.canonicalResourceAsync(raw).whenCompleteAsync((canonical, error) -> {
+                if (!BiliWhitelistManager.acceptsServer(server)
+                        || actor != null && server.getPlayerList().getPlayer(actor.getUUID()) != actor
+                        || !canManageWhitelist(source)) return;
+                if (error != null || canonical == null || canonical.isEmpty()) {
+                    source.sendFailure(Component.literal("短链解析失败，未修改白名单，请重试。"));
+                    return;
+                }
+                commentWhitelist(source, raw, text);
+            }, server);
+            source.sendSuccess(() -> Component.literal("正在解析短链…"), false);
+            return 1;
+        }
+
         try {
             BiliWhitelistManager.CommentResult result = BiliWhitelistManager.addComment(source.getServer(), raw,
                     source.getPlayer(), text);

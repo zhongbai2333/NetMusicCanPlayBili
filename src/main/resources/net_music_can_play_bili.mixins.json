@@ -28,7 +28,8 @@
     "MusicToClientMessageClientMixin",
     "ScreenAccessor",
     "SoundEngineAccessor",
-    "SoundManagerAccessor"
+    "SoundManagerAccessor",
+    "NetMusicAudioStreamStatusMixin"
   ],
   "injectors": {
     "defaultRequire": 1

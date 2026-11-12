@@ -80,6 +80,11 @@ public final class AacOpenALPipeline extends AbstractAudioPipeline {
     }
 
     @Override
+    public com.zhongbai233.net_music_can_play_bili.media.audio.AudioDrainStatus drainStatus() {
+        return stereo.drainStatus();
+    }
+
+    @Override
     public void close() {
         if (cleaned.compareAndSet(false, true)) {
             ClientAudioOutputRegistry.unregisterStereo(stereo);

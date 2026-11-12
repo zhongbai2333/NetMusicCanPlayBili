@@ -7,27 +7,55 @@ import com.zhongbai233.bench.api.MetricDirection;
 import com.zhongbai233.bench.api.neoforge.client.BenchClientContext;
 import com.zhongbai233.bench.api.neoforge.client.BenchClientScenario;
 import com.zhongbai233.bench.api.neoforge.client.BenchClientStepResult;
+import com.github.tartaricacid.netmusic.init.InitItems;
+import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
+import com.zhongbai233.net_music_can_play_bili.blockentity.ControlConsoleBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.BiliRealVideoPlaybackBench;
 import com.zhongbai233.net_music_can_play_bili.client.VideoFeatureProperties;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleAudioRoutePolicy;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoCloseDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioNativeCloseDiagnostics;
+import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument;
+import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
 import com.zhongbai233.net_music_can_play_bili.media.audio.OpenALSpatialAudio;
+import com.zhongbai233.net_music_can_play_bili.media.stream.AudioStreamProperties;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.media.stream.HttpRequestCloseDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
 import com.zhongbai233.net_music_can_play_bili.bili.StereoOpenALHandler;
 import com.zhongbai233.net_music_can_play_bili.util.diagnostics.MemoryResourceTracker;
 
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Relative;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.Vec3;
+
 import java.io.IOException;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * Real Bilibili DASH decode/audio proof, followed by an optional world stage in which a projector and
+ * screen-only console linked to a real turntable session leave render range and return. The session must
+ * pause rather than be destroyed outside range and resume with advanced media time on re-entry.
+ * Disable the world stage with {@code -Dncpb.bench.real_bv.range_reentry=false}.
+ */
 final class RealBvPlaybackScenario implements BenchClientScenario {
     private static final BenchMetricDescriptor DECODED_STAGES = new BenchMetricDescriptor(
             "ncpb.real_bv.decoded_stages", "count", MetricDirection.NEUTRAL);
@@ -42,11 +70,13 @@ final class RealBvPlaybackScenario implements BenchClientScenario {
     private static final BenchMetricDescriptor ACTIVE_CLOSES = new BenchMetricDescriptor(
             "ncpb.real_bv.active_closes", "count", MetricDirection.LOWER_IS_BETTER);
     private static final String AUDIO_SESSION_ID = "bench-real-bv-audio";
+    private static final boolean RANGE_REENTRY = Boolean.parseBoolean(
+            System.getProperty("ncpb.bench.real_bv.range_reentry", "true"));
 
     private final AtomicReference<Throwable> audioResolutionFailure = new AtomicReference<>();
     private CompletableFuture<ResolvedAudio> audioResolution;
     private ResolvedAudio resolvedAudio;
-    private RealMediaLifecycleScenario.RealAudioStage audio;
+    private RealMediaStages.RealAudioStage audio;
     private PlaybackSessionId audioSession;
     private UUID audioOwner;
     private BiliRealVideoPlaybackBench.RunSnapshot finalSnapshot;
@@ -55,6 +85,7 @@ final class RealBvPlaybackScenario implements BenchClientScenario {
     private long decodedAudioInputSamples;
     private boolean audioDecoded;
     private boolean cleanupRequested;
+    private RangeReentryStage rangeStage;
 
     @Override
     public void setup(BenchClientContext context) {
@@ -66,7 +97,7 @@ final class RealBvPlaybackScenario implements BenchClientScenario {
                 .whenComplete((ignored, error) -> {
                     if (error != null) {
                         audioResolutionFailure.compareAndSet(null,
-                                RealMediaLifecycleScenario.unwrapCompletion(error));
+                                RealMediaStages.unwrapCompletion(error));
                     }
                 });
         if (!BiliRealVideoPlaybackBench.tryStart()) {
@@ -86,7 +117,7 @@ final class RealBvPlaybackScenario implements BenchClientScenario {
             resolvedAudio = audioResolution.join();
         }
         if (audio == null) {
-            audio = RealMediaLifecycleScenario.RealAudioStage.start(
+            audio = RealMediaStages.RealAudioStage.start(
                     resolvedAudio.audioUrl(), audioOwner, audioSession, resolvedAudio.durationMillis());
         }
         return BenchClientStepResult.COMPLETE;
@@ -139,7 +170,20 @@ final class RealBvPlaybackScenario implements BenchClientScenario {
             cleanupMedia();
             return BenchClientStepResult.CONTINUE;
         }
-        return resourcesConverged(audio) ? BenchClientStepResult.COMPLETE : BenchClientStepResult.CONTINUE;
+        if (rangeStage != null && !rangeStage.done()) {
+            if (rangeStage.step(context)) {
+                cleanupMedia();
+            }
+            return BenchClientStepResult.CONTINUE;
+        }
+        if (!resourcesConverged(audio)) {
+            return BenchClientStepResult.CONTINUE;
+        }
+        if (RANGE_REENTRY && rangeStage == null) {
+            rangeStage = new RangeReentryStage(context);
+            return BenchClientStepResult.CONTINUE;
+        }
+        return BenchClientStepResult.COMPLETE;
     }
 
     @Override
@@ -155,6 +199,9 @@ final class RealBvPlaybackScenario implements BenchClientScenario {
         if (!finalSnapshot.videoId().equals(VideoFeatureProperties.realMediaLifecycle().videoId())) {
             throw new AssertionError("Real BV bench decoded an unexpected video: " + finalSnapshot);
         }
+        if (RANGE_REENTRY && (rangeStage == null || !rangeStage.done())) {
+            throw new AssertionError("Real video range re-entry stage did not complete: " + rangeStage);
+        }
         if (!resourcesConverged(audio)) {
             throw new AssertionError("Real BV audio/video resources did not converge: video="
                     + ModernTurntableVideoClient.videoLifecycleDiagnostics() + " audio=" + audio
@@ -165,6 +212,9 @@ final class RealBvPlaybackScenario implements BenchClientScenario {
 
     @Override
     public void teardown(BenchClientContext context) {
+        if (rangeStage != null) {
+            rangeStage.teardown(context);
+        }
         cleanupMedia();
     }
 
@@ -214,7 +264,7 @@ final class RealBvPlaybackScenario implements BenchClientScenario {
         OpenALSpatialAudio.tickNativeDeletes(System.nanoTime());
     }
 
-    private static boolean resourcesConverged(RealMediaLifecycleScenario.RealAudioStage audio) {
+    private static boolean resourcesConverged(RealMediaStages.RealAudioStage audio) {
         var lifecycle = ModernTurntableVideoClient.videoLifecycleDiagnostics();
         if (audio == null || !audio.finished() || !audio.streamClosed()
                 || ClientAudioOutputRegistry.isActive()
@@ -238,5 +288,274 @@ final class RealBvPlaybackScenario implements BenchClientScenario {
     }
 
     private record ResolvedAudio(long durationMillis, String audioUrl) {
+    }
+
+    /** Visible -> out of render/decode range -> visible re-entry on one synchronized video session. */
+    private static final class RangeReentryStage {
+        private static final int FAR_DISTANCE = 128;
+        private static final long MIN_RETURN_ADVANCE_MILLIS = 500L;
+        private final VideoFeatureProperties.RealMediaLifecycle properties =
+                VideoFeatureProperties.realMediaLifecycle();
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
+        private final AtomicBoolean fixtureReady = new AtomicBoolean();
+        private final AtomicBoolean cleanupServerDone = new AtomicBoolean();
+        private final CompletableFuture<BiliVideoStreamResolver.ResolvedVideoStream> resolution;
+        private final UUID playerId;
+        private final BlockPos projectorPos;
+        private final BlockPos consolePos;
+        private final BlockPos sourcePos;
+        private final Vec3 home;
+        private final Vec3 far;
+        private String sessionId = "";
+        private int closeBaseline;
+        private int httpBaseline;
+        private int phase;
+        private int phaseTicks;
+        private long firstMediaMillis = -1L;
+        private long returnedMediaMillis = -1L;
+        private boolean outsidePaused;
+        private boolean cleanupRequested;
+        private boolean done;
+
+        RangeReentryStage(BenchClientContext context) {
+            ModernTurntablePlaybackTracker.stopAllSounds();
+            playerId = context.player().getUUID();
+            context.player().setNoGravity(true);
+            home = context.player().position();
+            far = home.add(0.0D, 0.0D, -FAR_DISTANCE);
+            projectorPos = context.player().blockPosition().offset(0, 0, 4).immutable();
+            consolePos = projectorPos.offset(-2, 0, 0).immutable();
+            sourcePos = projectorPos.offset(2, 0, 0).immutable();
+            resolution = CompletableFuture.supplyAsync(() -> {
+                try {
+                    return BiliVideoStreamResolver.resolve(properties.videoId(), properties.quality(), 30);
+                } catch (Exception error) {
+                    throw new CompletionException(error);
+                }
+            });
+            submitServer(context, (player, level) -> {
+                player.setNoGravity(true);
+                for (BlockPos pos : List.of(projectorPos, consolePos, sourcePos)) {
+                    level.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
+                    level.setBlockAndUpdate(pos.below(), Blocks.STONE.defaultBlockState());
+                }
+                level.setBlockAndUpdate(sourcePos, ModBlocks.MODERN_TURNTABLE.get().defaultBlockState());
+                level.setBlockAndUpdate(projectorPos, ModBlocks.VIDEO_PROJECTOR.get().defaultBlockState());
+                level.setBlockAndUpdate(consolePos, ModBlocks.CONTROL_CONSOLE.get().defaultBlockState());
+                if (!(level.getBlockEntity(sourcePos) instanceof ModernTurntableBlockEntity turntable)
+                        || !(level.getBlockEntity(projectorPos) instanceof VideoProjectorBlockEntity projector)
+                        || !(level.getBlockEntity(consolePos) instanceof ControlConsoleBlockEntity console)) {
+                    throw new IllegalStateException("Video range re-entry fixtures were not created");
+                }
+                projector.setPreferredQuality(properties.quality());
+                projector.linkTo(sourcePos);
+                console.linkTo(level.dimension().identifier().toString(), sourcePos,
+                        ControlConsoleDocument.SourceKind.TURNTABLE);
+                turntable.setVolumePerMille(1_000);
+                turntable.setDisc(ItemMusicCD.setSongInfo(new ItemMusicCD.SongInfo(
+                        AudioStreamProperties.realMp3Bench().url(), "real video range re-entry clock", 360, false),
+                        new ItemStack(InitItems.MUSIC_CD.get())));
+                turntable.startFromDisc(player);
+                teleport(player, level, home);
+                fixtureReady.set(true);
+            });
+        }
+
+        /** Returns true exactly once, when the stage has converged and the caller should run global cleanup. */
+        boolean step(BenchClientContext context) {
+            throwIfFailed();
+            phaseTicks++;
+            VideoBillboardPreview.VideoSyncStatus sync = VideoBillboardPreview.getSyncStatus(sessionId);
+            VideoBillboardPreview.BenchDecoderState state = VideoBillboardPreview.benchDecoderState(sessionId);
+            StereoOpenALHandler.DiagnosticSnapshot audio =
+                    ClientAudioOutputRegistry.getStereoSnapshot(sourcePos).orElse(null);
+            switch (phase) {
+                case 0 -> startWhenLinked(context);
+                case 1 -> {
+                    if (state.present() && state.prewarmVisible() && state.hasFrame()
+                            && VideoBillboardPreview.currentProjectorFrame(projectorPos).hasFrame()
+                            && sync.mediaMillis() >= 0L && healthyAudio(audio)) {
+                        requirePcmQuality("screen-only console initial audio", audio.firstPcm());
+                        firstMediaMillis = sync.mediaMillis();
+                        submitServer(context, (player, level) -> teleport(player, level, far));
+                        advance(2);
+                    }
+                }
+                case 2 -> {
+                    if (context.player().position().distanceToSqr(far) >= 4.0D) {
+                        break;
+                    }
+                    if (!state.present() || !VideoBillboardPreview.isSessionRunning(sessionId)
+                            || VideoBillboardPreview.resourceDiagnostics().instances() != 1) {
+                        throw new AssertionError("Video session was destroyed outside range: " + describe(state, sync));
+                    }
+                    if (state.offscreenPauseActive() && audio == null) {
+                        outsidePaused = true;
+                        submitServer(context, (player, level) -> teleport(player, level, home));
+                        advance(3);
+                    }
+                }
+                case 3 -> {
+                    if (!state.present() || !VideoBillboardPreview.isSessionRunning(sessionId)) {
+                        throw new AssertionError("Video session disappeared before visible re-entry: "
+                                + describe(state, sync));
+                    }
+                    if (context.player().position().distanceToSqr(home) < 4.0D
+                            && state.prewarmVisible() && state.hasFrame()
+                            && sync.mediaMillis() >= firstMediaMillis + MIN_RETURN_ADVANCE_MILLIS
+                            && healthyAudio(audio)) {
+                        requirePcmQuality("screen-only console returned audio", audio.firstPcm());
+                        returnedMediaMillis = sync.mediaMillis();
+                        VideoBillboardPreview.stopIfSession(sessionId);
+                        requestCleanup(context);
+                        advance(4);
+                    }
+                }
+                case 4 -> {
+                    if (cleanupServerDone.get() && converged()) {
+                        ModernTurntablePlaybackTracker.stopAllSounds();
+                        context.player().setNoGravity(false);
+                        done = true;
+                        return true;
+                    }
+                }
+                default -> throw new AssertionError("Unexpected real video range re-entry phase " + phase);
+            }
+            if ((phase == 3 && phaseTicks > 240) || phaseTicks > 1_200) {
+                throw new AssertionError("Real video range re-entry timed out: " + describe(state, sync));
+            }
+            return false;
+        }
+
+        private void startWhenLinked(BenchClientContext context) {
+            if (!fixtureReady.get() || !resolution.isDone()
+                    || !(context.level().getBlockEntity(projectorPos) instanceof VideoProjectorBlockEntity projector)
+                    || !(context.level().getBlockEntity(sourcePos) instanceof ModernTurntableBlockEntity turntable)
+                    || !(context.level().getBlockEntity(consolePos) instanceof ControlConsoleBlockEntity console)
+                    || !sourcePos.equals(projector.getLinkedTurntablePos())
+                    || !ControlConsoleAudioRoutePolicy.takesOverMainOutput(console.document())
+                    || !turntable.isPlaying()
+                    || VideoBillboardPreview.resourceDiagnostics().instances() != 0
+                    || VideoCloseDiagnostics.global().snapshot(System.nanoTime()).activeOperations() != 0) {
+                return;
+            }
+            sessionId = turntable.getPlaybackSyncMetadata().sessionId();
+            if (sessionId.isBlank()) {
+                return;
+            }
+            BiliVideoStreamResolver.ResolvedVideoStream stream = resolution.join();
+            closeBaseline = VideoCloseDiagnostics.global().snapshot(System.nanoTime()).activeOperations();
+            httpBaseline = HttpRequestCloseDiagnostics.global().snapshot(System.nanoTime()).activeRequests();
+            VideoBillboardPreview.startSyncedCandidates(
+                    stream.candidates(), stream.sourceWidth(), stream.sourceHeight(), stream.fps(),
+                    sessionId, 0L, 0L, List.of(projectorPos, consolePos), sourcePos, true, null);
+            advance(1);
+        }
+
+        boolean done() {
+            return done && outsidePaused && returnedMediaMillis >= firstMediaMillis + MIN_RETURN_ADVANCE_MILLIS;
+        }
+
+        void teardown(BenchClientContext context) {
+            VideoBillboardPreview.stopIfSession(sessionId);
+            ModernTurntablePlaybackTracker.stopAllSounds();
+            context.player().setNoGravity(false);
+            if (!cleanupRequested) {
+                requestCleanup(context);
+            }
+        }
+
+        private void requestCleanup(BenchClientContext context) {
+            cleanupRequested = true;
+            submitServer(context, (player, level) -> {
+                if (level.getBlockEntity(sourcePos) instanceof ModernTurntableBlockEntity turntable) {
+                    turntable.stopPlayback();
+                }
+                for (BlockPos pos : List.of(projectorPos, consolePos, sourcePos)) {
+                    level.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
+                    level.setBlockAndUpdate(pos.below(), Blocks.AIR.defaultBlockState());
+                }
+                player.setNoGravity(false);
+                teleport(player, level, home);
+                cleanupServerDone.set(true);
+            });
+        }
+
+        private boolean converged() {
+            return !VideoBillboardPreview.isSessionRunning(sessionId)
+                    && VideoBillboardPreview.resourceDiagnostics().instances() == 0
+                    && VideoBillboardPreview.resourceDiagnostics().activeCloseZombies() == 0
+                    && VideoCloseDiagnostics.global().snapshot(System.nanoTime()).activeOperations() <= closeBaseline
+                    && HttpRequestCloseDiagnostics.global().snapshot(System.nanoTime()).activeRequests()
+                            <= httpBaseline;
+        }
+
+        private static boolean healthyAudio(StereoOpenALHandler.DiagnosticSnapshot audio) {
+            return audio != null && audio.started() && audio.firstPcm().samples() >= 1_024L;
+        }
+
+        private void submitServer(BenchClientContext context, ServerAction action) {
+            var server = context.minecraft().getSingleplayerServer();
+            if (server == null) {
+                failure.compareAndSet(null, new IllegalStateException("Integrated server is unavailable"));
+                return;
+            }
+            server.execute(() -> {
+                try {
+                    ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+                    if (player == null || !(player.level() instanceof ServerLevel level)) {
+                        throw new IllegalStateException("Integrated server player is unavailable");
+                    }
+                    action.run(player, level);
+                } catch (Throwable error) {
+                    failure.compareAndSet(null, error);
+                }
+            });
+        }
+
+        private static void teleport(ServerPlayer player, ServerLevel level, Vec3 target) {
+            if (!player.teleportTo(level, target.x, target.y, target.z, Set.<Relative>of(), 0.0F, 0.0F, true)) {
+                throw new IllegalStateException("Could not teleport video range re-entry player to " + target);
+            }
+        }
+
+        private void advance(int nextPhase) {
+            phase = nextPhase;
+            phaseTicks = 0;
+        }
+
+        private void throwIfFailed() {
+            if (resolution.isCompletedExceptionally()) {
+                resolution.exceptionally(error -> {
+                    failure.compareAndSet(null, RealMediaStages.unwrapCompletion(error));
+                    return null;
+                });
+            }
+            Throwable error = failure.get();
+            if (error != null) {
+                throw new AssertionError("Real video range re-entry failed", error);
+            }
+        }
+
+        private String describe(VideoBillboardPreview.BenchDecoderState state,
+                VideoBillboardPreview.VideoSyncStatus sync) {
+            return "phase=" + phase + " state=" + state + " sync=" + sync + " resources="
+                    + VideoBillboardPreview.resourceDiagnostics() + " close="
+                    + VideoCloseDiagnostics.global().snapshot(System.nanoTime()) + " http="
+                    + HttpRequestCloseDiagnostics.global().snapshot(System.nanoTime()) + " audioDemand="
+                    + ClientAudioOutputRegistry.audioDemandDebug(sourcePos, null, sessionId);
+        }
+
+        @Override
+        public String toString() {
+            return "RangeReentryStage[phase=" + phase + ", session=" + sessionId + ", first=" + firstMediaMillis
+                    + ", returned=" + returnedMediaMillis + ", outsidePaused=" + outsidePaused + ", done=" + done
+                    + ']';
+        }
+
+        @FunctionalInterface
+        private interface ServerAction {
+            void run(ServerPlayer player, ServerLevel level) throws Exception;
+        }
     }
 }

@@ -2,7 +2,7 @@
 
 本模组提供低频内存遥测，用于区分 JVM 堆、JVM 管理的堆外内存、进程提交量，以及本模组显式分配的 native/PBO 资源。
 
-周期诊断日志默认关闭；媒体内存保护默认开启。保护模式只维护 NCPB 四类私有资源的当前值/峰值，
+周期诊断日志默认关闭；媒体内存保护默认开启。保护模式维护 NCPB 解码 NV12、纹理 staging、音频 staging 和 GPU PBO 四类私有资源的当前值/峰值，
 并每 2 秒读取一次 FFmpeg/D3D11 统计，不执行 MXBean 全量报告或采集调用栈。资源计数只发生在
 direct buffer、PBO 和音频 staging 的分配/释放点，不在逐像素或逐采样循环中。
 
@@ -50,8 +50,8 @@ gradlew runClient -PncpbMemoryDiagnostics=true -PncpbMemoryReportIntervalMs=3000
 
 熔断后会停止并释放世界视频、
 手持 MP4/Pad 视频、音频和相关客户端媒体缓存；冷却期内拒绝创建新视频会话。默认冷却 60 秒，
-且所有指标都回落到阈值的 65% 以下后才自动恢复。若 Java/direct/纹理分配直接抛出
-`OutOfMemoryError`，则不等待第二次采样，立即熔断。
+且所有启用的指标都回落到阈值的 65% 以下后才自动恢复。媒体视频解码或纹理分配路径捕获到
+`OutOfMemoryError` 时会立即触发熔断，不等待后续采样；这不是对整个 JVM 所有内存分配失败的全局拦截。
 
 保护不使用进程 committed 作为触发条件，因为 JVM、显卡驱动和内存映射的正常扩容可能造成很大
 但可回收的 committed 波动。保护器也不会调用 `System.gc()` 或结束游戏进程。

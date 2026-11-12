@@ -5,7 +5,6 @@ import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.List;
@@ -74,19 +73,29 @@ final class MP4PlaybackProgressPersistence {
         flush(level, deviceId);
     }
 
-    void persist(ServerPlayer owner, MP4PlaybackSyncManager.Session session, long gameTime, boolean playing) {
-        if (owner == null || session == null || !(owner.level() instanceof ServerLevel level)) {
-            return;
+    void recordPlaying(ServerLevel level, MP4PlaybackSyncManager.Session session, long nowNanos) {
+        if (session != null) {
+            recordSession(level, session, nowNanos, true);
         }
-        ItemStack stack = MP4Item.findPlayableInInventory(owner);
-        persist(level, stack, session, gameTime, playing, false);
     }
 
-    void persist(ItemStack stack, MP4PlaybackSyncManager.Session session, long gameTime, boolean playing) {
+    void persistStopped(ServerLevel level, ItemStack stack, MP4PlaybackSyncManager.Session session, long nowNanos) {
         if (session == null) {
             return;
         }
-        persist(session.currentLevel(), stack, session, gameTime, playing, true);
+        long elapsedMillis = recordSession(level, session, nowNanos, false);
+        if (level == null) {
+            return;
+        }
+        flush(level, session.sourceId());
+        if (stack == null || !(stack.getItem() instanceof MP4Item)) {
+            return;
+        }
+        MP4Item.State state = MP4DeviceStateStore.getOrCreate(level, session.sourceId(), stack).state();
+        int progress = MP4PlaybackProgressPolicy.progressPerMille(elapsedMillis, session.durationSeconds());
+        MP4DeviceStateStore.updateState(level, session.sourceId(), MP4StateUpdatePolicy.withPlayback(
+                state, false, session.queueIndex(), session.volumePerMille(), progress));
+        MP4PlaybackSourceDiscovery.markContainerChanged(level, session);
     }
 
     long targetMillis(ServerLevel level, UUID deviceId, ItemStack stack, MP4Item.State state, int queueIndex) {
@@ -98,21 +107,10 @@ final class MP4PlaybackProgressPersistence {
         @SuppressWarnings("null")
         ItemMusicCD.SongInfo songInfo = ItemMusicCD.getSongInfo(queue.get(queueIndex));
         int durationSeconds = songInfo != null ? Math.max(0, songInfo.songTime) : 0;
-        if (durationSeconds <= 0) {
-            return 0L;
-        }
         long fallbackMillis = MP4PlaybackProgressPolicy.elapsedFromProgress(durationSeconds,
                 state.progressPerMille());
-        MP4PlaybackProgressPolicy.RuntimeProgress runtime = snapshot(
-                runtimeProgress.get(PlaybackSourceId.of(deviceId)));
-        long selected;
-        if (runtime != null && runtime.queueIndex() == queueIndex) {
-            selected = MP4PlaybackProgressPolicy.queueElapsed(queueIndex, runtime, fallbackMillis);
-        } else {
-            long persisted = MP4PlaybackSavedData.get(level).elapsedMillis(deviceId, queueIndex, fallbackMillis);
-            selected = MP4PlaybackProgressPolicy.queueElapsed(queueIndex, null, persisted);
-        }
-        return MP4PlaybackProgressPolicy.clampTarget(durationSeconds, selected);
+        return MP4PlaybackProgressPolicy.clampTarget(durationSeconds,
+                savedElapsed(level, deviceId, queueIndex, fallbackMillis));
     }
 
     void flush(ServerLevel level) {
@@ -137,34 +135,16 @@ final class MP4PlaybackProgressPersistence {
         runtimeProgress.clear();
     }
 
-    private void persist(ServerLevel level, ItemStack stack, MP4PlaybackSyncManager.Session session,
-            long gameTime, boolean playing, boolean markContainerChanged) {
-        long elapsedMillis = session.elapsedMillis(gameTime);
+    private long recordSession(ServerLevel level, MP4PlaybackSyncManager.Session session,
+            long nowNanos, boolean playing) {
+        long elapsedMillis = session.elapsedMillisAtNanos(nowNanos);
         record(session.sourceId(), session.queueIndex(), elapsedMillis, session.durationSeconds(),
                 session.volumePerMille(), Optional.of(session.playbackSessionId()), playing);
-        if (level == null) {
-            return;
+        if (level != null) {
+            MP4DeviceStateStore.recordPlayback(level, session.sourceId(), session.queueIndex(), elapsedMillis,
+                    session.durationSeconds(), session.volumePerMille(), Optional.of(session.playbackSessionId()), playing);
         }
-        MP4DeviceStateStore.recordPlayback(level, session.sourceId(), session.queueIndex(), elapsedMillis,
-                session.durationSeconds(), session.volumePerMille(), Optional.of(session.playbackSessionId()), playing);
-        if (!playing) {
-            flush(level, session.sourceId());
-        } else {
-            return;
-        }
-        if (stack == null || !(stack.getItem() instanceof MP4Item)) {
-            return;
-        }
-        MP4Item.State state = MP4DeviceStateStore.getOrCreate(level, session.sourceId(), stack).state();
-        int progress = MP4PlaybackProgressPolicy.progressPerMille(elapsedMillis, session.durationSeconds());
-        MP4DeviceStateStore.updateState(level, session.sourceId(), new MP4Item.State(
-                false, state.shuffle(), state.videoEnabled(), state.landscape(), state.qualityIndex(),
-                session.queueIndex(), state.queueScrollOffset(), session.volumePerMille(), state.repeatMode(),
-                state.playlistOpen(), state.lyricsEnabled(), state.subtitleMode(), state.subtitleAiEnabled(),
-                progress, state.rotationHintShown()));
-        if (markContainerChanged) {
-            session.markContainerChanged();
-        }
+        return elapsedMillis;
     }
 
     private static MP4PlaybackProgressPolicy.RuntimeProgress snapshot(MP4PlaybackRuntimeProgress entry) {

@@ -72,9 +72,11 @@ public final class ControlConsoleBlock extends Block implements EntityBlock {
             return;
         }
         BlockPos sourcePos = link.pos();
-        BlockEntity source = level.getBlockEntity(sourcePos);
         String currentDimension = level.dimension().identifier().toString();
         boolean correctDimension = link.legacy() || currentDimension.equals(link.dimension());
+        BlockEntity source = correctDimension
+                && level.hasChunk(Math.floorDiv(sourcePos.getX(), 16), Math.floorDiv(sourcePos.getZ(), 16))
+                ? level.getBlockEntity(sourcePos) : null;
         boolean validSource = link.legacy()
             ? source instanceof com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity
                 || source instanceof com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEntity
@@ -84,7 +86,7 @@ public final class ControlConsoleBlock extends Block implements EntityBlock {
         if (correctDimension && validSource
             && level.getBlockEntity(pos) instanceof ControlConsoleBlockEntity console) {
             console.linkTo(currentDimension, sourcePos,
-                link.sourceKind() == com.zhongbai233.net_music_can_play_bili.link.LinkHelper.ControlConsoleSourceKind.LIVE_STREAMER
+                source instanceof com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEntity
                     ? com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument.SourceKind.LIVE_STREAMER
                     : com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument.SourceKind.TURNTABLE);
             if (!(placer instanceof Player player) || !player.isCreative()) {

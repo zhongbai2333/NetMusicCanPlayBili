@@ -45,21 +45,13 @@ def modBenchEnabled = providers.gradleProperty('enableModBench')
         .map { it.toBoolean() }
         .orElse(false)
         .get()
-def terrainCompatMatrixRequested = providers.gradleProperty('enableTerrainCompatMatrix')
-        .map { it.toBoolean() }
-        .orElse(false)
-        .get()
 def realMediaLifecycleRequested = providers.gradleProperty('ncpbRealMediaLifecycle')
         .map { it.toBoolean() }
         .orElse(false)
         .get()
-if (terrainCompatMatrixRequested && !modBenchEnabled) {
-    throw new GradleException('-PenableTerrainCompatMatrix=true requires -PenableModBench=true')
-}
 if (realMediaLifecycleRequested && !modBenchEnabled) {
     throw new GradleException('-PncpbRealMediaLifecycle=true requires -PenableModBench=true')
 }
-def terrainCompatMatrixEnabled = modBenchEnabled && terrainCompatMatrixRequested
 def realMediaLifecycleEnabled = modBenchEnabled && realMediaLifecycleRequested
 // Client、Bench client 与 paired client 共用的媒体运行参数。保持单一清单，避免新增场景时只接通其中一端。
 def sharedMediaRunProperties = [
@@ -78,7 +70,6 @@ def sharedMediaRunProperties = [
         [system: 'ncpb.live.real_bench', gradle: 'ncpbRealLiveBench', fallback: 'false'],
         [system: 'ncpb.live.real_bench.room', gradle: 'ncpbLiveBenchRoom', fallback: '8178490'],
         [system: 'ncpb.video.real_media_lifecycle', gradle: 'ncpbRealMediaLifecycle', fallback: 'false'],
-        [system: 'ncpb.video.real_media_lifecycle.rounds', gradle: 'ncpbRealMediaLifecycleRounds', fallback: '100'],
         [system: 'ncpb.video.real_media_lifecycle.cycle_timeout_ticks',
                 gradle: 'ncpbRealMediaLifecycleCycleTimeoutTicks', fallback: '600'],
         [system: 'ncpb.video.real_media_lifecycle.quality', gradle: 'ncpbRealMediaLifecycleQuality', fallback: '16'],
@@ -88,18 +79,8 @@ def sharedMediaRunProperties = [
         [system: 'ncpb.video.native.av1_first_frame_probe_max_packets',
                 gradle: 'ncpbAv1FirstFrameProbeMaxPackets', fallback: '256']
 ]
-def terrainCompatAssetManifestFile = layout.projectDirectory.file('tools/terrain_compat_matrix_assets.json')
-def terrainCompatNeoForgeVersion = neo_version.toString()
-def terrainCompatAssetDirectory = providers.gradleProperty('ncpbTerrainCompatAssetDirectory')
-        .map { file(it) }
-        .orElse(layout.buildDirectory.dir('terrainCompatAssets').map { it.asFile })
 if (modBenchEnabled) {
     apply plugin: 'com.zhongbai233.minecraft-bench'
-    tasks.named('processBenchResources', ProcessResources).configure {
-        from('src/test/resources') {
-            include 'bili/real-av1/**'
-        }
-    }
 }
 
 repositories {
@@ -314,6 +295,8 @@ neoForge {
 
 // 加入数据生成输出资源。
 sourceSets.main.resources { srcDir 'src/generated/resources' }
+// Reproducibly selected, privately relocated QR encoder sources; complete upstream core is never shipped.
+sourceSets.main.java.srcDir 'third_party/zxing-qr-only/src/main/java'
 // 显式声明测试目录，确保 Gradle/Buildship 在多根工作区中稳定导入测试源码模型。
 sourceSets.test.java.setSrcDirs(['src/test/java'])
 sourceSets.test.resources.setSrcDirs(['src/test/resources'])
@@ -418,28 +401,17 @@ dependencies {
     localRuntimeOnly "org.teacon.github-release:AreaControl-NeoForge-26.1:${area_control_runtime_version}@jar"
     if (modBenchEnabled) {
         benchCompileOnly "maven.modrinth:net-music:mCrjhdSq"
-        // Real LuckPerms -> NeoForge PermissionAPI integration; never enters the production JAR.
-        benchRuntimeMod "maven.modrinth:Vebnzrzj:${luckperms_bench_version}"
-        // ModBench launches from its own runtime-mod bucket and does not inherit localRuntimeOnly.
-        benchRuntimeMod "org.teacon.github-release:AreaControl-NeoForge-26.1:${area_control_runtime_version}@jar"
     }
     compileOnly "maven.modrinth:iris:YEGDGnJM"
 
     testImplementation platform('org.junit:junit-bom:5.13.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
+    // Independent full decoder for offline QR roundtrip tests only.
+    testImplementation 'com.google.zxing:core:3.5.4'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     testCompileOnly "net.neoforged:neoforge:${neo_version}"
     // 测试直接构造 B站 API 的 JSON 响应，因此编译期也需要 gson。
     testImplementation 'com.google.code.gson:gson:2.13.1'
-
-    if (terrainCompatMatrixEnabled) {
-        def manifest = new groovy.json.JsonSlurper().parse(terrainCompatAssetManifestFile.asFile)
-        manifest.assets.findAll { it.kind == 'mod' }.each { asset ->
-            add('benchRuntimeMod', files(terrainCompatAssetDirectory.map { directory ->
-                new File(directory, asset.file.toString())
-            }))
-        }
-    }
 }
 
 if (modBenchEnabled) {
@@ -447,7 +419,7 @@ if (modBenchEnabled) {
         targetMod = 'net_music_can_play_bili'
         expectedProviderCount = 1
         seed = 233
-        phaseTimeoutTicks = realMediaLifecycleEnabled ? 72000 : terrainCompatMatrixEnabled ? 3600 : 1200
+        phaseTimeoutTicks = realMediaLifecycleEnabled ? 6000 : 1200
         clientWorldPreset = providers.gradleProperty('ncpbBenchWorldPreset').orElse('void').get()
         clientRequireWindowFocus = false
         pairedClientCount = providers.gradleProperty('ncpbPairedClientCount')
@@ -461,8 +433,7 @@ if (modBenchEnabled) {
         }
         (sharedMediaRunProperties.collect { it.gradle } + [
                 'ncpbRealBenchManaged',
-                'ncpbRealMp3Bench', 'ncpbRealMp3BenchUrl', 'enableTerrainCompatMatrix',
-                'ncpbTerrainCompatAssetDirectory'
+                'ncpbRealMp3Bench', 'ncpbRealMp3BenchUrl'
         ]).unique().each { propertyName ->
             def propertyValue = providers.gradleProperty(propertyName).orNull
             if (propertyValue != null) {
@@ -482,129 +453,7 @@ if (modBenchEnabled) {
                 systemProperty 'ncpb.bili.audio.real_mp3_bench', benchProp('ncpbRealMp3Bench', 'false')
                 systemProperty 'ncpb.bili.audio.real_mp3_bench.url', benchProp('ncpbRealMp3BenchUrl',
                         'https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.mp3')
-                if (terrainCompatMatrixEnabled) {
-                    systemProperty 'ncpb.terrain.compat_matrix', 'true'
-                }
             }
-        }
-    }
-
-    def verifyTerrainCompatMatrixAssets = tasks.register('verifyTerrainCompatMatrixAssets') {
-        group = 'verification'
-        description = 'Verifies every pinned third-party terrain compatibility asset by exact size and SHA-512.'
-        inputs.file(terrainCompatAssetManifestFile)
-        inputs.dir(terrainCompatAssetDirectory)
-        doLast {
-            def manifest = new groovy.json.JsonSlurper().parse(terrainCompatAssetManifestFile.asFile)
-            if (manifest.schemaVersion != 1 || manifest.minecraftVersion != '26.1.2'
-                    || manifest.neoForgeVersion != terrainCompatNeoForgeVersion) {
-                throw new GradleException("Unsupported terrain compatibility manifest header: ${manifest}")
-            }
-            def ids = new HashSet<String>()
-            def names = new HashSet<String>()
-            manifest.assets.each { asset ->
-                def id = asset.id.toString()
-                def name = asset.file.toString()
-                if (!ids.add(id) || !names.add(name) || new File(name).name != name) {
-                    throw new GradleException("Duplicate or unsafe terrain compatibility asset: ${asset}")
-                }
-                def assetFile = new File(terrainCompatAssetDirectory.get(), name)
-                if (!assetFile.isFile()) {
-                    throw new GradleException("Missing terrain compatibility asset ${id}: ${assetFile}. "
-                            + 'Run tools/fetch_terrain_compat_matrix_assets.py first.')
-                }
-                def digest = java.security.MessageDigest.getInstance('SHA-512')
-                assetFile.withInputStream { input ->
-                    byte[] buffer = new byte[1024 * 1024]
-                    int count
-                    while ((count = input.read(buffer)) != -1) {
-                        digest.update(buffer, 0, count)
-                    }
-                }
-                def actualHash = java.util.HexFormat.of().formatHex(digest.digest())
-                if (assetFile.length() != (asset.bytes as long)
-                        || !actualHash.equalsIgnoreCase(asset.sha512.toString())) {
-                    throw new GradleException("Terrain compatibility asset ${id} failed verification: "
-                            + "bytes=${assetFile.length()}, sha512=${actualHash}")
-                }
-            }
-            logger.lifecycle('Verified {} pinned terrain compatibility assets in {}',
-                    manifest.assets.size(), terrainCompatAssetDirectory.get())
-        }
-    }
-
-    if (terrainCompatMatrixEnabled) {
-        def stageTerrainCompatMatrixAssets = tasks.register('stageTerrainCompatMatrixAssets') {
-            group = 'verification'
-            description = 'Stages the pinned resource pack and Iris shaderpack for integrated and paired clients.'
-            def pairedClientIndex = providers.gradleProperty('modBench.internal.clientIndex')
-            dependsOn verifyTerrainCompatMatrixAssets, tasks.named(
-                    pairedClientIndex.isPresent() ? 'prepareBenchRemoteClientOptions' : 'prepareBenchClientOptions')
-            def selectedRunType = pairedClientIndex.zip(
-                    providers.gradleProperty('modBench.internal.clientCount').orElse('1')) { index, count ->
-                Integer.parseInt(count) == 1 ? 'remote-client' : "remote-client-${Integer.parseInt(index)}"
-            }.orElse('client')
-            def gameDirectory = layout.buildDirectory.dir(
-                    selectedRunType.map { "modBench/runs/default/${it}" })
-            inputs.file(terrainCompatAssetManifestFile)
-            inputs.dir(terrainCompatAssetDirectory)
-            outputs.dir(gameDirectory.map { it.dir('resourcepacks') })
-            outputs.dir(gameDirectory.map { it.dir('shaderpacks') })
-            // options.txt and Iris config are game-owned mutable files; always restore the pinned selection.
-            outputs.upToDateWhen { false }
-            doLast {
-                def manifest = new groovy.json.JsonSlurper().parse(terrainCompatAssetManifestFile.asFile)
-                def resourcePack = manifest.assets.find { it.kind == 'resource_pack' }
-                def shaderPack = manifest.assets.find { it.kind == 'shader_pack' }
-                if (resourcePack == null || shaderPack == null) {
-                    throw new GradleException('Terrain compatibility manifest must contain one resource and shader pack')
-                }
-                [gameDirectory.get().asFile].each { gameDir ->
-                    def resourcePackDirectory = new File(gameDir, 'resourcepacks')
-                    def shaderPackDirectory = new File(gameDir, 'shaderpacks')
-                    resourcePackDirectory.mkdirs()
-                    shaderPackDirectory.mkdirs()
-                    java.nio.file.Files.copy(
-                            new File(terrainCompatAssetDirectory.get(), resourcePack.file.toString()).toPath(),
-                            new File(resourcePackDirectory, resourcePack.file.toString()).toPath(),
-                            java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-                    java.nio.file.Files.copy(
-                            new File(terrainCompatAssetDirectory.get(), shaderPack.file.toString()).toPath(),
-                            new File(shaderPackDirectory, shaderPack.file.toString()).toPath(),
-                            java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-
-                    def optionsFile = new File(gameDir, 'options.txt')
-                    def lines = optionsFile.isFile() ? optionsFile.readLines('UTF-8') : []
-                    def resourcePacksValue = groovy.json.JsonOutput.toJson(["file/${resourcePack.file}"])
-                    // Iris 1.11.3 + Sodium 0.9.1 currently crashes its multi-player shadow pass on
-                    // macOS with "Missing sampler Sampler1". The compatibility gate covers
-                    // shader/world/media rendering, so pin both vanilla entity shadows and the
-                    // pack's shadow program off without disabling the shaderpack itself.
-                    def updated = lines.findAll {
-                        !it.startsWith('resourcePacks:') && !it.startsWith('entityShadows:')
-                    }
-                    updated.add("resourcePacks:${resourcePacksValue}")
-                    updated.add('entityShadows:false')
-                    optionsFile.setText(updated.join(System.lineSeparator()) + System.lineSeparator(), 'UTF-8')
-
-                    def shaderOptions = new File(shaderPackDirectory, "${shaderPack.file}.txt")
-                    shaderOptions.setText('SHADOW_CASTING=false' + System.lineSeparator(), 'UTF-8')
-
-                    def irisConfig = new File(gameDir, 'config/iris.properties')
-                    irisConfig.parentFile.mkdirs()
-                    irisConfig.setText("""shaderPack=${shaderPack.file}
-enableShaders=true
-allowUnknownShaders=false
-disableUpdateMessage=true
-maxShadowRenderDistance=16
-""", 'UTF-8')
-                    logger.lifecycle('Staged resource pack {} and shaderpack {} in {}',
-                            resourcePack.file, shaderPack.file, gameDir)
-                }
-            }
-        }
-        tasks.matching { it.name in ['runBenchClient', 'runBenchRemoteClient'] }.configureEach {
-            dependsOn stageTerrainCompatMatrixAssets
         }
     }
 }
@@ -618,6 +467,37 @@ tasks.named('test') {
     // Ignore cloud-sync conflict copies restored in the generated test output directory.
     exclude '**/* *.class'
 }
+
+// Production codecs and ItemStack persistence require the Minecraft ABI at runtime.
+// Keep this headless fixture suite separate from the existing pure-Java unit tests.
+sourceSets {
+    platformTest {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath + sourceSets.test.runtimeClasspath
+        runtimeClasspath += output + compileClasspath
+    }
+}
+configurations {
+    platformTestImplementation.extendsFrom(testImplementation)
+    platformTestRuntimeOnly.extendsFrom(testRuntimeOnly)
+    mockitoAgent
+}
+dependencies {
+    platformTestImplementation 'org.mockito:mockito-core:5.20.0'
+    mockitoAgent('org.mockito:mockito-core:5.20.0') { transitive = false }
+}
+tasks.register('platformTest', Test) {
+    description = 'Exercises production orchestration, codecs and persistence without launching Minecraft.'
+    group = 'verification'
+    testClassesDirs = sourceSets.platformTest.output.classesDirs
+    classpath = sourceSets.platformTest.runtimeClasspath
+    useJUnitPlatform()
+    maxHeapSize = '2g'
+    jvmArgs "-javaagent:${configurations.mockitoAgent.singleFile}"
+    shouldRunAfter tasks.named('test')
+}
+// platformTest guards save formats, packet codecs, permissions and credentials. It is run on demand
+// (and before release) rather than on every build, so unrelated work is not blocked by mock wiring churn.
+
 
 def productionJarArchive = tasks.named('jar', Jar).flatMap { it.archiveFile }
 tasks.register('verifyProductionJarHasNoConflictCopies') {
@@ -972,7 +852,7 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
     inputs.properties replaceProperties
     expand replaceProperties
     from "src/main/templates"
-    into "build/generated/sources/modMetadata"
+    into layout.buildDirectory.dir('generated/sources/modMetadata')
 }
 
 // Gradle 和 IDE 构建都包含生成的元数据。
@@ -1009,4 +889,90 @@ eclipse {
             sourceSets += [sourceSets.bench]
         }
     }
+}
+
+
+// Keep source filenames and line numbers for actionable crash reports; omit local-variable debug tables.
+tasks.named('compileJava', JavaCompile) {
+    options.debug = true
+    options.debugOptions.debugLevel = 'source,lines'
+}
+
+def qrVendorDirectory = layout.projectDirectory.dir('third_party/zxing-qr-only')
+def qrVendorManifest = qrVendorDirectory.file('manifest.json')
+// Resolve the vendor source tree during configuration: doLast runs after the configuration cache is
+// serialized, where Project.fileTree is no longer available.
+def qrVendorSources = fileTree(qrVendorDirectory.dir('src/main/java'))
+tasks.register('verifyQrEncoderSubset') {
+    group = 'verification'
+    description = 'Verifies the pinned, privately relocated QR-only source subset and its production packaging.'
+    dependsOn tasks.named('jar')
+    inputs.file(qrVendorManifest)
+    inputs.dir(qrVendorDirectory.dir('src/main/java'))
+    inputs.file(productionJarArchive)
+    doLast {
+        def manifest = new groovy.json.JsonSlurper().parse(qrVendorManifest.asFile)
+        if (manifest.upstream != 'com.google.zxing:core:3.5.4'
+                || manifest.source_artifact_sha256 != 'a611e3b63b661aeb2a81b8b4f4bde2daace1e2976adbb37917a674a0019c8fac'
+                || manifest.binary_artifact_sha256 != '71de5d89341b5fcf5dd89da7f44e84d825d0e084cdf3ec77c9abe26b0f0ceb13') {
+            throw new GradleException('Unreviewed QR subset provenance')
+        }
+        def expectedSources = manifest.sources.collect { it.relocated.toString() }.toSet()
+        def actualSources = qrVendorSources.files.collect {
+            qrVendorDirectory.asFile.toPath().relativize(it.toPath()).toString().replace('\\', '/')
+        }.toSet()
+        if (expectedSources != actualSources) throw new GradleException('Unexpected QR vendor source file set')
+        manifest.sources.each { source ->
+            def input = new File(qrVendorDirectory.asFile, source.relocated.toString())
+            def digest = java.security.MessageDigest.getInstance('SHA-256').digest(input.bytes).encodeHex().toString()
+            if (digest != source.sha256) throw new GradleException("QR vendor source changed: ${source.relocated}")
+        }
+        new java.util.zip.ZipFile(productionJarArchive.get().asFile).withCloseable { zip ->
+            def entries = zip.entries().findAll { !it.directory }.collect { it.name }
+            def prefix = manifest.namespace.toString().replace('.', '/') + '/'
+            if (!entries.contains(prefix + 'qrcode/QRCodeWriter.class')
+                    || !entries.contains('com/zhongbai233/net_music_can_play_bili/bili/LocalQrImageEncoder.class')) {
+                throw new GradleException('Production JAR missing local QR implementation')
+            }
+            if (entries.any { it.startsWith('com/google/zxing/')
+                    || it.toLowerCase(java.util.Locale.ROOT).contains('core-3.5.4.jar')
+                    || it.endsWith('/qrcode/QRCodeReader.class')
+                    || it.endsWith('/qrcode/decoder/Decoder.class') }) {
+                throw new GradleException('Full decoder/upstream dependency leaked into the distribution')
+            }
+            def allowedOuter = manifest.sources.collect {
+                it.relocated.toString().substring('src/main/java/'.length()).replace('.java', '')
+            }.toSet()
+            def qrClasses = entries.findAll { it.startsWith(prefix) && it.endsWith('.class') }
+            if (qrClasses.any { !allowedOuter.contains(it.substring(0, it.length() - 6).split('\\$')[0]) }) {
+                throw new GradleException('Unselected QR implementation class packaged')
+            }
+            def license = zip.getEntry('META-INF/licenses/ZXing-3.5.4-LICENSE.txt')
+            if (license == null) throw new GradleException('ZXing license missing from distribution')
+            def licenseBytes = zip.getInputStream(license).withCloseable { it.readAllBytes() }
+            if (!java.util.Arrays.equals(licenseBytes, qrVendorDirectory.file('LICENSE.txt').asFile.bytes)) {
+                throw new GradleException('Packaged ZXing license differs from retained upstream notice')
+            }
+            def notices = zip.getInputStream(zip.getEntry('META-INF/THIRD-PARTY-NOTICES.md')).withCloseable {
+                new String(it.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+            }
+            if (!notices.contains('ZXing QR encoder subset')) throw new GradleException('ZXing attribution missing')
+        }
+    }
+}
+
+tasks.register('verifyUniversalDistributionSize') {
+    group = 'verification'
+    description = 'Requires the actual universal production JAR to be strictly below decimal 10 MB.'
+    dependsOn tasks.named('jar'), tasks.named('verifyEmbeddedNativeBundle')
+    inputs.file(productionJarArchive)
+    doLast {
+        long bytes = productionJarArchive.get().asFile.length()
+        if (bytes >= 10_000_000L) throw new GradleException("Universal distribution must be <10000000 bytes; got ${bytes}")
+        logger.lifecycle('Universal production JAR: {} bytes; {} bytes below exclusive decimal limit', bytes, 10_000_000L - bytes)
+        if (bytes > 9_600_000L) logger.warn('Universal JAR has less than the recommended 400000-byte growth reserve')
+    }
+}
+tasks.named('check') {
+    dependsOn tasks.named('verifyQrEncoderSubset'), tasks.named('verifyUniversalDistributionSize')
 }

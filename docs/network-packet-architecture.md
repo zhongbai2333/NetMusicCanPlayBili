@@ -1,6 +1,6 @@
-# NetMusicCanPlayBili 网络包全景图
+# NetMusicCanPlayBili 网络包架构
 
-> 当前协议：NeoForge payload registrar `6`，短命名空间 `ncpb`。共 **42 个本地 payload**（24 C→S、18 S→C），另有上游 NetMusic 的刻录/播放兼容消息链。
+> 当前协议：NeoForge payload registrar `7`，短命名空间 `ncpb`。共 **43 个本地 payload**（25 C→S、18 S→C），另有上游 NetMusic 的刻录/播放兼容消息链。
 
 ```mermaid
 flowchart LR
@@ -17,17 +17,17 @@ flowchart LR
         C_CFG["方块/装备 UI<br/>唱片机 · 直播机 · 中控台 · 音箱<br/>歌词/视频投影 · 全息眼镜"]:::client
         C_TOOL["媒体管理工具 UI<br/>绑定 · 清除 · 举报"]:::client
         C_WL["白名单管理 UI<br/>活动/历史 · 备注删除 · 评论 · 导出 · 预览<br/>请求号关联 · 幂等重试 · 失败保留输入 · 键盘操作"]:::client
-        C_MP4["MP4 客户端<br/>状态脏合并 · 控制 · 自动恢复<br/>失败重试 · 队列完成"]:::client
+        C_MP4["MP4 客户端<br/>状态脏合并 · 控制 · 自动恢复<br/>失败重试 · EOF/失败回报"]:::client
         C_PAD["Pad 客户端<br/>10t 文档合并 · 发布 · 播放控制"]:::client
         C_CD["上游刻录 UI Mixin<br/>异步解析 B 站信息"]:::upstream
     end
 
-    subgraph C2S["② C → S：24 个本地请求包"]
+    subgraph C2S["② C → S：25 个本地请求包"]
         direction TB
         P_CFG["配置/控制（11）<br/>ModernTurntableControlPacket · LiveStreamerControlPacket<br/>LyricProjectorConfigPacket · SpeakerConfigPacket<br/>VideoProjectorConfigPacket · HolographicGlassesConfigPacket<br/>ControlConsoleConfigPacket · ControlConsoleAccessPacket<br/>ControlConsoleEditLeasePacket · ControlConsoleConsumerLeasePacket<br/>ClearEquippedBindingPacket *"]:::c2s
         P_TOOL["媒体工具（3）<br/>MediaToolConfirmBindingPacket<br/>MediaToolClearBindingPacket<br/>MediaToolReportPacket"]:::c2s
         P_WL["白名单（1）<br/>WhitelistReviewActionPacket<br/>REMOVE 备注 / COMMENT 评论"]:::c2s
-        P_MP4["MP4（5）<br/>MP4StatePacket · MP4PlaybackControlPacket<br/>MP4PlaybackRetryPacket<br/>MP4EnsureDeviceIdPacket · MP4EnsureInventoryDeviceIdPacket"]:::c2s
+        P_MP4["MP4（6）<br/>MP4StatePacket · MP4PlaybackControlPacket<br/>MP4PlaybackRetryPacket · MP4PlaybackEndPacket<br/>MP4EnsureDeviceIdPacket · MP4EnsureInventoryDeviceIdPacket"]:::c2s
         P_PAD["Pad（4）<br/>PadStatePacket · PadPublishPacket<br/>PadPlaybackControlPacket · PadPlaybackRetryPacket"]:::c2s
     end
 
@@ -41,7 +41,7 @@ flowchart LR
         S_ID["MP4 身份与位置<br/>MP4DeviceIdentity<br/>MP4DeviceLocationIndex（best-effort）<br/>HolderTracker：5t 扫描 / 300t 强镜像"]:::server
         S_MP4["MP4 权威状态<br/>MP4DeviceStateStore<br/>MP4PlaybackSavedData<br/>队列以服务端 ItemStack 为准"]:::server
         S_PAD["Pad 权威文档<br/>PadDocumentStore / SavedData<br/>草稿持有验证 · 锁定副本共享 deviceId<br/>HolderTracker：5t 扫描 / 300t 强镜像"]:::server
-        S_MEDIA["统一媒体会话<br/>MP4PlaybackSyncManager.SESSIONS<br/>Pad 与 MP4 共用<br/>20t timeline · 300t full sync<br/>空间源 64 格 / PLAYER 源 owner 单播<br/>耳机绑定监听者定向单播"]:::server
+        S_MEDIA["统一媒体会话<br/>MP4PlaybackSyncManager<br/>MP4PlaybackSourceSessionRegistry<br/>Pad 与 MP4 共用<br/>20t timeline · 300t full sync<br/>普通 MP4 无耳机投递时走附近广播<br/>Pad PLAYER 源按 owner 分支投递<br/>耳机绑定监听者定向单播"]:::server
         S_SCOPE["Pad 地图世界作用域<br/>PadMapScopeSavedData<br/>玩家登录时推送"]:::server
     end
 
@@ -131,8 +131,30 @@ flowchart LR
     S_PAD -.-> N3
 ```
 
+## 协议维护入口
+
+注册清单以 `src/main/java/com/zhongbai233/net_music_can_play_bili/network/ModernTurntableNetwork.java` 为准。
+新增或调整 payload 时，同步检查协议版本、方向、Codec、handler 和本图；上游 NetMusic 消息不计入本地 payload 数量。
+
+`MP4PlaybackEndPacket` 携带客户端结束原因和传输标识，服务端验证所有权及当前会话后再决定忽略、停止或推进队列。
+已知时长的自然结束由服务端精确时钟判断；客户端报告不能绕过正在解析的命令或终止新的会话。
+
+`MP4PlaybackSyncManager` 负责服务端编排，手动命令在 `MP4PlaybackCommands`，结束协调在
+`MP4PlaybackTerminationApplication`，会话和缺源宽限状态由 `MP4PlaybackSourceSessionRegistry` 保存。
+Pad 文档与 MP4 队列分开维护，两者复用播放同步链路。
+
 ## 读图顺序
 
-从左向右看：客户端行为产生 C→S payload，经服务端信任边界验证后修改权威状态；服务端再通过身份回包、状态镜像、完整播放同步、轻量时间轴或管理结果回到客户端。白名单审核操作会额外返回 `WhitelistReviewMutationResultPacket`：删除和评论明确区分成功、限频、无权限、条目不存在、输入无效、必填缺失、条目过期和保存失败，刷新、预览及拖动被拒绝或限频时也会立即结束客户端等待；客户端只有收到成功变更回执才清除输入，失败或超时会保留原备注/评论供重试。同一请求号的成功变更会在服务端短期幂等回放，避免确认丢失后重复追加评论；预览及拖动请求也使用独立请求号，服务器校正时间点后仍能安全匹配最新回包。MP4 与 Pad 的数据模型彼此独立，但两者最终共用同一套媒体会话同步与客户端播放器。
+从左向右看：客户端行为产生 C→S payload，经服务端信任边界验证后修改权威状态；服务端再通过身份回包、状态镜像、完整播放同步、轻量时间轴或管理结果回到客户端。MP4 与 Pad 的数据模型彼此独立，但两者最终共用同一套媒体会话同步与客户端播放器。
 
-图中 `*` 表示包已注册且 handler 完整，但当前源码没有发现主动发送点。方块实体常规数据使用 Minecraft 原生 BlockEntity 同步，不会额外占用一个 `ncpb` payload。刻录和现代唱片机播放还复用了上游 NetMusic 消息，因此单独画在最下方。
+图中 `*` 表示包已注册并绑定 handler，但当前源码未找到主动发送点。方块实体常规数据使用 Minecraft 原生 BlockEntity 同步，不会额外占用一个 `ncpb` payload。刻录和现代唱片机播放还复用了上游 NetMusic 消息，因此单独画在最下方。
+
+## 白名单回执语义
+
+白名单审核操作会额外返回 `WhitelistReviewMutationResultPacket`：删除和评论明确区分成功、限频、无权限、条目不存在、输入无效、必填缺失、条目过期和保存失败，刷新、预览及拖动被拒绝或限频时也会立即结束客户端等待；客户端只有收到成功变更回执才清除输入，失败或超时会保留原备注/评论供重试。同一请求号的成功变更会在服务端短期幂等回放，避免确认丢失后重复追加评论；预览及拖动请求也使用独立请求号，服务器校正时间点后仍能安全匹配最新回包。
+
+## 播放投递边界
+
+普通 MP4 的 PLAYER 来源与 Pad 的 PLAYER 来源不使用同一个公开路由：没有耳机投递时，普通 MP4 可向附近玩家广播；
+Pad 按在线 owner 分支投递。耳机监听者先定向投递，再由 `MediaAudienceRoutingPolicy` 决定是否仍需公开路由，避免重复。
+停止包另有附近广播规则，PLAYER 来源的投递逻辑不限于 owner。

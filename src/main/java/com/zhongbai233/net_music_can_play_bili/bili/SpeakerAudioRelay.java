@@ -11,13 +11,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 音响独立音频输出 — 单声道，只接收已拆分好的目标声道 PCM
- * 与主 handler 同时初始化（首帧 PCM 到达时），共享相同的 256ms init 静音期，
- * 确保主输出与 relay 时间线对齐，切换时无回跳
+ * Native media is queued only after the owning handler starts, without synthetic pre-roll.
+ * A newly attached relay inherits the owner's media baseline.
  */
 public class SpeakerAudioRelay {
     private static final int SAMPLES_PER_BLOCK = 256;
     private static final float[] MONO_POS = { 0, 0, 1.0f };
-    private static final int MIN_PUMP_PENDING = 4;
 
     private volatile OpenALSpatialAudio spatialAudio;
     private volatile boolean initialized;
@@ -180,8 +179,9 @@ public class SpeakerAudioRelay {
             initialized = false;
             started = false;
             pendingFed = 0;
-        } else if (pendingFed >= MIN_PUMP_PENDING)
+        } else if (handlerStarted) {
             sa.pumpQueuedAudio();
+        }
         PlaybackLatencyBench.markAudioConsumed(this, kind(), sa.getConsumedSamples(), sampleRate);
     }
 
@@ -193,7 +193,7 @@ public class SpeakerAudioRelay {
         }
     }
 
-    /** 音响是否已度过初始静音期，正在输出真实音频 */
+    /** Whether the owner has enabled real-media output for this relay. */
     public boolean isStarted() {
         return started;
     }
@@ -259,6 +259,11 @@ public class SpeakerAudioRelay {
     }
 
     /** Flushes stale buffers while preserving the shared handler media timeline. */
+    public void catchUpStartedMedia(long targetMediaSamples) {
+        OpenALSpatialAudio output = spatialAudio;
+        if (handlerStarted && output != null) output.catchUpStartedMedia(targetMediaSamples);
+    }
+
     public void flushQueuedAudio(long mediaPositionSamples) {
         long baseline = Math.max(0L, mediaPositionSamples);
         timelineBaselineSamples = Math.max(timelineBaselineSamples, baseline);

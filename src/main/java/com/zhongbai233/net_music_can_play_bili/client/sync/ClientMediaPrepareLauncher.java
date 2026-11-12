@@ -67,15 +67,31 @@ public final class ClientMediaPrepareLauncher {
         if (current == null || !payload.playbackSessionId().equals(current.playbackSessionId())) {
             return;
         }
+        String token = com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync.parseTerminalToken(payload.playUrl());
+        if (!token.isEmpty() && !ClientMediaTerminalRegistry.current(sourceId, payload.sessionId(), token)) return;
         if (!policy.canHear(sourceId, payload.headphoneRouted())) {
             policy.stop(sourceId);
             policy.onPrepareCancelledCannotHear(payload, sourceId);
             return;
         }
+        if (error instanceof java.util.concurrent.CancellationException) return;
         if (error != null) {
             policy.onPrepareFailed(payload, sourceId, error);
         } else if (prepared == null) {
             policy.onPrepareTimeout(payload, sourceId);
+        }
+
+        if (prepared != null && prepared.audioPresence() == ClientMediaPreparer.AudioPresence.ABSENT) {
+            // Confirmed video-only media stays available; it is not an audio failure.
+            ClientMediaTerminalRegistry.markVideoOnly(sourceId, payload.sessionId(), token);
+            ClientMediaDemandScheduler.markPlaying(sourceId, payload.sessionId());
+            return;
+        }
+
+        if (error != null || prepared == null
+                || prepared.audioPresence() == ClientMediaPreparer.AudioPresence.FAILED) {
+            reportPrepareFailure(payload, sourceId, policy);
+            return;
         }
 
         long startOffsetMillis = policy.startOffsetMillis(payload, current);
@@ -83,6 +99,10 @@ public final class ClientMediaPrepareLauncher {
         SyncedMediaPlaybackLauncher.LaunchResult launch = SyncedMediaPlaybackLauncher.fromPrepared(
                 payload.rawUrl(), payload.songName(), prepared, payload.playUrl(), payload.sessionId(),
                 startOffsetMillis, totalMillis, null, sourceId);
+        if (launch == null) {
+            reportPrepareFailure(payload, sourceId, policy);
+            return;
+        }
         ClientMediaPlaybackRegistry.put(sourceId, current.withLyrics(null, "", ""));
         if (loadLyrics) {
             loadLyricsAsync(keyFor(payload, sourceId), payload, sourceId, policy);
@@ -92,10 +112,16 @@ public final class ClientMediaPrepareLauncher {
                 (url, lyricRecord) -> policy.createSound(sourceId, payload, url, lyricRecord, startOffsetMillis));
         if (!submitted) {
             ClientMediaDemandScheduler.markLaunchFailed(sourceId, payload.sessionId());
+            reportPrepareFailure(payload, sourceId, policy);
         }
     }
 
-    static void removeScheduledForDevice(UUID sourceId) {
+    private static void reportPrepareFailure(ClientMediaSyncPayload payload, UUID sourceId, ClientMediaPreparePolicy policy) {
+        ClientMediaTerminalReporter.failure(payload, sourceId);
+        policy.stop(sourceId);
+    }
+
+    public static void removeScheduledForDevice(UUID sourceId) {
         if (sourceId != null) {
             PlaybackSourceId parsedSourceId = PlaybackSourceId.of(sourceId);
             SCHEDULED_PREPARES.cancelSource(parsedSourceId);

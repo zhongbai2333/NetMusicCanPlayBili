@@ -65,9 +65,14 @@ public final class SyncedMediaPlaybackLauncher {
             return null;
         }
         LyricRecord lyricRecord = prepared != null ? prepared.lyricRecord() : null;
-        PlaybackRequest playbackRequest = PlaybackRequest.now(playUrl, pos, sessionId,
-                Math.max(0L, elapsedMillis), Math.max(0L, totalMillis), ownerId,
-                minecartAnchor != null ? minecartAnchor.entityUuid() : null);
+        var pacing = pos == null && minecartAnchor == null
+                ? com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRegistry.startupPacing(ownerId, sessionId)
+                : null;
+        PlaybackRequest playbackRequest = pacing != null
+                ? new PlaybackRequest(playUrl, pos, sessionId, pacing.elapsedMillis(), Math.max(0L, totalMillis),
+                        ownerId, null, pacing.capturedNanos())
+                : PlaybackRequest.now(playUrl, pos, sessionId, Math.max(0L, elapsedMillis),
+                        Math.max(0L, totalMillis), ownerId, minecartAnchor != null ? minecartAnchor.entityUuid() : null);
         HttpAudioStreamHandler.RegisteredRequest request = HttpAudioStreamHandler.registerRequest(playbackRequest);
         BiliPlaybackDiagnostics.beginPlayback(songName, rawUrl, request.url());
         return new LaunchResult(request.url(), lyricRecord, request.requestToken());

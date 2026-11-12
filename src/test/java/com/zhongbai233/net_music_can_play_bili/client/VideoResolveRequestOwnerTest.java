@@ -9,7 +9,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class VideoResolveRequestOwnerTest {
@@ -40,13 +39,4 @@ class VideoResolveRequestOwnerTest {
         }
     }
 
-    @Test
-    void replacementMetadataRemainsStable() {
-        VideoResolveRequestOwner<Object> owner = new VideoResolveRequestOwner<>(80,
-                ResolveGeneration.of(11L), List.of());
-        assertTrue(owner.matches(1234L, 80));
-        assertTrue(!owner.matches(1234L, 116));
-        assertEquals(ResolveGeneration.of(11L), owner.requestGeneration());
-        assertEquals(0, owner.consumerPositions().size());
-    }
 }

@@ -32,6 +32,29 @@ import java.util.function.BiFunction;
 public final class ClientMediaPlaybackRegistry {
     private static final Map<PlaybackSourceId, ActivePlayback> ACTIVE = new ConcurrentHashMap<>();
     private static final Set<SourceSessionKey> STARTED_AUDIO_SESSIONS = ConcurrentHashMap.newKeySet();
+    private static final Map<PlaybackSourceId, StartupPacing> STARTUP_PACING = new ConcurrentHashMap<>();
+
+    /** Receipt-based PCM supply reference. Reported media/lyric timelines retain their existing semantics. */
+    public record StartupPacing(String sessionId, long elapsedMillis, long capturedNanos) {}
+
+    public static void captureStartupPacing(UUID sourceId, ClientMediaSyncPayload payload, long receivedNanos) {
+        if (sourceId == null || payload == null || payload.playbackSessionId().isEmpty()
+                || get(sourceId) == null || !isCurrent(sourceId, payload.sessionId())) return;
+        PlaybackSourceId key = PlaybackSourceId.of(sourceId);
+        if (receivedNanos <= 0L || receivedNanos > System.nanoTime()) {
+            STARTUP_PACING.remove(key);
+            return;
+        }
+        StartupPacing next = new StartupPacing(payload.sessionId(), Math.max(0L, payload.elapsedMillis()), receivedNanos);
+        STARTUP_PACING.compute(key, (ignored, current) -> current != null
+                && current.capturedNanos() > receivedNanos ? current : next);
+    }
+
+    public static StartupPacing startupPacing(UUID sourceId, String sessionId) {
+        if (sourceId == null || sessionId == null || sessionId.isBlank() || !isCurrent(sourceId, sessionId)) return null;
+        StartupPacing current = STARTUP_PACING.get(PlaybackSourceId.of(sourceId));
+        return current != null && sessionId.equals(current.sessionId()) ? current : null;
+    }
 
     private ClientMediaPlaybackRegistry() {
     }
@@ -42,7 +65,10 @@ public final class ClientMediaPlaybackRegistry {
 
     public static void put(UUID sourceId, ActivePlayback playback) {
         if (sourceId != null && playback != null) {
-            ACTIVE.put(PlaybackSourceId.of(sourceId), playback);
+            PlaybackSourceId key = PlaybackSourceId.of(sourceId);
+            ACTIVE.put(key, playback);
+            STARTUP_PACING.computeIfPresent(key, (ignored, pacing) ->
+                    pacing.sessionId().equals(playback.sessionId()) ? pacing : null);
         }
     }
 
@@ -60,6 +86,7 @@ public final class ClientMediaPlaybackRegistry {
     public static void remove(UUID sourceId) {
         if (sourceId != null) {
             ACTIVE.remove(PlaybackSourceId.of(sourceId));
+            STARTUP_PACING.remove(PlaybackSourceId.of(sourceId));
             removeAudioStartedForSource(sourceId);
             ClientMediaTimelineView.forget(sourceId);
             ClientAudioOwnerVolumes.remove(sourceId);
@@ -85,10 +112,11 @@ public final class ClientMediaPlaybackRegistry {
                     return active;
                 });
         if (removed[0]) {
+            STARTUP_PACING.remove(parsedSourceId);
             ClientAudioOwnerVolumes.remove(sourceId);
+            ClientMediaTimelineView.forget(sourceId);
         }
         STARTED_AUDIO_SESSIONS.remove(new SourceSessionKey(parsedSourceId, sessionId));
-        ClientMediaTimelineView.forget(sourceId);
     }
 
     public static void finishSession(UUID sourceId, String sessionId) {
@@ -117,7 +145,9 @@ public final class ClientMediaPlaybackRegistry {
     }
 
     public static void clear() {
+        ClientMediaTerminalRegistry.clear();
         ACTIVE.clear();
+        STARTUP_PACING.clear();
         STARTED_AUDIO_SESSIONS.clear();
         ClientMediaTimelineView.clearVisualStates();
     }

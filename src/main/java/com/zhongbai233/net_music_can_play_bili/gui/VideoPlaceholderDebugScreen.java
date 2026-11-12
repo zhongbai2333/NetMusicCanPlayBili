@@ -38,18 +38,19 @@ public final class VideoPlaceholderDebugScreen extends Screen {
     @Override
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
-        int scale = width >= 1040 ? 1 : Math.max(1, Math.min(width / 360, height / 240));
-        int drawW = TEX_W * scale;
-        int drawH = TEX_H * scale;
-        int gap = 18;
+        int gap = Math.min(18, Math.max(4, width / 24));
+        float scale = Math.min(1.0F, Math.min(Math.max(3, width - 16 - gap * 2) / (3.0F * TEX_W),
+                Math.max(1, height - 60) / (float) TEX_H));
+        int drawW = Math.max(1, (int) (TEX_W * scale));
+        int drawH = Math.max(1, (int) (TEX_H * scale));
         int totalW = drawW * 3 + gap * 2;
         int startX = Math.max(8, (width - totalW) / 2);
         int y = Math.max(28, (height - drawH) / 2);
 
-        drawTexture(graphics, LOADING, startX, y, drawW, drawH, "LOADING + PROGRESS");
-        drawProgress(graphics, startX, y, scale);
-        drawTexture(graphics, IRIS_WARNING, startX + drawW + gap, y, drawW, drawH, "IRIS WARNING");
-        drawTexture(graphics, PRIVACY, startX + (drawW + gap) * 2, y, drawW, drawH, "HOLO PRIVACY");
+        drawTexture(graphics, LOADING, startX, y, drawW, drawH, drawW < 110 ? "LOADING" : "LOADING + PROGRESS");
+        drawProgress(graphics, startX, y, drawW / (float) TEX_W);
+        drawTexture(graphics, IRIS_WARNING, startX + drawW + gap, y, drawW, drawH, drawW < 110 ? "IRIS" : "IRIS WARNING");
+        drawTexture(graphics, PRIVACY, startX + (drawW + gap) * 2, y, drawW, drawH, drawW < 110 ? "PRIVACY" : "HOLO PRIVACY");
 
         graphics.centeredText(font, Component.literal("Video placeholder textures - press Esc to close"), width / 2,
                 10, 0xFFE8E8E8);
@@ -62,14 +63,14 @@ public final class VideoPlaceholderDebugScreen extends Screen {
         graphics.centeredText(font, Component.literal(label), x + w / 2, y + h + 6, 0xFFBDE7FF);
     }
 
-    private void drawProgress(GuiGraphicsExtractor graphics, int x, int y, int scale) {
-        int progressX = x + 58 * scale;
-        int progressY = y + 126 * scale;
-        graphics.blit(PROGRESS_FRAME, progressX, progressY, progressX + 204 * scale, progressY + 10 * scale,
+    private void drawProgress(GuiGraphicsExtractor graphics, int x, int y, float scale) {
+        int progressX = x + Math.round(58 * scale);
+        int progressY = y + Math.round(126 * scale);
+        graphics.blit(PROGRESS_FRAME, progressX, progressY, progressX + Math.max(1, Math.round(204 * scale)), progressY + Math.max(1, Math.round(10 * scale)),
                 0.0F, 1.0F, 0.0F, 1.0F);
-        int movingX = progressX + 2 * scale + (int) (((System.nanoTime() / 12_000_000L) % (204 - 42 - 4)) * scale);
-        int movingY = progressY + 2 * scale;
-        graphics.blit(PROGRESS_SEGMENT, movingX, movingY, movingX + 42 * scale, movingY + 6 * scale,
+        int movingX = progressX + Math.round(2 * scale) + (int) (((System.nanoTime() / 12_000_000L) % (204 - 42 - 4)) * scale);
+        int movingY = progressY + Math.round(2 * scale);
+        graphics.blit(PROGRESS_SEGMENT, movingX, movingY, movingX + Math.max(1, Math.round(42 * scale)), movingY + Math.max(1, Math.round(6 * scale)),
                 0.0F, 1.0F, 0.0F, 1.0F);
     }
 }

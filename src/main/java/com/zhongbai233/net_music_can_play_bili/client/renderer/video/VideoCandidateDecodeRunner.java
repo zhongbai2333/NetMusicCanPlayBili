@@ -115,7 +115,7 @@ final class VideoCandidateDecodeRunner {
                 return false;
             }
         }
-        if (!owner.running || generation != owner.generation.get()) {
+        if (!owner.running || owner.stopRequested || generation != owner.generation.get()) {
             return false;
         }
         owner.grantDecodeAdmission();
@@ -126,9 +126,10 @@ final class VideoCandidateDecodeRunner {
         int candidateFps = Math.max(1, candidate.fps());
         long frameIntervalNs = Math.max(1L, 1_000_000_000L / candidateFps);
         long frameIndex = 0L;
-        long effectiveStartOffsetMillis = owner.effectiveDecoderStartOffsetMillis();
-        owner.decoderStartOffsetMillis = effectiveStartOffsetMillis;
-        owner.adaptiveRestartOffsetMillis = -1L;
+        long effectiveStartOffsetMillis = owner.prepareCandidateTiming(generation);
+        if (effectiveStartOffsetMillis < 0L) {
+            return false;
+        }
         boolean candidateCommitted = false;
         VideoStartupFallbackPolicy.DecodeSize decodeSize = VideoStartupFallbackPolicy.candidateDecodeSize(
                 owner.targetWidth, owner.targetHeight, candidate.sourceWidth(), candidate.sourceHeight());
@@ -139,7 +140,12 @@ final class VideoCandidateDecodeRunner {
             owner.physicalCloseHandoff.attachDecoder(nativeDecoder.terminationFuture());
         }
         try {
-            owner.decoder = decoder;
+            synchronized (owner) {
+                if (!owner.running || owner.stopRequested || generation != owner.generation.get()) {
+                    return false;
+                }
+                owner.decoder = decoder;
+            }
             while (owner.running && generation == owner.generation.get()) {
                 if (!waitWhilePaused(generation) || !owner.hasVideoConsumer()
                         || !waitWhileOffscreen(generation, candidateCommitted)) {
@@ -164,6 +170,10 @@ final class VideoCandidateDecodeRunner {
                     }
                     return true;
                 }
+                if (!owner.running || owner.stopRequested || generation != owner.generation.get()) {
+                    rejectAndClose(decoder, frame, boundedAv1Probe);
+                    break;
+                }
                 frameIndex++;
                 long ptsNanos = frame.ptsNanos() >= 0L ? frame.ptsNanos() : frameIndex * frameIntervalNs;
                 if (!owner.firstFrameLogged && shouldDropStaleStartupFrame(ptsNanos)) {
@@ -183,26 +193,32 @@ final class VideoCandidateDecodeRunner {
                     break;
                 }
                 if (!candidateCommitted) {
-                    if (boundedAv1Probe) {
-                        try {
-                            VideoBillboardPreview.commitAv1FirstFrameProbe(decoder, frame);
-                        } catch (IOException error) {
-                            owner.frameQueue.clear();
-                            throw error;
+                    synchronized (owner) {
+                        if (!owner.running || owner.stopRequested || generation != owner.generation.get()) {
+                            break;
                         }
+                        if (boundedAv1Probe) {
+                            try {
+                                VideoBillboardPreview.commitAv1FirstFrameProbe(decoder, frame);
+                            } catch (IOException error) {
+                                owner.frameQueue.clear();
+                                throw error;
+                            }
+                        }
+                        candidateCommitted = true;
+                        owner.targetWidth = decodeSize.width();
+                        owner.targetHeight = decodeSize.height();
+                        owner.firstFrameLogged = true;
+                        owner.firstDecodedNanoTime = System.nanoTime();
+                        owner.visualTiming.commit(generation, ptsNanos, owner.firstDecodedNanoTime);
+                        owner.activeCandidate = candidate;
+                        owner.actualDecoderBackend = actualBackend(decoder);
+                        owner.performanceMonitor.start(owner.firstDecodedNanoTime, candidateFps, owner.actualDecoderBackend);
+                        owner.performanceMonitor.recordDecodedFrame(preferredDecodeSampleNanos(frame, waitNs));
+                        LOGGER.debug("视频实例首个解码帧已提交: session={}, pts={}ms, wait={}ms, startOffset={}ms",
+                                owner.sessionId(), ptsNanos / 1_000_000L, waitNs / 1_000_000L,
+                                effectiveStartOffsetMillis);
                     }
-                    candidateCommitted = true;
-                    owner.targetWidth = decodeSize.width();
-                    owner.targetHeight = decodeSize.height();
-                    owner.firstFrameLogged = true;
-                    owner.firstDecodedNanoTime = System.nanoTime();
-                    owner.activeCandidate = candidate;
-                    owner.actualDecoderBackend = actualBackend(decoder);
-                    owner.performanceMonitor.start(owner.firstDecodedNanoTime, candidateFps, owner.actualDecoderBackend);
-                    owner.performanceMonitor.recordDecodedFrame(preferredDecodeSampleNanos(frame, waitNs));
-                    LOGGER.debug("视频实例首个解码帧已提交: session={}, pts={}ms, wait={}ms, startOffset={}ms",
-                            owner.sessionId(), ptsNanos / 1_000_000L, waitNs / 1_000_000L,
-                            effectiveStartOffsetMillis);
                 } else {
                     owner.performanceMonitor.recordDecodedFrame(preferredDecodeSampleNanos(frame, waitNs));
                 }
@@ -393,6 +409,7 @@ final class VideoCandidateDecodeRunner {
             return owner.running && generation == owner.generation.get();
         }
         long pauseStartNs = System.nanoTime();
+        owner.visualTiming.setPaused(generation, true, pauseStartNs);
         owner.performanceMonitor.pause(pauseStartNs);
         while (owner.running && generation == owner.generation.get() && isGamePaused()) {
             try {
@@ -402,9 +419,16 @@ final class VideoCandidateDecodeRunner {
                 return false;
             }
         }
-        owner.startNanoTime += Math.max(0L, System.nanoTime() - pauseStartNs);
-        owner.performanceMonitor.resume(System.nanoTime());
-        return owner.running && generation == owner.generation.get();
+        synchronized (owner) {
+            if (!owner.running || owner.stopRequested || generation != owner.generation.get()) {
+                return false;
+            }
+            long now = System.nanoTime();
+            owner.visualTiming.setPaused(generation, false, now);
+            owner.startNanoTime += Math.max(0L, now - pauseStartNs);
+            owner.performanceMonitor.resume(now);
+            return true;
+        }
     }
 
     private boolean waitWhileOffscreen(long generation, boolean candidateCommitted) {

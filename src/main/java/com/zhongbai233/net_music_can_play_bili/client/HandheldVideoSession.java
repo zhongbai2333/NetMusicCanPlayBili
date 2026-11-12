@@ -31,6 +31,12 @@ final class HandheldVideoSession implements AutoCloseable {
     final VideoPerformanceMonitor performanceMonitor = new VideoPerformanceMonitor();
     final boolean h264CandidateAvailable;
     final AtomicBoolean performanceFallbackRequested = new AtomicBoolean(false);
+    final com.zhongbai233.net_music_can_play_bili.client.sync.VideoTailPresentation tailPresentation =
+            new com.zhongbai233.net_music_can_play_bili.client.sync.VideoTailPresentation();
+    volatile String transportToken = "";
+    volatile boolean naturalEnd;
+    volatile boolean endReported;
+    volatile long frameDurationMillis = 34L;
     volatile boolean performanceFallbackLocked;
     volatile int activeCodecId;
     volatile int actualQuality;

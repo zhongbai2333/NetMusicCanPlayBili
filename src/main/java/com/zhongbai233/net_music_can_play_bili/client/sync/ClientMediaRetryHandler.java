@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 
 /** Shared stream retry coordinator for synchronized client media playback. */
 public final class ClientMediaRetryHandler {
+    private static final System.Logger LOGGER = System.getLogger(ClientMediaRetryHandler.class.getName());
     private static final ClientMediaRetryRegistry PENDING_RETRIES = new ClientMediaRetryRegistry();
 
     private ClientMediaRetryHandler() {
@@ -35,14 +36,15 @@ public final class ClientMediaRetryHandler {
         if (active == null || !active.playbackSessionId().filter(sessionId::equals).isPresent()) {
             return false;
         }
-        if (!markPending(deviceId, sessionId)) {
-            return false;
-        }
+        ClientMediaRetryRegistry.Admission admission = PENDING_RETRIES.admitFailure(PlaybackSourceId.of(deviceId), sessionId);
+        if (admission == ClientMediaRetryRegistry.Admission.ALREADY_PENDING) return true;
+        if (admission == ClientMediaRetryRegistry.Admission.EXHAUSTED) return false;
         ClientMediaPlaybackRegistry.ActivePlayback admitted = ClientMediaPlaybackRegistry.get(deviceId);
         if (admitted == null || !admitted.playbackSessionId().filter(sessionId::equals).isPresent()) {
             PENDING_RETRIES.forget(PlaybackSourceId.of(deviceId), sessionId);
             return false;
         }
+        String transportToken = ClientMediaTerminalRegistry.token(deviceId, sessionId.value());
         policy.onRetryScheduled(deviceId, sessionId.value(), admitted, error);
         CompletableFuture.delayedExecutor(Math.max(0L, policy.retryDelayMillis()), TimeUnit.MILLISECONDS)
                 .execute(() -> Minecraft.getInstance().execute(() -> {
@@ -53,14 +55,42 @@ public final class ClientMediaRetryHandler {
                             PENDING_RETRIES.forget(sourceId, sessionId);
                             return false;
                         }
-                        return ClientMediaRetryDispatch.dispatch(policy, deviceId, sessionId, current, error, () -> {
+                        return dispatchRetry(policy, deviceId, sessionId, current, error, () -> {
                             if (PENDING_RETRIES.forget(sourceId, sessionId)) {
+                                ClientMediaTerminalReporter.failure(deviceId, sessionId.value(), transportToken);
                                 ClientMediaPlaybackRegistry.finishSession(deviceId, sessionId);
                             }
                         });
                     });
                 }));
         return true;
+    }
+
+    static boolean dispatchRetry(ClientMediaRetryPolicy policy, UUID sourceId, PlaybackSessionId sessionId,
+            ClientMediaPlaybackRegistry.ActivePlayback active, Throwable error, Runnable rejected) {
+        if (policy == null || sourceId == null || sessionId == null || active == null) {
+            reject(rejected);
+            return false;
+        }
+        try {
+            if (policy.tryScheduleRetry(sourceId, sessionId.value(), active, error)) {
+                return true;
+            }
+            LOGGER.log(System.Logger.Level.DEBUG,
+                    "客户端媒体 retry dispatch 被拒绝: source={0} session={1}", sourceId, sessionId);
+        } catch (RuntimeException dispatchError) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "客户端媒体 retry dispatch 异常: source=" + sourceId + " session=" + sessionId,
+                    dispatchError);
+        }
+        reject(rejected);
+        return false;
+    }
+
+    private static void reject(Runnable rejected) {
+        if (rejected != null) {
+            rejected.run();
+        }
     }
 
     public static boolean isPending(UUID deviceId, String sessionId) {
@@ -93,9 +123,5 @@ public final class ClientMediaRetryHandler {
 
     static void clearPending() {
         PENDING_RETRIES.clear();
-    }
-
-    private static boolean markPending(UUID deviceId, PlaybackSessionId sessionId) {
-        return sessionId != null && PENDING_RETRIES.tryMark(PlaybackSourceId.of(deviceId), sessionId);
     }
 }

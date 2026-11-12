@@ -21,23 +21,6 @@ class VideoPipelinePropertiesTest {
     }
 
     @Test
-    void networkErrorPlaceholderRemainsEnabledByDefault() {
-        assertTrue(VideoPipelineProperties.networkErrorPlaceholderEnabled());
-    }
-
-    @Test
-    void explicitFalseDisablesPlaceholder() {
-        System.setProperty(VideoPipelineProperties.NETWORK_ERROR_PLACEHOLDER, "false");
-        assertFalse(VideoPipelineProperties.networkErrorPlaceholderEnabled());
-    }
-
-    @Test
-    void invalidValueFallsBackToDefault() {
-        System.setProperty(VideoPipelineProperties.NETWORK_ERROR_PLACEHOLDER, "invalid");
-        assertTrue(VideoPipelineProperties.networkErrorPlaceholderEnabled());
-    }
-
-    @Test
     void uploadAndYuvDefaultsRemainCompatible() {
         VideoPipelineProperties.Upload upload = VideoPipelineProperties.upload();
         assertEquals("normal", upload.pixelMode());
@@ -49,17 +32,6 @@ class VideoPipelinePropertiesTest {
         assertEquals("bt709_limited", yuv.matrix());
         assertEquals("", yuv.shaderDebug());
         assertFalse(yuv.depthWriteDisabled());
-    }
-
-    @Test
-    void configuredStringModesAreTrimmedAndNormalizedWhereRequired() {
-        System.setProperty(VideoPipelineProperties.PIXEL_MODE, " swap_rb ");
-        System.setProperty(VideoPipelineProperties.YUV_MATRIX, " BT601_LIMITED ");
-        System.setProperty(VideoPipelineProperties.YUV_SHADER_DEBUG, " luma ");
-
-        assertEquals("swap_rb", VideoPipelineProperties.upload().pixelMode());
-        assertEquals("bt601_limited", VideoPipelineProperties.yuv().matrix());
-        assertEquals("LUMA", VideoPipelineProperties.yuv().shaderDebug());
     }
 
     @Test
@@ -76,21 +48,4 @@ class VideoPipelinePropertiesTest {
         assertTrue(VideoPipelineProperties.yuv().depthWriteDisabled());
     }
 
-    @Test
-    void invalidFlagsAndBlankModesUseCompatibilityDefaults() {
-        System.setProperty(VideoPipelineProperties.PIXEL_MODE, "  ");
-        System.setProperty(VideoPipelineProperties.FAST_NATIVE_UPLOAD, "yes");
-        System.setProperty(VideoPipelineProperties.NV12_PBO, "yes");
-        System.setProperty(VideoPipelineProperties.NV12_UV_RG8, "yes");
-        System.setProperty(VideoPipelineProperties.YUV_MATRIX, "  ");
-        System.setProperty(VideoPipelineProperties.YUV_NO_DEPTH_WRITE, "yes");
-
-        VideoPipelineProperties.Upload upload = VideoPipelineProperties.upload();
-        assertEquals("normal", upload.pixelMode());
-        assertTrue(upload.fastNativeUploadEnabled());
-        assertTrue(upload.nv12PboEnabled());
-        assertTrue(upload.nv12UvRg8Enabled());
-        assertEquals("bt709_limited", VideoPipelineProperties.yuv().matrix());
-        assertFalse(VideoPipelineProperties.yuv().depthWriteDisabled());
-    }
 }

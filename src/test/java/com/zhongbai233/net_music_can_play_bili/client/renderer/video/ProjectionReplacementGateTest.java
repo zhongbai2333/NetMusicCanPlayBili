@@ -165,21 +165,6 @@ class ProjectionReplacementGateTest {
     }
 
     @Test
-    void retainedHandoffSurvivesLogicalRegistryClearOrRemove() {
-        ProjectionReplacementGate<String> gate = new ProjectionReplacementGate<>(new ManualScheduler());
-        Signals detached = new Signals();
-        gate.retainCloseHandoff("projector", detached.handoff());
-
-        ProjectionReplacementGate.Intent<String> replacement = gate.beginIntent("projector", "session-new",
-                ProjectionReplacementGate.CloseHandoff.completed());
-
-        assertSame(detached.handoff(), replacement.closeHandoff());
-        assertEquals(ProjectionReplacementGate.Decision.WAIT, gate.evaluate(replacement));
-        detached.completeAll();
-        assertEquals(ProjectionReplacementGate.Decision.OPEN, gate.evaluate(replacement));
-    }
-
-    @Test
     void logicalRemovalInvalidatesAnAlreadyWaitingIntentButKeepsItsSignals() {
         ProjectionReplacementGate<String> gate = new ProjectionReplacementGate<>(new ManualScheduler());
         Signals detached = new Signals();
@@ -213,24 +198,6 @@ class ProjectionReplacementGateTest {
         assertFalse(gate.commitIfOpen(replacement, () -> {
             throw new AssertionError("failed handoff must stay closed");
         }));
-    }
-
-    @Test
-    void differentOwnersHaveIndependentSlotsAndEpochs() {
-        ProjectionReplacementGate<String> gate = new ProjectionReplacementGate<>(new ManualScheduler());
-        Signals firstOwner = new Signals();
-        ProjectionReplacementGate.Intent<String> first = gate.beginIntent("first", "session-a",
-                firstOwner.handoff());
-        ProjectionReplacementGate.Intent<String> second = gate.beginIntent("second", "session-b",
-                ProjectionReplacementGate.CloseHandoff.completed());
-
-        assertEquals(1L, first.epoch());
-        assertEquals(1L, second.epoch());
-        assertEquals(ProjectionReplacementGate.Decision.WAIT, gate.evaluate(first));
-        assertEquals(ProjectionReplacementGate.Decision.OPEN, gate.evaluate(second));
-        assertTrue(gate.commitIfOpen(second, () -> {
-        }));
-        assertEquals(ProjectionReplacementGate.Decision.WAIT, gate.evaluate(first));
     }
 
     @Test

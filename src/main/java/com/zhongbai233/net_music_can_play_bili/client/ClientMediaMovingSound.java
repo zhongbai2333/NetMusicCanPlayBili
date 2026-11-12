@@ -4,13 +4,14 @@ import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.client.audio.SyncedMediaSound;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAreaAudioZoneRegistry;
-import com.zhongbai233.net_music_can_play_bili.client.audio.SyncedStreamRecoveryRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaAudioRouting;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlaybackRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundHandle;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundLifecyclePolicy;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaRetryHandler;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaSoundRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTerminalRegistry;
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioUtils;
 import com.zhongbai233.net_music_can_play_bili.media.audio.AudioPlaybackRange;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackApproachPredictor;
@@ -38,8 +39,66 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
     private final AtomicBoolean finished = new AtomicBoolean();
     private final PlaybackPresentationEnvelope presentationEnvelope = new PlaybackPresentationEnvelope();
     private volatile boolean streamReady;
-    private final SyncedStreamRecoveryRegistry.Registration recoveryRegistration;
+    private String transportToken = "";
+    private static final java.util.Set<ClientMediaMovingSound> NATURAL_ENDS =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    public ClientMediaMovingSound withTerminalFeedback(String serverPlayUrl) {
+        transportToken = com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync.parseTerminalToken(serverPlayUrl);
+        return this;
+    }
+
+    public String transportToken() { return transportToken; }
+
+    /** Run on the client thread: SoundEngine has consumed its own trailing carrier buffers too. */
+    public static void tickNaturalEnds() {
+        Minecraft client = Minecraft.getInstance();
+        if (client.isPaused()) return;
+        for (ClientMediaMovingSound sound : NATURAL_ENDS) {
+            if (sound.finished.get() || !ClientMediaPlayback.isCurrent(sound.sourceId, sound.sessionId())
+                    || ClientMediaSoundRegistry.get(sound.sourceId) != sound
+                    || ClientMediaRetryHandler.isPending(sound.sourceId, sound.playbackSessionId())) {
+                NATURAL_ENDS.remove(sound);
+                continue;
+            }
+            if (!client.getSoundManager().isActive(sound)) {
+                NATURAL_ENDS.remove(sound);
+                sound.reportTerminal(com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackEndReason.NATURAL_EOF);
+                sound.lifecyclePolicy.onCompleted(sound.sourceId, sound.sessionId());
+                sound.stopAndFinish();
+            }
+        }
+    }
+
+    private void reportTerminal(com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackEndReason reason) {
+        Minecraft client = Minecraft.getInstance();
+        if ((reason != com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackEndReason.FAILED && totalMillis > 0) || finished.get() || client.player == null
+                || !ClientMediaPlayback.isCurrent(sourceId, sessionId())
+                || ClientMediaRetryHandler.isPending(sourceId, playbackSessionId())
+                || ClientMediaSoundRegistry.get(sourceId) != this
+                || !ClientMediaTerminalRegistry.reporter(
+                        sourceId, sessionId(), transportToken, client.player.getUUID())) return;
+        net.neoforged.neoforge.client.network.ClientPacketDistributor.sendToServer(
+                new com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackEndPacket(sourceId, sessionId(),
+                        transportToken, reason));
+    }
+
+    @Override
+    protected void onStreamNaturalEnd() {
+        Minecraft.getInstance().execute(() -> {
+            if (!finished.get()) NATURAL_ENDS.add(this);
+        });
+    }
+
+    @Override
+    protected void onStreamCancelled() {
+        Minecraft.getInstance().execute(() -> {
+            if (ClientMediaSoundRegistry.get(sourceId) != this
+                    || !ClientMediaTerminalRegistry.current(
+                            sourceId, sessionId(), transportToken)) discardWithoutFinishing();
+            else stopAndFinish();
+        });
+    }
     public ClientMediaMovingSound(UUID sourceId, URL songUrl, int timeSecond, LyricRecord lyricRecord,
             String sessionId, long startOffsetMillis, float volume, boolean headphoneRouted,
             ClientMediaSoundLifecyclePolicy lifecyclePolicy, String debugName) {
@@ -53,8 +112,8 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
         updatePositionAndAttenuation();
         LOGGER.trace("{} 声音实例创建: source={} session={} headphoneRouted={} volume={} gain={} attenuation={}",
                 this.debugName, sourceId, sessionId(), headphoneRouted, this.mediaVolume, volume, attenuation);
-        recoveryRegistration = SyncedStreamRecoveryRegistry.register(playbackSessionId(),
-                request -> this.lifecyclePolicy.recoverAfterStreamFailure(sourceId, sessionId(), request.error()));
+        // OwnedAudioStream delivers failures for this exact sound. A session-only recovery registration
+        // would let a retired producer invoke the replacement transport's handler.
         boolean accepted = false;
         try {
             accepted = this.lifecyclePolicy.tryRegisterSound(sourceId, sessionId(), this);
@@ -81,9 +140,8 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
 
     @Override
     public void discardWithoutFinishing() {
-        if (finished.compareAndSet(false, true)) {
-            SyncedStreamRecoveryRegistry.unregister(recoveryRegistration);
-        }
+        NATURAL_ENDS.remove(this);
+        finished.set(true);
         stop();
     }
 
@@ -135,10 +193,17 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
 
     @Override
     protected void onStreamFailure(Exception error) {
-        boolean retryScheduled = lifecyclePolicy.recoverAfterStreamFailure(sourceId, sessionId(), error);
-        if (!retryScheduled) {
-            finishSession();
-        }
+        Minecraft.getInstance().execute(() -> {
+            if (finished.get() || ClientMediaSoundRegistry.get(sourceId) != this
+                    || !ClientMediaPlayback.isCurrent(sourceId, sessionId())
+                    || (!transportToken.isEmpty()
+                            && !ClientMediaTerminalRegistry.current(sourceId, sessionId(), transportToken))
+                    || ClientMediaRetryHandler.isPending(sourceId, playbackSessionId())) return;
+            if (!lifecyclePolicy.recoverAfterStreamFailure(sourceId, sessionId(), error)) {
+                reportTerminal(com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackEndReason.FAILED);
+                finishSession();
+            }
+        });
     }
 
     @Override
@@ -208,8 +273,8 @@ public class ClientMediaMovingSound extends SyncedMediaSound implements ClientMe
 
     @Override
     protected void finishSession() {
+        NATURAL_ENDS.remove(this);
         if (finished.compareAndSet(false, true)) {
-            SyncedStreamRecoveryRegistry.unregister(recoveryRegistration);
             lifecyclePolicy.finish(sourceId, sessionId());
         }
     }

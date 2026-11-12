@@ -68,13 +68,13 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
         if (closed) {
             return -1;
         }
-        if (!drainStartOffset()) {
-            return -1;
-        }
+        if (len == 0) return 0;
+        if (inputFinished || !drainStartOffset()) return drainTail(b, off, len);
         int n = source.read(b, off, len);
         if (n <= 0) {
             if (n < 0) {
                 finishInput();
+                return drainTail(b, off, len);
             }
             return n;
         }
@@ -180,6 +180,12 @@ public final class OpenALTappedAudioInputStream extends AudioInputStream {
             capacity = required;
         }
         tapBuffer = new byte[capacity];
+    }
+
+    private int drainTail(byte[] bytes, int offset, int length) throws IOException {
+        if (stereo == null) return -1;
+        return com.zhongbai233.net_music_can_play_bili.media.stream.TerminalSilence.read(bytes, offset, length,
+                closed, null, true, stereo.drainStatus());
     }
 
     private void finishInput() {

@@ -40,6 +40,9 @@ final class RealMp3SoundEngineScenario implements BenchClientScenario {
     private static final long PAUSE_HOLD_NANOS = 750_000_000L;
     private static final long PAUSE_POSITION_TOLERANCE_MILLIS = 80L;
     private static final long RESUME_PROGRESS_MILLIS = 250L;
+    /** A decode-from-head seek may overshoot its target by at most this much fed audio before it is judged late. */
+    private static final long SEEK_OVERSHOOT_MILLIS = 60_000L;
+    private static final long SEEK_UNDERSHOOT_MILLIS = 1_000L;
     private static final long TOTAL_MILLIS = 360_000L;
     private static final BenchMetricDescriptor SOUND_ACTIVE = new BenchMetricDescriptor(
             "ncpb.real_mp3_sound_engine.sound_active", "count", MetricDirection.NEUTRAL);
@@ -53,6 +56,10 @@ final class RealMp3SoundEngineScenario implements BenchClientScenario {
             "ncpb.real_mp3_sound_engine.paused", "count", MetricDirection.NEUTRAL);
     private static final BenchMetricDescriptor AUDIBLE_MILLIS = new BenchMetricDescriptor(
             "ncpb.real_mp3_sound_engine.audible_millis", "milliseconds", MetricDirection.NEUTRAL);
+    private static final BenchMetricDescriptor MEDIA_MILLIS = new BenchMetricDescriptor(
+            "ncpb.real_mp3_sound_engine.media_millis", "milliseconds", MetricDirection.NEUTRAL);
+    private static final BenchMetricDescriptor FED_MILLIS = new BenchMetricDescriptor(
+            "ncpb.real_mp3_sound_engine.fed_millis", "milliseconds", MetricDirection.NEUTRAL);
 
     private final AudioStreamProperties.RealMp3Bench properties = AudioStreamProperties.realMp3Bench();
     private final PlaybackSessionId firstSession = PlaybackSessionId.of("bench-real-mp3-sound-engine-first");
@@ -86,6 +93,7 @@ final class RealMp3SoundEngineScenario implements BenchClientScenario {
     private boolean pauseContinuityVerified;
     private boolean exactMuteStopVerified;
     private boolean exactRangeStopVerified;
+    private int seekWindowsVerified;
 
     @Override
     public void setup(BenchClientContext context) {
@@ -126,6 +134,7 @@ final class RealMp3SoundEngineScenario implements BenchClientScenario {
 
         StereoOpenALHandler.DiagnosticSnapshot output = ClientAudioOutputRegistry
                 .getOwnerStereoSnapshot(ownerId).orElse(null);
+        ClientAudioOutputRegistry.AudioTimeline timeline = ClientAudioOutputRegistry.getOwnerAudioTimeline(ownerId);
         if (output != null && output.firstPcm().samples() > 0L) {
             if (phase == 0) {
                 firstPcm = output.firstPcm();
@@ -133,12 +142,14 @@ final class RealMp3SoundEngineScenario implements BenchClientScenario {
                 secondPcm = output.firstPcm();
             }
         }
-        record(context);
+        record(context, timeline);
 
         if (phase == 0 && firstSound.streamReady() && streamingChannelStarts.get() == 1
                 && context.minecraft().getSoundManager().isActive(firstSound)
-                && output != null && output.started() && output.firstPcm().samples() >= 1_024L) {
+                && output != null && output.started() && output.firstPcm().samples() >= 1_024L
+                && seekReached(timeline, firstSession, FIRST_OFFSET_MILLIS)) {
             requireHealthy("first SoundEngine channel", firstSound, 1, output);
+            requireSeekWindow("first seek", timeline, firstSession, FIRST_OFFSET_MILLIS);
             firstPcm = output.firstPcm();
             if (!ModernTurntablePlaybackTracker.tryStart(turntablePos, firstSession.value(),
                     (int) (TOTAL_MILLIS / 1_000L))) {
@@ -160,8 +171,10 @@ final class RealMp3SoundEngineScenario implements BenchClientScenario {
         }
         if (phase == 2 && secondSound.streamReady() && streamingChannelStarts.get() == 2
                 && context.minecraft().getSoundManager().isActive(secondSound)
-                && output != null && output.started() && output.firstPcm().samples() >= 1_024L) {
+                && output != null && output.started() && output.firstPcm().samples() >= 1_024L
+                && seekReached(timeline, secondSession, SECOND_OFFSET_MILLIS)) {
             requireHealthy("replacement SoundEngine channel", secondSound, 2, output);
+            requireSeekWindow("replacement seek", timeline, secondSession, SECOND_OFFSET_MILLIS);
             secondPcm = output.firstPcm();
             pausePositionMillis = output.positionMillis();
             if (pausePositionMillis < 0L) {
@@ -218,7 +231,7 @@ final class RealMp3SoundEngineScenario implements BenchClientScenario {
     public void verify(BenchClientContext context) {
         throwIfStreamFailed();
         if (!converged || !pauseContinuityVerified || !exactMuteStopVerified || !exactRangeStopVerified
-                || !resourcesConverged(context)) {
+                || seekWindowsVerified != 2 || !resourcesConverged(context)) {
             throw new AssertionError("Minecraft SoundEngine streaming channels did not converge: firstActive="
                     + context.minecraft().getSoundManager().isActive(firstSound) + " secondActive="
                     + context.minecraft().getSoundManager().isActive(secondSound) + " tap="
@@ -296,6 +309,27 @@ final class RealMp3SoundEngineScenario implements BenchClientScenario {
         requirePcmQuality(phase, output.firstPcm());
     }
 
+    private static boolean seekReached(ClientAudioOutputRegistry.AudioTimeline timeline,
+            PlaybackSessionId sessionId, long targetMillis) {
+        return timeline.playbackSessionId().filter(sessionId::equals).isPresent()
+                && timeline.fedMillis() >= targetMillis;
+    }
+
+    /**
+     * Seek generation: each session must start decoding from its own requested offset, neither replaying from
+     * the head (main clock far behind the target) nor having skipped far past it (fed clock far ahead).
+     */
+    private void requireSeekWindow(String phase, ClientAudioOutputRegistry.AudioTimeline timeline,
+            PlaybackSessionId sessionId, long targetMillis) {
+        if (!seekReached(timeline, sessionId, targetMillis)
+                || timeline.fedMillis() > targetMillis + SEEK_OVERSHOOT_MILLIS
+                || timeline.mainMillis() < targetMillis - SEEK_UNDERSHOOT_MILLIS) {
+            throw new AssertionError("Real MP3 seek started outside the target window during " + phase
+                    + ": session=" + sessionId.value() + " target=" + targetMillis + " timeline=" + timeline);
+        }
+        seekWindowsVerified++;
+    }
+
     private void throwIfStreamFailed() {
         Throwable failure = streamFailure.get();
         if (failure != null) {
@@ -303,7 +337,9 @@ final class RealMp3SoundEngineScenario implements BenchClientScenario {
         }
     }
 
-    private void record(BenchClientContext context) {
+    private void record(BenchClientContext context, ClientAudioOutputRegistry.AudioTimeline timeline) {
+        context.metrics().record(MEDIA_MILLIS, Math.max(0L, timeline.mainMillis()));
+        context.metrics().record(FED_MILLIS, Math.max(0L, timeline.fedMillis()));
         context.metrics().record(SOUND_ACTIVE,
                 (isActive(context, firstSound) ? 1L : 0L) + (isActive(context, secondSound) ? 1L : 0L));
         context.metrics().record(CHANNEL_STARTS, streamingChannelStarts.get());

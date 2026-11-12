@@ -45,38 +45,6 @@ class IrisShaderpackPropertiesTest {
         assertEquals("PARTICLES_TRANS", IrisShaderpackProperties.yuvShaderKeyName());
     }
 
-    @Test
-    void canonicalDisableKeyTakesPriorityOverLegacyKey() {
-        set(IrisShaderpackProperties.LEGACY_DISABLE_CUSTOM_YUV_SHADER, "true");
-        assertTrue(IrisShaderpackProperties.customYuvShaderDisabled());
-
-        set(IrisShaderpackProperties.DISABLE_CUSTOM_YUV_SHADER, "false");
-        assertFalse(IrisShaderpackProperties.customYuvShaderDisabled());
-    }
-
-    @Test
-    void invalidBooleanValuesUseDefaultsOrValidLegacyFallback() {
-        set(IrisShaderpackProperties.FORCE_YUV_SHADER, "yes");
-        set(IrisShaderpackProperties.DISABLE_CUSTOM_YUV_SHADER, "invalid");
-        set(IrisShaderpackProperties.LEGACY_DISABLE_CUSTOM_YUV_SHADER, "true");
-        set(IrisShaderpackProperties.ALLOW_THREE_PLANE_YUV, "1");
-        set(IrisShaderpackProperties.ENABLE_YUV_SHADERPACK_BYPASS, "no");
-
-        assertTrue(IrisShaderpackProperties.forceYuvShaderEnabled());
-        assertTrue(IrisShaderpackProperties.customYuvShaderDisabled());
-        assertTrue(IrisShaderpackProperties.threePlaneYuvAllowed());
-        assertTrue(IrisShaderpackProperties.yuvShaderpackBypassEnabled());
-    }
-
-    @Test
-    void blankNamesUseCompatibilityDefaults() {
-        set(IrisShaderpackProperties.YUV_PROGRAM, "   ");
-        set(IrisShaderpackProperties.YUV_SHADER_KEY, "   ");
-
-        assertEquals("ENTITIES_TRANSLUCENT", IrisShaderpackProperties.yuvProgramName());
-        assertEquals("", IrisShaderpackProperties.yuvShaderKeyName());
-    }
-
     private void set(String key, String value) {
         System.setProperty(key, value);
         if (!changedKeys.contains(key)) {

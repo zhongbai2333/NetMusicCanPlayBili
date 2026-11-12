@@ -460,7 +460,7 @@ public final class PadMapSampler {
      * 这样就不需要维护"人工方块清单"——不属于自然/植被/水体的实体方块即视为人工方块。
      */
     static boolean isNaturalTerrain(BlockState state) {
-        if (state.is(BlockTags.DIRT) || state.is(BlockTags.SAND) || state.is(BlockTags.BASE_STONE_OVERWORLD)
+        if (state.is(BlockTags.GRASS_BLOCKS) || state.is(BlockTags.DIRT) || state.is(BlockTags.SAND) || state.is(BlockTags.BASE_STONE_OVERWORLD)
                 || state.is(BlockTags.BASE_STONE_NETHER) || state.is(BlockTags.NYLIUM)
                 || state.is(BlockTags.SNOW) || state.is(BlockTags.ICE) || state.is(BlockTags.TERRACOTTA)) {
             return true;
@@ -484,7 +484,7 @@ public final class PadMapSampler {
         if (state.is(BlockTags.SNOW) || state.is(Blocks.POWDER_SNOW)) {
             return PadMapTileKind.SNOW;
         }
-        if (state.is(BlockTags.DIRT) || state.is(Blocks.DIRT_PATH) || state.is(Blocks.MYCELIUM)
+        if (state.is(BlockTags.GRASS_BLOCKS) || state.is(BlockTags.DIRT) || state.is(Blocks.DIRT_PATH) || state.is(Blocks.MYCELIUM)
                 || state.is(Blocks.CLAY) || state.is(BlockTags.NYLIUM) || state.is(Blocks.FARMLAND)) {
             return PadMapTileKind.GRASS;
         }

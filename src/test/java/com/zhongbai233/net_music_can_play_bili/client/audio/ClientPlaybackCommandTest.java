@@ -1,12 +1,11 @@
 package com.zhongbai233.net_music_can_play_bili.client.audio;
 
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-
-import org.junit.jupiter.api.Test;
 
 class ClientPlaybackCommandTest {
     @Test
@@ -44,5 +43,69 @@ class ClientPlaybackCommandTest {
         assertFalse(command.hasSession());
         assertTrue(command.playbackSessionId().isEmpty());
         assertEquals("", command.sessionId());
+    }
+
+    @Test
+    void acceptsTheAuthoritativeSessionEvenWhenTrackerStillHasThePreviousSession() {
+        assertEquals(ModernTurntableCommandAdmissionPolicy.Decision.ACCEPT_AUTHORITATIVE,
+                ModernTurntableCommandAdmissionPolicy.decide("session-2", "session-2", "session-1"));
+    }
+
+    @Test
+    void dropsACommandThatConflictsWithTheObservableAuthoritativeSession() {
+        assertEquals(ModernTurntableCommandAdmissionPolicy.Decision.DROP_AUTHORITATIVE_SESSION_MISMATCH,
+                ModernTurntableCommandAdmissionPolicy.decide("session-1", "session-2", "session-1"));
+    }
+
+    @Test
+    void preservesCompatibilityFallbackWhenNoAuthoritativeOrTrackedSessionIsObservable() {
+        assertEquals(ModernTurntableCommandAdmissionPolicy.Decision.ACCEPT_COMPATIBILITY_FALLBACK,
+                ModernTurntableCommandAdmissionPolicy.decide("session-1", "", ""));
+        assertEquals(ModernTurntableCommandAdmissionPolicy.Decision.ACCEPT_COMPATIBILITY_FALLBACK,
+                ModernTurntableCommandAdmissionPolicy.decide("session-1", null, null));
+    }
+
+    @Test
+    void rejectsDelayedPlaybackWhenTheAuthoritativeTurntableIsPresentButStopped() {
+        assertEquals(ModernTurntableCommandAdmissionPolicy.Decision.DROP_AUTHORITATIVE_STOPPED,
+                ModernTurntableCommandAdmissionPolicy.decide("session-1", "", "", true));
+        assertEquals(ModernTurntableCommandAdmissionPolicy.Decision.DROP_AUTHORITATIVE_STOPPED,
+                ModernTurntableCommandAdmissionPolicy.decide("session-1", "", "session-1", true));
+    }
+
+    @Test
+    void explicitStopDominatesStaleAuthoritativeAndTrackedState() {
+        assertEquals(ModernTurntableCommandAdmissionPolicy.Decision.DROP_EXPLICITLY_STOPPED,
+                ModernTurntableCommandAdmissionPolicy.decide(
+                        "session-1", "session-1", "session-1", true, true));
+    }
+
+
+    @Test
+    void allowsTheTrackedSessionWhileAuthoritativeStateIsTemporarilyUnavailable() {
+        assertEquals(ModernTurntableCommandAdmissionPolicy.Decision.ACCEPT_TRACKED,
+                ModernTurntableCommandAdmissionPolicy.decide("session-2", "", "session-2"));
+    }
+
+    @Test
+    void preventsAnOlderCommandFromReplacingTheTrackedSessionDuringFallback() {
+        assertEquals(ModernTurntableCommandAdmissionPolicy.Decision.DROP_TRACKED_SESSION_MISMATCH,
+                ModernTurntableCommandAdmissionPolicy.decide("session-1", "", "session-2"));
+    }
+
+    @Test
+    void stopsOnlyTheExactActiveSession() {
+        assertEquals(ModernTurntableStopPolicy.Decision.STOP_EXACT,
+                ModernTurntableStopPolicy.decide("disc-session", "disc-session"));
+    }
+
+    @Test
+    void staleOrMalformedStopsCannotKillTheReplacementSession() {
+        assertEquals(ModernTurntableStopPolicy.Decision.IGNORE_STALE,
+                ModernTurntableStopPolicy.decide("old-disc", "replacement-disc"));
+        assertEquals(ModernTurntableStopPolicy.Decision.IGNORE_INVALID,
+                ModernTurntableStopPolicy.decide("", "replacement-disc"));
+        assertEquals(ModernTurntableStopPolicy.Decision.IGNORE_INVALID,
+                ModernTurntableStopPolicy.decide("old-disc", null));
     }
 }

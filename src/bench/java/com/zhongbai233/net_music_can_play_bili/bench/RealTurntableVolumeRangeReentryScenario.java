@@ -51,9 +51,10 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
- * Production-path proof for place turntable -> drag its real volume slider -> walk out of range ->
- * walk back into range. Player movement deliberately goes through BenchMod automation instead of
- * writing NCPB's cached listener coordinates.
+ * Production-path proof for place turntable -> drag its real volume slider -> right-click a real MP3 disc
+ * in (server resolve + sync packet) -> walk out of range -> walk back into range -> right-click eject.
+ * Player movement deliberately goes through BenchMod automation instead of writing NCPB's cached
+ * listener coordinates.
  */
 final class RealTurntableVolumeRangeReentryScenario implements BenchClientScenario {
     private static final Logger LOGGER = LogUtils.getLogger();
@@ -446,6 +447,12 @@ final class RealTurntableVolumeRangeReentryScenario implements BenchClientScenar
                 || !context.minecraft().getSoundManager().isActive(sound)
                 || session.isBlank() || !ModernTurntablePlaybackTracker.isActiveSession(turntablePos, session)) {
             return false;
+        }
+        // Server resolve -> sync packet -> client sound: the streaming channel must carry the exact
+        // server-issued session on both passes, so range re-entry resumes the same logical session.
+        if (sound.playbackSession().filter(id -> session.equals(id.value())).isEmpty()) {
+            throw new AssertionError("Turntable streaming sound does not carry the server-resolved session "
+                    + session + " on pass " + expectedStarts + ": " + sound.playbackSession());
         }
         requirePcmQuality("turntable slider re-entry pass " + expectedStarts, output.firstPcm());
         return true;

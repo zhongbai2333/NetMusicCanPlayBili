@@ -47,6 +47,14 @@ public record PadStatePacket(UUID deviceId, PadDocument document, long clientUpd
         return TYPE;
     }
 
+    static void clearClientSyncs() {
+        LAST_CLIENT_SYNCS.clear();
+    }
+
+    static void removeClientSyncs(UUID playerId) {
+        LAST_CLIENT_SYNCS.keySet().removeIf(key -> key.playerId().equals(playerId));
+    }
+
     public static void handle(PadStatePacket payload, IPayloadContext context) {
         if (!(context.player() instanceof ServerPlayer player) || payload.deviceId() == null
                 || payload.document() == null) {

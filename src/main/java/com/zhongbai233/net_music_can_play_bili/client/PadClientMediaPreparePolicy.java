@@ -64,7 +64,7 @@ final class PadClientMediaPreparePolicy implements ClientMediaPreparePolicy {
             long startOffsetMillis) {
         return new ClientMediaMovingSound(sourceId, url, payload.durationSeconds(), lyricRecord, payload.sessionId(),
                 startOffsetMillis, payload.volumePerMille() / 1000.0F, payload.headphoneRouted(),
-                PadMediaSoundLifecyclePolicy.INSTANCE, "Pad");
+                PadMediaSoundLifecyclePolicy.INSTANCE, "Pad").withTerminalFeedback(payload.playUrl());
     }
 
     @Override

@@ -7,6 +7,7 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.Config;
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliSongInfoSanitizer;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.ClickEvent;
@@ -14,6 +15,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
@@ -35,6 +37,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import com.github.tartaricacid.netmusic.item.ItemMusicCD;
+import com.github.tartaricacid.netmusic.api.resolver.MusicPlayResolverManager;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoReferenceParser;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
 
 /** 服务端 BV/第三方链接白名单，按世界存档持久化。 */
 public final class BiliWhitelistManager {
@@ -44,6 +54,72 @@ public final class BiliWhitelistManager {
     static final int MAX_AUDIT_TEXT_LENGTH = 256;
     private static final int MAX_REVIEW_RESOURCE_LENGTH = 512;
     private static final String LEGACY_REMOVAL_NOTE = "系统兼容调用";
+
+    private static final ThreadPoolExecutor SHORT_LINK_EXECUTOR = new ThreadPoolExecutor(
+            2, 2, 0L, TimeUnit.SECONDS, new ArrayBlockingQueue<>(64),
+            NetMusicThreadFactory.daemon("WhitelistShortLink"), new ThreadPoolExecutor.AbortPolicy());
+    private static final AsyncCanonicalResourceCache<CanonicalResource> SHORT_LINK_CACHE =
+            new AsyncCanonicalResourceCache<>(128, TimeUnit.MINUTES.toNanos(5), TimeUnit.SECONDS.toNanos(10),
+                    System::nanoTime, SHORT_LINK_EXECUTOR, key -> {
+                        BiliApiClient.VideoSelection selection = BiliApiClient.extractVideoSelectionLenientWithShortLink(key);
+                        return selection == null ? Optional.empty()
+                                : Optional.of(new CanonicalResource("bili", normalizeVideoSelection(selection)));
+                    });
+
+    /** True only for network-backed Bili identities; numeric NetMusic ids retain their existing policy. */
+    public static boolean isShortLink(String raw) { return shortLinkKey(raw).isPresent(); }
+
+    private static Optional<String> shortLinkKey(String raw) {
+        if (raw == null) return Optional.empty();
+        String input = raw.trim();
+        if (input.regionMatches(true, 0, "bili:", 0, 5)) input = input.substring(5).trim();
+        URI uri = BiliVideoReferenceParser.parseShortLinkUri(input);
+        return uri == null ? Optional.empty() : Optional.of(uri.normalize().toString());
+    }
+
+    private static volatile java.lang.ref.WeakReference<MinecraftServer> closingServer = new java.lang.ref.WeakReference<>(null);
+    public static boolean acceptsServer(MinecraftServer server) {
+        return server != null && server != closingServer.get()
+                && net.neoforged.neoforge.server.ServerLifecycleHooks.getCurrentServer() == server;
+    }
+    public static void serverClosing(MinecraftServer server) { closingServer = new java.lang.ref.WeakReference<>(server); }
+    public static void clearCanonicalCache() { SHORT_LINK_CACHE.clear(); }
+
+    public static boolean canonicalReady(String raw) {
+        return shortLinkKey(raw).map(SHORT_LINK_CACHE::ready).orElse(true);
+    }
+
+    public static CompletableFuture<Optional<CanonicalResource>> canonicalResourceAsync(String raw) {
+        Optional<String> key = shortLinkKey(raw);
+        return key.isPresent() ? SHORT_LINK_CACHE.resolve(key.get())
+                : CompletableFuture.completedFuture(canonicalResource(raw));
+    }
+
+    /** Normalize once before media resolution. The final server callback rechecks current authorization. */
+    public static CompletableFuture<ItemMusicCD.SongInfo> resolveSong(ItemMusicCD.SongInfo original) {
+        return canonicalResourceAsync(original.songUrl).thenCompose(canonical -> {
+            ItemMusicCD.SongInfo input = original.clone();
+            if (isShortLink(original.songUrl)) {
+                if (canonical.isEmpty()) return CompletableFuture.failedFuture(
+                        new IllegalArgumentException("B站短链解析失败，请重试"));
+                input.songUrl = canonical.get().id();
+            }
+            String admitted = input.songUrl;
+            return MusicPlayResolverManager.resolve(input).thenApply(resolved -> {
+                if (isShortLink(original.songUrl) && (resolved == null || !admitted.equals(resolved.songUrl))) {
+                    throw new IllegalArgumentException("短链播放结果与准入身份不一致");
+                }
+                return resolved;
+            });
+        }).orTimeout(20L, TimeUnit.SECONDS);
+    }
+
+    /** Queue matching uses original input; playback/authorization uses the captured admitted Bili identity. */
+    public static String playbackIdentity(String original, String resolvedPlayUrl) {
+        return isShortLink(original)
+                ? com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync.strip(resolvedPlayUrl)
+                : original;
+    }
 
     private static Path loadedPath;
     private static WhitelistData data = new WhitelistData();
@@ -56,13 +132,58 @@ public final class BiliWhitelistManager {
         return Config.enableLinkWhitelist;
     }
 
-    public static synchronized Optional<String> canonicalId(String raw) {
+    /** Player commands without an actor retain their existing whitelist bypass. */
+    public static boolean isPlaybackAllowed(ServerPlayer player, String sourceUrl, String actionText) {
+        if (BiliSongInfoSanitizer.isForbiddenBiliDirectUrl(sourceUrl)) {
+            if (player != null) {
+                player.sendSystemMessage(denialMessage(player, sourceUrl, actionText));
+            }
+            return false;
+        }
+        if (player == null || !enabled()
+                || (canonicalResource(sourceUrl).isEmpty() && !isShortLink(sourceUrl))) {
+            return true;
+        }
+        if (isAllowed(player.level().getServer(), sourceUrl)) {
+            return true;
+        }
+        player.sendSystemMessage(denialMessage(player, sourceUrl, actionText));
+        return false;
+    }
+
+    /** Server-owned playback remains subject to the whitelist when its owner is offline. */
+    public static boolean isPlaybackAllowed(ServerLevel level, String sourceUrl, ServerPlayer actor,
+            String actionText) {
+        if (BiliSongInfoSanitizer.isForbiddenBiliDirectUrl(sourceUrl)) {
+            if (actor != null) {
+                actor.sendSystemMessage(denialMessage(actor, sourceUrl, actionText));
+            }
+            return false;
+        }
+        if (!enabled() || (canonicalResource(sourceUrl).isEmpty() && !isShortLink(sourceUrl))) {
+            return true;
+        }
+        if (isAllowed(level.getServer(), sourceUrl)) {
+            return true;
+        }
+        if (actor != null) {
+            actor.sendSystemMessage(denialMessage(actor, sourceUrl, actionText));
+        }
+        return false;
+    }
+
+    public static Optional<String> canonicalId(String raw) {
         return canonicalResource(raw).map(resource -> resource.key());
     }
 
-    public static synchronized Optional<CanonicalResource> canonicalResource(String raw) {
+    public static Optional<CanonicalResource> canonicalResource(String raw) {
         if (raw == null || raw.isBlank()) {
             return Optional.empty();
+        }
+        Optional<String> shortKey = shortLinkKey(raw);
+        if (shortKey.isPresent()) {
+            SHORT_LINK_CACHE.resolve(shortKey.get());
+            return SHORT_LINK_CACHE.peek(shortKey.get());
         }
         String trimmed = raw.trim();
         Optional<CanonicalResource> canonicalId = canonicalPrefixedResource(trimmed);
@@ -75,7 +196,7 @@ public final class BiliWhitelistManager {
         if (!liveRoomId.isEmpty()) {
             return Optional.of(new CanonicalResource("live", liveRoomId));
         }
-        BiliApiClient.VideoSelection selection = BiliApiClient.extractVideoSelectionLenientWithShortLink(raw);
+        BiliApiClient.VideoSelection selection = BiliApiClient.extractVideoSelectionLenient(raw);
         if (selection != null) {
             return Optional.of(new CanonicalResource("bili", normalizeVideoSelection(selection)));
         }
@@ -97,7 +218,7 @@ public final class BiliWhitelistManager {
             return Optional.empty();
         }
         if ("bili".equals(type)) {
-            BiliApiClient.VideoSelection selection = BiliApiClient.extractVideoSelectionLenientWithShortLink(value);
+            BiliApiClient.VideoSelection selection = BiliApiClient.extractVideoSelectionLenient(value);
             return selection != null ? Optional.of(new CanonicalResource("bili", normalizeVideoSelection(selection)))
                     : Optional.empty();
         }

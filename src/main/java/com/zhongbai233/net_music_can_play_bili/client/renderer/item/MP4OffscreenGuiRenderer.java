@@ -49,6 +49,11 @@ final class MP4OffscreenGuiRenderer implements AutoCloseable {
     private boolean failed;
     private boolean loggedReady;
     private int renderTicks;
+    private boolean renderedLandscape;
+
+    boolean renderedLandscape() {
+        return renderedLandscape;
+    }
 
     MP4OffscreenGuiRenderer(String textureKey) {
         String safeKey = textureKey == null || textureKey.isBlank() ? "fallback"
@@ -119,7 +124,9 @@ final class MP4OffscreenGuiRenderer implements AutoCloseable {
         renderState.reset();
         renderState.clearColorOverride = 0x00000000;
         GuiGraphicsExtractor graphics = new GuiGraphicsExtractor(minecraft, renderState, -1, -1);
-        drawGui(graphics, MP4GuiViewState.capture(deviceId));
+        MP4GuiViewState view = MP4GuiViewState.capture(deviceId);
+        drawGui(graphics, view);
+        renderedLandscape = view.landscape();
 
         var encoder = RenderSystem.getDevice().createCommandEncoder();
         if (target.getDepthTexture() != null) {
@@ -488,6 +495,10 @@ final class MP4OffscreenGuiRenderer implements AutoCloseable {
 
     private void drawHover(GuiGraphicsExtractor g, MP4GuiViewState view, boolean landscape) {
         String control = view.hoverControlName();
+        if ((landscape && !view.controlsVisible())
+                || (view.biliLoginVisible() && !control.equals("BILI_LOGIN"))) {
+            return;
+        }
         int color = 0x66FFFFFF;
         switch (control) {
             case "PREVIOUS" -> outline(g, landscape ? 144 : 32, landscape ? 202 : 331, landscape ? 34 : 46,
@@ -500,6 +511,43 @@ final class MP4OffscreenGuiRenderer implements AutoCloseable {
                     landscape ? 16 : 18, color);
             case "VOLUME" -> outline(g, landscape ? 346 : 62, landscape ? 207 : 388, landscape ? 74 : 158,
                     landscape ? 14 : 12, color);
+            case "QUALITY" -> outline(g, landscape ? 328 : 191, landscape ? 12 : 19,
+                    landscape ? 56 : 46, landscape ? 32 : 26, color);
+            case "PLAYLIST" -> outline(g, landscape ? 276 : 134, landscape ? 16 : 409,
+                    landscape ? 48 : 62, landscape ? 20 : 18, color);
+            case "LYRICS" -> outline(g, landscape ? 26 : 201, landscape ? 211 : 409,
+                    landscape ? 52 : 36, 18, color);
+            case "BILI_LOGIN" -> {
+                if (!landscape) outline(g, 18, 409, 46, 18, color);
+            }
+            case "SHUFFLE" -> {
+                if (!landscape) outline(g, 66, 409, 62, 18, color);
+            }
+            case "REPEAT" -> {
+                if (landscape) outline(g, 86, 211, 52, 18, color);
+            }
+            case "QUALITY_0", "QUALITY_1", "QUALITY_2", "QUALITY_3",
+                    "QUALITY_4", "QUALITY_5", "QUALITY_6", "QUALITY_7" -> {
+                if (view.qualityMenuOpen()) {
+                    int index = control.charAt(control.length() - 1) - '0';
+                    outline(g, landscape ? 329 : 159, (landscape ? 64 : 67) + index * 13,
+                            landscape ? 72 : 68, 13, color);
+                }
+            }
+            case "SUBTITLE_OFF", "SUBTITLE_PRIMARY", "SUBTITLE_SECONDARY", "SUBTITLE_AI" -> {
+                if (view.subtitleMenuOpen()) {
+                    int index = switch (control) {
+                        case "SUBTITLE_OFF" -> 0;
+                        case "SUBTITLE_PRIMARY" -> 1;
+                        case "SUBTITLE_SECONDARY" -> 2;
+                        default -> 3;
+                    };
+                    int width = control.equals("SUBTITLE_AI") ? (landscape ? 84 : 74)
+                            : (landscape ? 54 : 46);
+                    outline(g, landscape ? 243 : 145, (landscape ? 71 : 353) + index * (landscape ? 22 : 21),
+                            width, 16, color);
+                }
+            }
             default -> {
             }
         }

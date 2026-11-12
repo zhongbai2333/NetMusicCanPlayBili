@@ -15,7 +15,8 @@ final class ModernTurntablePlaybackAccess {
             deny(actor, sourceUrl);
             return false;
         }
-        if (!BiliWhitelistManager.enabled() || BiliWhitelistManager.canonicalResource(sourceUrl).isEmpty()
+        if (!BiliWhitelistManager.enabled() || (BiliWhitelistManager.canonicalResource(sourceUrl).isEmpty()
+                && !BiliWhitelistManager.isShortLink(sourceUrl))
                 || BiliWhitelistManager.isAllowed(level.getServer(), sourceUrl)) {
             return true;
         }

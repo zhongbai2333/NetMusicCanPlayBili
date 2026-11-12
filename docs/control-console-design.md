@@ -2,16 +2,16 @@
 
 中控台是绑定现代化唱片机或直播机的空间媒体场景编排方块。玩家在三栏编辑器中以附近地形为参照，布置共享同一媒体会话的屏幕、字幕和空间音源。
 
-本文只描述稳定的产品与架构规格，不记录当前测试数量、单次性能数据或逐日实现过程：
+本文描述产品与架构约束；类型和字段示例用于说明模型，不是当前实现的完整字段清单，也不代表全部目标已验收。当前维护入口见[开发说明](development.md)，游戏内验收见[人工检查单](testing/manual-release-checklist.md)。历史材料另见：
 
-- 当前实现进度与历史：[`control-console-implementation-status.md`](control-console-implementation-status.md)
-- 测试、Bench 与验收证据：[`control-console-validation.md`](control-console-validation.md)
+- 历史实现记录：[`control-console-implementation-status.md`](archive/control-console-implementation-status.md)
+- 历史测试、Bench 与验收记录：[`control-console-validation.md`](archive/control-console-validation.md)
 
 ## 设计边界
 
 ### 目标
 
-1. 一个中控台首版绑定一个现代化唱片机或直播机。
+1. 一个中控台绑定一个现代化唱片机或直播机。
 2. 一个源驱动多个屏幕、字幕和音源，但共享解析、解码、帧、PCM 与时间线。
 3. 服务端是文档、权限、revision、绑定和消费资格的权威来源。
 4. 玩家只有处于中控台 hardRange 并持有有效消费租约时，才建立本地媒体消费者。
@@ -23,12 +23,12 @@
 - 不成为新的播放器或播放协调器。
 - 不在方块实体或网络包中保存媒体 URL、PCM、视频帧、纹理或 CDN 内容。
 - 不替代唱片机、直播机的播放控制和白名单规则。
-- 首版不支持递归元素树或多选批量编辑。
-- Phase 8 的独立 Lib/JiJ 发布不属于当前中控台功能验收范围。
+- 本设计不支持递归元素树或多选批量编辑。
+- Scene Editor 独立库/JiJ 发布（见[Scene Editor 集成](scene-editor-publishing.md)）不属于当前中控台功能验收范围。
 
-## 首版参数
+## 设计参数基线
 
-| 参数 | 首版建议 | 语义 |
+| 参数 | 默认基线 | 语义 |
 |---|---:|---|
 | hardRange 半尺寸 | X/Z 各 64 格，Y 轴上下各 32 格 | 以中控台中心为基准的 AABB 消费边界 |
 | 重入内缩 | 2 格 | 离开后需进入内缩 AABB 才可重新获取消费者 |
@@ -54,7 +54,7 @@ ConsoleSourceRef
   pos: BlockPos
 ```
 
-首版源与中控台位于同一维度。源未加载、被拆除或类型改变时，中控台进入源不可用状态。
+本设计要求媒体源与中控台位于同一维度。源未加载、被拆除或类型改变时，中控台进入源不可用状态。
 
 ### 编辑
 
@@ -83,7 +83,7 @@ ConsoleSourceRef
 
 ### 元素层级
 
-左栏负责添加、选择、重命名、复制、删除、显示、锁定和状态提示。首版元素直接位于中控台局部空间，不形成递归父子树。
+左栏负责添加、选择、重命名、复制、删除、显示、锁定和状态提示。元素直接位于中控台局部空间，不形成递归父子树。
 
 ### 场景视口
 
@@ -301,4 +301,4 @@ $$
 5. 服务端始终是配置、权限、revision 和资格权威；
 6. terrain 通过 LOD、缓存和增量更新满足预算；
 7. 编辑器内核由全息眼镜和中控台共同复用；
-8. 声明由 [`control-console-validation.md`](control-console-validation.md) 中的可重复证据支持。
+8. 上述目标需按当前版本验证；历史记录见 [`control-console-validation.md`](archive/control-console-validation.md)。

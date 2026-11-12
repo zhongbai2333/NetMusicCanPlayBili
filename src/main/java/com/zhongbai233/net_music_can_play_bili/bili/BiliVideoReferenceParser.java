@@ -6,7 +6,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Parses direct, stored, and URL-embedded Bilibili video references without performing network I/O. */
-final class BiliVideoReferenceParser {
+public final class BiliVideoReferenceParser {
     private static final Pattern BV_FULL = Pattern.compile("^[Bb][Vv][0-9A-Za-z]{10}$");
     private static final Pattern AV_FULL = Pattern.compile("^av(\\d+)$", Pattern.CASE_INSENSITIVE);
     private static final Pattern BV_ANYWHERE = Pattern.compile("[Bb][Vv][0-9A-Za-z]{10}");
@@ -102,7 +102,7 @@ final class BiliVideoReferenceParser {
         return parseShortLinkUri(input) != null;
     }
 
-    static URI parseShortLinkUri(String input) {
+    public static URI parseShortLinkUri(String input) {
         if (input == null || input.isBlank()) {
             return null;
         }

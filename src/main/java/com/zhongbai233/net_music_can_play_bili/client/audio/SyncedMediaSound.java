@@ -185,7 +185,7 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
             java.io.InputStream errorSound = net.minecraft.client.Minecraft.getInstance()
                     .getResourceManager()
                     .open(com.github.tartaricacid.netmusic.client.audio.NetMusicSound.ERROR_SOUND);
-            return own(new net.minecraft.client.sounds.JOrbisAudioStream(errorSound));
+            return own(new net.minecraft.client.sounds.JOrbisAudioStream(errorSound), false);
         } catch (Exception fallbackError) {
             CompletionException failure = new CompletionException(cause);
             failure.addSuppressed(fallbackError);
@@ -229,6 +229,10 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
     protected void onStreamReady() {
     }
 
+    protected void onStreamNaturalEnd() { }
+    protected void onStreamCancelled() { }
+
+
     protected void onStreamFailure(Exception error) {
         finishSession();
     }
@@ -251,8 +255,10 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
         decodeAdmission.drainAllocatedChannel();
     }
 
-    private OwnedAudioStream own(AudioStream stream) {
-        OwnedAudioStream owned = new OwnedAudioStream(stream);
+    private OwnedAudioStream own(AudioStream stream) { return own(stream, true); }
+
+    private OwnedAudioStream own(AudioStream stream, boolean media) {
+        OwnedAudioStream owned = new OwnedAudioStream(stream, media);
         ownedStreams.add(owned);
         return owned;
     }
@@ -339,13 +345,17 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
      * Makes a decoded stream safe across the stop/future-attachment race. If SoundEngine has already attached it,
      * its later channel cleanup may close the wrapper again; only the first close reaches the underlying stream.
      */
-    private static final class OwnedAudioStream implements AudioStream {
+    private final class OwnedAudioStream implements AudioStream {
         private final AudioStream delegate;
         private final AudioFormat format;
         private final AtomicBoolean closed = new AtomicBoolean();
 
-        private OwnedAudioStream(AudioStream delegate) {
+        private final boolean media;
+        private final AtomicBoolean terminal = new AtomicBoolean();
+
+        private OwnedAudioStream(AudioStream delegate, boolean media) {
             this.delegate = delegate;
+            this.media = media;
             this.format = delegate.getFormat();
         }
 
@@ -356,7 +366,30 @@ public abstract class SyncedMediaSound extends AbstractTickableSoundInstance {
 
         @Override
         public ByteBuffer read(int size) throws IOException {
-            return closed.get() ? null : delegate.read(size);
+            if (closed.get()) return null;
+            try {
+                NetMusicStreamStatus status = delegate instanceof NetMusicStreamStatus adapted ? adapted : null;
+                checkProducerFailure(status);
+                ByteBuffer data = status != null ? status.ncpbReadBuffered(size) : delegate.read(size);
+                checkProducerFailure(status);
+                if (data == null && !closed.get() && media && terminal.compareAndSet(false, true)) {
+                    onStreamNaturalEnd();
+                }
+                return data;
+            } catch (com.zhongbai233.net_music_can_play_bili.media.stream.PlaybackStreamCancelledException cancelled) {
+                if (terminal.compareAndSet(false, true)) onStreamCancelled();
+                return null;
+            } catch (IOException failure) {
+                if (!closed.get() && media && terminal.compareAndSet(false, true)) onStreamFailure(failure);
+                throw failure;
+            }
+        }
+
+        private void checkProducerFailure(NetMusicStreamStatus status) throws IOException {
+            Throwable failure = status != null ? status.ncpbReadFailure() : null;
+            if (failure instanceof com.zhongbai233.net_music_can_play_bili.media.stream.PlaybackStreamCancelledException cancelled)
+                throw cancelled;
+            if (failure != null) throw new IOException("upstream media producer failed", failure);
         }
 
         @Override

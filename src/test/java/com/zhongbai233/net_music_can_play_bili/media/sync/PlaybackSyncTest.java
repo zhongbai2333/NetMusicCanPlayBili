@@ -82,4 +82,13 @@ class PlaybackSyncTest {
         assertTrue(PlaybackSync.parsePlaybackSessionId(
                 url + "#nmb_session=session=other&nmb_elapsed_ms=1000").isEmpty());
     }
+    @org.junit.jupiter.api.Test void terminalNonceIsOnlyFragmentAndReplacementDoesNotChangeSignedQuery() {
+        String url="https://example.test/audio?signature=a%2Bb&expires=3";
+        String first=PlaybackSync.withTerminalToken(url,new MediaRequestToken("old"));
+        String next=PlaybackSync.withTerminalToken(first,new MediaRequestToken("new"));
+        org.junit.jupiter.api.Assertions.assertEquals("new",PlaybackSync.parseTerminalToken(next));
+        org.junit.jupiter.api.Assertions.assertEquals(url,PlaybackSync.strip(next));
+        org.junit.jupiter.api.Assertions.assertFalse(next.contains("old"));
+        org.junit.jupiter.api.Assertions.assertEquals("",PlaybackSync.parseTerminalToken(url+"#nmb_terminal=bad value"));
+    }
 }

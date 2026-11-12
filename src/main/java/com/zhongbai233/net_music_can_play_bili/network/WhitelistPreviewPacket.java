@@ -25,6 +25,8 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
         int videoWidth, int videoHeight, int fps, int codecId, int durationSeconds, long elapsedMillis,
         boolean playing, long requestId) implements CustomPacketPayload {
     private static final Logger LOGGER = LogUtils.getLogger();
+    private static final com.zhongbai233.net_music_can_play_bili.server.DeferredRequestGate<UUID> REQUESTS =
+            new com.zhongbai233.net_music_can_play_bili.server.DeferredRequestGate<>(256);
     private static final int MAX_URL_LENGTH = 8192;
     private static final int MAX_TITLE_LENGTH = 256;
 
@@ -79,11 +81,14 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
         if (player == null || idOrLink == null || idOrLink.isBlank()) {
             return;
         }
+        var server = player.level().getServer();
+        long ticket = REQUESTS.begin(player.getUUID());
         String audioOnlyUrl = audioOnlyUrl(idOrLink);
         if (audioOnlyUrl != null) {
             player.sendSystemMessage(Component.literal("正在准备音频预览...").withStyle(ChatFormatting.GRAY));
             MediaIoExecutor.supply(() -> audioOnlyPacket(audioOnlyUrl, elapsedMillis, playing, requestId))
-                    .whenComplete((packet, error) -> player.level().getServer().execute(() -> {
+                    .whenComplete((packet, error) -> server.execute(() -> {
+                        if (!previewCurrent(player, server, ticket)) return;
                         if (error != null) {
                             LOGGER.warn("白名单审核音频预览解析失败，将使用未知时长: {}", audioOnlyUrl, error);
                             PacketDistributor.sendToPlayer(player,
@@ -94,16 +99,12 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
                     }));
             return;
         }
-        BiliApiClient.VideoSelection selection = BiliApiClient.extractVideoSelectionLenientWithShortLink(idOrLink);
-        if (selection == null) {
-            player.sendSystemMessage(Component.literal("当前条目不是可预览的 B站视频。")
-                    .withStyle(ChatFormatting.YELLOW));
-            return;
-        }
-        BiliApiClient.VideoSelection finalSelection = selection;
         player.sendSystemMessage(Component.literal("正在准备预览...").withStyle(ChatFormatting.GRAY));
         MediaIoExecutor.supply(() -> {
             try {
+                BiliApiClient.VideoSelection finalSelection =
+                        BiliApiClient.extractVideoSelectionLenientWithShortLink(idOrLink);
+                if (finalSelection == null) throw new IllegalArgumentException("当前条目不是可预览的 B站视频");
                 BiliApiClient.VideoInfo info = BiliApiClient.getVideoInfo(finalSelection.videoId(),
                         finalSelection.page());
                 UUID previewId = UUID.nameUUIDFromBytes(("whitelist-preview:" + finalSelection.videoId().asInputText()
@@ -120,7 +121,8 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
             } catch (Exception e) {
                 throw new IllegalStateException(e);
             }
-        }).whenComplete((packet, error) -> player.level().getServer().execute(() -> {
+        }).whenComplete((packet, error) -> server.execute(() -> {
+                        if (!previewCurrent(player, server, ticket)) return;
             if (error != null) {
                 LOGGER.warn("白名单审核预览解析失败: {}", idOrLink, error);
                 Throwable cause = error.getCause() != null ? error.getCause() : error;
@@ -130,6 +132,16 @@ public record WhitelistPreviewPacket(UUID previewId, String title, String rawUrl
             }
             PacketDistributor.sendToPlayer(player, packet);
         }));
+    }
+
+    public static void clearPendingPreviews() { REQUESTS.clear(); }
+
+    private static boolean previewCurrent(ServerPlayer player, net.minecraft.server.MinecraftServer server,
+            long ticket) {
+        return REQUESTS.current(player.getUUID(), ticket)
+                && com.zhongbai233.net_music_can_play_bili.server.BiliWhitelistManager.acceptsServer(server)
+                && server.getPlayerList().getPlayer(player.getUUID()) == player
+                && WhitelistReviewPacket.canOpen(player);
     }
 
     public static MP4PlaybackSyncPacket toAudioSync(WhitelistPreviewPacket packet) {

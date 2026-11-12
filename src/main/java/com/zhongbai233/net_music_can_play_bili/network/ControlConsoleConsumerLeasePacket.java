@@ -69,7 +69,7 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
         }
         ControlConsoleConsumerLeaseRegistry.Key key = key(level, payload.pos(), player.getUUID());
         if (payload.action() == Action.RELEASE) {
-            ControlConsoleConsumerLeaseRegistry.release(key, payload.leaseId());
+            ControlConsoleConsumerLeaseRegistry.release(key, payload.leaseId(), payload.consumerGeneration());
             return;
         }
         if (!NetworkRateLimiter.allow(player.getUUID(), "control_console_consumer_lease_global", 64)
@@ -87,7 +87,7 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
         var document = console.document();
         if (!hasValidLoadedSource(level, document)) {
             if (payload.leaseId() != null) {
-                ControlConsoleConsumerLeaseRegistry.release(key, payload.leaseId());
+                ControlConsoleConsumerLeaseRegistry.release(key, payload.leaseId(), payload.consumerGeneration());
             }
                 send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.REJECTED, null,
                     payload.consumerGeneration());
@@ -100,7 +100,7 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
                 document.hardRangeX(), document.hardRangeY(), document.hardRangeZ());
         if (!range.active()) {
             if (payload.leaseId() != null) {
-                ControlConsoleConsumerLeaseRegistry.release(key, payload.leaseId());
+                ControlConsoleConsumerLeaseRegistry.release(key, payload.leaseId(), payload.consumerGeneration());
             }
                 send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.OUTSIDE, null,
                     payload.consumerGeneration());
@@ -110,8 +110,8 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
         if (existing) {
             if (payload.leaseId() == null) {
                 // 客户端越界后会忘记 leaseId；同一玩家重入时可安全取回并续期自己的现有租约。
-                leaseId = ControlConsoleConsumerLeaseRegistry.acquireOrRenew(key, now);
-            } else if (!ControlConsoleConsumerLeaseRegistry.renew(key, payload.leaseId(), now)) {
+                leaseId = ControlConsoleConsumerLeaseRegistry.acquireOrRenew(key, now, payload.consumerGeneration());
+            } else if (!ControlConsoleConsumerLeaseRegistry.renew(key, payload.leaseId(), now, payload.consumerGeneration())) {
                 send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.REJECTED, null,
                     payload.consumerGeneration());
                 return;
@@ -119,7 +119,12 @@ public record ControlConsoleConsumerLeasePacket(BlockPos pos, Action action, UUI
                 leaseId = payload.leaseId();
             }
         } else {
-            leaseId = ControlConsoleConsumerLeaseRegistry.acquireOrRenew(key, now);
+            leaseId = ControlConsoleConsumerLeaseRegistry.acquireOrRenew(key, now, payload.consumerGeneration());
+        }
+        if (leaseId == null) {
+            send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.REJECTED, null,
+                    payload.consumerGeneration());
+            return;
         }
         send(player, payload.pos(), ControlConsoleConsumerLeaseResultPacket.Status.GRANTED, leaseId,
             payload.consumerGeneration(), audioOutputZones(level, payload.pos(), document));

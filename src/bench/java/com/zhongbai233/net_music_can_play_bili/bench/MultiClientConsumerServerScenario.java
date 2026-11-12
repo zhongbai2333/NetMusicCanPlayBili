@@ -21,15 +21,32 @@ import net.minecraft.world.phys.Vec3;
 import java.util.Set;
 import java.util.UUID;
 
+/**
+ * Paired console-lease lifecycle. Without reconnect the server proves 2 -> 1 -> 0. With reconnect,
+ * {@code ModBenchClient0} first drops its connection and rejoins with the same UUID, so the proof becomes
+ * 2 -> 1 (peer lease survives) -> 2 (same identity reacquires its lease) -> 1 -> 0.
+ */
 final class MultiClientConsumerServerScenario implements BenchServerScenario {
+    private static final String RECONNECTING_PROFILE = "ModBenchClient0";
+    private static final int RECONNECT_STABLE_TICKS = 20;
+    private final boolean expectReconnect;
     private final Set<UUID> initialPlayers = new java.util.HashSet<>();
+    private UUID reconnectingPlayer;
     private UUID survivingPlayer;
     private boolean observedTwoLeases;
+    private boolean observedReconnectDrop;
+    private boolean observedSameIdentityReconnect;
     private boolean observedIndependentSurvivor;
     private boolean observedFinalCleanup;
+    private int stableAfterReconnect;
     private int warmupTicks;
     private int measureTicks;
     private int phase;
+
+    MultiClientConsumerServerScenario(boolean expectReconnect) {
+        this.expectReconnect = expectReconnect;
+        this.phase = expectReconnect ? -2 : 0;
+    }
 
     @Override
     public void setup(BenchServerContext context) {
@@ -54,6 +71,9 @@ final class MultiClientConsumerServerScenario implements BenchServerScenario {
         int index = 0;
         for (ServerPlayer player : context.server().getPlayerList().getPlayers()) {
             initialPlayers.add(player.getUUID());
+            if (player.getGameProfile().name().equals(RECONNECTING_PROFILE)) {
+                reconnectingPlayer = player.getUUID();
+            }
             double x = MULTI_CLIENT_CONSOLE_POS.getX() + 0.25D + index * 0.5D;
             if (!player.teleportTo(level, x, MULTI_CLIENT_CONSOLE_POS.getY() + 1.0D,
                     MULTI_CLIENT_CONSOLE_POS.getZ() + 2.5D, Set.<Relative>of(), 180.0F, 0.0F, true)) {
@@ -67,6 +87,9 @@ final class MultiClientConsumerServerScenario implements BenchServerScenario {
         }
         if (initialPlayers.size() != 2) {
             throw new AssertionError("Paired clients did not have distinct UUIDs: " + initialPlayers);
+        }
+        if (expectReconnect && reconnectingPlayer == null) {
+            throw new AssertionError("Reconnect fixture did not find " + RECONNECTING_PROFILE + ": " + initialPlayers);
         }
     }
 
@@ -103,7 +126,21 @@ final class MultiClientConsumerServerScenario implements BenchServerScenario {
         Set<UUID> active = activePlayers(context);
         int players = context.server().getPlayerList().getPlayerCount();
         record(context, active.size());
-        if (phase == 0 && players == 1 && active.size() == 1) {
+        if (phase == -2 && players == 1 && active.size() == 1 && !active.contains(reconnectingPlayer)) {
+            observedReconnectDrop = true;
+            phase = -1;
+        } else if (phase == -1) {
+            Set<UUID> online = context.server().getPlayerList().getPlayers().stream()
+                    .map(ServerPlayer::getUUID).collect(java.util.stream.Collectors.toSet());
+            if (online.equals(initialPlayers) && active.equals(initialPlayers)) {
+                observedSameIdentityReconnect = true;
+                if (++stableAfterReconnect >= RECONNECT_STABLE_TICKS) {
+                    phase = 0;
+                }
+            } else if (observedSameIdentityReconnect) {
+                stableAfterReconnect = 0;
+            }
+        } else if (phase == 0 && players == 1 && active.size() == 1) {
             survivingPlayer = active.iterator().next();
             if (!initialPlayers.contains(survivingPlayer)) {
                 throw new AssertionError("Unknown lease survived the first disconnect: " + survivingPlayer);
@@ -114,7 +151,7 @@ final class MultiClientConsumerServerScenario implements BenchServerScenario {
             observedFinalCleanup = true;
             return BenchStepResult.COMPLETE;
         }
-        if (measureTicks > 600) {
+        if (measureTicks > (expectReconnect ? 1_200 : 600)) {
             throw new AssertionError("Paired disconnect lifecycle stalled: phase=" + phase
                     + ", players=" + players + ", leases=" + active + ", survivor=" + survivingPlayer);
         }
@@ -125,9 +162,13 @@ final class MultiClientConsumerServerScenario implements BenchServerScenario {
     public void verify(BenchServerContext context) {
         Set<UUID> active = activePlayers(context);
         if (!observedTwoLeases || !observedIndependentSurvivor || !observedFinalCleanup
+                || expectReconnect && (!observedReconnectDrop || !observedSameIdentityReconnect
+                        || stableAfterReconnect < RECONNECT_STABLE_TICKS)
                 || context.server().getPlayerList().getPlayerCount() != 0 || !active.isEmpty()) {
-            throw new AssertionError("Paired consumer lifecycle did not prove 2 -> 1 -> 0: initial="
-                    + observedTwoLeases + ", survivor=" + observedIndependentSurvivor + ", final="
+            throw new AssertionError("Paired consumer lifecycle did not prove "
+                    + (expectReconnect ? "2 -> 1 -> 2 -> 1 -> 0" : "2 -> 1 -> 0") + ": initial="
+                    + observedTwoLeases + ", reconnectDrop=" + observedReconnectDrop + ", rejoined="
+                    + observedSameIdentityReconnect + ", survivor=" + observedIndependentSurvivor + ", final="
                     + observedFinalCleanup + ", players="
                     + context.server().getPlayerList().getPlayerCount() + ", leases=" + active);
         }

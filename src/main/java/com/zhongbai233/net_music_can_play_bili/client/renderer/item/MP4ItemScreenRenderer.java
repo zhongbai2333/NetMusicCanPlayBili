@@ -92,6 +92,7 @@ public final class MP4ItemScreenRenderer {
         if (minecraft.player == null) {
             return;
         }
+        MP4FocusState.renderTick();
         renderHeldOffscreenGuiFrameStart(minecraft.player.getMainHandItem());
         renderHeldOffscreenGuiFrameStart(minecraft.player.getOffhandItem());
     }
@@ -175,7 +176,6 @@ public final class MP4ItemScreenRenderer {
 
     private static void submitTexturedSurface(PoseStack poseStack, SubmitNodeCollector collector, float partialTick,
             UUID deviceId) {
-        MP4FocusState.renderTick();
         MP4GuiTexture guiTexture = textureFor(deviceId);
         Identifier textureId = guiTexture.textureId(deviceId);
         boolean flipGuiV = true;
@@ -224,7 +224,8 @@ public final class MP4ItemScreenRenderer {
         poseStack.mulPose(Axis.XP.rotationDegrees(hoverY * HOVER_TILT_DEGREES * MP4FocusState.progress(1.0F)));
         poseStack.mulPose(Axis.YP.rotationDegrees(hoverX * HOVER_TILT_DEGREES * MP4FocusState.progress(1.0F)));
         poseStack.translate(-pivotX, -pivotY, 0.0F);
-        publishProjectedQuad(poseStack.last().pose(), bx0, by0, b0z, bx1, by1, b1z, b2z, b3z);
+        publishProjectedQuad(poseStack.last().pose(), bx0, by0, screenTextureZ, bx1, by1,
+                screenTextureZ, screenTextureZ, screenTextureZ, guiTexture.renderedLandscape());
         collector.submitCustomGeometry(
                 poseStack,
                 RenderTypes.itemCutout(bodyTextureId),
@@ -313,7 +314,7 @@ public final class MP4ItemScreenRenderer {
     }
 
     private static void publishProjectedQuad(Matrix4f modelMatrix, float bx0, float by0, float b0z, float bx1,
-            float by1, float b1z, float b2z, float b3z) {
+            float by1, float b1z, float b2z, float b3z, boolean renderedLandscape) {
         if (!MP4FocusState.active() || !projectedInputEnabled()) {
             return;
         }
@@ -335,7 +336,7 @@ public final class MP4ItemScreenRenderer {
             return;
         }
         MP4FocusState.updateProjectedQuad(topLeft.x(), topLeft.y(), topRight.x(), topRight.y(), bottomRight.x(),
-                bottomRight.y(), bottomLeft.x(), bottomLeft.y(), guiWidth, guiHeight, MP4FocusState.landscape());
+                bottomRight.y(), bottomLeft.x(), bottomLeft.y(), guiWidth, guiHeight, renderedLandscape);
     }
 
     private static ScreenPoint projectToGui(Matrix4f modelMatrix, float x, float y, float z, int physicalWidth,
@@ -363,7 +364,12 @@ public final class MP4ItemScreenRenderer {
 
     private static Matrix4f firstPersonProjection(int physicalWidth, int physicalHeight) {
         float aspect = physicalWidth / (float) Math.max(1, physicalHeight);
-        return new Matrix4f().perspective((float) Math.toRadians(70.0F), aspect, 0.05F,
+        float hudFov = Minecraft.getInstance().gameRenderer.getGameRenderState()
+                .levelRenderState.cameraRenderState.hudFov;
+        if (!Float.isFinite(hudFov) || hudFov <= 0.0F) {
+            hudFov = 70.0F;
+        }
+        return new Matrix4f().perspective((float) Math.toRadians(hudFov), aspect, 0.05F,
                 net.minecraft.client.renderer.GameRenderer.PROJECTION_3D_HUD_Z_FAR);
     }
 

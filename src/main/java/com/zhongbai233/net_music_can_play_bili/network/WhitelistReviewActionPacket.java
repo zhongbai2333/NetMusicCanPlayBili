@@ -261,8 +261,51 @@ public record WhitelistReviewActionPacket(Action action, String idOrLink, long t
         }
     }
 
+    private record PendingShortMutation(String fingerprint, net.minecraft.server.MinecraftServer server, long ticket) { }
+    private static long shortMutationTicket;
+    private static final java.util.Map<CompletedMutationKey, PendingShortMutation> PENDING_SHORT_MUTATIONS = new java.util.HashMap<>();
+    public static void clearPendingShortMutations() { PENDING_SHORT_MUTATIONS.clear(); }
+    private static boolean deferShortMutation(ServerPlayer player, Action action, String raw, String text,
+            String expectedAddedAt, int entryOffset, int removalOffset, long requestId) {
+        CompletedMutationKey key = new CompletedMutationKey(player.getUUID(), action, requestId);
+        String fingerprint = raw + "\n" + text + "\n" + expectedAddedAt;
+        PendingShortMutation pending = PENDING_SHORT_MUTATIONS.get(key);
+        if (pending != null) {
+            if (!pending.fingerprint().equals(fingerprint)) sendMutationResult(player, action,
+                    WhitelistReviewMutationResultPacket.Status.STALE, raw, "请求标识已在使用，请刷新。", requestId);
+            return true;
+        }
+        if (BiliWhitelistManager.canonicalReady(raw)) return false;
+        if (PENDING_SHORT_MUTATIONS.size() >= 256) {
+            sendMutationResult(player, action, WhitelistReviewMutationResultPacket.Status.RATE_LIMITED,
+                    raw, "短链解析任务繁忙，请稍后重试。", requestId);
+            return true;
+        }
+        var server = player.level().getServer();
+        PendingShortMutation admitted = new PendingShortMutation(fingerprint, server, ++shortMutationTicket);
+        PENDING_SHORT_MUTATIONS.put(key, admitted);
+        BiliWhitelistManager.canonicalResourceAsync(raw).whenCompleteAsync((canonical, error) -> {
+            if (!BiliWhitelistManager.acceptsServer(server)
+                    || server.getPlayerList().getPlayer(player.getUUID()) != player || !WhitelistReviewPacket.canOpen(player)) {
+                PENDING_SHORT_MUTATIONS.remove(key, admitted);
+                return;
+            }
+            if (!PENDING_SHORT_MUTATIONS.remove(key, admitted)) return;
+            if (error != null || canonical == null || canonical.isEmpty()) {
+                sendMutationResult(player, action, WhitelistReviewMutationResultPacket.Status.INVALID,
+                        raw, "短链解析失败，未修改白名单。", requestId);
+                player.sendSystemMessage(Component.literal("短链解析失败，未修改白名单。"));
+                return;
+            }
+            if (action == Action.REMOVE) removeEntry(player, raw, text, expectedAddedAt, entryOffset, removalOffset, requestId);
+            else addComment(player, raw, text, expectedAddedAt, entryOffset, removalOffset, requestId);
+        }, server);
+        return true;
+    }
+
     private static void removeEntry(ServerPlayer player, String idOrLink, String note,
             String expectedAddedAt, int entryOffset, int removalOffset, long requestId) {
+        if (deferShortMutation(player, Action.REMOVE, idOrLink, note, expectedAddedAt, entryOffset, removalOffset, requestId)) return;
         WhitelistReviewMutationResultPacket.Status packetStatus = WhitelistReviewMutationResultPacket.Status.INVALID;
         String message = "白名单移除未完成。";
         ChatFormatting color = ChatFormatting.RED;
@@ -310,6 +353,7 @@ public record WhitelistReviewActionPacket(Action action, String idOrLink, long t
 
     private static void addComment(ServerPlayer player, String idOrLink, String text,
             String expectedAddedAt, int entryOffset, int removalOffset, long requestId) {
+        if (deferShortMutation(player, Action.COMMENT, idOrLink, text, expectedAddedAt, entryOffset, removalOffset, requestId)) return;
         WhitelistReviewMutationResultPacket.Status packetStatus = WhitelistReviewMutationResultPacket.Status.INVALID;
         String message = "审核评论未完成。";
         ChatFormatting color = ChatFormatting.RED;

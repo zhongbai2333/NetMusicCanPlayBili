@@ -164,11 +164,6 @@ public final class WhitelistCsvExportClient {
                 : safe;
     }
 
-    private static String safeTransferId(String value) {
-        String safe = value == null ? "unknown" : value.replaceAll("[^A-Za-z0-9._-]", "_");
-        return safe.isBlank() ? "unknown" : safe;
-    }
-
     private static final class Transfer {
         private final String fileName;
         private final int chunkCount;
@@ -199,10 +194,15 @@ public final class WhitelistCsvExportClient {
             cleanupAbandoned(dir, now);
             String fileName = safeFileName(first.fileName());
             Path target = dir.resolve(fileName);
-            Path temporary = dir.resolve(".ncpb-whitelist-" + safeTransferId(first.transferId()) + ".part");
-            Files.deleteIfExists(temporary);
-            OutputStream output = Files.newOutputStream(temporary,
-                    StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+            Path temporary = Files.createTempFile(dir, ".ncpb-whitelist-", ".part");
+            OutputStream output;
+            try {
+                output = Files.newOutputStream(temporary, StandardOpenOption.WRITE);
+            } catch (IOException failure) {
+                try { Files.deleteIfExists(temporary); }
+                catch (IOException cleanupFailure) { failure.addSuppressed(cleanupFailure); }
+                throw failure;
+            }
             return new Transfer(first.fileName(), first.chunkCount(), first.totalBytes(),
                     target, temporary, output, now);
         }

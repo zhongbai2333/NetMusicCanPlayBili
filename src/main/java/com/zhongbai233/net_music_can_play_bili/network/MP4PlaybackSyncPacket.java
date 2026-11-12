@@ -111,6 +111,7 @@ public record MP4PlaybackSyncPacket(UUID ownerId, UUID sourceId, int sourceType,
     }
 
     public static void handle(MP4PlaybackSyncPacket payload, IPayloadContext context) {
-        MP4ClientMediaSync.handleSync(payload);
+        long receivedNanos = System.nanoTime();
+        context.enqueueWork(() -> MP4ClientMediaSync.handleSync(payload, receivedNanos));
     }
 }

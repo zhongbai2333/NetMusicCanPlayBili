@@ -21,6 +21,7 @@ import java.util.function.Consumer;
 /** Applies MP4 queue decisions to sessions, device state, and playback progress. */
 final class MP4PlaybackQueueController {
     private final MP4PlaybackSourceSessionRegistry<MP4PlaybackSyncManager.Session> sessions;
+    private final MP4FailureRecovery recovery;
     private final Consumer<UUID> resolveInvalidator;
     private final RuntimeProgressRecorder progressRecorder;
     private final BiConsumer<ServerLevel, UUID> progressFlusher;
@@ -30,6 +31,7 @@ final class MP4PlaybackQueueController {
 
     MP4PlaybackQueueController(
             MP4PlaybackSourceSessionRegistry<MP4PlaybackSyncManager.Session> sessions,
+            MP4FailureRecovery recovery,
             Consumer<UUID> resolveInvalidator,
             RuntimeProgressRecorder progressRecorder,
             BiConsumer<ServerLevel, UUID> progressFlusher,
@@ -37,6 +39,7 @@ final class MP4PlaybackQueueController {
             SessionStopPublisher stopPublisher,
             PlaybackStarter playbackStarter) {
         this.sessions = Objects.requireNonNull(sessions, "sessions");
+        this.recovery = Objects.requireNonNull(recovery, "recovery");
         this.resolveInvalidator = Objects.requireNonNull(resolveInvalidator, "resolveInvalidator");
         this.progressRecorder = Objects.requireNonNull(progressRecorder, "progressRecorder");
         this.progressFlusher = Objects.requireNonNull(progressFlusher, "progressFlusher");
@@ -45,7 +48,7 @@ final class MP4PlaybackQueueController {
         this.playbackStarter = Objects.requireNonNull(playbackStarter, "playbackStarter");
     }
 
-    void reconcileQueueChange(ServerPlayer owner, UUID deviceId, List<ItemStack> newQueue) {
+    void reconcileQueueChange(ServerPlayer owner, UUID deviceId, List<ItemStack> newQueue, int removedIndex) {
         if (owner == null || deviceId == null || !(owner.level() instanceof ServerLevel level)) {
             return;
         }
@@ -55,9 +58,10 @@ final class MP4PlaybackQueueController {
         }
         List<ItemStack> safeNewQueue = newQueue != null ? newQueue : List.of();
         MP4PlaybackQueuePolicy.Reconciliation reconciliation = MP4PlaybackQueuePolicy.reconcile(
-                session.queueIndex(), session.rawUrl(), sourceUrls(safeNewQueue));
+                session.queueIndex(), session.rawUrl(), sourceUrls(safeNewQueue), removedIndex);
+        long nowNanos = MonotonicMediaClock.nowNanos();
         long gameTime = MonotonicMediaClock.nowTick();
-        long elapsedMillis = session.elapsedMillis(gameTime);
+        long elapsedMillis = session.elapsedMillisAtNanos(nowNanos);
         if (reconciliation.action() == MP4PlaybackQueuePolicy.ReconcileAction.KEEP) {
             return;
         }
@@ -73,21 +77,20 @@ final class MP4PlaybackQueueController {
         List<ItemStack> queue = queueForDevice(deviceEntry, stack);
         MP4Item.State state = deviceEntry.state();
         MP4PlaybackQueuePolicy.Completion completion = MP4PlaybackQueuePolicy.completion(
-                session.queueIndex(), queue.size(), state.repeatMode());
+                session.queueIndex(), queue.size(), state.repeatMode(), state.shuffle(),
+                java.util.concurrent.ThreadLocalRandom.current().nextInt());
         if (!completion.shouldAdvance()) {
             return false;
         }
         int nextIndex = completion.nextIndex();
         MP4DeviceStateStore.update(level, session.sourceId(), new MP4DeviceStateStore.DeviceEntry(
-                new MP4Item.State(true, state.shuffle(), state.videoEnabled(), state.landscape(),
-                        state.qualityIndex(), nextIndex, state.queueScrollOffset(), state.volumePerMille(),
-                        state.repeatMode(), state.playlistOpen(), state.lyricsEnabled(), state.subtitleMode(),
-                        state.subtitleAiEnabled(), 0, state.rotationHintShown()),
+                MP4StateUpdatePolicy.withPlayback(state, true, nextIndex, state.volumePerMille(), 0),
                 queue, 0L, 0, Optional.empty()));
         progressRecorder.record(session.sourceId(), nextIndex, 0L, 0, session.volumePerMille(), Optional.empty(),
                 true);
         progressFlusher.accept(level, session.sourceId());
-        session.markContainerChanged();
+        MP4PlaybackSourceDiscovery.markContainerChanged(level, session);
+        recovery.beginAutomatic(session.sourceId(), sourceUrls(queue));
         playbackStarter.start(level, stack, session.ownerId(), session.sourceId(), session.sourceType(),
                 session.sourceEntityId(), session.sourcePos(), session.containerSlot());
         return true;
@@ -137,14 +140,11 @@ final class MP4PlaybackQueueController {
         MP4DeviceStateStore.DeviceEntry entry = MP4DeviceStateStore.getOrCreate(level, deviceId, ItemStack.EMPTY);
         MP4Item.State state = entry.state();
         MP4DeviceStateStore.update(level, deviceId, new MP4DeviceStateStore.DeviceEntry(
-                new MP4Item.State(false, state.shuffle(), state.videoEnabled(), state.landscape(),
-                        state.qualityIndex(), selectedIndex, state.queueScrollOffset(), session.volumePerMille(),
-                        state.repeatMode(), state.playlistOpen(), state.lyricsEnabled(), state.subtitleMode(),
-                        state.subtitleAiEnabled(), 0, state.rotationHintShown()),
+                MP4StateUpdatePolicy.withPlayback(state, false, selectedIndex, session.volumePerMille(), 0),
                 newQueue, 0L, durationSeconds, Optional.empty()));
     }
 
-    private static List<String> sourceUrls(List<ItemStack> queue) {
+    static List<String> sourceUrls(List<ItemStack> queue) {
         List<String> urls = new ArrayList<>(queue.size());
         for (ItemStack stack : queue) {
             @SuppressWarnings("null")

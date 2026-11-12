@@ -47,52 +47,54 @@ abstract class VideoBillboardDecoderSupport extends VideoBillboardUploadSupport 
                 if (frame == null) {
                     break;
                 }
-                frameIndex++;
-
-                int dropped = 0;
-                long nowNs = System.nanoTime();
-                while (catchUpDropsEnabled && LEGACY_WORKER.isActive(generation)
-                        && nowNs - expectedFrameTimeNs(frameIndex, frameIntervalNs) > frameIntervalNs * 2L
-                        && dropped < MAX_CATCH_UP_DROPS_PER_TICK) {
-                    DecodedFrame catchUpDecoded = nextDecodedFrame(decoder);
-                    if (catchUpDecoded == null) {
-                        frame.close();
-                        frame = null;
-                        break;
-                    }
-                    frame.close();
-                    frame = catchUpDecoded;
-                    frameIndex++;
-                    dropped++;
-                    nowNs = System.nanoTime();
-                }
-                if (frame == null) {
-                    break;
-                }
-                if (dropped > 0) {
-                    LOGGER.debug("视频播放落后音频时间线，丢弃 {} 帧追赶 (frameIndex={}, lag={}ms)", dropped, frameIndex,
-                            Math.max(0L, (System.nanoTime() - expectedFrameTimeNs(frameIndex, frameIntervalNs))
-                                    / 1_000_000L));
-                }
-
-                long waitNs = expectedFrameTimeNs(frameIndex, frameIntervalNs) - System.nanoTime();
-                if (waitNs > 0L) {
-                    try {
-                        java.util.concurrent.TimeUnit.NANOSECONDS.sleep(waitNs);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                }
                 long uploadNs;
                 try {
+                    frameIndex++;
+
+                    int dropped = 0;
+                    long nowNs = System.nanoTime();
+                    while (catchUpDropsEnabled && LEGACY_WORKER.isActive(generation)
+                            && nowNs - expectedFrameTimeNs(frameIndex, frameIntervalNs) > frameIntervalNs * 2L
+                            && dropped < MAX_CATCH_UP_DROPS_PER_TICK) {
+                        DecodedFrame catchUpDecoded = nextDecodedFrame(decoder);
+                        if (catchUpDecoded == null) {
+                            frame.close();
+                            frame = null;
+                            break;
+                        }
+                        frame.close();
+                        frame = catchUpDecoded;
+                        frameIndex++;
+                        dropped++;
+                        nowNs = System.nanoTime();
+                    }
+                    if (frame == null) {
+                        break;
+                    }
+                    if (dropped > 0) {
+                        LOGGER.debug("视频播放落后音频时间线，丢弃 {} 帧追赶 (frameIndex={}, lag={}ms)", dropped, frameIndex,
+                                Math.max(0L, (System.nanoTime() - expectedFrameTimeNs(frameIndex, frameIntervalNs))
+                                        / 1_000_000L));
+                    }
+
+                    long waitNs = expectedFrameTimeNs(frameIndex, frameIntervalNs) - System.nanoTime();
+                    if (waitNs > 0L) {
+                        try {
+                            java.util.concurrent.TimeUnit.NANOSECONDS.sleep(waitNs);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                    }
                     uploadNs = uploadFrameSync(frame, targetWidth, targetHeight, generation);
                     if (uploadNs < 0L) {
                         LOGGER.warn("视频 billboard 预览上传失败或客户端世界已退出");
                         break;
                     }
                 } finally {
-                    frame.close();
+                    if (frame != null) {
+                        frame.close();
+                    }
                 }
                 if (uploadNs > ADAPTIVE_FRAME_BUDGET_NS) {
                     consecutiveBadFrames++;

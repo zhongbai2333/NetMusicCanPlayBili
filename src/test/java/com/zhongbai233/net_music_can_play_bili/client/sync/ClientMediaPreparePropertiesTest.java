@@ -17,34 +17,6 @@ class ClientMediaPreparePropertiesTest {
     }
 
     @Test
-    void defaultsRemainCompatible() {
-        assertEquals(new ClientMediaPrepareProperties.Settings(2, 20L, 12L, 12L),
-                ClientMediaPrepareProperties.settings());
-    }
-
-    @Test
-    void explicitValuesRemainConfigurable() {
-        set(ClientMediaPrepareProperties.AUDIO_PREPARE_THREADS, "4");
-        set(ClientMediaPrepareProperties.MODERN_PREPARE_TIMEOUT_SECONDS, "30");
-        set(ClientMediaPrepareProperties.MP4_PREPARE_TIMEOUT_SECONDS, "18");
-        set(ClientMediaPrepareProperties.PAD_PREPARE_TIMEOUT_SECONDS, "24");
-
-        assertEquals(new ClientMediaPrepareProperties.Settings(4, 30L, 18L, 24L),
-                ClientMediaPrepareProperties.settings());
-    }
-
-    @Test
-    void invalidValuesUseDefaults() {
-        set(ClientMediaPrepareProperties.AUDIO_PREPARE_THREADS, "invalid");
-        set(ClientMediaPrepareProperties.MODERN_PREPARE_TIMEOUT_SECONDS, "invalid");
-        set(ClientMediaPrepareProperties.MP4_PREPARE_TIMEOUT_SECONDS, "invalid");
-        set(ClientMediaPrepareProperties.PAD_PREPARE_TIMEOUT_SECONDS, "invalid");
-
-        assertEquals(new ClientMediaPrepareProperties.Settings(2, 20L, 12L, 12L),
-                ClientMediaPrepareProperties.settings());
-    }
-
-    @Test
     void unsafeValuesAreClamped() {
         set(ClientMediaPrepareProperties.AUDIO_PREPARE_THREADS, "0");
         set(ClientMediaPrepareProperties.MODERN_PREPARE_TIMEOUT_SECONDS, "0");

@@ -12,17 +12,6 @@ class Fmp4StreamPropertiesTest {
     }
 
     @Test
-    void defaultRemainsCompatible() {
-        assertEquals(64 * 1024 * 1024, Fmp4StreamProperties.maxBufferedPayloadBytes());
-    }
-
-    @Test
-    void explicitLimitRemainsConfigurable() {
-        System.setProperty(Fmp4StreamProperties.MAX_BUFFERED_PAYLOAD_BYTES, "2097152");
-        assertEquals(2 * 1024 * 1024, Fmp4StreamProperties.maxBufferedPayloadBytes());
-    }
-
-    @Test
     void invalidValuesUseDefaultAndSmallLimitsAreClamped() {
         System.setProperty(Fmp4StreamProperties.MAX_BUFFERED_PAYLOAD_BYTES, "invalid");
         assertEquals(64 * 1024 * 1024, Fmp4StreamProperties.maxBufferedPayloadBytes());

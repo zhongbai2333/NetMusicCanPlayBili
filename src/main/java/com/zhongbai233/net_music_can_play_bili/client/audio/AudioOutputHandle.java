@@ -26,6 +26,10 @@ public interface AudioOutputHandle extends AutoCloseable {
     default void setConsoleRouteSuppressed(boolean suppressed) {
     }
 
+    default com.zhongbai233.net_music_can_play_bili.media.audio.AudioDrainStatus drainStatus() {
+        return com.zhongbai233.net_music_can_play_bili.media.audio.AudioDrainStatus.RUNNING;
+    }
+
     float audioLevel();
 
     long getPositionTicks();

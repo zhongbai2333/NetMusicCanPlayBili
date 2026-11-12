@@ -44,7 +44,7 @@ public final class BiliApiClient {
     private static final Duration SHORT_LINK_TIMEOUT = Duration.ofSeconds(5);
     private static final HttpClient SHORT_LINK_HTTP = HttpClient.newBuilder()
             .connectTimeout(SHORT_LINK_TIMEOUT)
-            .followRedirects(HttpClient.Redirect.ALWAYS)
+            .followRedirects(HttpClient.Redirect.NEVER)
             .build();
     // B站 SESSDATA Cookie，扫码登录后自动获取
     public static volatile String sessdata = BiliApiProperties.initialSessdata();
@@ -109,18 +109,16 @@ public final class BiliApiClient {
 
     private static String expandBiliShortLink(URI shortLink) {
         try {
-            HttpRequest.Builder builder = HttpRequest.newBuilder(shortLink)
-                    .timeout(SHORT_LINK_TIMEOUT)
-                    .GET();
-            BiliRequestHeaders.applyPublicWebHeaders(builder);
-            HttpRequest req = builder.build();
-            URI expanded = sendApi(SHORT_LINK_HTTP, req, HttpResponse.BodyHandlers.discarding(),
-                    "bili-api-short-link").uri();
-            if (!isTrustedExpandedShortLink(expanded)) {
-                logger().warn("拒绝 B站短链的非可信重定向目标: host={}", safeHost(expanded));
-                return null;
-            }
-            return expanded.toString();
+            URI expanded = BiliShortLinkExpansion.expand(shortLink, SHORT_LINK_TIMEOUT, System::nanoTime,
+                    (uri, timeout) -> {
+                        HttpRequest.Builder builder = HttpRequest.newBuilder(uri).timeout(timeout).GET();
+                        BiliRequestHeaders.applyPublicWebHeaders(builder);
+                        HttpResponse<Void> response = sendApi(SHORT_LINK_HTTP, builder.build(),
+                                HttpResponse.BodyHandlers.discarding(), "bili-api-short-link");
+                        return new BiliShortLinkExpansion.Response(response.statusCode(),
+                                response.headers().firstValue("Location").orElse(null));
+                    });
+            return isTrustedExpandedShortLink(expanded) ? expanded.toString() : null;
         } catch (Exception e) {
             logger().debug("B站短链展开失败: host={}", safeHost(shortLink), e);
             return null;
@@ -128,9 +126,7 @@ public final class BiliApiClient {
     }
 
     static boolean isTrustedExpandedShortLink(URI expanded) {
-        return expanded != null
-                && "https".equalsIgnoreCase(expanded.getScheme())
-                && BiliRequestHeaders.isBiliHost(expanded);
+        return BiliShortLinkExpansion.trusted(expanded) && BiliRequestHeaders.isBiliHost(expanded);
     }
 
     private static String safeHost(URI uri) {

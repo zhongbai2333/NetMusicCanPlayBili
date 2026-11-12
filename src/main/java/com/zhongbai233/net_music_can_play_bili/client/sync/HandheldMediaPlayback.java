@@ -30,6 +30,6 @@ public record HandheldMediaPlayback(Optional<PlaybackSessionId> playbackSessionI
     public boolean hasPlayableVideoSource() {
         return hasSession()
                 && rawUrl != null && !rawUrl.isBlank()
-                && timeline != null && timeline.totalMillis() > 0L;
+                && timeline != null && timeline.totalMillis() >= 0L;
     }
 }

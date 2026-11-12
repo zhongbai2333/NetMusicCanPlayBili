@@ -21,6 +21,10 @@ public final class MP4ClientMediaSync {
         ClientMediaSyncHandler.handleSync(payload, SYNC_POLICY);
     }
 
+    public static void handleSync(MP4PlaybackSyncPacket payload, long receivedNanos) {
+        ClientMediaSyncHandler.handleSync(payload, SYNC_POLICY, receivedNanos);
+    }
+
     public static void handleTimeline(MP4PlaybackTimelinePacket payload) {
         ClientMediaSyncHandler.handleTimeline(payload, SYNC_POLICY);
     }

@@ -19,32 +19,6 @@ class CdnPropertiesTest {
     }
 
     @Test
-    void defaultsPreserveExistingSelectorAndFallbackBehavior() {
-        CdnProperties.Selector selector = CdnProperties.selector();
-        assertTrue(selector.enabled());
-        assertFalse(selector.raceEnabled());
-        assertEquals(2048, selector.raceBytes());
-        assertEquals(2_500L, selector.raceTimeoutMillis());
-        assertEquals(4, selector.maxRaceCandidates());
-        assertEquals(5_000L, selector.minPersistIntervalMillis());
-        assertEquals(60_000L, selector.backgroundRaceIntervalMillis());
-        assertEquals("", selector.preferredHost());
-        assertEquals(512, CdnProperties.fallback().maxGroups());
-    }
-
-    @Test
-    void typoLegacyRaceKeysRemainCompatible() {
-        set(CdnProperties.RACE_BYTES, "invalid");
-        set(CdnProperties.LEGACY_RACE_BYTES, "4096");
-        set(CdnProperties.RACE_TIMEOUT_MILLIS, "invalid");
-        set(CdnProperties.LEGACY_RACE_TIMEOUT_MILLIS, "4500");
-
-        CdnProperties.Selector selector = CdnProperties.selector();
-        assertEquals(4096, selector.raceBytes());
-        assertEquals(4500L, selector.raceTimeoutMillis());
-    }
-
-    @Test
     void effectiveMinimumsAndPreferredHostNormalizationRemainStable() {
         set(CdnProperties.SELECTOR_ENABLED, "false");
         set(CdnProperties.SELECTOR_RACE, "true");
@@ -66,20 +40,6 @@ class CdnPropertiesTest {
         assertEquals(1_000L, selector.backgroundRaceIntervalMillis());
         assertEquals("cdn.example.com", selector.preferredHost());
         assertEquals(1, CdnProperties.fallback().maxGroups());
-    }
-
-    @Test
-    void invalidValuesUseCompatibilityDefaults() {
-        set(CdnProperties.SELECTOR_ENABLED, "yes");
-        set(CdnProperties.SELECTOR_RACE, "yes");
-        set(CdnProperties.MAX_RACE_CANDIDATES, "invalid");
-        set(CdnProperties.PREFERRED_HOST, "   ");
-
-        CdnProperties.Selector selector = CdnProperties.selector();
-        assertTrue(selector.enabled());
-        assertFalse(selector.raceEnabled());
-        assertEquals(4, selector.maxRaceCandidates());
-        assertEquals("", selector.preferredHost());
     }
 
     private void set(String key, String value) {

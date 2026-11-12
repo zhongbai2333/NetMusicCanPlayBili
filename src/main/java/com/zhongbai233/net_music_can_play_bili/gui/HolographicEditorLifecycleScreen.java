@@ -29,6 +29,11 @@ import java.util.UUID;
 
 /** Lifecycle, autosave, roaming, and equipped-glasses persistence for the scene editor. */
 abstract class HolographicEditorLifecycleScreen extends HolographicEditorScreenState {
+    private boolean consoleCloseSaveDeferred;
+    private boolean editorResourcesRetired;
+    private boolean consoleAutosavePaused;
+    private UUID consoleRejectedLeaseId;
+    private UUID consolePendingLeaseId;
     protected HolographicEditorLifecycleScreen(boolean bindEquippedGlasses, BlockPos controlConsolePos) {
         super(bindEquippedGlasses, controlConsolePos);
     }
@@ -112,10 +117,22 @@ abstract class HolographicEditorLifecycleScreen extends HolographicEditorScreenS
 
     protected void processConsoleAutosave() {
         ControlConsoleDocument draft = currentConsoleDocument();
-        if (draft == null || consoleSaveConflict) {
+        if (draft == null || consoleSaveConflict || editorResourcesRetired) {
             return;
         }
         int fingerprint = consoleDraftFingerprint(draft);
+        if (consoleAutosavePaused) {
+            UUID leaseId = com.zhongbai233.net_music_can_play_bili.client.ControlConsoleClient.leaseId(controlConsolePos);
+            if (leaseId == null || java.util.Objects.equals(leaseId, consoleRejectedLeaseId)) {
+                return;
+            }
+            // A new lease can permit the retained draft again; renewal of the rejected lease cannot.
+            consoleAutosavePaused = false;
+            consoleRejectedLeaseId = null;
+            consoleObservedFingerprint = fingerprint;
+            consoleAutosaveTick = 10L;
+            return;
+        }
         if (!consoleAutosaveFingerprintInitialized) {
             consoleSavedFingerprint = fingerprint;
             consoleObservedFingerprint = fingerprint;
@@ -134,7 +151,7 @@ abstract class HolographicEditorLifecycleScreen extends HolographicEditorScreenS
     }
 
     protected void sendConsoleAutosave() {
-        if (controlConsolePos == null || consoleDraft == null || consolePendingOperation != null) {
+        if (controlConsolePos == null || consoleDraft == null || consolePendingOperation != null || editorResourcesRetired) {
             return;
         }
         UUID operationId = UUID.randomUUID();
@@ -154,6 +171,10 @@ abstract class HolographicEditorLifecycleScreen extends HolographicEditorScreenS
             consoleSaveStatus = "编辑租约不可用";
             return;
         }
+        // An explicit call is also a deliberate retry. The automatic path remains paused after rejection.
+        consoleAutosavePaused = false;
+        consoleRejectedLeaseId = null;
+        consolePendingLeaseId = leaseId;
         ClientPacketDistributor.sendToServer(new ControlConsoleConfigPacket(controlConsolePos, leaseId, operationId,
                 consoleDraft.revision(), consoleDraft.displayName(), consoleDraft.hardRangeX(),
                 consoleDraft.hardRangeY(), consoleDraft.hardRangeZ(), consoleElementsSnapshot()));
@@ -166,6 +187,7 @@ abstract class HolographicEditorLifecycleScreen extends HolographicEditorScreenS
 
     public static void acceptControlConsoleConfigResult(
             com.zhongbai233.net_music_can_play_bili.network.ControlConsoleConfigResultPacket result) {
+        if (com.zhongbai233.net_music_can_play_bili.client.ControlConsoleClient.acceptClosingSaveResult(result)) return;
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.screen instanceof HolographicScreenConfigTestScreen screen) {
             screen.acceptConsoleConfigResult(result);
@@ -181,6 +203,8 @@ abstract class HolographicEditorLifecycleScreen extends HolographicEditorScreenS
         switch (result.status()) {
             case APPLIED, DUPLICATE -> {
                 consoleConflictAuthoritative = null;
+                consoleAutosavePaused = false;
+                consoleRejectedLeaseId = null;
                 consoleDraft = consoleDraft.withRevision(result.revision());
                 consoleSaveStatus = consoleAccessRollback != null ? "权限设置已保存" : "已自动保存";
                 consoleSavedFingerprint = consolePendingFingerprint;
@@ -204,10 +228,14 @@ abstract class HolographicEditorLifecycleScreen extends HolographicEditorScreenS
             case REJECTED -> {
                 consoleConflictAuthoritative = null;
                 restoreAccessRollback();
+                consoleAutosavePaused = true;
+                consoleRejectedLeaseId = consolePendingLeaseId != null ? consolePendingLeaseId
+                    : com.zhongbai233.net_music_can_play_bili.client.ControlConsoleClient.leaseId(controlConsolePos);
                 consoleSaveStatus = "保存被服务器拒绝";
                 init();
             }
         }
+        consolePendingLeaseId = null;
     }
 
     protected void restoreAccessRollback() {
@@ -234,6 +262,9 @@ abstract class HolographicEditorLifecycleScreen extends HolographicEditorScreenS
         consoleAccessRollback = null;
         consoleConflictAuthoritative = null;
         consoleSaveConflict = false;
+        consoleAutosavePaused = false;
+        consoleRejectedLeaseId = null;
+        consolePendingLeaseId = null;
         consoleSaveStatus = status;
         consolePendingOperation = null;
         consoleAutosaveTick = 0L;
@@ -276,20 +307,64 @@ abstract class HolographicEditorLifecycleScreen extends HolographicEditorScreenS
     @Override
     public void onClose() {
         clearFlyKeys();
-        if (controlConsoleMode && consoleDraft != null && consolePendingOperation == null
+        if (!editorResourcesRetired && !consoleAutosavePaused && !consoleCloseSaveDeferred
+            && controlConsoleMode && consoleDraft != null && consolePendingOperation != null
+            && !transferLeaseToRoaming && !consoleSaveConflict && consoleAutosaveFingerprintInitialized
+            && consoleDraftFingerprint(consoleDraft) != consolePendingFingerprint && validControlConsoleHost()) {
+            ControlConsoleDocument draft = currentConsoleDocument();
+            ControlConsoleDocument latest = new ControlConsoleDocument(draft.schemaVersion(), draft.consoleId(), draft.revision(),
+                draft.ownerId(), draft.accessMode(), draft.trustedPlayerIds(), draft.displayName(), draft.sourceDimension(),
+                draft.sourceKind(), draft.sourceX(), draft.sourceY(), draft.sourceZ(), draft.hardRangeX(), draft.hardRangeY(),
+                draft.hardRangeZ(), consoleElementsSnapshot());
+            consoleCloseSaveDeferred = com.zhongbai233.net_music_can_play_bili.client.ControlConsoleClient.deferCloseSave(
+                controlConsolePos, consolePendingOperation, latest);
+        }
+        if (!editorResourcesRetired && !consoleAutosavePaused && controlConsoleMode
+            && consoleDraft != null && consolePendingOperation == null
             && !consoleSaveConflict && consoleAutosaveFingerprintInitialized
             && consoleDraftFingerprint(consoleDraft) != consoleSavedFingerprint) {
             sendConsoleAutosave();
         }
         saveEquippedGlassesConfig();
+        retireEditorResources();
         if (controlConsolePos != null) {
-            TerrainPreviewManager.close(controlConsolePos);
-            if (!transferLeaseToRoaming) {
+            if (!transferLeaseToRoaming && !consoleCloseSaveDeferred) {
                 com.zhongbai233.net_music_can_play_bili.client.ControlConsoleClient.releaseLease(controlConsolePos);
             }
         }
-        clearNumericPanelRefs();
         super.onClose();
+    }
+
+    @Override
+    public void removed() {
+        try {
+            // Lease expiry/replacement uses setScreen(null), which never calls onClose().
+            // Removal retires output only: it must not save a rejected draft or release a newer lease.
+            retireEditorResources();
+        } finally {
+            super.removed();
+        }
+    }
+
+    private void retireEditorResources() {
+        if (editorResourcesRetired) {
+            return;
+        }
+        editorResourcesRetired = true;
+        clearFlyKeys();
+        try {
+            if (controlConsolePos != null) {
+                // A delayed old callback must not park terrain already owned by its replacement editor.
+                boolean replacementOwnsTerrain = minecraft != null
+                    && minecraft.screen instanceof HolographicEditorLifecycleScreen replacement
+                    && replacement != this && controlConsolePos.equals(replacement.controlConsolePos);
+                if (!replacementOwnsTerrain) {
+                    TerrainPreviewManager.close(controlConsolePos);
+                }
+            }
+        } finally {
+            clearNumericPanelRefs();
+        }
     }
 
     protected void startWorldRoaming() {
@@ -376,6 +451,8 @@ abstract class HolographicEditorLifecycleScreen extends HolographicEditorScreenS
 
     @Override
     protected void init() {
+        // The same screen object may be resumed through the normal GUI layer lifecycle.
+        editorResourcesRetired = false;
         clearWidgets();
         clearNumericPanelRefs();
         if (controlConsoleMode) {
