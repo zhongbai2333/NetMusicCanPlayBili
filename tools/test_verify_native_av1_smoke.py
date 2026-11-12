@@ -63,7 +63,7 @@ class VerifyNativeAv1SmokeTest(unittest.TestCase):
             with mock.patch.object(subject.verify_native_runtime, "read_bundle_metadata", return_value=metadata), \
                     mock.patch.object(subject, "require_matching_runner"), \
                     mock.patch.object(subject.subprocess, "run") as run:
-                with self.assertRaisesRegex(RuntimeError, "requires media-min-v48"):
+                with self.assertRaisesRegex(RuntimeError, f"requires {subject.verify_native_runtime.CURRENT_RELEASE}"):
                     subject.run_smoke("macos-arm64", root, source, fixture)
             run.assert_not_called()
 

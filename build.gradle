@@ -588,9 +588,9 @@ def embeddedNativeRoot = layout.projectDirectory.dir('src/main/resources/native'
 def embeddedNativeManifest = embeddedNativeRoot.file('SHA256SUMS')
 def embeddedNativeReadme = embeddedNativeRoot.file('README.md')
 def embeddedNativeReadmeText = embeddedNativeReadme.asFile.getText('UTF-8')
-def embeddedNativeReleaseMatcher = embeddedNativeReadmeText =~ /(?m)^\s*- Release:\s*`(media-min-v48)`\s*$/
+def embeddedNativeReleaseMatcher = embeddedNativeReadmeText =~ /(?m)^\s*- Release:\s*`(media-min-v50)`\s*$/
 if (embeddedNativeReleaseMatcher.count != 1) {
-    throw new GradleException('native/README.md must identify exactly one supported media-min-v48 release')
+    throw new GradleException('native/README.md must identify exactly one supported media-min-v50 release')
 }
 def linuxArm64GlibcMatcher = embeddedNativeReadmeText =~ /host glibc to provide at\s+least\s+`(GLIBC_[0-9]+\.[0-9]+)` on Linux ARM64/
 def linuxX8664GlibcMatcher = embeddedNativeReadmeText =~ /at\s+least\s+`(GLIBC_[0-9]+\.[0-9]+)` on Linux x86_64/
@@ -763,7 +763,7 @@ tasks.register('verifyProductionJarLegalMaterials') {
 
         def noticeText = nativeCapabilityNotice.asFile.getText('UTF-8')
         def requiredNoticeMarkers = [
-                'media-min-v48',
+                'media-min-v50',
                 'AV1 仅支持平台硬件解码',
                 '不包含 dav1d 或 libaom',
                 'H.264 硬件或软件解码',

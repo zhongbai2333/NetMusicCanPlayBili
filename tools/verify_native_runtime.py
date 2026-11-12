@@ -14,7 +14,7 @@ import sys
 
 
 LEGACY_V38_FFMPEG_VERSION = "git-2026-08-10-3dbd669"
-CURRENT_RELEASE = "media-min-v48"
+CURRENT_RELEASE = "media-min-v50"
 SUPPORTED_RELEASES = {"media-min-v38", CURRENT_RELEASE}
 SUPPORTED_PLATFORMS = {
     "linux-arm64": ("linux", "arm64"),

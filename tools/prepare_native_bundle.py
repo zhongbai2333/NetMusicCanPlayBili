@@ -41,22 +41,22 @@ PLATFORM_FILES: dict[str, tuple[str, ...]] = {
     ),
 }
 
-CURRENT_RELEASE = "media-min-v48"
-FFMPEG_SOURCE_COMMIT = "3b3d6f46bbd34049fcac013d743d75e953452431"
-FFMPEG_UPSTREAM_BASE = "b397eba2f0d3d86daf1098d0f27daffccc74fea5"
+CURRENT_RELEASE = "media-min-v50"
+FFMPEG_SOURCE_COMMIT = "9a57f0a332a25d9f2c4a620fd5bbd5ce3bbbd972"
+FFMPEG_UPSTREAM_BASE = "611bcc793fd8fce743fc6b3f784c0b9b8cf0d961"
 FFMPEG_RUNTIME_VERSIONS = {
-    "linux-arm64": "git-2026-08-13-3b3d6f4",
-    "linux-x86_64": "git-2026-08-13-3b3d6f4",
-    "macos-arm64": "git-2026-08-13-3b3d6f4",
-    "macos-x86_64": "git-2026-08-13-3b3d6f4",
+    "linux-arm64": "git-2026-11-07-9a57f0a",
+    "linux-x86_64": "git-2026-11-07-9a57f0a",
+    "macos-arm64": "git-2026-11-07-9a57f0a",
+    "macos-x86_64": "git-2026-11-07-9a57f0a",
     "windows-arm64": "8.0.git",
     "windows-x86_64": "8.0.git",
 }
 FFMPEG_SOURCE_FILES = {
     "COPYING.LGPLv2.1": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30",
-    ".github/workflows/build.yml": "029bcb010faa532e9908e0e0d10634c8e574657ab65bdb8541bf4d02539af9af",
-    "configure": "68a001bbee07696d4a44e90e9e2ac5783fcfe58a8c90b36d0672c63e979bd6e6",
-    "libavcodec/allcodecs.c": "85e5d76f4729e5a01061066e59cbd916f3eb3d2b5ad033343d54a6026e75ade2",
+    ".github/workflows/build.yml": "b983dcdbc1e64da68cef37059fe2f5e21a68bab4b71c67f09b5f59923b434a6a",
+    "configure": "b7aef8b590028bd90261b628ad3fdfd2456d1ac282f8b6d65571bbe190ad78cf",
+    "libavcodec/allcodecs.c": "e79d38cf8f02be4e4eedbd7c1b0accf7256678b5a5df770b4d19dda400a8d397",
     "eac3_jni.c": "e67a454a35460b4a0e358d3f03f03c6caad3562faafb6bf91b0b6ff0c1217d8b",
     "video_jni.c": "550ddc8a6ffd27270ae4d5b1034e40d0c823843c0fba51c997419b01d328d491",
 }

@@ -163,7 +163,7 @@ NetMusic 自带的广播喇叭也仍然支持：在地址输入框中填写 `liv
 | `compatibility` | 只尝试一次最高 AV1 硬解，随后直接 H.264，不用软件 AV1 |
 | `h264` | 完全禁用 AV1 候选，用于老设备和问题定位 |
 
-无法识别或空白的值会回到 `auto`。当前 `media-min-v48` 发布包不包含 dav1d/libaom 软件 AV1 decoder；
+无法识别或空白的值会回到 `auto`。当前 `media-min-v50` 发布包不包含 dav1d/libaom 软件 AV1 decoder；
 `auto` 和 `prefer-av1` 当前都优先尝试代表性 AV1 硬解候选，失败后回退 H.264。所有模式都拒绝 HEVC/H.265。
 
 AV1 首帧成功后还会进行五秒有效播放观测；暂停或离屏等待不计入窗口。如果解码 FPS 持续低于目标的 80%，或
