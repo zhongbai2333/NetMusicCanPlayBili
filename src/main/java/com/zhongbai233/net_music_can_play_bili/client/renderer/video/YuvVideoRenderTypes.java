@@ -8,6 +8,7 @@ import com.mojang.blaze3d.platform.CompareOp;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
 import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.BindGroupLayouts;
 import net.minecraft.client.renderer.rendertype.RenderSetup;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.resources.Identifier;
@@ -114,7 +115,7 @@ public final class YuvVideoRenderTypes {
                 .withShaderDefine("NO_CARDINAL_LIGHTING")
                 .withDepthStencilState(new DepthStencilState(CompareOp.LESS_THAN_OR_EQUAL,
                         renderPass.depthWrite()))
-                .withSampler("Sampler1");
+                .withBindGroupLayout(BindGroupLayouts.SAMPLER1);
         if (renderPass.alphaCutout() > 0.0F) {
             builder.withShaderDefine("ALPHA_CUTOUT", renderPass.alphaCutout());
         }
@@ -138,9 +139,8 @@ public final class YuvVideoRenderTypes {
                         ? new DepthStencilState(CompareOp.LESS_THAN_OR_EQUAL, false)
                         : DepthStencilState.DEFAULT)
                 .withCull(false)
-                .withSampler("Sampler0")
-                .withSampler("Sampler1")
-                .withSampler("Sampler2");
+                .withBindGroupLayout(BindGroupLayouts.SAMPLER1)
+                .withBindGroupLayout(BindGroupLayouts.SAMPLER2);
         switch (YUV_SHADER_DEBUG) {
             case "CONSTANT", "MAGENTA", "CYAN" -> builder.withShaderDefine("BILI_YUV_DEBUG_CONSTANT");
             case "PLANES", "YUV" -> builder.withShaderDefine("BILI_YUV_DEBUG_PLANES");

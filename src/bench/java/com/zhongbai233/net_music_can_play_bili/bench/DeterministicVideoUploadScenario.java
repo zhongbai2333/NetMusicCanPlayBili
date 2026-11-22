@@ -8,6 +8,7 @@ import com.zhongbai233.bench.api.neoforge.client.BenchClientStepResult;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.DeterministicVideoUploadWorkload;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoUploadBackend;
 
 import java.util.Arrays;
 
@@ -105,8 +106,11 @@ final class DeterministicVideoUploadScenario implements BenchClientScenario {
         if (peakStagingDelta <= 0L) {
             throw new AssertionError("YUV upload did not allocate tracked texture staging memory");
         }
-        if (peakPboDelta <= 0L) {
+        if (VideoUploadBackend.current().supportsPbo() && peakPboDelta <= 0L) {
             throw new AssertionError("NV12 upload did not allocate tracked PBO memory");
+        }
+        if (!VideoUploadBackend.current().supportsPbo() && peakPboDelta != 0L) {
+            throw new AssertionError("Non-OpenGL backend allocated OpenGL PBO memory");
         }
         var resources = VideoBillboardPreview.benchUploadResources();
         if (resources.rgbaTexture() || resources.yuvTextures()

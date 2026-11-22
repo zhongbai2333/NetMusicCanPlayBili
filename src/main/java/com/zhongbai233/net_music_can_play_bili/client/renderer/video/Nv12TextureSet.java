@@ -60,7 +60,7 @@ public final class Nv12TextureSet implements VideoYuvTextureSet {
             return false;
         }
         ensureTextures(width, height, uvWidth, uvHeight);
-        if (PBO_UPLOAD) {
+        if (PBO_UPLOAD && VideoUploadBackend.current().supportsPbo()) {
             boolean yOk = yTexture.uploadPbo(nv12, 0);
             boolean uvOk = uvTexture.uploadPbo(nv12, ySize);
             if (yOk && uvOk) {
@@ -81,23 +81,16 @@ public final class Nv12TextureSet implements VideoYuvTextureSet {
             return false;
         }
         ensureTextures(width, height, uvWidth, uvHeight);
-        if (PBO_UPLOAD) {
+        if (PBO_UPLOAD && VideoUploadBackend.current().supportsPbo()) {
             boolean yOk = yTexture.uploadPbo(nv12, 0);
             boolean uvOk = uvTexture.uploadPbo(nv12, ySize);
             if (yOk && uvOk) {
                 return true;
             }
         }
-        return upload(frameBytes(nv12, ySize + uvSize), width, height);
-    }
-
-    private static byte[] frameBytes(ByteBuffer buffer, int byteCount) {
-        ByteBuffer src = buffer.duplicate();
-        src.position(0);
-        src.limit(Math.min(src.limit(), byteCount));
-        byte[] out = new byte[src.remaining()];
-        src.get(out);
-        return out;
+        yTexture.upload(nv12, 0);
+        uvTexture.upload(nv12, ySize);
+        return true;
     }
 
     private void ensureTextures(int width, int height, int uvWidth, int uvHeight) {
