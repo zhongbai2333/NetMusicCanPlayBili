@@ -1,7 +1,49 @@
 {
-  "variants": {
-    "": {
-      "model": "net_music_can_play_bili:block/control_console"
-    }
+ "variants": {
+  "facing=north,section=single": {
+   "model": "net_music_can_play_bili:block/control_console_lower"
+  },
+  "facing=north,section=base": {
+   "model": "net_music_can_play_bili:block/control_console_lower"
+  },
+  "facing=north,section=top": {
+   "model": "net_music_can_play_bili:block/control_console_upper"
+  },
+  "facing=east,section=single": {
+   "model": "net_music_can_play_bili:block/control_console_lower",
+   "y": 90
+  },
+  "facing=east,section=base": {
+   "model": "net_music_can_play_bili:block/control_console_lower",
+   "y": 90
+  },
+  "facing=east,section=top": {
+   "model": "net_music_can_play_bili:block/control_console_upper",
+   "y": 90
+  },
+  "facing=south,section=single": {
+   "model": "net_music_can_play_bili:block/control_console_lower",
+   "y": 180
+  },
+  "facing=south,section=base": {
+   "model": "net_music_can_play_bili:block/control_console_lower",
+   "y": 180
+  },
+  "facing=south,section=top": {
+   "model": "net_music_can_play_bili:block/control_console_upper",
+   "y": 180
+  },
+  "facing=west,section=single": {
+   "model": "net_music_can_play_bili:block/control_console_lower",
+   "y": 270
+  },
+  "facing=west,section=base": {
+   "model": "net_music_can_play_bili:block/control_console_lower",
+   "y": 270
+  },
+  "facing=west,section=top": {
+   "model": "net_music_can_play_bili:block/control_console_upper",
+   "y": 270
   }
+ }
 }

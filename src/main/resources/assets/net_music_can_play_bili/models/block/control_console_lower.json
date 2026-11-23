@@ -1,0 +1,647 @@
+{
+ "format_version": "1.21.11",
+ "textures": {
+  "0": "net_music_can_play_bili:block/redstone_media/rs_record_edge",
+  "1": "net_music_can_play_bili:block/redstone_media/rs_rack_case",
+  "2": "net_music_can_play_bili:block/redstone_media/rs_rack_rail",
+  "3": "net_music_can_play_bili:block/redstone_media/rs_rack_lower_unit",
+  "4": "net_music_can_play_bili:block/redstone_media/rs_rack_upper",
+  "5": "net_music_can_play_bili:block/redstone_media/rs_rack_drawer",
+  "6": "net_music_can_play_bili:block/redstone_media/rs_standing_desk",
+  "7": "net_music_can_play_bili:block/redstone_media/rs_spruce",
+  "8": "net_music_can_play_bili:block/redstone_media/rs_rack_grip",
+  "9": "net_music_can_play_bili:block/redstone_media/rs_copper",
+  "10": "net_music_can_play_bili:block/redstone_media/rs_console_rubber_pads",
+  "11": "net_music_can_play_bili:block/redstone_media/rs_mixer_side_vent",
+  "12": "net_music_can_play_bili:block/redstone_media/rs_mixer_rear_io",
+  "13": "net_music_can_play_bili:block/redstone_media/rs_mixer_rear_controls",
+  "particle": "net_music_can_play_bili:block/redstone_media/rs_record_edge"
+ },
+ "elements": [
+  {
+   "name": "内收底脚",
+   "from": [
+    1.9,
+    0,
+    2.6
+   ],
+   "to": [
+    14.1,
+    0.85,
+    14.3
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     1.9,
+     0,
+     2.6
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      2,
+      0,
+      14.2,
+      0.85
+     ],
+     "texture": "#0"
+    },
+    "east": {
+     "uv": [
+      4,
+      1,
+      15.7,
+      1.85
+     ],
+     "texture": "#0"
+    },
+    "south": {
+     "uv": [
+      1,
+      2,
+      13.2,
+      2.85
+     ],
+     "texture": "#0"
+    },
+    "west": {
+     "uv": [
+      3,
+      3,
+      14.7,
+      3.85
+     ],
+     "texture": "#0"
+    },
+    "up": {
+     "uv": [
+      0,
+      1,
+      12.2,
+      12.7
+     ],
+     "texture": "#0"
+    },
+    "down": {
+     "uv": [
+      0,
+      0,
+      12.2,
+      11.7
+     ],
+     "texture": "#10"
+    }
+   }
+  },
+  {
+   "name": "下部设备柜",
+   "from": [
+    1.28,
+    0.85,
+    2.94
+   ],
+   "to": [
+    14.72,
+    14.22,
+    14.92
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     1.28,
+     0.85,
+     2.94
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      1,
+      1,
+      14.44,
+      14.37
+     ],
+     "texture": "#1"
+    },
+    "east": {
+     "uv": [
+      11.98,
+      0,
+      0,
+      13.37
+     ],
+     "texture": "#11"
+    },
+    "south": {
+     "uv": [
+      0,
+      0,
+      13.44,
+      13.37
+     ],
+     "texture": "#12"
+    },
+    "west": {
+     "uv": [
+      0,
+      0,
+      11.98,
+      13.37
+     ],
+     "texture": "#11"
+    },
+    "up": {
+     "uv": [
+      2,
+      2,
+      15.44,
+      13.98
+     ],
+     "texture": "#1"
+    },
+    "down": {
+     "uv": [
+      1,
+      3,
+      14.44,
+      14.98
+     ],
+     "texture": "#1"
+    }
+   }
+  },
+  {
+   "name": "左前立柱",
+   "from": [
+    1.18,
+    0.85,
+    1.93
+   ],
+   "to": [
+    2.21,
+    14.2,
+    3.02
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     1.18,
+     0.85,
+     1.93
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      1,
+      1,
+      2.03,
+      14.35
+     ],
+     "texture": "#2"
+    },
+    "east": {
+     "uv": [
+      4,
+      2,
+      5.09,
+      15.35
+     ],
+     "texture": "#2"
+    },
+    "south": {
+     "uv": [
+      5,
+      2,
+      6.03,
+      15.35
+     ],
+     "texture": "#2"
+    },
+    "west": {
+     "uv": [
+      8,
+      0,
+      9.09,
+      13.35
+     ],
+     "texture": "#2"
+    },
+    "up": {
+     "uv": [
+      9,
+      6,
+      10.03,
+      7.09
+     ],
+     "texture": "#2"
+    },
+    "down": {
+     "uv": [
+      11,
+      7,
+      12.03,
+      8.09
+     ],
+     "texture": "#2"
+    }
+   }
+  },
+  {
+   "name": "右前立柱",
+   "from": [
+    13.79,
+    0.85,
+    1.93
+   ],
+   "to": [
+    14.82,
+    14.2,
+    3.02
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     13.79,
+     0.85,
+     1.93
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      14,
+      1,
+      15.03,
+      14.35
+     ],
+     "texture": "#2"
+    },
+    "east": {
+     "uv": [
+      4,
+      2,
+      5.09,
+      15.35
+     ],
+     "texture": "#2"
+    },
+    "south": {
+     "uv": [
+      2,
+      2,
+      3.03,
+      15.35
+     ],
+     "texture": "#2"
+    },
+    "west": {
+     "uv": [
+      8,
+      0,
+      9.09,
+      13.35
+     ],
+     "texture": "#2"
+    },
+    "up": {
+     "uv": [
+      6,
+      6,
+      7.03,
+      7.09
+     ],
+     "texture": "#2"
+    },
+    "down": {
+     "uv": [
+      8,
+      7,
+      9.03,
+      8.09
+     ],
+     "texture": "#2"
+    }
+   }
+  },
+  {
+   "name": "机架功率放大器",
+   "from": [
+    2.24,
+    1.75,
+    2.18
+   ],
+   "to": [
+    13.76,
+    5.8,
+    3.07
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     2.24,
+     1.75,
+     2.18
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      0,
+      0,
+      11.52,
+      4.05
+     ],
+     "texture": "#3"
+    },
+    "east": {
+     "uv": [
+      4,
+      3,
+      4.89,
+      7.05
+     ],
+     "texture": "#1"
+    },
+    "south": {
+     "uv": [
+      1,
+      4,
+      12.52,
+      8.05
+     ],
+     "texture": "#1"
+    },
+    "west": {
+     "uv": [
+      8,
+      5,
+      8.89,
+      9.05
+     ],
+     "texture": "#1"
+    },
+    "up": {
+     "uv": [
+      4,
+      6,
+      15.52,
+      6.89
+     ],
+     "texture": "#1"
+    },
+    "down": {
+     "uv": [
+      1,
+      7,
+      12.52,
+      7.89
+     ],
+     "texture": "#1"
+    }
+   }
+  },
+  {
+   "name": "信号分配器",
+   "from": [
+    2.24,
+    6.58,
+    2.18
+   ],
+   "to": [
+    13.76,
+    10.5,
+    3.07
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     2.24,
+     6.58,
+     2.18
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      0,
+      0,
+      11.52,
+      3.92
+     ],
+     "texture": "#4"
+    },
+    "east": {
+     "uv": [
+      4,
+      8,
+      4.89,
+      11.92
+     ],
+     "texture": "#1"
+    },
+    "south": {
+     "uv": [
+      1,
+      9,
+      12.52,
+      12.92
+     ],
+     "texture": "#1"
+    },
+    "west": {
+     "uv": [
+      8,
+      10,
+      8.89,
+      13.92
+     ],
+     "texture": "#1"
+    },
+    "up": {
+     "uv": [
+      4,
+      6,
+      15.52,
+      6.89
+     ],
+     "texture": "#1"
+    },
+    "down": {
+     "uv": [
+      1,
+      7,
+      12.52,
+      7.89
+     ],
+     "texture": "#1"
+    }
+   }
+  },
+  {
+   "name": "收纳抽屉",
+   "from": [
+    2.24,
+    11.1,
+    2.2
+   ],
+   "to": [
+    13.76,
+    13.34,
+    3.05
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     2.24,
+     11.1,
+     2.2
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      0,
+      0,
+      11.52,
+      2.24
+     ],
+     "texture": "#5"
+    },
+    "east": {
+     "uv": [
+      4,
+      12,
+      4.85,
+      14.24
+     ],
+     "texture": "#1"
+    },
+    "south": {
+     "uv": [
+      1,
+      13,
+      12.52,
+      15.24
+     ],
+     "texture": "#1"
+    },
+    "west": {
+     "uv": [
+      8,
+      13,
+      8.85,
+      15.24
+     ],
+     "texture": "#1"
+    },
+    "up": {
+     "uv": [
+      4,
+      6,
+      15.52,
+      6.85
+     ],
+     "texture": "#1"
+    },
+    "down": {
+     "uv": [
+      1,
+      7,
+      12.52,
+      7.85
+     ],
+     "texture": "#1"
+    }
+   }
+  },
+  {
+   "name": "台面后托",
+   "from": [
+    1.6,
+    14.19,
+    6.97
+   ],
+   "to": [
+    14.4,
+    15.92,
+    10.35
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     1.6,
+     14.19,
+     6.97
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      2,
+      14,
+      14.8,
+      15.73
+     ],
+     "texture": "#1"
+    },
+    "east": {
+     "uv": [
+      9,
+      14,
+      12.38,
+      15.73
+     ],
+     "texture": "#1"
+    },
+    "south": {
+     "uv": [
+      1,
+      1,
+      13.8,
+      2.73
+     ],
+     "texture": "#1"
+    },
+    "west": {
+     "uv": [
+      12,
+      2,
+      15.38,
+      3.73
+     ],
+     "texture": "#1"
+    },
+    "up": {
+     "uv": [
+      1,
+      11,
+      13.8,
+      14.38
+     ],
+     "texture": "#1"
+    },
+    "down": {
+     "uv": [
+      3,
+      12,
+      15.8,
+      15.38
+     ],
+     "texture": "#1"
+    }
+   }
+  }
+ ],
+ "parent": "minecraft:block/block"
+}

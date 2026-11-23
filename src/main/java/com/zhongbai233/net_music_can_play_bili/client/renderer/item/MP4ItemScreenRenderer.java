@@ -45,8 +45,6 @@ public final class MP4ItemScreenRenderer {
     private static final float FOCUSED_SURFACE_Z = -1.09F;
     private static final float FOCUSED_SURFACE_SCALE = 1.92F;
     private static final float VIDEO_LAYER_OVERSCAN_PIXELS = 2.0F;
-    private static final float DEVICE_BORDER = 0.035F;
-    private static final float DEVICE_THICKNESS = 0.055F;
     private static final float SCREEN_FACE_Z_OFFSET = 0.020F;
     private static final float SCREEN_TEXTURE_Z_OFFSET = 0.022F;
     private static final PlaybackSourceId FALLBACK_SOURCE_ID = PlaybackSourceId.of(new UUID(0L, 0L));
@@ -122,12 +120,12 @@ public final class MP4ItemScreenRenderer {
 
         poseStack.pushPose();
         if (MP4FocusState.activeFor(hand)) {
-            applyFocusedMapPose(partialTick, poseStack);
+            applyFocusedMapPose(arm, partialTick, poseStack);
             renderFocusedHand(player, partialTick, poseStack, collector, light, arm, armRenderer);
         } else {
             applyOneHandedMapPose(arm, swingProgress, equipProgress, poseStack, collector, light, armRenderer);
         }
-        submitTexturedSurface(poseStack, collector, partialTick, deviceId);
+        submitTexturedSurface(player, stack, poseStack, collector, light, partialTick, deviceId);
         poseStack.popPose();
     }
 
@@ -145,10 +143,11 @@ public final class MP4ItemScreenRenderer {
         poseStack.popPose();
     }
 
-    private static void applyFocusedMapPose(float partialTick, PoseStack poseStack) {
+    private static void applyFocusedMapPose(HumanoidArm arm, float partialTick, PoseStack poseStack) {
         float p = MP4FocusState.progress(partialTick);
         float eased = 1.0F - (1.0F - p) * (1.0F - p);
-        poseStack.translate(lerp(HELD_SURFACE_X, FOCUSED_SURFACE_X, eased),
+        float side = arm == HumanoidArm.RIGHT ? 1.0F : -1.0F;
+        poseStack.translate(side * lerp(HELD_SURFACE_X, FOCUSED_SURFACE_X, eased),
                 lerp(HELD_SURFACE_Y, FOCUSED_SURFACE_Y, eased),
                 lerp(HELD_SURFACE_Z, FOCUSED_SURFACE_Z, eased));
         float scale = lerp(HELD_SURFACE_SCALE, FOCUSED_SURFACE_SCALE, eased);
@@ -174,8 +173,8 @@ public final class MP4ItemScreenRenderer {
         return start + (end - start) * t;
     }
 
-    private static void submitTexturedSurface(PoseStack poseStack, SubmitNodeCollector collector, float partialTick,
-            UUID deviceId) {
+    private static void submitTexturedSurface(AbstractClientPlayer player, ItemStack stack, PoseStack poseStack,
+            SubmitNodeCollector collector, int light, float partialTick, UUID deviceId) {
         MP4GuiTexture guiTexture = textureFor(deviceId);
         Identifier textureId = guiTexture.textureId(deviceId);
         boolean flipGuiV = true;
@@ -183,34 +182,17 @@ public final class MP4ItemScreenRenderer {
         float logicalWidth = MP4GuiTexture.WIDTH;
         float logicalHeight = MP4GuiTexture.HEIGHT;
         float aspect = logicalWidth / logicalHeight;
-        float halfHeight = 0.50F;
+        float halfHeight = 0.535F;
         float halfWidth = halfHeight * aspect;
 
         float hoverX = MP4FocusState.hoverX() * guiHoverFlip(partialTick);
         float hoverY = MP4FocusState.hoverY() * guiHoverFlip(partialTick);
 
-        final float bx0 = -halfWidth - DEVICE_BORDER;
-        final float by0 = halfHeight + DEVICE_BORDER;
-        final float bx1 = halfWidth + DEVICE_BORDER;
-        final float by1 = -halfHeight - DEVICE_BORDER;
-        final float backZ = -DEVICE_THICKNESS;
-
-        final float bodyDepthBoost = 0.020F;
-        final float p0z = 0.0F;
-        final float p1z = 0.0F;
-        final float p2z = 0.0F;
-        final float p3z = 0.0F;
-        final float screenFaceZ = SCREEN_FACE_Z_OFFSET;
-        final float screenTextureZ = SCREEN_TEXTURE_Z_OFFSET;
-        final float b0z = p0z + bodyDepthBoost;
-        final float b1z = p1z + bodyDepthBoost;
-        final float b2z = p2z + bodyDepthBoost;
-        final float b3z = p3z + bodyDepthBoost;
-        final float flatBackZ = bodyDepthBoost + backZ;
-        final float bb0z = flatBackZ;
-        final float bb1z = flatBackZ;
-        final float bb2z = flatBackZ;
-        final float bb3z = flatBackZ;
+        float bx0 = -halfWidth;
+        float by0 = halfHeight;
+        float bx1 = halfWidth;
+        float by1 = -halfHeight;
+        float screenTextureZ = SCREEN_TEXTURE_Z_OFFSET;
 
         poseStack.pushPose();
         poseStack.scale(0.532F, 0.532F, 0.532F);
@@ -224,38 +206,12 @@ public final class MP4ItemScreenRenderer {
         poseStack.mulPose(Axis.XP.rotationDegrees(hoverY * HOVER_TILT_DEGREES * MP4FocusState.progress(1.0F)));
         poseStack.mulPose(Axis.YP.rotationDegrees(hoverX * HOVER_TILT_DEGREES * MP4FocusState.progress(1.0F)));
         poseStack.translate(-pivotX, -pivotY, 0.0F);
-        publishProjectedQuad(poseStack.last().pose(), bx0, by0, screenTextureZ, bx1, by1,
-                screenTextureZ, screenTextureZ, screenTextureZ, guiTexture.renderedLandscape());
-        collector.submitCustomGeometry(
-                poseStack,
-                RenderTypes.itemCutout(bodyTextureId),
-                (pose, buffer) -> {
-                    emitSolidQuad(buffer, pose, bx1, by0, bb3z, bx0, by0, bb0z, -halfWidth, halfHeight, flatBackZ,
-                            halfWidth, halfHeight, flatBackZ, 0xFF202531);
-                    emitSolidQuad(buffer, pose, bx0, by1, bb1z, bx1, by1, bb2z, halfWidth, -halfHeight,
-                            flatBackZ, -halfWidth, -halfHeight, flatBackZ, 0xFF181C25);
-                    emitSolidQuad(buffer, pose, bx0, by0, bb0z, -halfWidth, halfHeight, flatBackZ, -halfWidth,
-                            -halfHeight, flatBackZ, bx0, by1, bb1z, 0xFF242A36);
-                    emitSolidQuad(buffer, pose, bx1, by0, bb3z, halfWidth, halfHeight, flatBackZ, halfWidth,
-                            -halfHeight, flatBackZ, bx1, by1, bb2z, 0xFF3B4354);
-                    emitSolidQuad(buffer, pose, bx0, by1, b1z, bx0, by0, b0z, bx0, by0, bb0z, bx0, by1, bb1z,
-                            0xFF242A36);
-                    emitSolidQuad(buffer, pose, bx1, by0, b3z, bx1, by1, b2z, bx1, by1, bb2z, bx1, by0, bb3z,
-                            0xFF3B4354);
-                    emitSolidQuad(buffer, pose, bx1, by0, b3z, bx0, by0, b0z, bx0, by0, bb0z, bx1, by0, bb3z,
-                            0xFF475062);
-                    emitSolidQuad(buffer, pose, bx0, by1, b1z, bx1, by1, b2z, bx1, by1, bb2z, bx0, by1, bb1z,
-                            0xFF181C25);
-                    emitSolidQuad(buffer, pose, bx0, by0, screenFaceZ, bx0, by1, screenFaceZ, bx1, by1,
-                            screenFaceZ, bx1, by0, screenFaceZ, 0xFF050507);
-                    emitSideButton(buffer, pose, bx1 + 0.012F, halfHeight * 0.78F, halfHeight, 0.038F, 0.165F,
-                            halfWidth, 0xFF687285);
-                    emitSideButton(buffer, pose, bx0 - 0.012F, halfHeight * 0.74F, halfHeight, 0.038F, 0.145F,
-                            halfWidth, 0xFF5D697D);
-                    emitSideButton(buffer, pose, bx0 - 0.012F, halfHeight * 0.52F, halfHeight, 0.038F, 0.145F,
-                            halfWidth, 0xFF5D697D);
-                });
-        submitNv12VideoLayer(poseStack, collector, deviceId, bx0, by0, bx1, by1, b0z, b1z, b2z, b3z);
+        HandheldDeviceModel.MP4.submit(player, stack, poseStack, collector, light, halfHeight * 2, SCREEN_FACE_Z_OFFSET);
+        publishProjectedQuad(poseStack.last().pose(), bx0, by0, bx1, by1, screenTextureZ, guiTexture.renderedLandscape());
+        collector.submitCustomGeometry(poseStack, RenderTypes.itemCutout(bodyTextureId),
+                (pose, buffer) -> emitSolidQuad(buffer, pose, bx0, by0, SCREEN_FACE_Z_OFFSET, bx0, by1,
+                        SCREEN_FACE_Z_OFFSET, bx1, by1, SCREEN_FACE_Z_OFFSET, bx1, by0, SCREEN_FACE_Z_OFFSET, 0xFF050507));
+        submitNv12VideoLayer(poseStack, collector, deviceId, bx0, by0, bx1, by1);
         boolean splitGuiAroundVideo = MP4FocusState.visualLandscape(1.0F) && MP4FocusState.videoEnabled()
                 && MP4FocusState.playing() && MP4HandheldVideoClient.latestFrame(deviceId) != null
                 && !MP4BiliLoginOverlay.visible();
@@ -313,8 +269,8 @@ public final class MP4ItemScreenRenderer {
         poseStack.popPose();
     }
 
-    private static void publishProjectedQuad(Matrix4f modelMatrix, float bx0, float by0, float b0z, float bx1,
-            float by1, float b1z, float b2z, float b3z, boolean renderedLandscape) {
+    private static void publishProjectedQuad(Matrix4f modelMatrix, float bx0, float by0, float bx1, float by1,
+            float z, boolean renderedLandscape) {
         if (!MP4FocusState.active() || !projectedInputEnabled()) {
             return;
         }
@@ -324,13 +280,13 @@ public final class MP4ItemScreenRenderer {
         int physicalHeight = Math.max(1, window.getHeight());
         int guiWidth = Math.max(1, minecraft.getWindow().getGuiScaledWidth());
         int guiHeight = Math.max(1, minecraft.getWindow().getGuiScaledHeight());
-        ScreenPoint topLeft = projectToGui(modelMatrix, bx0, by0, b0z, physicalWidth, physicalHeight, guiWidth,
+        ScreenPoint topLeft = projectToGui(modelMatrix, bx0, by0, z, physicalWidth, physicalHeight, guiWidth,
                 guiHeight);
-        ScreenPoint bottomLeft = projectToGui(modelMatrix, bx0, by1, b1z, physicalWidth, physicalHeight, guiWidth,
+        ScreenPoint bottomLeft = projectToGui(modelMatrix, bx0, by1, z, physicalWidth, physicalHeight, guiWidth,
                 guiHeight);
-        ScreenPoint bottomRight = projectToGui(modelMatrix, bx1, by1, b2z, physicalWidth, physicalHeight, guiWidth,
+        ScreenPoint bottomRight = projectToGui(modelMatrix, bx1, by1, z, physicalWidth, physicalHeight, guiWidth,
                 guiHeight);
-        ScreenPoint topRight = projectToGui(modelMatrix, bx1, by0, b3z, physicalWidth, physicalHeight, guiWidth,
+        ScreenPoint topRight = projectToGui(modelMatrix, bx1, by0, z, physicalWidth, physicalHeight, guiWidth,
                 guiHeight);
         if (topLeft == null || bottomLeft == null || bottomRight == null || topRight == null) {
             return;
@@ -374,7 +330,7 @@ public final class MP4ItemScreenRenderer {
     }
 
     private static void submitNv12VideoLayer(PoseStack poseStack, SubmitNodeCollector collector, UUID deviceId,
-            float bx0, float by0, float bx1, float by1, float b0z, float b1z, float b2z, float b3z) {
+            float bx0, float by0, float bx1, float by1) {
         if (deviceId == null) {
             return;
         }
@@ -384,14 +340,10 @@ public final class MP4ItemScreenRenderer {
         float inset = 10.0F - VIDEO_LAYER_OVERSCAN_PIXELS;
         float right = MP4GuiTexture.HEIGHT - 10.0F + VIDEO_LAYER_OVERSCAN_PIXELS;
         float bottom = MP4GuiTexture.WIDTH - 10.0F + VIDEO_LAYER_OVERSCAN_PIXELS;
-        SurfacePoint topLeft = landscapeSurfacePoint(inset, inset, bx0, by0, bx1, by1, b0z, b1z, b2z,
-                b3z);
-        SurfacePoint bottomLeft = landscapeSurfacePoint(inset, bottom, bx0, by0, bx1,
-                by1, b0z, b1z, b2z, b3z);
-        SurfacePoint bottomRight = landscapeSurfacePoint(right, bottom,
-                bx0, by0, bx1, by1, b0z, b1z, b2z, b3z);
-        SurfacePoint topRight = landscapeSurfacePoint(right, inset, bx0, by0, bx1, by1,
-                b0z, b1z, b2z, b3z);
+        SurfacePoint topLeft = landscapeSurfacePoint(inset, inset, bx0, by0, bx1, by1);
+        SurfacePoint bottomLeft = landscapeSurfacePoint(inset, bottom, bx0, by0, bx1, by1);
+        SurfacePoint bottomRight = landscapeSurfacePoint(right, bottom, bx0, by0, bx1, by1);
+        SurfacePoint topRight = landscapeSurfacePoint(right, inset, bx0, by0, bx1, by1);
         MP4HandheldVideoClient.markVisible(deviceId);
         boolean useRgbaFallback = IrisShaderpackCompat.isShaderPackInUse();
         MP4RgbaVideoLayer rgbaLayer = MP4RgbaVideoLayer.forDevice(deviceId);
@@ -416,14 +368,12 @@ public final class MP4ItemScreenRenderer {
     }
 
     private static SurfacePoint landscapeSurfacePoint(float landscapeX, float landscapeY, float bx0, float by0,
-            float bx1, float by1, float b0z, float b1z, float b2z, float b3z) {
+            float bx1, float by1) {
         float u = Math.max(0.0F, Math.min(1.0F, landscapeY / MP4GuiTexture.WIDTH));
         float v = Math.max(0.0F, Math.min(1.0F, (MP4GuiTexture.HEIGHT - 1.0F - landscapeX) / MP4GuiTexture.HEIGHT));
         float x = lerp(bx0, bx1, u);
         float y = lerp(by0, by1, v);
-        float leftZ = lerp(b0z, b1z, v);
-        float rightZ = lerp(b3z, b2z, v);
-        return new SurfacePoint(x, y, lerp(leftZ, rightZ, u) + 0.001F);
+        return new SurfacePoint(x, y, SCREEN_FACE_Z_OFFSET + 0.001F);
     }
 
     private record SurfacePoint(float x, float y, float z) {
@@ -529,39 +479,6 @@ public final class MP4ItemScreenRenderer {
         vertex(buffer, pose, left, top, z, u0, vTop);
     }
 
-    private static void emitSideButton(VertexConsumer buffer, PoseStack.Pose pose, float x, float centerY,
-            float halfHeight, float width, float height, float halfWidth, int color) {
-        float sign = x > 0.0F ? 1.0F : -1.0F;
-        float outerX = x;
-        float innerX = x - sign * width;
-        float y0 = centerY + height * 0.5F;
-        float y1 = centerY - height * 0.5F;
-        float frontInnerTop = 0.010F;
-        float frontOuterTop = 0.010F;
-        float frontOuterBottom = 0.010F;
-        float frontInnerBottom = 0.010F;
-        float backInnerTop = frontInnerTop - DEVICE_THICKNESS * 0.72F;
-        float backOuterTop = frontOuterTop - DEVICE_THICKNESS * 0.72F;
-        float backOuterBottom = frontOuterBottom - DEVICE_THICKNESS * 0.72F;
-        float backInnerBottom = frontInnerBottom - DEVICE_THICKNESS * 0.72F;
-        int sideColor = darker(color);
-        int capColor = darker(color, 0.76F);
-        int backColor = darker(color, 0.48F);
-
-        emitSolidQuad(buffer, pose, innerX, y0, frontInnerTop, outerX, y0, frontOuterTop, outerX, y1,
-                frontOuterBottom, innerX, y1, frontInnerBottom, color);
-        emitSolidQuad(buffer, pose, outerX, y0, frontOuterTop, outerX, y0, backOuterTop, outerX, y1,
-                backOuterBottom, outerX, y1, frontOuterBottom, sideColor);
-        emitSolidQuad(buffer, pose, innerX, y0, backInnerTop, innerX, y0, frontInnerTop, innerX, y1,
-                frontInnerBottom, innerX, y1, backInnerBottom, sideColor);
-        emitSolidQuad(buffer, pose, innerX, y0, backInnerTop, outerX, y0, backOuterTop, outerX, y0,
-                frontOuterTop, innerX, y0, frontInnerTop, capColor);
-        emitSolidQuad(buffer, pose, innerX, y1, frontInnerBottom, outerX, y1, frontOuterBottom, outerX, y1,
-                backOuterBottom, innerX, y1, backInnerBottom, capColor);
-        emitSolidQuad(buffer, pose, outerX, y0, backOuterTop, innerX, y0, backInnerTop, innerX, y1,
-                backInnerBottom, outerX, y1, backOuterBottom, backColor);
-    }
-
     private static void emitSolidQuad(VertexConsumer buffer, PoseStack.Pose pose,
             float ax, float ay, float az,
             float bx, float by, float bz,
@@ -581,18 +498,6 @@ public final class MP4ItemScreenRenderer {
                 .setOverlay(OverlayTexture.NO_OVERLAY)
                 .setLight(FULL_BRIGHT)
                 .setNormal(pose, 0.0F, 0.0F, 1.0F);
-    }
-
-    private static int darker(int color) {
-        return darker(color, 0.58F);
-    }
-
-    private static int darker(int color, float scale) {
-        int a = color & 0xFF000000;
-        int r = Math.round(((color >> 16) & 0xFF) * scale);
-        int g = Math.round(((color >> 8) & 0xFF) * scale);
-        int b = Math.round((color & 0xFF) * scale);
-        return a | (r << 16) | (g << 8) | b;
     }
 
     private static void vertex(VertexConsumer buffer, PoseStack.Pose pose, float x, float y, float z, float u,

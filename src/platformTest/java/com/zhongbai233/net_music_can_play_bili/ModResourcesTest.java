@@ -1,7 +1,10 @@
 package com.zhongbai233.net_music_can_play_bili;
 
 import com.google.gson.*;
+import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.serialization.JsonOps;
+import net.minecraft.client.resources.model.cuboid.ItemTransform;
+import org.joml.Vector3f;
 import com.zhongbai233.net_music_can_play_bili.init.ModItems;
 import com.zhongbai233.net_music_can_play_bili.testsupport.PlatformBootstrap;
 import com.zhongbai233.net_music_can_play_bili.testsupport.DeviceAdapterBootstrap;
@@ -76,6 +79,31 @@ class ModResourcesTest {
             }
         }
     }
+    @Test
+    void holographicGlassesUseAnEmptyModelOnlyWhenWorn() throws Exception {
+        JsonObject model = resource("assets/net_music_can_play_bili/items/holographic_glasses.json").getAsJsonObject("model");
+        assertEquals("minecraft:select", model.get("type").getAsString());
+        assertEquals("minecraft:display_context", model.get("property").getAsString());
+        JsonArray cases = model.getAsJsonArray("cases");
+        assertEquals(1, cases.size());
+        JsonObject worn = cases.get(0).getAsJsonObject();
+        assertEquals("head", worn.get("when").getAsString());
+        assertEquals("minecraft:empty", worn.getAsJsonObject("model").get("type").getAsString());
+        assertEquals("net_music_can_play_bili:item/holographic_glasses",
+                model.getAsJsonObject("fallback").get("model").getAsString());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings={"firstperson_righthand", "firstperson_lefthand"})
+    void glassesBrowFacesUpInEitherHand(String context) throws Exception {
+        JsonObject model = resource("assets/net_music_can_play_bili/models/item/holographic_glasses.json");
+        Gson gson = new GsonBuilder().registerTypeAdapter(ItemTransform.class, new ItemTransform.Deserializer()).create();
+        ItemTransform transform = gson.fromJson(model.getAsJsonObject("display").get(context), ItemTransform.class);
+        PoseStack pose = new PoseStack();
+        transform.apply(context.equals("firstperson_lefthand"), pose.last());
+        assertTrue(new Vector3f(0, 1, 0).mulDirection(pose.last().pose()).y() > 0);
+    }
+
     @ParameterizedTest @ValueSource(strings={"headphones","holographic_glasses"})
     void enchantmentHeadSlotSupportedTagAttributeAndTranslationResolveWithinResources(String name)throws Exception{
         JsonObject e=resource("data/net_music_can_play_bili/enchantment/"+name+".json");

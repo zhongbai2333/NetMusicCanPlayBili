@@ -55,8 +55,6 @@ public class HolographicGlassesItem extends Item {
         if (head.isEmpty()) {
             player.setItemSlot(EquipmentSlot.HEAD, stack.copyWithCount(1));
             stack.shrink(1);
-            player.sendSystemMessage(Component.translatable(
-                    "message.net_music_can_play_bili.holographic_glasses.equipped"));
             return InteractionResult.SUCCESS;
         }
         player.sendSystemMessage(Component.translatable(

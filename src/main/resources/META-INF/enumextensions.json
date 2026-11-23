@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "enum": "net/minecraft/client/model/HumanoidModel$ArmPose",
+      "name": "NET_MUSIC_CAN_PLAY_BILI_PAD_READING",
+      "constructor": "(ZZLnet/neoforged/neoforge/client/IArmPoseTransformer;)V",
+      "parameters": {
+        "class": "com/zhongbai233/net_music_can_play_bili/client/renderer/item/PadArmPoses",
+        "field": "READING"
+      }
+    },
+    {
+      "enum": "net/minecraft/client/model/HumanoidModel$ArmPose",
+      "name": "NET_MUSIC_CAN_PLAY_BILI_PAD_CARRYING",
+      "constructor": "(ZZLnet/neoforged/neoforge/client/IArmPoseTransformer;)V",
+      "parameters": {
+        "class": "com/zhongbai233/net_music_can_play_bili/client/renderer/item/PadArmPoses",
+        "field": "CARRYING"
+      }
+    }
+  ]
+}

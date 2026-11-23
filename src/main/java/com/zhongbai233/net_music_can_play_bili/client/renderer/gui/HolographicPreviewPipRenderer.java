@@ -10,6 +10,7 @@ import com.zhongbai233.scene_editor.core.camera.CameraFrame;
 import com.zhongbai233.scene_editor.core.camera.EditorCameraMode;
 import com.zhongbai233.scene_editor.core.math.EditorTransform;
 import com.zhongbai233.net_music_can_play_bili.link.HolographicScreenSettings;
+import com.zhongbai233.net_music_can_play_bili.block.ControlConsoleBlock;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
 import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainPreviewFrame;
 import com.zhongbai233.net_music_can_play_bili.client.terrain.TerrainWireframeMesher;
@@ -225,19 +226,25 @@ public final class HolographicPreviewPipRenderer extends PictureInPictureRendere
         poseStack.popPose();
     }
 
-        private static void renderControlConsole(Minecraft minecraft, PoseStack poseStack) {
+    private static void renderControlConsole(Minecraft minecraft, PoseStack poseStack) {
         FeatureRenderDispatcher featureDispatcher = minecraft.gameRenderer.getFeatureRenderDispatcher();
         SubmitNodeStorage nodeStorage = featureDispatcher.getSubmitNodeStorage();
         BlockModelRenderState blockRenderState = new BlockModelRenderState();
+        var base = ModBlocks.CONTROL_CONSOLE.get().defaultBlockState().setValue(ControlConsoleBlock.SECTION,
+                ControlConsoleBlock.Section.BASE);
         poseStack.pushPose();
         poseStack.translate(-0.5F, 0.0F, -0.5F);
-        minecraft.getBlockModelResolver().update(blockRenderState, ModBlocks.CONTROL_CONSOLE.get().defaultBlockState(),
-            DEBUG_GARDEN_DISPLAY_CONTEXT);
+        minecraft.getBlockModelResolver().update(blockRenderState, base, DEBUG_GARDEN_DISPLAY_CONTEXT);
         blockRenderState.submitMultiLayer(poseStack, nodeStorage, LightCoordsUtil.FULL_BRIGHT,
-            OverlayTexture.NO_OVERLAY, 0);
+                OverlayTexture.NO_OVERLAY, 0);
+        poseStack.translate(0.0F, 1.0F, 0.0F);
+        minecraft.getBlockModelResolver().update(blockRenderState, base.setValue(ControlConsoleBlock.SECTION,
+                ControlConsoleBlock.Section.TOP), DEBUG_GARDEN_DISPLAY_CONTEXT);
+        blockRenderState.submitMultiLayer(poseStack, nodeStorage, LightCoordsUtil.FULL_BRIGHT,
+                OverlayTexture.NO_OVERLAY, 0);
         featureDispatcher.renderAllFeatures();
         poseStack.popPose();
-        }
+    }
 
     /**
      * 固定的 3×3 原版草方块调试地板。使用当前资源包烘焙模型，角落的蒲公英也保留 cutout 材质层。

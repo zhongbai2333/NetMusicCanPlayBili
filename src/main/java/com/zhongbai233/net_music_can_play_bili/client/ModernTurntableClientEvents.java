@@ -9,6 +9,7 @@ import com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleRen
 import com.zhongbai233.net_music_can_play_bili.client.renderer.gui.HolographicPreviewPipRenderState;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.gui.HolographicPreviewPipRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.CuriosHeadGearLayer;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadArmPoses;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.HolographicPrivacyOverlay;
@@ -37,6 +38,7 @@ public final class ModernTurntableClientEvents {
     public static void register(IEventBus modEventBus) {
         modEventBus.addListener(ModernTurntableClientEvents::registerRenderers);
         modEventBus.addListener(CuriosHeadGearLayer::register);
+        modEventBus.addListener(PadArmPoses::register);
         modEventBus.addListener(ModernTurntableClientEvents::registerPictureInPictureRenderers);
         modEventBus.addListener(ModernTurntableClientEvents::registerMenuScreens);
         modEventBus.addListener(HolographicGlassesKeyHandler::register);

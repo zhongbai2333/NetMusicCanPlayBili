@@ -38,12 +38,23 @@ import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
+import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
+
+import java.util.Map;
 
 public class ModernTurntableBlock extends HorizontalDirectionalBlock implements EntityBlock {
     public static final BooleanProperty HAS_DISC = BooleanProperty.create("has_disc");
     public static final BooleanProperty PLAYING = BooleanProperty.create("playing");
-    private static final VoxelShape SHAPE = Block.box(1, 0, 1, 15, 8, 15);
+    private static final VoxelShape CABINET = Block.box(1, 0, 1, 15, 4, 15);
+    private static final Map<Direction, VoxelShape> CLOSED = Shapes.rotateHorizontal(
+            Shapes.or(CABINET, Block.box(1.4, 4, 2.2, 14.6, 7.2, 13.6)));
+    private static final Map<Direction, VoxelShape> OPEN = Shapes.rotateHorizontal(Shapes.or(CABINET,
+            Block.box(2.75, 4, 12.7, 13.25, 6.1, 14.7),
+            Block.box(1.4, 5.6, 13.8, 14.6, 8.1, 15.2),
+            Block.box(1.4, 8.1, 12.5, 14.6, 10.6, 14.2),
+            Block.box(1.4, 10.6, 11.2, 14.6, 13.1, 13),
+            Block.box(1.4, 13.1, 9.6, 14.6, 15.8, 11.8)));
     private static final MapCodec<ModernTurntableBlock> CODEC = simpleCodec(ModernTurntableBlock::new);
 
     public ModernTurntableBlock(Identifier id) {
@@ -246,7 +257,7 @@ public class ModernTurntableBlock extends HorizontalDirectionalBlock implements 
 
     @Override
     public VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
-        return SHAPE;
+        return (state.getValue(HAS_DISC) ? CLOSED : OPEN).get(state.getValue(FACING));
     }
 
     @Override

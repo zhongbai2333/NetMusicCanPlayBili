@@ -46,8 +46,6 @@ public final class PadItemScreenRenderer {
     private static final float HELD_SURFACE_SCALE = 1.56F;
     private static final float HELD_SURFACE_LEFT_SHIFT = PadRenderProperties.handheldLeftShift();
     private static final float HOVER_TILT_DEGREES = 3.0F;
-    private static final float DEVICE_BORDER = 0.040F;
-    private static final float DEVICE_THICKNESS = 0.060F;
     private static final float SCREEN_FACE_Z_OFFSET = 0.020F;
     private static final float SCREEN_TEXTURE_Z_OFFSET = 0.024F;
     private static final float VIDEO_UNDERLAY_Z_OFFSET = SCREEN_TEXTURE_Z_OFFSET - 0.001F;
@@ -154,8 +152,9 @@ public final class PadItemScreenRenderer {
         } else {
             applyOneHandedMapPose(arm, swingProgress, equipProgress, poseStack, collector, light, armRenderer);
         }
-        poseStack.translate(-HELD_SURFACE_LEFT_SHIFT, 0.0F, 0.0F);
-        submitTexturedSurface(poseStack, collector, deviceId);
+        float inwardShift = arm == HumanoidArm.RIGHT ? -HELD_SURFACE_LEFT_SHIFT : HELD_SURFACE_LEFT_SHIFT;
+        poseStack.translate(inwardShift, 0.0F, 0.0F);
+        submitTexturedSurface(player, stack, poseStack, collector, light, deviceId);
         poseStack.popPose();
     }
 
@@ -194,7 +193,8 @@ public final class PadItemScreenRenderer {
         poseStack.scale(HELD_SURFACE_SCALE, HELD_SURFACE_SCALE, HELD_SURFACE_SCALE);
     }
 
-    private static void submitTexturedSurface(PoseStack poseStack, SubmitNodeCollector collector, UUID deviceId) {
+    private static void submitTexturedSurface(AbstractClientPlayer player, ItemStack stack, PoseStack poseStack,
+            SubmitNodeCollector collector, int light, UUID deviceId) {
         PadFocusState.renderTick();
         PadGuiTexture guiTexture = textureFor(deviceId);
         Identifier textureId = guiTexture.textureId(deviceId);
@@ -206,15 +206,7 @@ public final class PadItemScreenRenderer {
         float halfHeight = 0.39F;
         float halfWidth = halfHeight * aspect;
 
-        final float bx0 = -halfWidth - DEVICE_BORDER;
-        final float by0 = halfHeight + DEVICE_BORDER;
-        final float bx1 = halfWidth + DEVICE_BORDER;
-        final float by1 = -halfHeight - DEVICE_BORDER;
-        final float backZ = -DEVICE_THICKNESS;
-        final float bodyDepthBoost = 0.020F;
-        final float screenFaceZ = SCREEN_FACE_Z_OFFSET;
-        final float screenTextureZ = SCREEN_TEXTURE_Z_OFFSET;
-        final float flatBackZ = bodyDepthBoost + backZ;
+        float screenTextureZ = SCREEN_TEXTURE_Z_OFFSET;
 
         poseStack.pushPose();
         poseStack.scale(0.660F, 0.660F, 0.660F);
@@ -222,25 +214,13 @@ public final class PadItemScreenRenderer {
         float hoverY = PadFocusState.hoverY();
         poseStack.mulPose(Axis.XP.rotationDegrees(hoverY * HOVER_TILT_DEGREES * PadFocusState.progress(1.0F)));
         poseStack.mulPose(Axis.YP.rotationDegrees(hoverX * HOVER_TILT_DEGREES * PadFocusState.progress(1.0F)));
+        HandheldDeviceModel.PAD.submit(player, stack, poseStack, collector, light, halfHeight * 2, SCREEN_FACE_Z_OFFSET);
         publishProjectedQuad(poseStack.last().pose(), -halfWidth, halfHeight, screenTextureZ, halfWidth,
                 -halfHeight, screenTextureZ);
-        collector.submitCustomGeometry(poseStack, RenderTypes.itemCutout(bodyTextureId), (pose, buffer) -> {
-            emitSolidQuad(buffer, pose, bx1, by0, flatBackZ, bx0, by0, flatBackZ, -halfWidth, halfHeight, flatBackZ,
-                    halfWidth, halfHeight, flatBackZ, 0xFF222936);
-            emitSolidQuad(buffer, pose, bx0, by1, flatBackZ, bx1, by1, flatBackZ, halfWidth, -halfHeight, flatBackZ,
-                    -halfWidth, -halfHeight, flatBackZ, 0xFF181D27);
-            emitSolidQuad(buffer, pose, bx0, by0, flatBackZ, -halfWidth, halfHeight, flatBackZ, -halfWidth,
-                    -halfHeight, flatBackZ, bx0, by1, flatBackZ, 0xFF2A3342);
-            emitSolidQuad(buffer, pose, bx1, by0, flatBackZ, halfWidth, halfHeight, flatBackZ, halfWidth,
-                    -halfHeight, flatBackZ, bx1, by1, flatBackZ, 0xFF414B5F);
-            emitSolidQuad(buffer, pose, bx0, by0, bodyDepthBoost, bx0, by1, bodyDepthBoost, bx1, by1,
-                    bodyDepthBoost, bx1, by0, bodyDepthBoost, 0xFF05070B);
-            emitSolidQuad(buffer, pose, bx0, by0, screenFaceZ, bx0, by1, screenFaceZ, bx1, by1, screenFaceZ, bx1,
-                    by0, screenFaceZ, 0xFF050507);
-            emitCameraDot(buffer, pose, bx0 + 0.050F, by0 - 0.022F, screenFaceZ + 0.003F);
-            emitSideButton(buffer, pose, bx1 + 0.012F, halfHeight * 0.50F, 0.040F, 0.130F, 0xFF6B7588);
-            emitSideButton(buffer, pose, bx1 + 0.012F, halfHeight * 0.22F, 0.040F, 0.130F, 0xFF5E687B);
-        });
+        collector.submitCustomGeometry(poseStack, RenderTypes.itemCutout(bodyTextureId),
+                (pose, buffer) -> emitSolidQuad(buffer, pose, -halfWidth, halfHeight, SCREEN_FACE_Z_OFFSET,
+                        -halfWidth, -halfHeight, SCREEN_FACE_Z_OFFSET, halfWidth, -halfHeight, SCREEN_FACE_Z_OFFSET,
+                        halfWidth, halfHeight, SCREEN_FACE_Z_OFFSET, 0xFF050507));
         if (videoUnderlay) {
             submitVideoLayer(poseStack, collector, deviceId, -halfWidth, halfHeight, halfWidth, -halfHeight,
                     VIDEO_UNDERLAY_Z_OFFSET, true, bodyTextureId);
@@ -393,21 +373,6 @@ public final class PadItemScreenRenderer {
     }
 
     private record ScreenPoint(float x, float y) {
-    }
-
-    private static void emitCameraDot(VertexConsumer buffer, PoseStack.Pose pose, float x, float y, float z) {
-        float r = 0.010F;
-        emitSolidQuad(buffer, pose, x - r, y + r, z, x - r, y - r, z, x + r, y - r, z, x + r, y + r, z,
-                0xFF11151C);
-    }
-
-    private static void emitSideButton(VertexConsumer buffer, PoseStack.Pose pose, float x, float centerY,
-            float width, float height, int color) {
-        float sign = x > 0.0F ? 1.0F : -1.0F;
-        float innerX = x - sign * width;
-        float y0 = centerY + height * 0.5F;
-        float y1 = centerY - height * 0.5F;
-        emitSolidQuad(buffer, pose, innerX, y0, 0.026F, x, y0, 0.026F, x, y1, 0.026F, innerX, y1, 0.026F, color);
     }
 
     private static void emitTexturedQuad(VertexConsumer buffer, PoseStack.Pose pose,

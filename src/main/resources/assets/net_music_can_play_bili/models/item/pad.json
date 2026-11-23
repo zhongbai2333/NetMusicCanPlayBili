@@ -1,93 +1,458 @@
 {
-  "textures": {
-    "particle": "minecraft:block/deepslate_tiles",
-    "body": "minecraft:block/polished_deepslate",
-    "edge": "minecraft:block/blackstone",
-    "screen": "minecraft:block/green_concrete",
-    "button": "minecraft:block/light_blue_concrete"
+ "format_version": "1.21.11",
+ "textures": {
+  "0": "net_music_can_play_bili:block/redstone_media/rs_bronze",
+  "1": "net_music_can_play_bili:block/redstone_media/rs_iron",
+  "2": "net_music_can_play_bili:block/redstone_media/rs_map_idle",
+  "3": "net_music_can_play_bili:block/redstone_media/rs_wool",
+  "particle": "net_music_can_play_bili:block/redstone_media/rs_iron"
+ },
+ "elements": [
+  {
+   "name": "地图板",
+   "from": [
+    0.45,
+    3.45,
+    7.5
+   ],
+   "to": [
+    15.55,
+    12.55,
+    8.55
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     0.45,
+     3.45,
+     7.5
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      0,
+      3,
+      15.1,
+      12.1
+     ],
+     "texture": "#1"
+    },
+    "east": {
+     "uv": [
+      10,
+      4,
+      11.05,
+      13.1
+     ],
+     "texture": "#1"
+    },
+    "south": {
+     "uv": [
+      0,
+      5,
+      15.1,
+      14.1
+     ],
+     "texture": "#1"
+    },
+    "west": {
+     "uv": [
+      14,
+      6,
+      15.05,
+      15.1
+     ],
+     "texture": "#1"
+    },
+    "up": {
+     "uv": [
+      0,
+      12,
+      15.1,
+      13.05
+     ],
+     "texture": "#1"
+    },
+    "down": {
+     "uv": [
+      0,
+      12,
+      15.1,
+      13.05
+     ],
+     "texture": "#1"
+    }
+   }
   },
-  "elements": [
-    {
-      "name": "pad_body",
-      "from": [2.0, 0.0, 7.0],
-      "to": [14.0, 16.0, 9.0],
-      "faces": {
-        "north": { "texture": "#body" },
-        "east": { "texture": "#body" },
-        "south": { "texture": "#body" },
-        "west": { "texture": "#body" },
-        "up": { "texture": "#body" },
-        "down": { "texture": "#body" }
-      }
+  {
+   "name": "地图示意",
+   "from": [
+    1,
+    4,
+    7.46
+   ],
+   "to": [
+    15,
+    12,
+    7.5
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     1,
+     4,
+     7.46
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      0,
+      0,
+      14,
+      8
+     ],
+     "texture": "#2"
     },
-    {
-      "name": "map_screen",
-      "from": [2.9, 1.2, 6.55],
-      "to": [13.1, 14.8, 7.05],
-      "faces": {
-        "north": { "texture": "#screen" },
-        "east": { "texture": "#screen" },
-        "south": { "texture": "#screen" },
-        "west": { "texture": "#screen" },
-        "up": { "texture": "#screen" },
-        "down": { "texture": "#screen" }
-      }
+    "east": {
+     "uv": [
+      9,
+      5,
+      9.04,
+      13
+     ],
+     "texture": "#2"
     },
-    {
-      "name": "home_button",
-      "from": [7.0, 0.25, 6.35],
-      "to": [9.0, 1.0, 7.15],
-      "faces": {
-        "north": { "texture": "#button" },
-        "east": { "texture": "#button" },
-        "south": { "texture": "#button" },
-        "west": { "texture": "#button" },
-        "up": { "texture": "#button" },
-        "down": { "texture": "#button" }
-      }
+    "west": {
+     "uv": [
+      13,
+      7,
+      13.04,
+      15
+     ],
+     "texture": "#2"
     },
-    {
-      "name": "left_edge",
-      "from": [2.0, 0.0, 6.45],
-      "to": [3.0, 16.0, 7.25],
-      "faces": {
-        "north": { "texture": "#edge" },
-        "east": { "texture": "#edge" },
-        "south": { "texture": "#edge" },
-        "west": { "texture": "#edge" },
-        "up": { "texture": "#edge" },
-        "down": { "texture": "#edge" }
-      }
+    "up": {
+     "uv": [
+      0,
+      11,
+      14,
+      11.04
+     ],
+     "texture": "#2"
     },
-    {
-      "name": "right_edge",
-      "from": [13.0, 0.0, 6.45],
-      "to": [14.0, 16.0, 7.25],
-      "faces": {
-        "north": { "texture": "#edge" },
-        "east": { "texture": "#edge" },
-        "south": { "texture": "#edge" },
-        "west": { "texture": "#edge" },
-        "up": { "texture": "#edge" },
-        "down": { "texture": "#edge" }
-      }
+    "down": {
+     "uv": [
+      2,
+      12,
+      16,
+      12.04
+     ],
+     "texture": "#2"
     }
-  ],
-  "display": {
-    "thirdperson_righthand": {
-      "rotation": [75, 45, 0],
-      "translation": [0, 2.5, 0],
-      "scale": [0.45, 0.45, 0.45]
+   }
+  },
+  {
+   "name": "折边 0.42",
+   "from": [
+    0.42,
+    3.4,
+    8.54
+   ],
+   "to": [
+    1.42,
+    12.6,
+    8.8
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     0.42,
+     3.4,
+     8.54
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      0,
+      3,
+      1,
+      12.2
+     ],
+     "texture": "#0"
     },
-    "firstperson_righthand": {
-      "rotation": [0, -35, 0],
-      "translation": [1.5, 2.5, 0],
-      "scale": [0.55, 0.55, 0.55]
+    "east": {
+     "uv": [
+      11,
+      4,
+      11.26,
+      13.2
+     ],
+     "texture": "#0"
     },
-    "gui": {
-      "rotation": [30, 225, 0],
-      "translation": [0, 0, 0],
-      "scale": [0.75, 0.75, 0.75]
+    "south": {
+     "uv": [
+      4,
+      5,
+      5,
+      14.2
+     ],
+     "texture": "#0"
+    },
+    "west": {
+     "uv": [
+      15,
+      6,
+      15.26,
+      15.2
+     ],
+     "texture": "#0"
+    },
+    "up": {
+     "uv": [
+      8,
+      13,
+      9,
+      13.26
+     ],
+     "texture": "#0"
+    },
+    "down": {
+     "uv": [
+      10,
+      14,
+      11,
+      14.26
+     ],
+     "texture": "#0"
     }
+   }
+  },
+  {
+   "name": "折边 14.57",
+   "from": [
+    14.57,
+    3.4,
+    8.54
+   ],
+   "to": [
+    15.57,
+    12.6,
+    8.8
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     14.57,
+     3.4,
+     8.54
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      15,
+      3,
+      16,
+      12.2
+     ],
+     "texture": "#0"
+    },
+    "east": {
+     "uv": [
+      11,
+      4,
+      11.26,
+      13.2
+     ],
+     "texture": "#0"
+    },
+    "south": {
+     "uv": [
+      3,
+      5,
+      4,
+      14.2
+     ],
+     "texture": "#0"
+    },
+    "west": {
+     "uv": [
+      15,
+      6,
+      15.26,
+      15.2
+     ],
+     "texture": "#0"
+    },
+    "up": {
+     "uv": [
+      7,
+      13,
+      8,
+      13.26
+     ],
+     "texture": "#0"
+    },
+    "down": {
+     "uv": [
+      9,
+      14,
+      10,
+      14.26
+     ],
+     "texture": "#0"
+    }
+   }
+  },
+  {
+   "name": "后部握带",
+   "from": [
+    3,
+    4.5,
+    8.54
+   ],
+   "to": [
+    5,
+    11.5,
+    9.05
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     3,
+     4.5,
+     8.54
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      3,
+      4,
+      5,
+      11
+     ],
+     "texture": "#3"
+    },
+    "east": {
+     "uv": [
+      11,
+      6,
+      11.51,
+      13
+     ],
+     "texture": "#3"
+    },
+    "south": {
+     "uv": [
+      7,
+      6,
+      9,
+      13
+     ],
+     "texture": "#3"
+    },
+    "west": {
+     "uv": [
+      15,
+      8,
+      15.51,
+      15
+     ],
+     "texture": "#3"
+    },
+    "up": {
+     "uv": [
+      11,
+      13,
+      13,
+      13.51
+     ],
+     "texture": "#3"
+    },
+    "down": {
+     "uv": [
+      13,
+      14,
+      15,
+      14.51
+     ],
+     "texture": "#3"
+    }
+   }
   }
+ ],
+ "display": {
+  "thirdperson_righthand": {
+   "rotation": [
+    -26.5,
+    174,
+    5
+   ],
+   "translation": [
+    -4.5,
+    1.6,
+    -0.65
+   ],
+   "scale": [
+    0.73,
+    0.73,
+    0.73
+   ]
+  },
+  "firstperson_righthand": {
+   "rotation": [
+    0,
+    -35,
+    0
+   ],
+   "translation": [
+    1.5,
+    2.5,
+    0
+   ],
+   "scale": [
+    0.55,
+    0.55,
+    0.55
+   ]
+  },
+  "gui": {
+   "rotation": [
+    10,
+    -163,
+    -3
+   ],
+   "scale": [
+    0.91,
+    0.91,
+    0.91
+   ]
+  },
+  "thirdperson_lefthand": {
+   "rotation": [
+    -26.5,
+    174,
+    5
+   ],
+   "translation": [
+    -4.5,
+    1.6,
+    -0.65
+   ],
+   "scale": [
+    0.73,
+    0.73,
+    0.73
+   ]
+  }
+ }
 }

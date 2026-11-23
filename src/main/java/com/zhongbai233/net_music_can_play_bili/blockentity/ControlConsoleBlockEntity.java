@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.blockentity;
 
+import com.zhongbai233.net_music_can_play_bili.block.ControlConsoleBlock;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
 import net.minecraft.core.BlockPos;
@@ -7,6 +8,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument;
@@ -91,6 +93,11 @@ public final class ControlConsoleBlockEntity extends SyncedBlockEntity {
     @Override
     public void onLoad() {
         super.onLoad();
+        BlockState state = getBlockState();
+        if (level instanceof ServerLevel server
+                && state.getValue(ControlConsoleBlock.SECTION) == ControlConsoleBlock.Section.SINGLE) {
+            server.scheduleTick(worldPosition, state.getBlock(), 1);
+        }
         if (level != null && level.isClientSide()) {
             // 消费资格属于方块实体生命周期，不能依赖 BER 是否进入视锥或渲染距离。
             com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleRenderer

@@ -42,7 +42,6 @@ public class InvisibleHeadphonesItem extends Item {
             if (player instanceof ServerPlayer serverPlayer) {
                 AudioLinkIndex.updatePlayerHeadphones(serverPlayer);
             }
-            player.sendSystemMessage(Component.translatable("message.net_music_can_play_bili.headphones.equipped"));
             return InteractionResult.SUCCESS;
         }
         player.sendSystemMessage(

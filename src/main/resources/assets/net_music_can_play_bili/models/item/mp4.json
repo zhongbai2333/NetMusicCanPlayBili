@@ -1,137 +1,583 @@
 {
-  "textures": {
-    "particle": "minecraft:block/blackstone",
-    "body": "minecraft:block/blackstone",
-    "edge": "minecraft:block/deepslate_tiles",
-    "screen": "minecraft:block/black_concrete",
-    "button": "minecraft:block/polished_deepslate"
-  },
-  "elements": [
-    {
-      "name": "mp4_body",
-      "from": [3.0, 0.0, 7.2],
-      "to": [13.0, 16.0, 8.8],
-      "faces": {
-        "north": { "texture": "#body" },
-        "east": { "texture": "#body" },
-        "south": { "texture": "#body" },
-        "west": { "texture": "#body" },
-        "up": { "texture": "#body" },
-        "down": { "texture": "#body" }
-      }
+ "format_version": "1.21.11",
+ "textures": {
+  "0": "net_music_can_play_bili:block/redstone_media/rs_bezel",
+  "1": "net_music_can_play_bili:block/redstone_media/rs_bronze",
+  "2": "net_music_can_play_bili:block/redstone_media/rs_hatch",
+  "3": "net_music_can_play_bili:block/redstone_media/rs_iron",
+  "4": "net_music_can_play_bili:block/redstone_media/rs_screen_idle",
+  "particle": "net_music_can_play_bili:block/redstone_media/rs_bezel"
+ },
+ "elements": [
+  {
+   "name": "铁质薄壳",
+   "from": [
+    3.45,
+    0.5,
+    7.55
+   ],
+   "to": [
+    12.55,
+    15.5,
+    8.37
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     3.45,
+     0.5,
+     7.55
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      3,
+      0,
+      12.1,
+      15
+     ],
+     "texture": "#0"
     },
-    {
-      "name": "screen_black",
-      "from": [3.9, 1.4, 6.75],
-      "to": [12.1, 14.6, 7.15],
-      "faces": {
-        "north": { "texture": "#screen" },
-        "east": { "texture": "#screen" },
-        "south": { "texture": "#screen" },
-        "west": { "texture": "#screen" },
-        "up": { "texture": "#screen" },
-        "down": { "texture": "#screen" }
-      }
+    "east": {
+     "uv": [
+      10,
+      1,
+      10.82,
+      16
+     ],
+     "texture": "#0"
     },
-    {
-      "name": "left_bezel",
-      "from": [3.0, 0.0, 6.6],
-      "to": [4.0, 16.0, 7.35],
-      "faces": {
-        "north": { "texture": "#edge" },
-        "east": { "texture": "#edge" },
-        "south": { "texture": "#edge" },
-        "west": { "texture": "#edge" },
-        "up": { "texture": "#edge" },
-        "down": { "texture": "#edge" }
-      }
+    "south": {
+     "uv": [
+      6,
+      0,
+      15.1,
+      15
+     ],
+     "texture": "#0"
     },
-    {
-      "name": "right_bezel",
-      "from": [12.0, 0.0, 6.6],
-      "to": [13.0, 16.0, 7.35],
-      "faces": {
-        "north": { "texture": "#edge" },
-        "east": { "texture": "#edge" },
-        "south": { "texture": "#edge" },
-        "west": { "texture": "#edge" },
-        "up": { "texture": "#edge" },
-        "down": { "texture": "#edge" }
-      }
+    "west": {
+     "uv": [
+      14,
+      1,
+      14.82,
+      16
+     ],
+     "texture": "#0"
     },
-    {
-      "name": "top_bezel",
-      "from": [3.0, 14.6, 6.55],
-      "to": [13.0, 16.0, 7.4],
-      "faces": {
-        "north": { "texture": "#edge" },
-        "east": { "texture": "#edge" },
-        "south": { "texture": "#edge" },
-        "west": { "texture": "#edge" },
-        "up": { "texture": "#edge" },
-        "down": { "texture": "#edge" }
-      }
+    "up": {
+     "uv": [
+      4,
+      12,
+      13.1,
+      12.82
+     ],
+     "texture": "#0"
     },
-    {
-      "name": "bottom_bezel",
-      "from": [3.0, 0.0, 6.55],
-      "to": [13.0, 1.4, 7.4],
-      "faces": {
-        "north": { "texture": "#edge" },
-        "east": { "texture": "#edge" },
-        "south": { "texture": "#edge" },
-        "west": { "texture": "#edge" },
-        "up": { "texture": "#edge" },
-        "down": { "texture": "#edge" }
-      }
-    },
-    {
-      "name": "right_side_button_top",
-      "from": [13.0, 10.8, 7.45],
-      "to": [13.45, 12.7, 8.55],
-      "faces": {
-        "north": { "texture": "#button" },
-        "east": { "texture": "#button" },
-        "south": { "texture": "#button" },
-        "west": { "texture": "#button" },
-        "up": { "texture": "#button" },
-        "down": { "texture": "#button" }
-      }
-    },
-    {
-      "name": "left_side_button_top",
-      "from": [2.55, 10.3, 7.45],
-      "to": [3.0, 12.0, 8.55],
-      "faces": {
-        "north": { "texture": "#button" },
-        "east": { "texture": "#button" },
-        "south": { "texture": "#button" },
-        "west": { "texture": "#button" },
-        "up": { "texture": "#button" },
-        "down": { "texture": "#button" }
-      }
-    },
-    {
-      "name": "left_side_button_bottom",
-      "from": [2.55, 7.0, 7.45],
-      "to": [3.0, 8.7, 8.55],
-      "faces": {
-        "north": { "texture": "#button" },
-        "east": { "texture": "#button" },
-        "south": { "texture": "#button" },
-        "west": { "texture": "#button" },
-        "up": { "texture": "#button" },
-        "down": { "texture": "#button" }
-      }
+    "down": {
+     "uv": [
+      6,
+      13,
+      15.1,
+      13.82
+     ],
+     "texture": "#0"
     }
-  ],
-  "display": {
-    "thirdperson_righthand": { "rotation": [12, 180, 0], "translation": [0.0, 2.5, 1.0], "scale": [0.5, 0.5, 0.5] },
-    "thirdperson_lefthand": { "rotation": [12, 180, 0], "translation": [0.0, 2.5, 1.0], "scale": [0.5, 0.5, 0.5] },
-    "firstperson_righthand": { "rotation": [0, -20, 0], "translation": [1.25, 2.5, 0], "scale": [0.62, 0.62, 0.62] },
-    "firstperson_lefthand": { "rotation": [0, 20, 0], "translation": [-1.25, 2.5, 0], "scale": [0.62, 0.62, 0.62] },
-    "ground": { "rotation": [90, 0, 0], "translation": [0, 2.5, 0], "scale": [0.45, 0.45, 0.45] },
-    "gui": { "rotation": [30, 225, 0], "translation": [0, 0, 0], "scale": [0.82, 0.82, 0.82] },
-    "fixed": { "rotation": [0, 180, 0], "translation": [0, 0, 0], "scale": [0.72, 0.72, 0.72] }
+   }
+  },
+  {
+   "name": "显示玻璃",
+   "from": [
+    4,
+    1,
+    7.51
+   ],
+   "to": [
+    12,
+    15,
+    7.55
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     4,
+     1,
+     7.51
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      0,
+      0,
+      8,
+      14
+     ],
+     "texture": "#4"
+    },
+    "east": {
+     "uv": [
+      10,
+      2,
+      10.04,
+      16
+     ],
+     "texture": "#4"
+    },
+    "west": {
+     "uv": [
+      14,
+      1,
+      14.04,
+      15
+     ],
+     "texture": "#4"
+    },
+    "up": {
+     "uv": [
+      3,
+      12,
+      11,
+      12.04
+     ],
+     "texture": "#4"
+    },
+    "down": {
+     "uv": [
+      5,
+      13,
+      13,
+      13.04
+     ],
+     "texture": "#4"
+    }
+   }
+  },
+  {
+   "name": "背部铜扣",
+   "from": [
+    5.5,
+    3,
+    8.36
+   ],
+   "to": [
+    10.5,
+    5.5,
+    8.6
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     5.5,
+     3,
+     8.36
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      6,
+      3,
+      11,
+      5.5
+     ],
+     "texture": "#1"
+    },
+    "east": {
+     "uv": [
+      10,
+      4,
+      10.24,
+      6.5
+     ],
+     "texture": "#1"
+    },
+    "south": {
+     "uv": [
+      0,
+      1,
+      5,
+      3.5
+     ],
+     "texture": "#2"
+    },
+    "west": {
+     "uv": [
+      14,
+      6,
+      14.24,
+      8.5
+     ],
+     "texture": "#1"
+    },
+    "up": {
+     "uv": [
+      2,
+      12,
+      7,
+      12.24
+     ],
+     "texture": "#1"
+    },
+    "down": {
+     "uv": [
+      4,
+      13,
+      9,
+      13.24
+     ],
+     "texture": "#1"
+    }
+   }
+  },
+  {
+   "name": "右键",
+   "from": [
+    3.22,
+    11.3,
+    7.72
+   ],
+   "to": [
+    3.46,
+    13.55,
+    8.18
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     3.22,
+     11.3,
+     7.72
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      3,
+      11,
+      3.24,
+      13.25
+     ],
+     "texture": "#3"
+    },
+    "east": {
+     "uv": [
+      10,
+      12,
+      10.46,
+      14.25
+     ],
+     "texture": "#3"
+    },
+    "south": {
+     "uv": [
+      7,
+      13,
+      7.24,
+      15.25
+     ],
+     "texture": "#3"
+    },
+    "west": {
+     "uv": [
+      14,
+      13,
+      14.46,
+      15.25
+     ],
+     "texture": "#3"
+    },
+    "up": {
+     "uv": [
+      11,
+      12,
+      11.24,
+      12.46
+     ],
+     "texture": "#3"
+    },
+    "down": {
+     "uv": [
+      13,
+      13,
+      13.24,
+      13.46
+     ],
+     "texture": "#3"
+    }
+   }
+  },
+  {
+   "name": "左上键",
+   "from": [
+    12.54,
+    11.1,
+    7.72
+   ],
+   "to": [
+    12.78,
+    13,
+    8.18
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     12.54,
+     11.1,
+     7.72
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      13,
+      11,
+      13.24,
+      12.9
+     ],
+     "texture": "#3"
+    },
+    "east": {
+     "uv": [
+      10,
+      12,
+      10.46,
+      13.9
+     ],
+     "texture": "#3"
+    },
+    "south": {
+     "uv": [
+      15,
+      13,
+      15.24,
+      14.9
+     ],
+     "texture": "#3"
+    },
+    "west": {
+     "uv": [
+      14,
+      14,
+      14.46,
+      15.9
+     ],
+     "texture": "#3"
+    },
+    "up": {
+     "uv": [
+      4,
+      12,
+      4.24,
+      12.46
+     ],
+     "texture": "#3"
+    },
+    "down": {
+     "uv": [
+      6,
+      13,
+      6.24,
+      13.46
+     ],
+     "texture": "#3"
+    }
+   }
+  },
+  {
+   "name": "左下键",
+   "from": [
+    12.54,
+    9,
+    7.72
+   ],
+   "to": [
+    12.78,
+    10.8,
+    8.18
+   ],
+   "rotation": {
+    "angle": 0,
+    "axis": "y",
+    "origin": [
+     12.54,
+     9,
+     7.72
+    ]
+   },
+   "faces": {
+    "north": {
+     "uv": [
+      13,
+      9,
+      13.24,
+      10.8
+     ],
+     "texture": "#3"
+    },
+    "east": {
+     "uv": [
+      10,
+      10,
+      10.46,
+      11.8
+     ],
+     "texture": "#3"
+    },
+    "south": {
+     "uv": [
+      15,
+      11,
+      15.24,
+      12.8
+     ],
+     "texture": "#3"
+    },
+    "west": {
+     "uv": [
+      14,
+      12,
+      14.46,
+      13.8
+     ],
+     "texture": "#3"
+    },
+    "up": {
+     "uv": [
+      4,
+      12,
+      4.24,
+      12.46
+     ],
+     "texture": "#3"
+    },
+    "down": {
+     "uv": [
+      6,
+      13,
+      6.24,
+      13.46
+     ],
+     "texture": "#3"
+    }
+   }
   }
+ ],
+ "display": {
+  "thirdperson_righthand": {
+   "rotation": [
+    64,
+    10,
+    0
+   ],
+   "translation": [
+    0,
+    2.5,
+    1
+   ],
+   "scale": [
+    0.47,
+    0.47,
+    0.47
+   ]
+  },
+  "thirdperson_lefthand": {
+   "rotation": [
+    64,
+    10,
+    0
+   ],
+   "translation": [
+    0,
+    2.5,
+    1
+   ],
+   "scale": [
+    0.47,
+    0.47,
+    0.47
+   ]
+  },
+  "firstperson_righthand": {
+   "rotation": [
+    0,
+    -20,
+    0
+   ],
+   "translation": [
+    1.25,
+    2.5,
+    0
+   ],
+   "scale": [
+    0.62,
+    0.62,
+    0.62
+   ]
+  },
+  "firstperson_lefthand": {
+   "rotation": [
+    0,
+    20,
+    0
+   ],
+   "translation": [
+    -1.25,
+    2.5,
+    0
+   ],
+   "scale": [
+    0.62,
+    0.62,
+    0.62
+   ]
+  },
+  "ground": {
+   "rotation": [
+    90,
+    0,
+    0
+   ],
+   "translation": [
+    0,
+    2.5,
+    0
+   ],
+   "scale": [
+    0.45,
+    0.45,
+    0.45
+   ]
+  },
+  "gui": {
+   "rotation": [
+    11,
+    -161,
+    -5
+   ],
+   "scale": [
+    0.93,
+    0.93,
+    0.93
+   ]
+  },
+  "fixed": {
+   "rotation": [
+    0,
+    -180,
+    0
+   ],
+   "scale": [
+    0.72,
+    0.72,
+    0.72
+   ]
+  }
+ }
 }

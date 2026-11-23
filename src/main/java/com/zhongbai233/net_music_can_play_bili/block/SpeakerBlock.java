@@ -71,7 +71,7 @@ public class SpeakerBlock extends Block implements EntityBlock {
 
     @Override
     public BlockState getStateForPlacement(BlockPlaceContext ctx) {
-        // 模型正面朝南(z+)；直接取玩家朝向（即方块放置面的方向），正面正对玩家
+        // The blockstate rotates the grille toward the player for each saved facing.
         return defaultBlockState()
                 .setValue(FACING, ctx.getHorizontalDirection());
     }

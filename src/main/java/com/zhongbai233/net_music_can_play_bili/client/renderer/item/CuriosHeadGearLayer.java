@@ -101,7 +101,6 @@ public final class CuriosHeadGearLayer extends RenderLayer<AvatarRenderState, Pl
         if (!(entity instanceof AbstractClientPlayer player)) {
             return ItemStack.EMPTY;
         }
-        return EquippedMediaItems.firstCuriosEquipped(player, stack -> stack.getItem() == ModItems.CAT_HEADPHONES.get()
-                || stack.getItem() == ModItems.HOLOGRAPHIC_GLASSES.get());
+        return EquippedMediaItems.firstCuriosEquipped(player, stack -> stack.is(ModItems.CAT_HEADPHONES.get()));
     }
 }

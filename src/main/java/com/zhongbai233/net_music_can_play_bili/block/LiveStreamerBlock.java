@@ -20,6 +20,7 @@ import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.block.Block;
@@ -35,17 +36,33 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.shapes.CollisionContext;
+import net.minecraft.world.phys.shapes.Shapes;
+import net.minecraft.world.phys.shapes.VoxelShape;
 
-/** 直播机方块：机柜造型，右键打开控制界面，可与音响、投影仪链接。 */
+import java.util.Map;
+
+/** Desktop live receiver. The physical controls face the player on placement. */
 public class LiveStreamerBlock extends HorizontalDirectionalBlock implements EntityBlock {
     public static final BooleanProperty PLAYING = BooleanProperty.create("playing");
     private static final MapCodec<LiveStreamerBlock> CODEC = simpleCodec(LiveStreamerBlock::new);
+
+    private static final VoxelShape HOUSING = Shapes.or(
+            Block.box(3.55, 0, 5.4, 12.45, .62, 11.1),
+            Block.box(3, .57, 5, 13, 4.65, 11.5),
+            Block.box(3.19, 1.15, 4.53, 5.29, 3.67, 5.1));
+    private static final Map<Direction, VoxelShape> COLLISION = Shapes.rotateHorizontal(HOUSING);
+    private static final Map<Direction, VoxelShape> OUTLINE = Shapes.rotateHorizontal(Shapes.or(HOUSING,
+            Block.box(4.07, 4.46, 9.37, 6.20, 5.42, 10.84),
+            Block.box(3.8, 5.35, 9.7, 5.62, 7.15, 10.47),
+            Block.box(2.82, 7, 9.7, 4.35, 8.70, 10.47)));
 
     public LiveStreamerBlock(Identifier id) {
         this(BlockBehaviour.Properties.of()
                 .setId(ResourceKey.create(Registries.BLOCK, id))
                 .sound(SoundType.METAL)
-                .strength(1.5F));
+                .strength(1.5F)
+                .noOcclusion());
     }
 
     public LiveStreamerBlock(BlockBehaviour.Properties properties) {
@@ -53,6 +70,16 @@ public class LiveStreamerBlock extends HorizontalDirectionalBlock implements Ent
         registerDefaultState(stateDefinition.any()
                 .setValue(FACING, Direction.SOUTH)
                 .setValue(PLAYING, false));
+    }
+
+    @Override
+    protected VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
+        return OUTLINE.get(state.getValue(FACING));
+    }
+
+    @Override
+    protected VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
+        return COLLISION.get(state.getValue(FACING));
     }
 
     @Override

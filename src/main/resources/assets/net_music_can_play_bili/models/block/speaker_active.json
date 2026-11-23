@@ -1,0 +1,6 @@
+{
+ "parent": "net_music_can_play_bili:block/speaker",
+ "textures": {
+  "1": "net_music_can_play_bili:block/redstone_media/rs_redstone_lit"
+ }
+}

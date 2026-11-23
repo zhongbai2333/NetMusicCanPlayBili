@@ -1,0 +1,6 @@
+{
+ "parent": "net_music_can_play_bili:block/live_streamer",
+ "textures": {
+  "4": "net_music_can_play_bili:block/redstone_media/rs_receiver_dial_lit"
+ }
+}
