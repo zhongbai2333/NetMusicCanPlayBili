@@ -52,6 +52,18 @@ class MediaDeviceBlockAdaptersProductionTest {
     private InteractionResult use(ItemStack stack) {
         return modernBlock.useItemOn(stack, turntable.getBlockState(), level, POS, player, InteractionHand.MAIN_HAND, null);
     }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void mediaToolHandlesTheClickWithOrWithoutADisc(boolean loaded) {
+        ItemStack disc = loaded ? PlatformBootstrap.disc("https://example.test/side-a.mp3", 30) : ItemStack.EMPTY;
+        turntable.setDisc(disc);
+        ItemStack tool = new ItemStack(ModItems.MEDIA_MANAGEMENT_TOOL.get());
+        assertEquals(InteractionResult.PASS, use(tool));
+        assertEquals(loaded, turntable.hasDisc());
+        assertTrue(ItemStack.isSameItemSameComponents(disc, turntable.getDisc()));
+        assertEquals(1, tool.getCount());
+    }
+
     @ParameterizedTest @ValueSource(booleans = {false, true})
     void mainHandInsertionCopiesOneDiscAndCreativeControlsConsumption(boolean creative) {
         when(player.isCreative()).thenReturn(creative);

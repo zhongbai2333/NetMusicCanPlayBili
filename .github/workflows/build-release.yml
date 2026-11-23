@@ -140,7 +140,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # The Gradle gate derives the exact v48 hardware-only schema from
+          # The Gradle gate derives the hardware-only schema from
           # native/README.md. Extra software-decoder/runtime files fail closed.
           ./gradlew verifyEmbeddedNativeBundle --stacktrace
 
@@ -161,18 +161,22 @@ jobs:
       - name: Bundle artifact
         id: bundle
         shell: bash
+        env:
+          MOD_ID: ${{ steps.meta.outputs.mod_id }}
+          MOD_VERSION: ${{ steps.meta.outputs.mod_version }}
+          ARTIFACT_NAME: ${{ steps.meta.outputs.artifact_name }}
         run: |
           set -euo pipefail
           mkdir -p dist
 
-          jar_path="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | head -n 1)"
-          if [[ -z "${jar_path}" ]]; then
-            echo "No built mod jar found under build/libs" >&2
+          jar_path="build/libs/${MOD_ID}-${MOD_VERSION}.jar"
+          if [[ ! -f "${jar_path}" ]]; then
+            echo "Expected mod JAR not found: ${jar_path}" >&2
             exit 1
           fi
 
-          cp "${jar_path}" "dist/${{ steps.meta.outputs.artifact_name }}"
-          sha256sum "dist/${{ steps.meta.outputs.artifact_name }}" > "dist/${{ steps.meta.outputs.artifact_name }}.sha256"
+          cp "${jar_path}" "dist/${ARTIFACT_NAME}"
+          sha256sum "dist/${ARTIFACT_NAME}" > "dist/${ARTIFACT_NAME}.sha256"
 
           echo "jar_path=${jar_path}" >> "$GITHUB_OUTPUT"
 

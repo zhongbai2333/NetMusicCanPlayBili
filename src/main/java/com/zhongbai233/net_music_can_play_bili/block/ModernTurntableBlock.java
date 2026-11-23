@@ -5,6 +5,7 @@ import com.mojang.serialization.MapCodec;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableClientHooks;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.item.MediaManagementToolItem;
 import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
@@ -98,7 +99,7 @@ public class ModernTurntableBlock extends HorizontalDirectionalBlock implements 
     @Override
     protected InteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
             Player player, InteractionHand hand, BlockHitResult hitResult) {
-        if (hand == InteractionHand.OFF_HAND) {
+        if (hand == InteractionHand.OFF_HAND || stack.getItem() instanceof MediaManagementToolItem) {
             return InteractionResult.PASS;
         }
         if (player.isShiftKeyDown()) {

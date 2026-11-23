@@ -1,71 +1,38 @@
 # NetMusicCanPlayBili
 
-NetMusicCanPlayBili（NCPB）是 NetMusic 的 NeoForge 附属模组，为 Minecraft 增加 Bilibili 视频、直播与游戏内影音设备。
+简体中文 · [English](README.en.md)
 
-## 功能
+把 Bilibili 视频刻进一张 NetMusic 唱片，放上唱片机，再把画面、歌词和声音送到房间里的不同位置。这个 NeoForge 附属模组也能播放 B 站直播。如果你在做冒险地图，还可以用 Pad 给沿途的地点配乐。
 
-- 将 BV、av 或视频链接刻录为 NetMusic 唱片，支持分 P 选择。
-- 使用现代化唱片机、直播机、歌词投影仪、视频投影仪和音响搭建影音系统。
-- MP4 提供随身播放队列；Pad 提供地图媒体点位、草稿编辑和锁定副本。
-- 中控台支持屏幕、字幕和空间音源编辑；耳机与全息眼镜提供个人收听、观看入口。
-- 服务端提供链接白名单、审核记录和权限控制。
+![放映室内正在投影测试色条，前方摆着唱片机、投影仪和机架中控台](docs/images/screening-room.webp)
 
-详细操作见[游玩指南](docs/play-guide.md)。
+## 搭一间放映室
+
+1. 在 NetMusic 的唱片刻录机里输入 BV 号、av 号或视频链接。多 P 视频可以选择分 P。需要登录时，在 NetMusic 电脑上打开「B站登录」，用手机客户端扫码。
+2. 手持刻好的音乐唱片，右键现代化唱片机开始播放。潜行并右键打开播放控制。唱片机也能与漏斗、红石信号和比较器配合使用。
+3. 主手拿着视频投影仪，右键唱片机记录音源，再把投影仪放到想要的位置。歌词投影仪和音响也这样绑定。放下音响后，右键选择声道才会出声。
+4. 想看直播时，在直播机里输入房间号并开始播放，再用同样的方法连接视频投影仪和音响。需要自行安排屏幕、字幕和空间音源时，可以把中控台绑定到唱片机或直播机，在编辑器里布置。
+
+## 把音乐带走
+
+| 设备 | 用法 |
+| --- | --- |
+| MP4 | 装入最多 18 张唱片，手持右键打开播放列表，切歌、看字幕或横屏播放视频。 |
+| Pad | 在地图上放置媒体点位，设定触发半径与方式。把锁定的 Pad 副本交给其他玩家，他们便能沿着你的路线收听。 |
+| 媒体管理工具、耳机和全息眼镜 | 用工具把隐形耳机或猫耳无线耳机绑定到唱片机、MP4 或 Pad，耳机声音只有佩戴者能听见。全息眼镜可在佩戴者的视野中显示绑定的视频，戴上后镜框不可见。 |
+
+六个方块和六件随身物品都有工作台配方。服务器管理员可管理媒体链接白名单，并查看玩家举报的音源。[合成速查](docs/play-guide.md#合成速查) · [游玩指南](docs/play-guide.md) · [服务器管理员附录](docs/play-guide.md#服务器管理员附录)
 
 ## 安装
 
-| 项目 | 当前要求 |
-| --- | --- |
-| Minecraft | 26.1.2 |
-| NeoForge | 26.x，开发基线为 26.1.2.76 |
-| Java | 25 |
-| NetMusic | 1.5.1 或更高，必装 |
-| Curios | 12 或更高，可选 |
+使用 **Minecraft Java 版 26.1.2、Java 25 和 NeoForge**。本项目的构建与验证基线是 NeoForge 26.1.2.76。把本模组和适用于同一游戏版本的 **NetMusic 1.5.1 或更高版本**放入 `mods`。多人游戏需要在客户端和服务端都安装这两个模组。[下载模组](https://github.com/zhongbai2333/NetMusicCanPlayBili/releases) · [下载 NetMusic](https://modrinth.com/mod/net-music)
 
-将 NCPB 和 NetMusic 放入 `mods`。多人游戏的客户端与服务端都需安装 NCPB 和 NetMusic；每个模组在两端的版本应保持一致。
+Curios 可让耳机和眼镜占用头部饰品槽，给头盔留出位置。安装 AreaControl 的服务器还可以利用区域边界隔离公共声音。[Curios](https://modrinth.com/mod/curios) · [AreaControl](https://github.com/teaconmc/AreaControl)
 
-当前源码版本为 `0.7.10-beta`，构建配置以 [gradle.properties](gradle.properties) 和[模组依赖声明](src/main/templates/META-INF/neoforge.mods.toml)为准。发布文件见 [Releases](https://github.com/zhongbai2333/NetMusicCanPlayBili/releases)。
+模组内置 Linux、macOS 和 Windows 的 x86_64 与 ARM64 解码库。H.264 支持软件解码，AV1 需要兼容的硬件和驱动。Linux 用户请同时核对系统库要求。Bilibili 登录凭据保存在游戏目录下的本机加密凭据库中。[媒体能力与 Linux 要求](docs/release-native-capabilities.md) · [配置与隐私](docs/play-guide.md#配置与隐私)
 
-内置解码库覆盖 Linux、macOS、Windows 的 x86_64/ARM64。AV1 依赖平台硬件解码能力，失败时尝试 H.264；Linux 另有系统库要求。安装前可查阅[媒体能力与限制](docs/release-native-capabilities.md)。
+## 开发与许可
 
-## 快速上手
+使用 JDK 25，在仓库根目录运行 `./gradlew build platformTest`。Windows 使用 `gradlew.bat build platformTest`。模组 JAR 位于 `build/libs/`。[开发说明](docs/development.md) · [文档索引](docs/README.md) · [Blockbench 源模型](design/blockbench) · [反馈问题](https://github.com/zhongbai2333/NetMusicCanPlayBili/issues)
 
-1. 打开 NetMusic 电脑，按需扫码登录 Bilibili。
-2. 在 CD 刻录机中输入 BV、av 或视频链接，制作唱片。
-3. 将唱片放入现代化唱片机或 MP4，或在 Pad 中创建媒体点位。
-4. 投影仪、音响等设备的绑定与配置见[游玩指南](docs/play-guide.md#搭建影音系统)。
-
-## 构建与检查
-
-使用 JDK 25，在仓库根目录运行：
-
-```sh
-bash gradlew build platformTest
-```
-
-`build` 执行普通单测和生产包校验；`platformTest` 用于保护存档、协议、权限等平台契约，默认构建不包含它。
-
-需要编译游戏内 Bench 时使用：
-
-```sh
-bash gradlew -PenableModBench=true compileBenchJava
-```
-
-这条命令只编译场景。真实音视频、多人和界面验收按[发布前人工检查单](docs/testing/manual-release-checklist.md)执行。Windows 可将 `bash gradlew` 替换为 `gradlew.bat`。
-
-开发入口与维护边界见[开发说明](docs/development.md)。
-
-## 文档
-
-- [文档索引](docs/README.md)：当前说明和历史档案的统一入口。
-- [游玩指南](docs/play-guide.md)：设备、命令、配置与故障排查。
-- [测试门槛](docs/testing/architecture-split-gates.md)与[人工检查单](docs/testing/manual-release-checklist.md)。
-- [Bench 场景](docs/bench-feature-coverage.md)：真实客户端、网络和硬件环境中的可选验证。
-- [媒体能力与第三方许可](docs/release-native-capabilities.md)。
-- [Scene Editor 集成](docs/scene-editor-publishing.md)：独立编辑器库与 JiJ 打包边界。
-
-## 隐私与许可
-
-Bilibili 登录凭据保存在游戏目录下的本机加密凭据库。报告问题时不要提供 Cookie、凭据文件或未经检查的完整日志；收集信息的方法见[配置与隐私](docs/play-guide.md#配置与隐私)。
-
-项目源码使用 [MIT](LICENSE) 许可。内嵌第三方组件保留各自许可，见[第三方声明](src/main/resources/META-INF/THIRD-PARTY-NOTICES.md)及[媒体能力说明](docs/release-native-capabilities.md)。
+项目源码使用 MIT 许可。随包的 FFmpeg 库和 ZXing 二维码编码组件保留各自的许可。[MIT](LICENSE) · [第三方声明](src/main/resources/META-INF/THIRD-PARTY-NOTICES.md)

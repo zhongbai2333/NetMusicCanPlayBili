@@ -45,6 +45,7 @@ bash gradlew compileBenchJava -PenableModBench=true
 
 | 功能 | 当前入口 |
 | --- | --- |
+| 设备模型与贴图 | [Blockbench 源模型](../design/blockbench)。游戏从[资源目录](../src/main/resources/assets/net_music_can_play_bili)加载 `blockstates`、`items`、`models` 和 `textures` |
 | 本地网络协议、注册和信任边界 | [网络包架构](network-packet-architecture.md)；`network/ModernTurntableNetwork` |
 | MP4/Pad 服务端播放 | `MP4PlaybackSyncManager` 编排；`MP4PlaybackCommands` 处理手动命令；`MP4PlaybackTerminationApplication` 协调结束 |
 | 会话、位置与进度 | `MP4PlaybackSourceSessionRegistry`、`MP4PlaybackSourceDiscovery`、`MP4PlaybackProgressPersistence` |

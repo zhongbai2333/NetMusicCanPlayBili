@@ -499,7 +499,9 @@ tasks.register('platformTest', Test) {
 // (and before release) rather than on every build, so unrelated work is not blocked by mock wiring churn.
 
 
-def productionJarArchive = tasks.named('jar', Jar).flatMap { it.archiveFile }
+def productionJarArchive = tasks.named('jar', Jar) {
+    from(layout.projectDirectory.file('LICENSE'))
+}.flatMap { it.archiveFile }
 tasks.register('verifyProductionJarHasNoConflictCopies') {
     group = 'verification'
     description = 'Verifies the production JAR contains no cloud-sync conflict-copy files.'
