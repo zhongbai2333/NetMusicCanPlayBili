@@ -3,14 +3,15 @@
   "category": "equipment",
   "key": {
     "C": "minecraft:compass",
+    "G": "minecraft:glass_pane",
     "I": "minecraft:iron_ingot",
     "R": "minecraft:redstone",
     "S": "minecraft:stick"
   },
   "pattern": [
-    " RC",
-    " IS",
-    "S  "
+    "S ",
+    "GC",
+    "IR"
   ],
   "result": {
     "id": "net_music_can_play_bili:media_management_tool"

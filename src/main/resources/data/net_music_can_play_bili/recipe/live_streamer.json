@@ -6,10 +6,11 @@
     "I": "minecraft:iron_ingot",
     "J": "minecraft:jukebox",
     "O": "minecraft:observer",
+    "P": "#minecraft:planks",
     "R": "minecraft:redstone"
   },
   "pattern": [
-    "III",
+    "PPP",
     "OJE",
     "IRI"
   ],

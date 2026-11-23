@@ -27,7 +27,7 @@ import java.nio.file.*;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Real resource files; eight registered-output recipes use real vanilla codec/crafting input. No FML resource reload or creative event. */
+/** Resource checks with vanilla recipe decoding and crafting against registered items. */
 class ModResourcesTest {
     private static final Path RES=Path.of("src/main/resources");
     private Map<TagKey<Item>,List<Holder<Item>>> previousTags;
@@ -48,7 +48,7 @@ class ModResourcesTest {
     }
     @AfterEach void restoreOriginalTags(){if(previousTags!=null)BuiltInRegistries.ITEM.prepareTagReload(new TagLoader.LoadResult<>(Registries.ITEM,previousTags)).apply();}
     private JsonObject resource(String name)throws Exception{return JsonParser.parseString(Files.readString(RES.resolve(name))).getAsJsonObject();}
-    @ParameterizedTest @CsvSource({"mp4,1","pad,1","modern_turntable,1","lyric_projector,1","video_projector,1","speaker,2","live_streamer,1","media_management_tool,1"})
+    @ParameterizedTest @CsvSource({"mp4,1","pad,1","modern_turntable,1","lyric_projector,1","video_projector,1","speaker,2","live_streamer,1","media_management_tool,1","control_console,1"})
     void recipesDecodeAndCraftTheirDeclaredOutputs(String name,int expectedCount)throws Exception{
         JsonObject json=resource("data/net_music_can_play_bili/recipe/"+name+".json");
         var ops=RegistryOps.create(JsonOps.INSTANCE,PlatformBootstrap.registries());

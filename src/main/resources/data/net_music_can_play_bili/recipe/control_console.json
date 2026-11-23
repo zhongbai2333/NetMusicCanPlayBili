@@ -1,0 +1,19 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {
+    "C": "minecraft:comparator",
+    "I": "minecraft:iron_ingot",
+    "L": "minecraft:lever",
+    "N": "minecraft:note_block",
+    "R": "minecraft:redstone"
+  },
+  "pattern": [
+    "LCL",
+    "INI",
+    "IRI"
+  ],
+  "result": {
+    "id": "net_music_can_play_bili:control_console"
+  }
+}
